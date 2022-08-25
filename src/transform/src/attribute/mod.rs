@@ -13,7 +13,9 @@ use std::collections::HashMap;
 
 use mz_expr::{LocalId, MirRelationExpr};
 
+pub mod arity;
 pub mod non_negative;
+pub mod relation_type;
 pub mod subtree_size;
 
 /// A common interface to be implemented by all derived attributes.

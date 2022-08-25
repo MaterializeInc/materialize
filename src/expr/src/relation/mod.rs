@@ -291,7 +291,7 @@ impl MirRelationExpr {
     /// Reports the schema of the relation given the schema of the input relations.
     ///
     /// `input_types` is required to contain the schemas for the input relations of
-    /// the current relation in the same order as they are visited by `try_visit1`
+    /// the current relation in the same order as they are visited by `try_visit_children`
     /// method, even though not all may be used for computing the schema of the
     /// current relation. For example, `Let` expects two input types, one for the
     /// value relation and one for the body, in that order, but only the one for the
@@ -300,79 +300,211 @@ impl MirRelationExpr {
     /// It is meant to be used during post-order traversals to compute relation
     /// schemas incrementally.
     pub fn typ_with_input_types(&self, input_types: &[RelationType]) -> RelationType {
-        assert_eq!(self.num_inputs(), input_types.len());
+        let column_types = self.col_with_input_cols(input_types.iter().map(|i| &i.column_types));
+        let unique_keys = self.keys_with_input_keys(
+            input_types.iter().map(|i| i.arity()),
+            input_types.iter().map(|i| &i.keys),
+        );
+        RelationType::new(column_types).with_keys(unique_keys)
+    }
+
+    /// Reports the column types of the relation given the column types of the input relations.
+    ///
+    /// `input_types` is required to contain the column types for the input relations of
+    /// the current relation in the same order as they are visited by `try_visit_children`
+    /// method, even though not all may be used for computing the schema of the
+    /// current relation. For example, `Let` expects two input types, one for the
+    /// value relation and one for the body, in that order, but only the one for the
+    /// body is used to determine the type of the `Let` relation.
+    ///
+    /// It is meant to be used during post-order traversals to compute column types
+    /// incrementally.
+    pub fn col_with_input_cols<'a, I>(&self, mut input_types: I) -> Vec<ColumnType>
+    where
+        I: Iterator<Item = &'a Vec<ColumnType>>,
+    {
+        use MirRelationExpr::*;
+
         match self {
-            MirRelationExpr::Constant { rows, typ } => {
-                if let Ok(rows) = rows {
-                    let n_cols = typ.arity();
-                    // If the `i`th entry is `Some`, then we have not yet observed non-uniqueness in the `i`th column.
-                    let mut unique_values_per_col = vec![Some(HashSet::<Datum>::default()); n_cols];
-                    for (row, diff) in rows {
-                        for (i, (datum, column_typ)) in
-                            row.iter().zip(typ.column_types.iter()).enumerate()
+            Constant { typ, .. } | Get { typ, .. } => typ.column_types.clone(),
+            Project { outputs, .. } => {
+                let input = input_types.next().unwrap();
+                outputs.iter().map(|&i| input[i].clone()).collect()
+            }
+            Map { scalars, .. } => {
+                let mut result = input_types.next().unwrap().clone();
+                for scalar in scalars.iter() {
+                    result.push(scalar.typ(&result))
+                }
+                result
+            }
+            FlatMap { func, .. } => {
+                let mut result = input_types.next().unwrap().clone();
+                result.extend(func.output_type().column_types);
+                result
+            }
+            Filter { predicates, .. } => {
+                let mut result = input_types.next().unwrap().clone();
+                // Augment non-nullability of columns, by observing either
+                // 1. Predicates that explicitly test for null values, and
+                // 2. Columns that if null would make a predicate be null.
+                let mut nonnull_required_columns = HashSet::new();
+                for predicate in predicates {
+                    // Add any columns that being null would force the predicate to be null.
+                    // Should that happen, the row would be discarded.
+                    predicate.non_null_requirements(&mut nonnull_required_columns);
+                    // Test for explicit checks that a column is non-null.
+                    if let MirScalarExpr::CallUnary {
+                        func: UnaryFunc::Not(scalar_func::Not),
+                        expr,
+                    } = predicate
+                    {
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::IsNull(scalar_func::IsNull),
+                            expr,
+                        } = &**expr
                         {
-                            // If the record will be observed, we should validate its type.
-                            if datum != Datum::Dummy {
-                                assert!(
-                                    datum.is_instance_of(column_typ),
-                                    "Expected datum of type {:?}, got value {:?}",
-                                    column_typ,
-                                    datum
-                                );
-                                if let Some(unique_vals) = &mut unique_values_per_col[i] {
-                                    let is_dupe = *diff != 1 || !unique_vals.insert(datum);
-                                    if is_dupe {
-                                        unique_values_per_col[i] = None;
-                                    }
+                            if let MirScalarExpr::Column(c) = &**expr {
+                                result[*c].nullable = false;
+                            }
+                        }
+                    }
+                }
+                // Set as nonnull any columns where null values would cause
+                // any predicate to evaluate to null.
+                for column in nonnull_required_columns.into_iter() {
+                    result[column].nullable = false;
+                }
+                result
+            }
+            // Iterating and cloning types inside the flat_map() avoids allocating Vec<>,
+            // as clones are directly added to column_types Vec<>.
+            Join { .. } => input_types.flat_map(|cols| cols.to_owned()).collect(),
+            Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                let input = input_types.next().unwrap();
+                group_key
+                    .iter()
+                    .map(|e| e.typ(&input))
+                    .chain(aggregates.iter().map(|agg| agg.typ(&input)))
+                    .collect()
+            }
+            TopK { .. } | Negate { .. } | Threshold { .. } | ArrangeBy { .. } => {
+                input_types.next().unwrap().clone()
+            }
+            Let { .. } => {
+                // skip over the unique keys for value
+                input_types.next();
+                input_types.next().unwrap().clone()
+            }
+            Union { .. } => {
+                let mut result = input_types.next().unwrap().clone();
+                for input_col_types in input_types {
+                    for (base_col, col) in result.iter_mut().zip_eq(input_col_types) {
+                        *base_col = base_col
+                            .union(&col)
+                            .map_err(|e| format!("{}\nIn {:#?}", e, self))
+                            .unwrap();
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    /// Reports the unique keys of the relation given the arities and the unique
+    /// keys of the input relations.
+    ///
+    /// `input_arities` and `input_keys` are required to contain the
+    /// corresponding info for the input relations of
+    /// the current relation in the same order as they are visited by `try_visit_children`
+    /// method, even though not all may be used for computing the schema of the
+    /// current relation. For example, `Let` expects two input types, one for the
+    /// value relation and one for the body, in that order, but only the one for the
+    /// body is used to determine the type of the `Let` relation.
+    ///
+    /// It is meant to be used during post-order traversals to compute unique keys
+    /// incrementally.
+    pub fn keys_with_input_keys<'a, I, J>(
+        &self,
+        mut input_arities: I,
+        mut input_keys: J,
+    ) -> Vec<Vec<usize>>
+    where
+        I: Iterator<Item = usize>,
+        J: Iterator<Item = &'a Vec<Vec<usize>>>,
+    {
+        use MirRelationExpr::*;
+
+        match self {
+            Constant {
+                rows: Ok(rows),
+                typ,
+            } => {
+                let n_cols = typ.arity();
+                // If the `i`th entry is `Some`, then we have not yet observed non-uniqueness in the `i`th column.
+                let mut unique_values_per_col = vec![Some(HashSet::<Datum>::default()); n_cols];
+                for (row, diff) in rows {
+                    for (i, datum) in row.iter().enumerate() {
+                        if datum != Datum::Dummy {
+                            if let Some(unique_vals) = &mut unique_values_per_col[i] {
+                                let is_dupe = *diff != 1 || !unique_vals.insert(datum);
+                                if is_dupe {
+                                    unique_values_per_col[i] = None;
                                 }
                             }
                         }
                     }
-                    if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
-                        RelationType::new(typ.column_types.clone()).with_key(vec![])
-                    } else {
-                        // XXX - Multi-column keys are not detected.
-                        typ.clone().with_keys(
+                }
+                if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
+                    vec![vec![]]
+                } else {
+                    // XXX - Multi-column keys are not detected.
+                    typ.keys
+                        .iter()
+                        .cloned()
+                        .chain(
                             unique_values_per_col
                                 .into_iter()
                                 .enumerate()
                                 .filter(|(_idx, unique_vals)| unique_vals.is_some())
-                                .map(|(idx, _)| vec![idx])
-                                .collect(),
+                                .map(|(idx, _)| vec![idx]),
                         )
-                    }
-                } else {
-                    typ.clone()
+                        .collect()
                 }
             }
-            MirRelationExpr::Get { typ, .. } => typ.clone(),
-            MirRelationExpr::Let { .. } => input_types.last().unwrap().clone(),
-            MirRelationExpr::Project { input: _, outputs } => {
-                let input_typ = &input_types[0];
-                let mut output_typ = RelationType::new(
-                    outputs
-                        .iter()
-                        .map(|&i| input_typ.column_types[i].clone())
-                        .collect(),
-                );
-                for keys in input_typ.keys.iter() {
-                    if keys.iter().all(|k| outputs.contains(k)) {
-                        output_typ = output_typ.with_key(
-                            keys.iter()
-                                .map(|c| outputs.iter().position(|o| o == c).unwrap())
-                                .collect(),
-                        );
-                    }
-                }
-                output_typ
+            Constant { rows: Err(_), typ } | Get { typ, .. } => typ.keys.clone(),
+            Threshold { .. } | ArrangeBy { .. } => input_keys.next().unwrap().clone(),
+            Let { .. } => {
+                // skip over the unique keys for value
+                input_keys.next();
+                input_keys.next().unwrap().clone()
             }
-            MirRelationExpr::Map { scalars, .. } => {
-                let mut typ = input_types[0].clone();
-                let arity = typ.column_types.len();
-
+            Project { outputs, .. } => {
+                let input = input_keys.next().unwrap();
+                input
+                    .iter()
+                    .filter_map(|key_set| {
+                        if key_set.iter().all(|k| outputs.contains(k)) {
+                            Some(
+                                key_set
+                                    .iter()
+                                    .map(|c| outputs.iter().position(|o| o == c).unwrap())
+                                    .collect(),
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            }
+            Map { scalars, .. } => {
                 let mut remappings = Vec::new();
+                let arity = input_arities.next().unwrap();
                 for (column, scalar) in scalars.iter().enumerate() {
-                    typ.column_types.push(scalar.typ(&typ.column_types));
                     // assess whether the scalar preserves uniqueness,
                     // and could participate in a key!
 
@@ -395,14 +527,15 @@ impl MirRelationExpr {
                     }
                 }
 
+                let mut result = input_keys.next().unwrap().clone();
+                let mut new_keys = Vec::new();
                 // Any column in `remappings` could be replaced in a key
                 // by the corresponding c. This could lead to combinatorial
                 // explosion using our current representation, so we wont
                 // do that. Instead, we'll handle the case of one remapping.
                 if remappings.len() == 1 {
                     let (old, new) = remappings.pop().unwrap();
-                    let mut new_keys = Vec::new();
-                    for key in typ.keys.iter() {
+                    for key in &result {
                         if key.contains(&old) {
                             let mut new_key: Vec<usize> =
                                 key.iter().cloned().filter(|k| k != &old).collect();
@@ -411,27 +544,26 @@ impl MirRelationExpr {
                             new_keys.push(new_key);
                         }
                     }
-                    for new_key in new_keys {
-                        typ = typ.with_key(new_key);
-                    }
+                    result.append(&mut new_keys);
                 }
-
-                typ
+                result
             }
-            MirRelationExpr::FlatMap { func, .. } => {
-                let mut input_typ = input_types[0].clone();
-                input_typ
-                    .column_types
-                    .extend(func.output_type().column_types);
-                // FlatMap can add duplicate rows, so input keys are no longer valid
-                let typ = RelationType::new(input_typ.column_types);
-                typ
+            FlatMap { .. } => {
+                // FlatMap can add duplicate rows, so input keys are no longer
+                // valid
+                vec![]
             }
-            MirRelationExpr::Filter { predicates, .. } => {
+            Negate { .. } => {
+                // Although negate may have distinct records for each key,
+                // the multiplicity is -1 rather than 1. This breaks many
+                // of the optimization uses of "keys".
+                vec![]
+            }
+            Filter { predicates, .. } => {
                 // A filter inherits the keys of its input unless the filters
                 // have reduced the input to a single row, in which case the
                 // keys of the input are `()`.
-                let mut input_typ = input_types[0].clone();
+                let mut input = input_keys.next().unwrap().clone();
                 let cols_equal_to_literal = predicates
                     .iter()
                     .filter_map(|p| {
@@ -450,10 +582,10 @@ impl MirRelationExpr {
                         None
                     })
                     .collect::<Vec<_>>();
-                for key_set in &mut input_typ.keys {
+                for key_set in &mut input {
                     key_set.retain(|k| !cols_equal_to_literal.contains(&k));
                 }
-                if !input_typ.keys.is_empty() {
+                if !input.is_empty() {
                     // If `[0 1]` is an input key and there `#0 = #1` exists as a
                     // predicate, we should present both `[0]` and `[1]` as keys
                     // of the output. Also, if there is a key involving X column
@@ -481,7 +613,7 @@ impl MirRelationExpr {
                     });
 
                     // Keep doing replacements until the number of keys settles
-                    let mut prev_keys: HashSet<_> = input_typ.keys.drain(..).collect();
+                    let mut prev_keys: HashSet<_> = input.drain(..).collect();
                     let mut prev_keys_size = 0;
                     while prev_keys_size != prev_keys.len() {
                         prev_keys_size = prev_keys.len();
@@ -520,93 +652,32 @@ impl MirRelationExpr {
                         }
                     }
 
-                    input_typ.keys = prev_keys.into_iter().sorted().collect_vec();
+                    prev_keys.into_iter().sorted().collect()
+                } else {
+                    input
                 }
-                // Augment non-nullability of columns, by observing either
-                // 1. Predicates that explicitly test for null values, and
-                // 2. Columns that if null would make a predicate be null.
-                let mut nonnull_required_columns = HashSet::new();
-                for predicate in predicates {
-                    // Add any columns that being null would force the predicate to be null.
-                    // Should that happen, the row would be discarded.
-                    predicate.non_null_requirements(&mut nonnull_required_columns);
-                    // Test for explicit checks that a column is non-null.
-                    if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::Not(scalar_func::Not),
-                        expr,
-                    } = predicate
-                    {
-                        if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull(scalar_func::IsNull),
-                            expr,
-                        } = &**expr
-                        {
-                            if let MirScalarExpr::Column(c) = &**expr {
-                                input_typ.column_types[*c].nullable = false;
-                            }
-                        }
-                    }
-                }
-                // Set as nonnull any columns where null values would cause
-                // any predicate to evaluate to null.
-                for column in nonnull_required_columns.into_iter() {
-                    input_typ.column_types[column].nullable = false;
-                }
-                input_typ
             }
-            MirRelationExpr::Join { equivalences, .. } => {
-                // Iterating and cloning types inside the flat_map() avoids allocating Vec<>,
-                // as clones are directly added to column_types Vec<>.
-                let column_types = input_types
-                    .iter()
-                    .flat_map(|i| i.column_types.iter().cloned())
-                    .collect::<Vec<_>>();
-                let mut typ = RelationType::new(column_types);
-
-                // It is important the `new_from_input_types` constructor is
+            Join { equivalences, .. } => {
+                // It is important the `new_from_input_arities` constructor is
                 // used. Otherwise, Materialize may potentially end up in an
                 // infinite loop.
-                let input_mapper =
-                    join_input_mapper::JoinInputMapper::new_from_input_types(input_types);
+                let input_mapper = crate::JoinInputMapper::new_from_input_arities(input_arities);
 
-                let global_keys = input_mapper.global_keys(
-                    &input_types
-                        .iter()
-                        .map(|t| t.keys.clone())
-                        .collect::<Vec<_>>(),
-                    equivalences,
-                );
-
-                for keys in global_keys {
-                    typ = typ.with_key(keys.clone());
-                }
-                typ
+                input_mapper.global_keys(input_keys, equivalences)
             }
-            MirRelationExpr::Reduce {
-                group_key,
-                aggregates,
-                ..
-            } => {
-                let input_typ = &input_types[0];
-                let mut column_types = group_key
-                    .iter()
-                    .map(|e| e.typ(&input_typ.column_types))
-                    .collect::<Vec<_>>();
-                for agg in aggregates {
-                    column_types.push(agg.typ(&input_typ.column_types));
-                }
-                let mut result = RelationType::new(column_types);
+            Reduce { group_key, .. } => {
                 // The group key should form a key, but we might already have
                 // keys that are subsets of the group key, and should retain
                 // those instead, if so.
-                let mut keys = Vec::new();
-                for key in input_typ.keys.iter() {
-                    if key
+                let mut result = Vec::new();
+                for key_set in input_keys.next().unwrap() {
+                    if key_set
                         .iter()
                         .all(|k| group_key.contains(&MirScalarExpr::Column(*k)))
                     {
-                        keys.push(
-                            key.iter()
+                        result.push(
+                            key_set
+                                .iter()
                                 .map(|i| {
                                     group_key
                                         .iter()
@@ -617,47 +688,23 @@ impl MirRelationExpr {
                         );
                     }
                 }
-                if keys.is_empty() {
-                    keys.push((0..group_key.len()).collect());
-                }
-                for key in keys {
-                    result = result.with_key(key);
+                if result.is_empty() {
+                    result.push((0..group_key.len()).collect());
                 }
                 result
             }
-            MirRelationExpr::TopK {
+            TopK {
                 group_key, limit, ..
             } => {
                 // If `limit` is `Some(1)` then the group key will become
                 // a unique key, as there will be only one record with that key.
-                let mut typ = input_types[0].clone();
+                let mut result = input_keys.next().unwrap().clone();
                 if limit == &Some(1) {
-                    typ = typ.with_key(group_key.clone())
+                    result.push(group_key.clone())
                 }
-                typ
+                result
             }
-            MirRelationExpr::Negate { input: _ } => {
-                // Although negate may have distinct records for each key,
-                // the multiplicity is -1 rather than 1. This breaks many
-                // of the optimization uses of "keys".
-                let mut typ = input_types[0].clone();
-                typ.keys.clear();
-                typ
-            }
-            MirRelationExpr::Threshold { .. } => input_types[0].clone(),
-            MirRelationExpr::Union { base, inputs } => {
-                let mut base_cols = input_types[0].column_types.clone();
-                for input_type in input_types.iter().skip(1) {
-                    for (base_col, col) in
-                        base_cols.iter_mut().zip_eq(input_type.column_types.iter())
-                    {
-                        *base_col = base_col
-                            .union(&col)
-                            .map_err(|e| format!("{}\nIn {:#?}", e, self))
-                            .unwrap();
-                    }
-                }
-
+            Union { base, inputs } => {
                 // Generally, unions do not have any unique keys, because
                 // each input might duplicate some. However, there is at
                 // least one idiomatic structure that does preserve keys,
@@ -681,15 +728,16 @@ impl MirRelationExpr {
                 // and who knows what is true (not expected, but again
                 // who knows what the query plan might look like).
 
+                let arity = input_arities.next().unwrap();
                 let (base_projection, base_with_project_stripped) =
                     if let MirRelationExpr::Project { input, outputs } = &**base {
                         (outputs.clone(), &**input)
                     } else {
                         // A input without a project is equivalent to an input
                         // with the project being all columns in the input in order.
-                        ((0..base_cols.len()).collect::<Vec<_>>(), &**base)
+                        ((0..arity).collect::<Vec<_>>(), &**base)
                     };
-                let mut keys = Vec::new();
+                let mut result = Vec::new();
                 if let MirRelationExpr::Get {
                     id: first_id,
                     typ: _,
@@ -707,7 +755,7 @@ impl MirRelationExpr {
                                             } = &**input
                                             {
                                                 if first_id == second_id {
-                                                    keys.extend(
+                                                    result.extend(
                                                         inputs[0].typ().keys.drain(..).filter(
                                                             |key| {
                                                                 key.iter().all(|c| {
@@ -727,11 +775,9 @@ impl MirRelationExpr {
                         }
                     }
                 }
-
-                RelationType::new(base_cols).with_keys(keys)
                 // Important: do not inherit keys of either input, as not unique.
+                result
             }
-            MirRelationExpr::ArrangeBy { .. } => input_types[0].clone(),
         }
     }
 
@@ -739,29 +785,82 @@ impl MirRelationExpr {
     ///
     /// This number is determined from the type, which is determined recursively
     /// at non-trivial cost.
+    ///
+    /// The arity is computed incrementally with a recursive post-order
+    /// traversal, that accumulates the arities for the relations yet to be
+    /// visited in `arity_stack`.
     pub fn arity(&self) -> usize {
+        let mut arity_stack = Vec::new();
+        #[allow(deprecated)]
+        self.visit_pre_post_nolimit(
+            &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
+                if let MirRelationExpr::Let { body, .. } = &e {
+                    // Do not traverse the value sub-graph, since it's not relevant for
+                    // determining the arity of Let operators.
+                    Some(vec![&*body])
+                } else {
+                    None
+                }
+            },
+            &mut |e: &MirRelationExpr| {
+                if let MirRelationExpr::Let { .. } = &e {
+                    let body_arity = arity_stack.pop().unwrap();
+                    arity_stack.push(0);
+                    arity_stack.push(body_arity);
+                }
+                let num_inputs = e.num_inputs();
+                let arity = e
+                    .arity_with_input_arities(arity_stack[arity_stack.len() - num_inputs..].iter());
+                arity_stack.truncate(arity_stack.len() - num_inputs);
+                arity_stack.push(arity);
+            },
+        );
+        assert_eq!(arity_stack.len(), 1);
+        arity_stack.pop().unwrap()
+    }
+
+    /// Reports the arity of the relation given the schema of the input relations.
+    ///
+    /// `input_arities` is required to contain the arities for the input relations of
+    /// the current relation in the same order as they are visited by `try_visit_children`
+    /// method, even though not all may be used for computing the schema of the
+    /// current relation. For example, `Let` expects two input types, one for the
+    /// value relation and one for the body, in that order, but only the one for the
+    /// body is used to determine the type of the `Let` relation.
+    ///
+    /// It is meant to be used during post-order traversals to compute arities
+    /// incrementally.
+    pub fn arity_with_input_arities<'a, I>(&self, mut input_arities: I) -> usize
+    where
+        I: Iterator<Item = &'a usize>,
+    {
+        use MirRelationExpr::*;
+
         match self {
-            MirRelationExpr::Constant { rows: _, typ } => typ.arity(),
-            MirRelationExpr::Get { typ, .. } => typ.arity(),
-            MirRelationExpr::Let { body, .. } => body.arity(),
-            MirRelationExpr::Project { input: _, outputs } => outputs.len(),
-            MirRelationExpr::Map { input, scalars } => input.arity() + scalars.len(),
-            MirRelationExpr::FlatMap { input, func, .. } => {
-                input.arity() + func.output_type().column_types.len()
+            Constant { rows: _, typ } => typ.arity(),
+            Get { typ, .. } => typ.arity(),
+            Let { .. } => {
+                input_arities.next();
+                *input_arities.next().unwrap()
             }
-            MirRelationExpr::Filter { input, .. } => input.arity(),
-            MirRelationExpr::Join { inputs, .. } => inputs.iter().map(|i| i.arity()).sum(),
-            MirRelationExpr::Reduce {
+            Project { outputs, .. } => outputs.len(),
+            Map { scalars, .. } => *input_arities.next().unwrap() + scalars.len(),
+            FlatMap { func, .. } => {
+                *input_arities.next().unwrap() + func.output_type().column_types.len()
+            }
+            Join { .. } => input_arities.map(|a| *a).sum(),
+            Reduce {
                 input: _,
                 group_key,
                 aggregates,
                 ..
             } => group_key.len() + aggregates.len(),
-            MirRelationExpr::TopK { input, .. } => input.arity(),
-            MirRelationExpr::Negate { input } => input.arity(),
-            MirRelationExpr::Threshold { input } => input.arity(),
-            MirRelationExpr::Union { base, inputs: _ } => base.arity(),
-            MirRelationExpr::ArrangeBy { input, .. } => input.arity(),
+            Filter { .. }
+            | TopK { .. }
+            | Negate { .. }
+            | Threshold { .. }
+            | Union { .. }
+            | ArrangeBy { .. } => *input_arities.next().unwrap(),
         }
     }
 
