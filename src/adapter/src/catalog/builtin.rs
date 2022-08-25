@@ -1070,7 +1070,7 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("position", ScalarType::Int64.nullable(false))
+        .with_column("position", ScalarType::UInt64.nullable(false))
         .with_column("nullable", ScalarType::Bool.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("default", ScalarType::String.nullable(true))
@@ -1091,8 +1091,8 @@ pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("index_id", ScalarType::String.nullable(false))
-        .with_column("index_position", ScalarType::Int64.nullable(false))
-        .with_column("on_position", ScalarType::Int64.nullable(true))
+        .with_column("index_position", ScalarType::UInt64.nullable(false))
+        .with_column("on_position", ScalarType::UInt64.nullable(true))
         .with_column("on_expression", ScalarType::String.nullable(true))
         .with_column("nullable", ScalarType::Bool.nullable(false)),
 });
@@ -1278,7 +1278,7 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_audit_events",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("event_type", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
         .with_column("event_details", ScalarType::Jsonb.nullable(false))
@@ -1306,9 +1306,9 @@ pub static MZ_STORAGE_USAGE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("object_id", ScalarType::String.nullable(true))
-        .with_column("size_bytes", ScalarType::Int64.nullable(false))
+        .with_column("size_bytes", ScalarType::UInt64.nullable(false))
         .with_column(
             "collection_timestamp",
             ScalarType::TimestampTz.nullable(false),
@@ -1609,13 +1609,13 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     -- MZ doesn't support replication so indisreplident is filled with false
     false::pg_catalog.bool AS indisreplident,
     -- Return zero if the index attribute is not a simple column reference, column position otherwise
-    pg_catalog.string_agg(coalesce(mz_index_columns.on_position, 0)::pg_catalog.text, ' ' ORDER BY mz_index_columns.index_position)::pg_catalog.int2vector AS indkey,
+    pg_catalog.string_agg(coalesce(mz_index_columns.on_position::int8, 0)::pg_catalog.text, ' ' ORDER BY mz_index_columns.index_position::int8)::pg_catalog.int2vector AS indkey,
     -- MZ doesn't have per-column flags, so returning a 0 for each column in the index
     pg_catalog.string_agg('0', ' ')::pg_catalog.int2vector AS indoption,
     -- Index expressions are returned in MZ format
-    CASE pg_catalog.string_agg(mz_index_columns.on_expression, ' ' ORDER BY mz_index_columns.index_position)
+    CASE pg_catalog.string_agg(mz_index_columns.on_expression, ' ' ORDER BY mz_index_columns.index_position::int8)
     WHEN NULL THEN NULL
-    ELSE '{' || pg_catalog.string_agg(mz_index_columns.on_expression, '}, {' ORDER BY mz_index_columns.index_position) || '}'
+    ELSE '{' || pg_catalog.string_agg(mz_index_columns.on_expression, '}, {' ORDER BY mz_index_columns.index_position::int8) || '}'
     END AS indexprs,
     -- MZ doesn't support indexes with predicates
     NULL::pg_catalog.text AS indpred
@@ -1785,7 +1785,7 @@ pub const PG_ATTRDEF: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_attrdef AS SELECT
     NULL::pg_catalog.oid AS oid,
     mz_objects.oid AS adrelid,
-    mz_columns.position AS adnum,
+    mz_columns.position::int8 AS adnum,
     mz_columns.default AS adbin,
     mz_columns.default AS adsrc
 FROM mz_catalog.mz_columns
@@ -2045,7 +2045,7 @@ SELECT
     s.name AS table_schema,
     o.name AS table_name,
     c.name AS column_name,
-    c.position AS ordinal_position,
+    c.position::int8 AS ordinal_position,
     c.type AS data_type,
     NULL::pg_catalog.int4 AS character_maximum_length,
     NULL::pg_catalog.int4 AS numeric_precision,

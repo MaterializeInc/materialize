@@ -14,6 +14,7 @@ use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation};
 use mz_expr::MirScalarExpr;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
@@ -228,7 +229,7 @@ impl CatalogState {
                     row: Row::pack_slice(&[
                         Datum::String(&id.to_string()),
                         Datum::String(column_name.as_str()),
-                        Datum::Int64(i as i64 + 1),
+                        Datum::UInt64(u64::cast_from(i + 1)),
                         Datum::from(column_type.nullable),
                         Datum::String(pgtype.name()),
                         default,
@@ -498,23 +499,22 @@ impl CatalogState {
                         .column_types,
                 )
                 .nullable;
-            let seq_in_index = i64::try_from(i + 1).expect("invalid index sequence number");
+            let seq_in_index = u64::cast_from(i + 1);
             let key_sql = key_sqls
                 .get(i)
                 .expect("missing sql information for index key")
                 .to_string();
             let (field_number, expression) = match key {
-                MirScalarExpr::Column(col) => (
-                    Datum::Int64(i64::try_from(*col + 1).expect("invalid index column number")),
-                    Datum::Null,
-                ),
+                MirScalarExpr::Column(col) => {
+                    (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)
+                }
                 _ => (Datum::Null, Datum::String(&key_sql)),
             };
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_INDEX_COLUMNS),
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
-                    Datum::Int64(seq_in_index),
+                    Datum::UInt64(seq_in_index),
                     field_number,
                     expression,
                     Datum::from(nullable),
@@ -688,16 +688,11 @@ impl CatalogState {
             .into_row();
         let event_details = event_details.iter().next().unwrap();
         let dt = mz_ore::now::to_datetime(occurred_at).naive_utc();
-        let id = i64::try_from(event.sortable_id()).map_err(|e| {
-            Error::new(ErrorKind::Unstructured(format!(
-                "exceeded event id space: {}",
-                e
-            )))
-        })?;
+        let id = event.sortable_id();
         Ok(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_AUDIT_EVENTS),
             row: Row::pack_slice(&[
-                Datum::Int64(id),
+                Datum::UInt64(id),
                 Datum::String(&format!("{}", event_type)),
                 Datum::String(&format!("{}", object_type)),
                 event_details,
@@ -735,12 +730,6 @@ impl CatalogState {
                 }
             };
 
-        let valid_id = i64::try_from(id).map_err(|e| {
-            Error::new(ErrorKind::Unstructured(format!(
-                "exceeded event id space: {}",
-                e
-            )))
-        })?;
         let table = self.resolve_builtin_table(&MZ_STORAGE_USAGE);
         let object_id_val = match object_id {
             Some(s) => Datum::String(s),
@@ -749,14 +738,9 @@ impl CatalogState {
         let dt = mz_ore::now::to_datetime(collection_timestamp).naive_utc();
 
         let row = Row::pack_slice(&[
-            Datum::Int64(valid_id),
+            Datum::UInt64(id),
             object_id_val,
-            Datum::Int64(
-                size_bytes
-                    .try_into()
-                    // Unless one object has over 9k petabytes of storage...
-                    .expect("Storage bytes size should not overflow i64"),
-            ),
+            Datum::UInt64(size_bytes),
             Datum::TimestampTz(DateTime::from_utc(dt, Utc)),
         ]);
         let diff = 1;
