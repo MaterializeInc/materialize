@@ -17,7 +17,7 @@ harness = false
 [dependencies]
 anyhow = "1.0.62"
 bytes = "1.2.1"
-chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
+chrono = { version = "0.4.20", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.6.3", features = ["serde", "case-insensitive"] }
 dec = "0.4.8"
 enum-kinds = "0.5.1"

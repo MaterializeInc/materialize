@@ -18,7 +18,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc, MIN_DATETIME};
+use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
@@ -600,7 +600,7 @@ impl Error for CatalogError {}
 pub struct DummyCatalog;
 
 static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
-    start_time: MIN_DATETIME,
+    start_time: DateTime::<Utc>::MIN_UTC,
     start_instant: Instant::now(),
     nonce: 0,
     cluster_id: Uuid::from_u128(0),
