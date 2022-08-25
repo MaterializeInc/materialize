@@ -383,10 +383,10 @@ impl<T> PartitionedState<StorageCommand<T>, StorageResponse<T>> for PartitionedS
 where
     T: timely::progress::Timestamp + Lattice,
 {
-    fn split_command(&mut self, command: StorageCommand<T>) -> Vec<StorageCommand<T>> {
+    fn split_command(&mut self, command: StorageCommand<T>) -> Vec<Option<StorageCommand<T>>> {
         self.observe_command(&command);
 
-        vec![command; self.parts]
+        vec![Some(command); self.parts]
     }
 
     fn absorb_response(
