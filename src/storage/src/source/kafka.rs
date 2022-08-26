@@ -127,6 +127,10 @@ impl SourceReader for KafkaSourceReader {
         let mut start_offsets: HashMap<_, u64> = kc
             .start_offsets
             .into_iter()
+            .filter(|(pid, _offset)| {
+                let pid = PartitionId::Kafka(*pid);
+                crate::source::responsible_for(&source_id, worker_id, worker_count, &pid)
+            })
             .map(|(k, v)| (k, v.offset))
             .collect();
 
@@ -147,7 +151,7 @@ impl SourceReader for KafkaSourceReader {
             }
         }
 
-        info!("Instantiating Kafka source reader at offsets {start_offsets:?}");
+        info!("worker {worker_id}/{worker_count}: Instantiating Kafka source reader at offsets {start_offsets:?}");
 
         let partition_info = Arc::new(Mutex::new(None));
         let metadata_thread_handle = {
@@ -208,8 +212,23 @@ impl SourceReader for KafkaSourceReader {
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         let partition_info = self.partition_info.lock().unwrap().take();
         if let Some(partitions) = partition_info {
+            // NOTE: We're somewhat inefficient with Vec allocations and the
+            // like. Shouldn't be a problem though, because we rarely hear about
+            // new partitions.
+            let mut unconsumed_partitions = Vec::new();
             for pid in partitions {
-                self.add_partition(PartitionId::Kafka(pid));
+                let pid = PartitionId::Kafka(pid);
+                if crate::source::responsible_for(&self.id, self.worker_id, self.worker_count, &pid)
+                {
+                    self.add_partition(pid);
+                } else {
+                    unconsumed_partitions.push(pid);
+                }
+            }
+            if !unconsumed_partitions.is_empty() {
+                return Ok(NextMessage::Ready(
+                    SourceMessageType::DropPartitionCapabilities(unconsumed_partitions),
+                ));
             }
         }
         let mut next_message = NextMessage::Pending;
@@ -263,9 +282,6 @@ impl KafkaSourceReader {
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid
     fn add_partition(&mut self, pid: PartitionId) {
-        if !crate::source::responsible_for(&self.id, self.worker_id, self.worker_count, &pid) {
-            return;
-        }
         let pid = match pid {
             PartitionId::Kafka(p) => p,
             _ => unreachable!(),
