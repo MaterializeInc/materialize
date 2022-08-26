@@ -649,6 +649,13 @@ where
                     continue;
                 }
 
+                // Wait until we know that we can mint new bindings. Any new
+                // summaries that we read from out input would not show up in
+                // the remap shard until that time anyways.
+                if let Err(wait_time) = timestamper.next_mint_timestamp() {
+                    tokio::time::sleep(wait_time).await;
+                }
+
                 input.for_each(|_cap, data| {
                     data.swap(&mut buffer);
 
@@ -662,8 +669,6 @@ where
                     }
                 });
 
-                // This will wait for the next mint timestamp to be available,
-                // if necessary.
                 let remap_trace_updates = timestamper.mint(&global_source_upper).await;
                 let mut remap_output = remap_output.activate();
                 let cap = cap_set.delayed(cap_set.first().unwrap());
