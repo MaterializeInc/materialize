@@ -25,10 +25,8 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
-use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use timely::progress::Timestamp;
-use tokio::sync::Mutex;
 
 use mz_build_info::BuildInfo;
 use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
@@ -73,8 +71,6 @@ pub struct StorageHosts<T> {
     objects: HashMap<GlobalId, StorageHostAddr>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
-    /// A handle to Persist
-    persist: Arc<Mutex<PersistClientCache>>,
 }
 
 /// Metadata about a single storage host, effectively used for reference-counting
@@ -94,10 +90,7 @@ where
     StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
     /// Constructs a new [`StorageHosts`] from its configuration.
-    pub fn new(
-        config: StorageHostsConfig,
-        persist: Arc<Mutex<PersistClientCache>>,
-    ) -> StorageHosts<T> {
+    pub fn new(config: StorageHostsConfig) -> StorageHosts<T> {
         StorageHosts {
             build_info: config.build_info,
             orchestrator: config.orchestrator,
@@ -105,7 +98,6 @@ where
             objects: HashMap::new(),
             hosts: HashMap::new(),
             initialized: false,
-            persist,
         }
     }
 
@@ -161,11 +153,7 @@ where
         };
 
         let host = self.hosts.entry(host_addr.clone()).or_insert_with(|| {
-            let mut client = RehydratingStorageClient::new(
-                host_addr,
-                self.build_info,
-                Arc::clone(&self.persist),
-            );
+            let mut client = RehydratingStorageClient::new(host_addr, self.build_info);
             if self.initialized {
                 client.send(StorageCommand::InitializationComplete);
             }

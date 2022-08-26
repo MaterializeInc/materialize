@@ -191,18 +191,28 @@ def workflow_test_github_12251(c: Composition) -> None:
     c.sql("SELECT * FROM log_table;")
 
 
-def workflow_test_upsert(c: Composition) -> None:
+def workflow_test_upsert(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
+
+    parser.add_argument(
+        "--redpanda",
+        action="store_true",
+        help="run against Redpanda instead of the Confluent Platform",
+    )
+    args = parser.parse_args()
     with c.override(
         Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
     ):
         c.down(destroy_volumes=True)
-        dependencies = [
-            "materialized",
-            "zookeeper",
-            "kafka",
-            "schema-registry",
-        ]
+        if args.redpanda:
+            dependencies = ["materialized", "redpanda"]
+        else:
+            dependencies = [
+                "materialized",
+                "zookeeper",
+                "kafka",
+                "schema-registry",
+            ]
         c.start_and_wait_for_tcp(
             services=dependencies,
         )

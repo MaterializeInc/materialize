@@ -19,6 +19,7 @@ use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
+use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, Mutex};
 
 use mz_ore::now::NowFn;
@@ -178,12 +179,21 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ))),
                     );
 
+                    // TODO(guswynn&&petrosagg): remove all uses of `block_on` in
+                    // timely workers
+                    let resume_upper = TokioHandle::current().block_on(
+                        ingestion.description.storage_metadata.get_resume_upper(
+                            &self.storage_state.persist_clients,
+                            &ingestion.description.desc.envelope,
+                        ),
+                    );
+
                     crate::render::build_ingestion_dataflow(
                         &mut self.timely_worker,
                         &mut self.storage_state,
                         ingestion.id,
                         ingestion.description,
-                        ingestion.resume_upper,
+                        resume_upper,
                     );
 
                     self.storage_state.reported_frontiers.insert(

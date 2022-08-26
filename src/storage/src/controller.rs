@@ -45,6 +45,7 @@ use tokio_stream::StreamMap;
 use tracing::info;
 
 use mz_build_info::BuildInfo;
+use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
@@ -61,7 +62,7 @@ use crate::protocol::client::{
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use crate::types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
-use crate::types::sources::IngestionDescription;
+use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
 
 mod hosts;
 mod rehydration;
@@ -409,6 +410,55 @@ impl Codec for CollectionMetadata {
     fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoCollectionMetadata::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
+    }
+}
+
+impl CollectionMetadata {
+    pub async fn get_resume_upper<T>(
+        &self,
+        persist: &Mutex<PersistClientCache>,
+        envelope: &SourceEnvelope,
+    ) -> Antichain<T>
+    where
+        T: timely::progress::Timestamp + Lattice + Codec64,
+    {
+        let persist = persist
+            .lock()
+            .await
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+        // Calculate the point at which we can resume ingestion computing the greatest
+        // antichain that is less or equal to all state and output shard uppers.
+        let mut resume_upper: Antichain<T> = Antichain::new();
+        let remap_write = persist
+            .open_writer::<(), PartitionId, T, MzOffset>(self.remap_shard)
+            .await
+            .unwrap();
+        for t in remap_write.upper().elements() {
+            resume_upper.insert(t.clone());
+        }
+        let data_write = persist
+            .open_writer::<SourceData, (), T, Diff>(self.data_shard)
+            .await
+            .unwrap();
+        for t in data_write.upper().elements() {
+            resume_upper.insert(t.clone());
+        }
+
+        // Check if this ingestion is using any operators that are stateful AND are not
+        // storing their state in persist shards. This whole section should be eventually
+        // removed as we make each operator durably record its state in persist shards.
+        let resume_upper = match envelope {
+            // We can only resume with the None envelope, which is stateless,
+            // or with the [Debezium] Upsert envelope, which is easy
+            //   (re-ingest the last emitted state)
+            SourceEnvelope::None(_) => resume_upper,
+            SourceEnvelope::Upsert(_) => resume_upper,
+            // Otherwise re-ingest everything
+            _ => Antichain::from_elem(T::minimum()),
+        };
+        resume_upper
     }
 }
 
@@ -773,6 +823,8 @@ where
                 id, metadata.remap_shard, metadata.data_shard, status_shard
             );
 
+            // TODO: determine if this can be done in storaged, as this is likely the
+            // last persist usage by the storage Controller
             let (write, mut read) = self
                 .persist
                 .lock()
@@ -812,11 +864,9 @@ where
                     desc: ingestion.desc,
                     typ: description.desc.typ().clone(),
                 };
-                let resume_upper = desc.get_resume_upper(Arc::clone(&self.persist)).await;
                 let augmented_ingestion = IngestSourceCommand {
                     id,
                     description: desc,
-                    resume_upper,
                 };
 
                 // Provision a storage host for the ingestion.
@@ -1214,14 +1264,11 @@ where
 
         Self {
             state: StorageControllerState::new(postgres_url, tx).await,
-            hosts: StorageHosts::new(
-                StorageHostsConfig {
-                    build_info,
-                    orchestrator,
-                    storaged_image,
-                },
-                Arc::clone(&persist_clients),
-            ),
+            hosts: StorageHosts::new(StorageHostsConfig {
+                build_info,
+                orchestrator,
+                storaged_image,
+            }),
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
