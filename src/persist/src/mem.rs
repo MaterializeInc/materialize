@@ -156,6 +156,22 @@ impl Default for MemConsensus {
     }
 }
 
+impl MemConsensus {
+    fn scan_store(
+        store: &HashMap<String, Vec<VersionedData>>,
+        key: &str,
+        from: SeqNo,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        let results = if let Some(values) = store.get(key) {
+            let from_idx = values.partition_point(|x| x.seqno < from);
+            values[from_idx..].to_vec()
+        } else {
+            Vec::new()
+        };
+        Ok(results)
+    }
+}
+
 #[async_trait]
 impl Consensus for MemConsensus {
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
@@ -173,7 +189,7 @@ impl Consensus for MemConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
+    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(ExternalError::from(
@@ -198,7 +214,8 @@ impl Consensus for MemConsensus {
         let seqno = data.as_ref().map(|data| data.seqno);
 
         if seqno != expected {
-            return Ok(Err(data.cloned()));
+            let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
+            return Ok(Err(Self::scan_store(&store, key, from)?));
         }
 
         store.entry(key.to_string()).or_default().push(new);
@@ -208,25 +225,7 @@ impl Consensus for MemConsensus {
 
     async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
         let store = self.data.lock().map_err(Error::from)?;
-        let mut results = vec![];
-        if let Some(values) = store.get(key) {
-            // TODO: we could instead binary search to find the first valid
-            // key and then binary search the rest.
-            for value in values {
-                if value.seqno >= from {
-                    results.push(value.clone());
-                }
-            }
-        }
-
-        if results.is_empty() {
-            Err(ExternalError::from(anyhow!(
-                "sequence number lower bound too high for scan: {:?}",
-                from
-            )))
-        } else {
-            Ok(results)
-        }
+        Self::scan_store(&store, key, from)
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {

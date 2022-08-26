@@ -1,0 +1,59 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for a bug in FuelingMerge. We previously tracked how much
+# total fuel a FuelingBatch had received, calling it progress. Whenever it
+# received new fuel, we compared progress against self.b1.len() + self.b2.len()
+# to see how much work remained. However, because we (quite surprisingly) swap
+# out the innards of a batch when applying a compaction response, if the
+# compaction resulted in consolication of updates, a batch len could become
+# smaller. This could lead to a situation where progress was greater than the
+# sum of the two batch lengths. In debug, this would present as a subtraction
+# underflow panic. In release, it would actually underflow and result in a batch
+# that would not complete given any amount of fuel, which then presented as a
+# "Attempted to insert batch into incomplete merge" panic.
+
+# Insert two batches and then a big batch so that 0-1 and 1-2 are fueled to
+# merge. This also creates a FuelingMerge(0-2,2-3).
+insert
+0 1 0 500 k0
+1 2 0 500 k1
+2 3 0 1000 k2
+----
+ok
+
+batches
+----
+[0][2][0] 2/1000 k0 k1
+[2][3][0] 1000 k2
+
+take-merge-reqs
+----
+[0][2][0] k0 k1
+
+# Give the FuelingMerge(0-2,2-3) some fuel, but not enough to finish.
+insert
+3 4 0 100 k3
+----
+ok
+
+# Now swap in the result of the 0-1 1-2 compaction with far fewer updates than
+# the pre compacted version (1000 vs 1). This creates a scenario where
+# FuelingMerge(0-2,2-3) suddenly has more fuel than it needs.
+apply-merge-res
+0 2 0 1 k0-1
+----
+applied
+
+# Insert a batch that would force FuelingMerge(0-2,2-3) to finish and move up a
+# few levels. In the regression, this would panic.
+insert
+4 5 0 10000 k4
+----
+ok
