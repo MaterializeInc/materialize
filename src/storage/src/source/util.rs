@@ -20,7 +20,7 @@ use timely::Data;
 use mz_ore::collections::CollectionExt;
 use mz_repr::Timestamp;
 
-use super::SourceToken;
+use crate::source::types::SourceToken;
 
 /// Constructs a source named `name` in `scope` whose lifetime is controlled
 /// both internally and externally.

@@ -28,9 +28,10 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use crate::controller::CollectionMetadata;
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::persist_source;
+use crate::source::types::DecodeResult;
 use crate::source::{
-    self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
-    LoadGeneratorSourceReader, PostgresSourceReader, RawSourceCreationConfig, S3SourceReader,
+    self, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader, LoadGeneratorSourceReader,
+    PostgresSourceReader, RawSourceCreationConfig, S3SourceReader,
 };
 use crate::types::errors::{DataflowError, DecodeError, EnvelopeError};
 use crate::types::sources::{encoding::*, *};

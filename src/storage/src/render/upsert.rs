@@ -30,7 +30,7 @@ use mz_expr::{EvalError, MirScalarExpr};
 use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::operator::StreamExt;
 
-use crate::source::DecodeResult;
+use crate::source::types::DecodeResult;
 use crate::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertValueError,
 };

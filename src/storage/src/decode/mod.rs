@@ -52,7 +52,7 @@ use crate::types::sources::encoding::{
 use crate::types::sources::{IncludedColumnSource, MzOffset};
 use crate::types::transforms::LinearOperator;
 use crate::{
-    source::{DecodeResult, SourceOutput},
+    source::types::{DecodeResult, SourceOutput},
     types::errors::DecodeErrorKind,
 };
 
