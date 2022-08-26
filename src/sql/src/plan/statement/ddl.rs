@@ -15,7 +15,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::str::FromStr;
-use std::time::Duration;
 
 use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
@@ -92,7 +91,7 @@ use crate::names::{
     Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
     ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
 };
-use crate::normalize::{self, ident, SqlValueOrSecret};
+use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -1821,14 +1820,26 @@ fn kafka_sink_builder(
     connection: mz_sql_parser::ast::KafkaConnection<Aug>,
     format: Option<Format<Aug>>,
     consistency: Option<KafkaConsistency<Aug>>,
-    with_options: &mut BTreeMap<String, SqlValueOrSecret>,
     topic_name: String,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
-    let (connection, config_options) = match connection {
+    let (
+        connection,
+        config_options,
+        KafkaConfigOptionExtracted {
+            reuse_topic,
+            avro_key_full_name,
+            avro_value_full_name,
+            partition_count,
+            replication_factor,
+            retention_ms,
+            retention_bytes,
+            ..
+        },
+    ) = match connection {
         mz_sql_parser::ast::KafkaConnection::Reference {
             connection,
             with_options,
@@ -1855,31 +1866,19 @@ fn kafka_sink_builder(
 
             let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
             let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
-            (connection, config_options)
+            (connection, config_options, extracted_options)
         }
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
     };
 
-    let avro_key_fullname = match with_options.remove("avro_key_fullname") {
-        Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
-        None => None,
-        Some(_) => sql_bail!("avro_key_fullname must be a string"),
-    };
-
-    if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
+    if key_desc_and_indices.is_none() && avro_key_full_name.is_some() {
         sql_bail!("Cannot specify avro_key_fullname without a corresponding KEY field");
     }
 
-    let avro_value_fullname = match with_options.remove("avro_value_fullname") {
-        Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
-        None => None,
-        Some(_) => sql_bail!("avro_value_fullname must be a string"),
-    };
-
     if key_desc_and_indices.is_some()
-        && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
+        && (avro_key_full_name.is_some() ^ avro_value_full_name.is_some())
     {
-        sql_bail!("Must specify both avro_key_fullname and avro_value_fullname when specifying generated schema names");
+        sql_bail!("Must specify both avro_key_full_name and avro_value_full_name when specifying generated schema names");
     }
 
     let format = match format {
@@ -1910,8 +1909,8 @@ fn kafka_sink_builder(
                 }
             };
             let schema_generator = AvroSchemaGenerator::new(
-                avro_key_fullname.as_deref(),
-                avro_value_fullname.as_deref(),
+                avro_key_full_name.as_deref(),
+                avro_value_full_name.as_deref(),
                 key_desc_and_indices
                     .as_ref()
                     .map(|(desc, _indices)| desc.clone()),
@@ -1938,53 +1937,28 @@ fn kafka_sink_builder(
     let consistency_config =
         get_kafka_sink_consistency_config(scx, &topic_name, &format, consistency)?;
 
-    // Use the user supplied value for partition count, or default to -1 (broker default)
-    let partition_count = match with_options.remove("partition_count") {
-        None => -1,
-        Some(SqlValueOrSecret::Value(Value::Number(n))) => n.parse::<i32>()?,
-        Some(_) => sql_bail!("partition count for sink topics must be an integer"),
-    };
-
     if partition_count == 0 || partition_count < -1 {
         sql_bail!(
-            "partition count for sink topics must be a positive integer or -1 for broker default"
+            "PARTION COUNT for sink topics must be a positive integer or -1 for broker default"
         );
     }
-
-    // Use the user supplied value for replication factor, or default to -1 (broker default)
-    let replication_factor = match with_options.remove("replication_factor") {
-        None => -1,
-        Some(SqlValueOrSecret::Value(Value::Number(n))) => n.parse::<i32>()?,
-        Some(_) => sql_bail!("replication factor for sink topics must be an integer"),
-    };
 
     if replication_factor == 0 || replication_factor < -1 {
         sql_bail!(
-            "replication factor for sink topics must be a positive integer or -1 for broker default"
+            "REPLICATION FACTOR for sink topics must be a positive integer or -1 for broker default"
         );
     }
 
-    let retention_duration = match with_options.remove("retention_ms") {
-        None => None,
-        Some(SqlValueOrSecret::Value(Value::Number(n))) => match n.parse::<i64>()? {
-            -1 => Some(None),
-            millis @ 0.. => Some(Some(Duration::from_millis(millis as u64))),
-            _ => sql_bail!("retention ms for sink topics must be greater than or equal to -1"),
-        },
-        Some(_) => sql_bail!("retention ms for sink topics must be an integer"),
-    };
-
-    let retention_bytes = match with_options.remove("retention_bytes") {
-        None => None,
-        Some(SqlValueOrSecret::Value(Value::Number(n))) => Some(n.parse::<i64>()?),
-        Some(_) => sql_bail!("retention bytes for sink topics must be an integer"),
-    };
+    if retention_ms.unwrap_or(0) < -1 {
+        sql_bail!("RETENTION MS for sink topics must be greater than or equal to -1");
+    }
 
     if retention_bytes.unwrap_or(0) < -1 {
-        sql_bail!("retention bytes for sink topics must be greater than or equal to -1");
+        sql_bail!("RETENTION BYTES for sink topics must be greater than or equal to -1");
     }
+
     let retention = KafkaSinkConnectionRetention {
-        duration: retention_duration,
+        duration: retention_ms,
         bytes: retention_bytes,
     };
 
@@ -2225,7 +2199,6 @@ pub fn plan_create_sink(
             connection,
             format,
             consistency,
-            &mut with_options,
             topic,
             relation_key_indices,
             key_desc_and_indices,

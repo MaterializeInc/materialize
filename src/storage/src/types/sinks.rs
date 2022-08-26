@@ -554,7 +554,7 @@ impl PopulateClientConfig for KafkaSinkConnectionBuilder {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectionRetention {
-    pub duration: Option<Option<Duration>>,
+    pub duration: Option<i64>,
     pub bytes: Option<i64>,
 }
 
