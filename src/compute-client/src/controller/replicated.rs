@@ -44,7 +44,7 @@ use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 use mz_storage::controller::CollectionMetadata;
 
-use crate::command::{ComputeCommand, Peek, ReplicaId};
+use crate::command::{ComputeCommand, ComputeCommandHistory, Peek, ReplicaId};
 use crate::logging::LogVariant;
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -140,7 +140,7 @@ where
 
 /// Additional information to store with pening peeks.
 #[derive(Debug)]
-pub struct PendingPeek {
+struct PendingPeek {
     /// The OpenTelemetry context for this peek.
     otel_ctx: OpenTelemetryContext,
 }
@@ -151,7 +151,7 @@ pub struct PendingPeek {
 /// tasks, so that we can call methods on it
 /// while holding mutable borrows to those.
 #[derive(Debug)]
-pub struct ActiveReplicationState<T> {
+struct ActiveReplicationState<T> {
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashMap<uuid::Uuid, PendingPeek>,
     /// Reported frontier of each in-progress tail.
@@ -332,7 +332,7 @@ where
 
 /// A client backed by multiple replicas.
 #[derive(Debug)]
-pub struct ActiveReplication<T> {
+pub(super) struct ActiveReplication<T> {
     /// The build information for this process.
     build_info: &'static BuildInfo,
     /// State for each replica.
@@ -342,7 +342,7 @@ pub struct ActiveReplication<T> {
 }
 
 impl<T> ActiveReplication<T> {
-    pub fn new(build_info: &'static BuildInfo) -> Self {
+    pub(super) fn new(build_info: &'static BuildInfo) -> Self {
         Self {
             build_info,
             replicas: Default::default(),
@@ -417,7 +417,7 @@ where
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub fn add_replica(
+    pub(super) fn add_replica(
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
@@ -473,12 +473,12 @@ where
     }
 
     /// Returns an iterator over the IDs of the replicas.
-    pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
+    pub(super) fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
         self.replicas.keys().copied()
     }
 
     /// Remove a replica by its identifier.
-    pub fn remove_replica(&mut self, id: ReplicaId) {
+    pub(super) fn remove_replica(&mut self, id: ReplicaId) {
         let replica_state = self.replicas.remove(&id).expect("replica not found");
 
         // Cease tracking frontiers of persisted_logs collections.
@@ -502,7 +502,7 @@ where
 
     /// Sends a command to all replicas.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn send(&mut self, cmd: ComputeCommand<T>) {
+    pub(super) fn send(&mut self, cmd: ComputeCommand<T>) {
         self.state.handle_command(&cmd);
 
         // Clone the command for each active replica.
@@ -521,7 +521,7 @@ where
     }
 
     /// Receives the next response from any replica.
-    pub async fn recv(&mut self) -> ActiveReplicationResponse<T> {
+    pub(super) async fn recv(&mut self) -> ActiveReplicationResponse<T> {
         // If we have a pending response, we should send it immediately.
         if let Some(response) = self.state.pending_response.pop_front() {
             return response;
@@ -563,194 +563,10 @@ where
 /// either a deduplicated compute response, or a notification
 /// that we heard from a given replica and should update its recency status.
 #[derive(Debug, Clone)]
-pub enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
+pub(super) enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
     /// A response from the underlying compute replica.
     ComputeResponse(ComputeResponse<T>),
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
-}
-
-#[derive(Debug)]
-pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {
-    /// The number of commands at the last time we compacted the history.
-    reduced_count: usize,
-    /// The sequence of commands that should be applied.
-    ///
-    /// This list may not be "compact" in that there can be commands that could be optimized
-    /// or removed given the context of other commands, for example compaction commands that
-    /// can be unified, or dataflows that can be dropped due to allowed compaction.
-    commands: Vec<ComputeCommand<T>>,
-}
-
-impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
-    /// Add a command to the history.
-    pub fn push(&mut self, command: ComputeCommand<T>) {
-        self.commands.push(command);
-        if self.commands.len() > 2 * self.reduced_count {
-            self.reduce();
-        }
-    }
-
-    /// Reduces `self.history` to a minimal form.
-    ///
-    /// This action not only simplifies the issued history, but importantly reduces the instructions
-    /// to only reference inputs from times that are still certain to be valid. Commands that allow
-    /// compaction of a collection also remove certainty that the inputs will be available for times
-    /// not greater or equal to that compaction frontier.
-    pub fn reduce(&mut self) {
-        // First determine what the final compacted frontiers will be for each collection.
-        // These will determine for each collection whether the command that creates it is required,
-        // and if required what `as_of` frontier should be used for its updated command.
-        let mut final_frontiers = std::collections::BTreeMap::new();
-        let mut live_dataflows = Vec::new();
-        let mut live_peeks = Vec::new();
-        let mut live_cancels = std::collections::BTreeSet::new();
-
-        let mut create_command = None;
-        let mut drop_command = None;
-
-        let mut initialization_complete = false;
-
-        for command in self.commands.drain(..) {
-            match command {
-                create @ ComputeCommand::CreateInstance(_) => {
-                    // We should be able to handle this, should this client need to be restartable.
-                    assert!(create_command.is_none());
-                    create_command = Some(create);
-                }
-                cmd @ ComputeCommand::DropInstance => {
-                    assert!(drop_command.is_none());
-                    drop_command = Some(cmd);
-                }
-                ComputeCommand::InitializationComplete => {
-                    initialization_complete = true;
-                }
-                ComputeCommand::CreateDataflows(dataflows) => {
-                    live_dataflows.extend(dataflows);
-                }
-                ComputeCommand::AllowCompaction(frontiers) => {
-                    for (id, frontier) in frontiers {
-                        final_frontiers.insert(id, frontier.clone());
-                    }
-                }
-                ComputeCommand::Peek(peek) => {
-                    live_peeks.push(peek);
-                }
-                ComputeCommand::CancelPeeks { uuids } => {
-                    live_cancels.extend(uuids);
-                }
-            }
-        }
-
-        // Determine the required antichains to support live peeks;
-        let mut live_peek_frontiers = std::collections::BTreeMap::new();
-        for Peek { id, timestamp, .. } in live_peeks.iter() {
-            // Introduce `time` as a constraint on the `as_of` frontier of `id`.
-            live_peek_frontiers
-                .entry(id)
-                .or_insert_with(Antichain::new)
-                .insert(timestamp.clone());
-        }
-
-        // Update dataflow `as_of` frontiers, constrained by live peeks and allowed compaction.
-        // One possible frontier is the empty frontier, indicating that the dataflow can be removed.
-        for dataflow in live_dataflows.iter_mut() {
-            let mut as_of = Antichain::new();
-            for id in dataflow.export_ids() {
-                // If compaction has been allowed use that; otherwise use the initial `as_of`.
-                if let Some(frontier) = final_frontiers.get(&id) {
-                    as_of.extend(frontier.clone());
-                } else {
-                    as_of.extend(dataflow.as_of.clone().unwrap());
-                }
-                // If we have requirements from peeks, apply them to hold `as_of` back.
-                if let Some(frontier) = live_peek_frontiers.get(&id) {
-                    as_of.extend(frontier.clone());
-                }
-            }
-
-            // Remove compaction for any collection that brought us to `as_of`.
-            for id in dataflow.export_ids() {
-                if let Some(frontier) = final_frontiers.get(&id) {
-                    if frontier == &as_of {
-                        final_frontiers.remove(&id);
-                    }
-                }
-            }
-
-            dataflow.as_of = Some(as_of);
-        }
-
-        // Discard dataflows whose outputs have all been allowed to compact away.
-        live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
-
-        // Record the volume of post-compaction commands.
-        let mut command_count = 1;
-        command_count += live_dataflows.len();
-        command_count += final_frontiers.len();
-        command_count += live_peeks.len();
-        command_count += live_cancels.len();
-        if drop_command.is_some() {
-            command_count += 1;
-        }
-
-        // Reconstitute the commands as a compact history.
-        if let Some(create_command) = create_command {
-            self.commands.push(create_command);
-        }
-        if !live_dataflows.is_empty() {
-            self.commands
-                .push(ComputeCommand::CreateDataflows(live_dataflows));
-        }
-        self.commands
-            .extend(live_peeks.into_iter().map(ComputeCommand::Peek));
-        if !live_cancels.is_empty() {
-            self.commands.push(ComputeCommand::CancelPeeks {
-                uuids: live_cancels,
-            });
-        }
-        // Allow compaction only after emmitting peek commands.
-        if !final_frontiers.is_empty() {
-            self.commands.push(ComputeCommand::AllowCompaction(
-                final_frontiers.into_iter().collect(),
-            ));
-        }
-        if initialization_complete {
-            self.commands.push(ComputeCommand::InitializationComplete);
-        }
-        if let Some(drop_command) = drop_command {
-            self.commands.push(drop_command);
-        }
-
-        self.reduced_count = command_count;
-    }
-
-    /// Retain only those peeks present in `peeks` and discard the rest.
-    pub fn retain_peeks<V>(&mut self, peeks: &std::collections::HashMap<uuid::Uuid, V>) {
-        for command in self.commands.iter_mut() {
-            if let ComputeCommand::CancelPeeks { uuids } = command {
-                uuids.retain(|uuid| peeks.contains_key(uuid));
-            }
-        }
-        self.commands.retain(|command| match command {
-            ComputeCommand::Peek(peek) => peeks.contains_key(&peek.uuid),
-            ComputeCommand::CancelPeeks { uuids } => !uuids.is_empty(),
-            _ => true,
-        });
-    }
-
-    /// Iterate through the contained commands.
-    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
-        self.commands.iter()
-    }
-}
-
-impl<T> Default for ComputeCommandHistory<T> {
-    fn default() -> Self {
-        Self {
-            reduced_count: 0,
-            commands: Vec::new(),
-        }
-    }
 }

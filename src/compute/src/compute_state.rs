@@ -26,9 +26,8 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
 use mz_compute_client::command::{
-    ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId,
+    ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek, ReplicaId,
 };
-use mz_compute_client::controller::replicated::ComputeCommandHistory;
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::response::{ComputeResponse, PeekResponse, TailResponse};

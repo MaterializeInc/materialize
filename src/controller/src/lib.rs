@@ -455,15 +455,11 @@ where
         &mut self,
         instance: ComputeInstanceId,
     ) -> Result<(), anyhow::Error> {
-        if let Some(mut compute) = self.compute.remove(&instance) {
-            assert!(
-                compute.replicas.get_replica_ids().next().is_none(),
-                "cannot drop instances with provisioned replicas; call `drop_replica` first"
-            );
+        if let Some(compute_state) = self.compute.remove(&instance) {
+            compute_state.drop();
             self.compute_orchestrator
                 .drop_service(&format!("cluster-{instance}"))
                 .await?;
-            compute.replicas.send(ComputeCommand::DropInstance);
         }
         Ok(())
     }
@@ -516,22 +512,18 @@ impl<T> Controller<T> {
     #[inline]
     pub fn compute(&self, instance: ComputeInstanceId) -> Option<ComputeController<T>> {
         let compute = self.compute.get(&instance)?;
-        Some(ComputeController {
-            instance,
-            compute,
-            storage_controller: self.storage(),
-        })
+        Some(ComputeController::new(instance, compute))
     }
 
     /// Acquires a mutable handle to a controller for the indicated compute instance, if it exists.
     #[inline]
     pub fn compute_mut(&mut self, instance: ComputeInstanceId) -> Option<ComputeControllerMut<T>> {
         let compute = self.compute.get_mut(&instance)?;
-        Some(ComputeControllerMut {
+        Some(ComputeControllerMut::new(
             instance,
             compute,
-            storage_controller: &mut *self.storage_controller,
-        })
+            &mut *self.storage_controller,
+        ))
     }
 }
 
@@ -548,12 +540,8 @@ where
     pub fn initialization_complete(&mut self) {
         self.initialized = true;
         for (instance, compute) in self.compute.iter_mut() {
-            ComputeControllerMut {
-                instance: *instance,
-                compute,
-                storage_controller: &mut *self.storage_controller,
-            }
-            .initialization_complete();
+            ComputeControllerMut::new(*instance, compute, &mut *self.storage_controller)
+                .initialization_complete();
         }
         self.storage_mut().initialization_complete();
     }

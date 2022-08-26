@@ -28,7 +28,7 @@ use std::fmt::{self, Debug};
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use timely::progress::frontier::MutableAntichain;
+use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
@@ -48,7 +48,7 @@ use crate::logging::{LogVariant, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-pub mod replicated;
+mod replicated;
 
 /// An abstraction allowing us to name different compute instances.
 pub type ComputeInstanceId = u64;
@@ -63,11 +63,11 @@ pub struct ComputeSinkId {
 #[derive(Debug)]
 pub struct ComputeControllerState<T> {
     /// The replicas of this compute instance.
-    pub replicas: ActiveReplication<T>,
+    replicas: ActiveReplication<T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
-    pub collections: BTreeMap<GlobalId, CollectionState<T>>,
+    collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
-    pub peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
+    peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
     /// A response to handle on the next call to `ComputeControllerMut::process`.
     stashed_response: Option<ActiveReplicationResponse<T>>,
 }
@@ -75,17 +75,16 @@ pub struct ComputeControllerState<T> {
 /// An immutable controller for a compute instance.
 #[derive(Debug, Copy, Clone)]
 pub struct ComputeController<'a, T> {
-    pub instance: ComputeInstanceId,
-    pub compute: &'a ComputeControllerState<T>,
-    pub storage_controller: &'a dyn StorageController<Timestamp = T>,
+    instance: ComputeInstanceId,
+    compute: &'a ComputeControllerState<T>,
 }
 
 /// A mutable controller for a compute instance.
 #[derive(Debug)]
 pub struct ComputeControllerMut<'a, T> {
-    pub instance: ComputeInstanceId,
-    pub compute: &'a mut ComputeControllerState<T>,
-    pub storage_controller: &'a mut dyn StorageController<Timestamp = T>,
+    instance: ComputeInstanceId,
+    compute: &'a mut ComputeControllerState<T>,
+    storage_controller: &'a mut dyn StorageController<Timestamp = T>,
 }
 
 /// Responses from a compute instance controller.
@@ -217,22 +216,30 @@ where
             self.stashed_response = Some(self.replicas.recv().await);
         }
     }
+
+    /// Drop this compute instance.
+    ///
+    /// # Panics
+    /// - If the compute instance still has active replicas.
+    pub fn drop(mut self) {
+        assert!(
+            self.replicas.get_replica_ids().next().is_none(),
+            "cannot drop instances with provisioned replicas"
+        );
+        self.replicas.send(ComputeCommand::DropInstance);
+    }
 }
 
 // Public interface
-impl<'a, T> ComputeController<'a, T>
-where
-    T: Timestamp + Lattice,
-{
+impl<'a, T> ComputeController<'a, T> {
+    /// Construct a new [`ComputeController`].
+    pub fn new(instance: ComputeInstanceId, compute: &'a ComputeControllerState<T>) -> Self {
+        Self { instance, compute }
+    }
+
     /// Returns this controller's compute instance ID.
     pub fn instance_id(&self) -> ComputeInstanceId {
         self.instance
-    }
-
-    /// Acquires an immutable handle to a controller for the storage instance.
-    #[inline]
-    pub fn storage(&self) -> &dyn StorageController<Timestamp = T> {
-        self.storage_controller
     }
 
     /// Acquire a handle to the collection state associated with `id`.
@@ -244,26 +251,34 @@ where
     }
 }
 
+impl<'a, T> ComputeControllerMut<'a, T> {
+    /// Construct a new [`ComputeControllerMut`].
+    pub fn new(
+        instance: ComputeInstanceId,
+        compute: &'a mut ComputeControllerState<T>,
+        storage_controller: &'a mut dyn StorageController<Timestamp = T>,
+    ) -> Self {
+        Self {
+            instance,
+            compute,
+            storage_controller,
+        }
+    }
+
+    /// Constructs an immutable handle from this mutable handle.
+    pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
+        ComputeController {
+            instance: self.instance,
+            compute: &self.compute,
+        }
+    }
+}
+
 impl<'a, T> ComputeControllerMut<'a, T>
 where
     T: Timestamp + Lattice + Codec64 + Debug,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    /// Constructs an immutable handle from this mutable handle.
-    pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
-        ComputeController {
-            instance: self.instance,
-            storage_controller: self.storage_controller,
-            compute: &self.compute,
-        }
-    }
-
-    /// Acquires a mutable handle to a controller for the storage instance.
-    #[inline]
-    pub fn storage_mut(&mut self) -> &mut dyn StorageController<Timestamp = T> {
-        self.storage_controller
-    }
-
     /// Adds a new instance replica, by name.
     pub fn add_replica(
         &mut self,
@@ -295,10 +310,6 @@ where
 
         // Add the replica
         self.compute.replicas.add_replica(id, addrs, persisted_logs);
-    }
-
-    pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
-        self.compute.replicas.get_replica_ids()
     }
 
     /// Removes an existing instance replica, by name.
@@ -481,6 +492,7 @@ where
         self.allow_compaction(compaction_commands).await?;
         Ok(())
     }
+
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
     ///     controller starts/restarts it has no durable state. That means that it has no way of
@@ -502,6 +514,7 @@ where
             .await?;
         Ok(())
     }
+
     /// Drops the read capability for the indexes and allows their resources to be reclaimed.
     pub async fn drop_indexes(&mut self, identifiers: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
@@ -514,6 +527,7 @@ where
         self.allow_compaction(compaction_commands).await?;
         Ok(())
     }
+
     /// Drops the read capability for the indexes and allows their resources to be reclaimed.
     /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
     ///     controller starts/restarts it has no durable state. That means that it has no way of
@@ -535,6 +549,7 @@ where
             .await?;
         Ok(())
     }
+
     /// Initiate a peek request for the contents of `id` at `timestamp`.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn peek(
@@ -591,47 +606,6 @@ where
         self.compute.replicas.send(ComputeCommand::CancelPeeks {
             uuids: uuids.clone(),
         });
-        Ok(())
-    }
-
-    /// Downgrade the read capabilities of specific identifiers to specific frontiers.
-    ///
-    /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn allow_compaction(
-        &mut self,
-        frontiers: Vec<(GlobalId, Antichain<T>)>,
-    ) -> Result<(), ComputeError> {
-        // Validate that the ids exist.
-        self.as_ref()
-            .validate_ids(frontiers.iter().map(|(id, _)| *id))?;
-        let policies = frontiers
-            .into_iter()
-            .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
-        self.set_read_policy(policies.collect()).await?;
-        Ok(())
-    }
-
-    /// Downgrade the read capabilities of specific identifiers to specific frontiers.
-    ///
-    /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
-    /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
-    ///     controller starts/restarts it has no durable state. That means that it has no way of
-    ///     remembering any past commands sent. In the future we plan on persisting state for the
-    ///     controller so that it is aware of past commands.
-    ///     Therefore this method is for allowing compaction on objects that we know to have been
-    ///     previously created, but have been forgotten by the controller due to a restart.
-    ///     Once command history becomes durable we can remove this method and use the normal
-    ///     `allow_compaction`.
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn allow_compaction_unvalidated(
-        &mut self,
-        frontiers: Vec<(GlobalId, Antichain<T>)>,
-    ) -> Result<(), ComputeError> {
-        let policies = frontiers
-            .into_iter()
-            .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
-        self.set_read_policy(policies.collect()).await?;
         Ok(())
     }
 
@@ -725,6 +699,15 @@ where
             )),
         }
     }
+
+    /// Marks the end of any initialization commands.
+    ///
+    /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
+    pub fn initialization_complete(&mut self) {
+        self.compute
+            .replicas
+            .send(ComputeCommand::InitializationComplete);
+    }
 }
 
 // Internal interface
@@ -733,7 +716,7 @@ where
     T: Timestamp + Lattice,
 {
     /// Validate that a collection exists for all identifiers, and error if any do not.
-    pub fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
+    fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
         for id in ids {
             self.collection(id)?;
         }
@@ -746,20 +729,8 @@ where
     T: Timestamp + Lattice + Codec64,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    /// Marks the end of any initialization commands.
-    ///
-    /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
-    pub fn initialization_complete(&mut self) {
-        self.compute
-            .replicas
-            .send(ComputeCommand::InitializationComplete);
-    }
-
     /// Acquire a mutable reference to the collection state, should it exist.
-    pub fn collection_mut(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<&mut CollectionState<T>, ComputeError> {
+    fn collection_mut(&mut self, id: GlobalId) -> Result<&mut CollectionState<T>, ComputeError> {
         self.compute
             .collections
             .get_mut(&id)
@@ -768,7 +739,7 @@ where
 
     /// Accept write frontier updates from the compute layer.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn update_write_frontiers(
+    async fn update_write_frontiers(
         &mut self,
         updates: &[(GlobalId, Antichain<T>)],
     ) -> Result<(), ComputeError> {
@@ -808,10 +779,10 @@ where
         // relying on others for that information.
         let storage_updates: Vec<_> = updates
             .iter()
-            .filter(|(id, _)| self.storage_mut().collection(*id).is_ok())
+            .filter(|(id, _)| self.storage_controller.collection(*id).is_ok())
             .cloned()
             .collect();
-        self.storage_mut()
+        self.storage_controller
             .update_write_frontiers(&storage_updates)
             .await?;
 
@@ -820,7 +791,7 @@ where
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends an appropriate compaction command.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn update_read_capabilities(
+    async fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
     ) -> Result<(), ComputeError> {
@@ -884,7 +855,7 @@ where
         Ok(())
     }
     /// Removes a registered peek, unblocking compaction that might have waited on it.
-    pub async fn remove_peeks(
+    async fn remove_peeks(
         &mut self,
         peek_ids: impl IntoIterator<Item = uuid::Uuid>,
     ) -> Result<(), ComputeError> {
@@ -900,6 +871,47 @@ where
         self.update_read_capabilities(&mut updates).await?;
         Ok(())
     }
+
+    /// Downgrade the read capabilities of specific identifiers to specific frontiers.
+    ///
+    /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn allow_compaction(
+        &mut self,
+        frontiers: Vec<(GlobalId, Antichain<T>)>,
+    ) -> Result<(), ComputeError> {
+        // Validate that the ids exist.
+        self.as_ref()
+            .validate_ids(frontiers.iter().map(|(id, _)| *id))?;
+        let policies = frontiers
+            .into_iter()
+            .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
+        self.set_read_policy(policies.collect()).await?;
+        Ok(())
+    }
+
+    /// Downgrade the read capabilities of specific identifiers to specific frontiers.
+    ///
+    /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
+    /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
+    ///     controller starts/restarts it has no durable state. That means that it has no way of
+    ///     remembering any past commands sent. In the future we plan on persisting state for the
+    ///     controller so that it is aware of past commands.
+    ///     Therefore this method is for allowing compaction on objects that we know to have been
+    ///     previously created, but have been forgotten by the controller due to a restart.
+    ///     Once command history becomes durable we can remove this method and use the normal
+    ///     `allow_compaction`.
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn allow_compaction_unvalidated(
+        &mut self,
+        frontiers: Vec<(GlobalId, Antichain<T>)>,
+    ) -> Result<(), ComputeError> {
+        let policies = frontiers
+            .into_iter()
+            .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
+        self.set_read_policy(policies.collect()).await?;
+        Ok(())
+    }
 }
 
 /// State maintained about individual collections.
@@ -909,19 +921,19 @@ pub struct CollectionState<T> {
     ///
     /// This accumulation will always contain `self.implied_capability`, but may also contain
     /// capabilities held by others who have read dependencies on this collection.
-    pub read_capabilities: MutableAntichain<T>,
+    read_capabilities: MutableAntichain<T>,
     /// The implicit capability associated with collection creation.
-    pub implied_capability: Antichain<T>,
+    implied_capability: Antichain<T>,
     /// The policy to use to downgrade `self.implied_capability`.
-    pub read_policy: ReadPolicy<T>,
+    read_policy: ReadPolicy<T>,
 
     /// Storage identifiers on which this collection depends.
-    pub storage_dependencies: Vec<GlobalId>,
+    storage_dependencies: Vec<GlobalId>,
     /// Compute identifiers on which this collection depends.
-    pub compute_dependencies: Vec<GlobalId>,
+    compute_dependencies: Vec<GlobalId>,
 
     /// Reported write frontier.
-    pub write_frontier: Antichain<T>,
+    write_frontier: Antichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -946,5 +958,15 @@ impl<T: Timestamp> CollectionState<T> {
     /// Reports the current read capability.
     pub fn read_capability(&self) -> &Antichain<T> {
         &self.implied_capability
+    }
+
+    /// Reports the current read frontier.
+    pub fn read_frontier(&self) -> AntichainRef<T> {
+        self.read_capabilities.frontier()
+    }
+
+    /// Reports the current write frontier.
+    pub fn write_frontier(&self) -> AntichainRef<T> {
+        self.write_frontier.borrow()
     }
 }

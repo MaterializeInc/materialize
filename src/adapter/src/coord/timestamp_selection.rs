@@ -133,8 +133,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 .unwrap()
                                 .collection(*id)
                                 .unwrap()
-                                .read_capabilities
-                                .frontier()
+                                .read_frontier()
                                 .to_owned();
                             if since.less_equal(&candidate) {
                                 None
@@ -189,7 +188,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for (instance, compute_ids) in &id_bundle.compute_ids {
                 let compute = self.controller.compute(*instance).unwrap();
                 for id in compute_ids.iter() {
-                    since.join_assign(&compute.collection(*id).unwrap().implied_capability)
+                    since.join_assign(&compute.collection(*id).unwrap().read_capability())
                 }
             }
         }
@@ -226,7 +225,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         compute
                             .collection(*id)
                             .unwrap()
-                            .write_frontier
+                            .write_frontier()
                             .iter()
                             .cloned(),
                     );
