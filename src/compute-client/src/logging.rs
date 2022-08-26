@@ -24,7 +24,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 /// Logging configuration.
 #[derive(Arbitrary, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
-    pub granularity_ns: u128,
+    pub interval_ns: u128,
     /// Logs to keep in an arrangement
     pub active_logs: BTreeMap<LogVariant, GlobalId>,
     /// Whether we should report logs for the log-processing dataflows
@@ -45,7 +45,7 @@ impl LoggingConfig {
 impl RustType<ProtoLoggingConfig> for LoggingConfig {
     fn into_proto(&self) -> ProtoLoggingConfig {
         ProtoLoggingConfig {
-            granularity_ns: Some(self.granularity_ns.into_proto()),
+            interval_ns: Some(self.interval_ns.into_proto()),
             active_logs: self.active_logs.into_proto(),
             log_logging: self.log_logging,
             sink_logs: self.sink_logs.into_proto(),
@@ -54,9 +54,9 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
 
     fn from_proto(proto: ProtoLoggingConfig) -> Result<Self, TryFromProtoError> {
         Ok(LoggingConfig {
-            granularity_ns: proto
-                .granularity_ns
-                .into_rust_if_some("ProtoLoggingConfig::granularity_ns")?,
+            interval_ns: proto
+                .interval_ns
+                .into_rust_if_some("ProtoLoggingConfig::interval_ns")?,
             active_logs: proto.active_logs.into_rust()?,
             log_logging: proto.log_logging,
             sink_logs: proto.sink_logs.into_rust()?,

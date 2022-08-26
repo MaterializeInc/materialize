@@ -179,7 +179,7 @@ pub struct ComputeInstanceIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
     /// The interval at which to introspect.
-    pub granularity: Duration,
+    pub interval: Duration,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

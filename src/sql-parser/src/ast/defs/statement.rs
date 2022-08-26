@@ -988,8 +988,8 @@ impl_display_t!(CreateClusterStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClusterOption<T: AstInfo> {
-    /// The `INTROSPECTION GRANULARITY [[=] <interval>] option.
-    IntrospectionGranularity(WithOptionValue<T>),
+    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
+    IntrospectionInterval(WithOptionValue<T>),
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
     IntrospectionDebugging(WithOptionValue<T>),
     /// The `REPLICAS` option.
@@ -999,9 +999,9 @@ pub enum ClusterOption<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterOption::IntrospectionGranularity(granularity) => {
-                f.write_str("INTROSPECTION GRANULARITY ");
-                f.write_node(granularity);
+            ClusterOption::IntrospectionInterval(interval) => {
+                f.write_str("INTROSPECTION INTERVAL ");
+                f.write_node(interval);
             }
             ClusterOption::IntrospectionDebugging(debugging) => {
                 f.write_str("INTROSPECTION DEBUGGING ");

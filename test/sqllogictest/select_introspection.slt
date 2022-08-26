@@ -21,7 +21,7 @@ CREATE CLUSTER test
     replica_a (SIZE '1'),
     replica_b (SIZE '2')
   ),
-  INTROSPECTION GRANULARITY '50 milliseconds'
+  INTROSPECTION INTERVAL '50 milliseconds'
 
 statement ok
 SET cluster = test
@@ -127,7 +127,7 @@ DROP CLUSTER test CASCADE
 statement ok
 CREATE CLUSTER test
   REPLICAS (replica_a (SIZE '1')),
-  INTROSPECTION GRANULARITY 0
+  INTROSPECTION INTERVAL 0
 
 query error cannot read log sources on cluster with disabled introspection
 SELECT * FROM mz_materializations

@@ -275,13 +275,13 @@ SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'])), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'])), INTROSPECTION INTERVAL '1s'
 
 statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'])), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'])), INTROSPECTION INTERVAL '1s'
 
 statement ok
 DROP CLUSTER foo CASCADE

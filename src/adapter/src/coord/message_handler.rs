@@ -157,9 +157,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
             ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
-                let replica_status_granularity = chrono::Duration::seconds(60);
+                let replica_status_interval = chrono::Duration::seconds(60);
                 let when_coarsened = when
-                    .duration_trunc(replica_status_granularity)
+                    .duration_trunc(replica_status_interval)
                     .expect("Time coarsening should not fail");
                 let new = ReplicaMetadata {
                     last_heartbeat: when_coarsened,
