@@ -274,17 +274,6 @@ pub struct DecodeResult {
     pub metadata: Row,
 }
 
-/// Kafka-specific information about the event
-#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
-pub struct KafkaMetadata {
-    /// The Partition within the Kafka Topic
-    pub partition: i32,
-    /// The message offset within the given partition
-    pub offset: i64,
-    /// The message timestamp, expressed as a Unix Milliseconds Timestamp
-    pub timestamp: i64,
-}
-
 impl<K, V, D> SourceOutput<K, V, D>
 where
     K: Data,
