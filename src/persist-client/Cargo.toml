@@ -62,7 +62,7 @@ axum = "0.5.15"
 clap = { version = "3.2.17", features = ["derive", "env"] }
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["html_reports"] }
 datadriven = { version = "0.6.0", features = ["async"] }
-futures-task = "0.3.21"
+futures-task = "0.3.23"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
