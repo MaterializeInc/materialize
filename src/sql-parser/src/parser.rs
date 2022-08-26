@@ -2365,7 +2365,7 @@ impl<'a> Parser<'a> {
             // default to WITH SNAPSHOT.
             true
         };
-        let as_of = self.parse_optional_as_of()?;
+
         Ok(Statement::CreateSink(CreateSinkStatement {
             name,
             from,
@@ -2374,7 +2374,6 @@ impl<'a> Parser<'a> {
             format,
             envelope,
             with_snapshot,
-            as_of,
             if_not_exists,
         }))
     }

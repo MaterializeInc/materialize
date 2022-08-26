@@ -2186,7 +2186,6 @@ pub fn plan_create_sink(
         format,
         envelope,
         with_snapshot,
-        as_of,
         if_not_exists,
     } = stmt;
 
@@ -2281,10 +2280,6 @@ pub fn plan_create_sink(
 
     if key_desc_and_indices.is_none() && envelope == SinkEnvelope::Upsert {
         return Err(PlanError::UpsertSinkWithoutKey);
-    }
-
-    if as_of.is_some() {
-        sql_bail!("CREATE SINK ... AS OF is no longer supported");
     }
 
     let connection_builder = match connection {

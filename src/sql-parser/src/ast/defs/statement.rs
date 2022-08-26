@@ -540,7 +540,6 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope<T>>,
     pub with_snapshot: bool,
-    pub as_of: Option<AsOf<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
@@ -571,11 +570,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
             f.write_str(" WITH SNAPSHOT");
         } else {
             f.write_str(" WITHOUT SNAPSHOT");
-        }
-
-        if let Some(as_of) = &self.as_of {
-            f.write_str(" ");
-            f.write_node(as_of);
         }
     }
 }
