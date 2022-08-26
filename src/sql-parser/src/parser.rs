@@ -2338,14 +2338,6 @@ impl<'a> Parser<'a> {
         let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
         let connection = self.parse_create_sink_connection()?;
-        let mut with_options = vec![];
-        if self.parse_keyword(WITH) {
-            if let Some(Token::LParen) = self.next_token() {
-                self.prev_token();
-                self.prev_token();
-                with_options = self.parse_opt_with_options()?;
-            }
-        }
         let format = if self.parse_keyword(FORMAT) {
             Some(self.parse_format()?)
         } else {
@@ -2372,7 +2364,6 @@ impl<'a> Parser<'a> {
             name,
             from,
             connection,
-            with_options,
             format,
             envelope,
             with_snapshot,

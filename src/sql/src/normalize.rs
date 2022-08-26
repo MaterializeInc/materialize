@@ -395,7 +395,6 @@ pub fn create_statement(
         Statement::CreateSink(CreateSinkStatement {
             name,
             connection: _,
-            with_options: _,
             format: _,
             envelope: _,
             with_snapshot: _,

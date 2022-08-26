@@ -538,7 +538,6 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub from: T::ObjectName,
     pub connection: CreateSinkConnection<T>,
-    pub with_options: Vec<WithOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope<T>>,
     pub with_snapshot: bool,
@@ -555,11 +554,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         f.write_node(&self.from);
         f.write_str(" INTO ");
         f.write_node(&self.connection);
-        if !self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
-        }
         if let Some(format) = &self.format {
             f.write_str(" FORMAT ");
             f.write_node(format);
