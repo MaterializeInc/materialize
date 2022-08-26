@@ -159,6 +159,70 @@ impl Ord for Row {
     }
 }
 
+#[allow(missing_debug_implementations)]
+mod columnation {
+
+    use super::Row;
+    use columnation::{Columnation, Region, StableRegion};
+
+    /// Region allocation for `Row` data.
+    ///
+    /// Content bytes are stored in stable contiguous memory locations,
+    /// and then a `Row` referencing them is falsified.
+    #[derive(Default)]
+    pub struct RowStack {
+        region: StableRegion<u8>,
+    }
+
+    impl Columnation for Row {
+        type InnerRegion = RowStack;
+    }
+
+    impl Region for RowStack {
+        type Item = Row;
+        #[inline]
+        fn clear(&mut self) {
+            self.region.clear();
+        }
+        #[inline(always)]
+        unsafe fn copy(&mut self, item: &Row) -> Row {
+            if item.data.spilled() {
+                let bytes = self.region.copy_slice(&item.data[..]);
+                Row {
+                    data: smallvec::SmallVec::from_raw_parts(
+                        bytes.as_mut_ptr(),
+                        item.data.len(),
+                        item.data.capacity(),
+                    ),
+                }
+            } else {
+                item.clone()
+            }
+        }
+
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.region.reserve(
+                items
+                    .filter(|row| row.data.spilled())
+                    .map(|row| row.data.len())
+                    .sum(),
+            );
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.region.reserve(regions.map(|r| r.region.len()).sum());
+        }
+    }
+}
+
 /// Packs datums into a [`Row`].
 ///
 /// Creating a `RowPacker` via [`Row::packer`] starts a packing operation on the

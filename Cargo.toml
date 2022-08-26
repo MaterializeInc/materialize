@@ -107,3 +107,7 @@ tungstenite = { git = "https://github.com/snapview/tungstenite-rs.git" }
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 ssh2 = { git = "https://github.com/MaterializeInc/ssh2-rs" }
 vte = { git = "https://github.com/alacritty/vte" }
+
+[patch."https://github.com/TimelyDataflow/differential-dataflow.git"]
+differential-dataflow = { git = "https://github.com/frankmcsherry/differential-dataflow.git", branch = "columnation" }
+dogsdogsdogs = { git = "https://github.com/frankmcsherry/differential-dataflow.git", branch = "columnation" }
