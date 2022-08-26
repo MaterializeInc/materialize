@@ -159,6 +159,10 @@ allow-git = [
     # v0.18 of opentelemetry.
     "https://github.com/MaterializeInc/tracing.git",
 
+    # Waiting on https://github.com/tikv/pprof-rs/pull/158 to make it into a
+    # release.
+    "https://github.com/MaterializeInc/pprof-rs.git",
+
     # Waiting on https://github.com/AltSysrq/proptest/pull/264.
     "https://github.com/MaterializeInc/proptest.git",
 
