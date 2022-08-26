@@ -10,7 +10,6 @@
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
 use std::collections::{BTreeMap, HashSet};
-use std::time::Duration;
 
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
