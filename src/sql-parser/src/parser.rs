@@ -2017,17 +2017,32 @@ impl<'a> Parser<'a> {
     fn parse_kafka_config_options(&mut self) -> Result<KafkaConfigOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
             ACKS,
+            AVRO,
             CLIENT,
             ENABLE,
             FETCH,
             GROUP,
             ISOLATION,
+            PARTITION,
+            REPLICATION,
+            RETENTION,
+            REUSE,
+            SNAPSHOT,
+            START,
             STATISTICS,
             TOPIC,
             TRANSACTION,
-            START,
         ])? {
             ACKS => KafkaConfigOptionName::Acks,
+            AVRO => {
+                let name = match self.expect_one_of_keywords(&[KEY, VALUE])? {
+                    KEY => KafkaConfigOptionName::AvroKeyFullName,
+                    VALUE => KafkaConfigOptionName::AvroValueFullName,
+                    _ => unreachable!(),
+                };
+                self.expect_keywords(&[FULL, NAME])?;
+                name
+            }
             CLIENT => {
                 self.expect_keyword(ID)?;
                 KafkaConfigOptionName::ClientId
@@ -2052,6 +2067,19 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(LEVEL)?;
                 KafkaConfigOptionName::IsolationLevel
             }
+            PARTITION => {
+                self.expect_keyword(COUNT)?;
+                KafkaConfigOptionName::PartitionCount
+            }
+            REPLICATION => {
+                self.expect_keyword(FACTOR)?;
+                KafkaConfigOptionName::ReplicationFactor
+            }
+            RETENTION => match self.expect_one_of_keywords(&[BYTES, DURATION])? {
+                BYTES => KafkaConfigOptionName::RetentionBytes,
+                MS => KafkaConfigOptionName::RetentionMs,
+                _ => unreachable!(),
+            },
             STATISTICS => {
                 self.expect_keywords(&[INTERVAL, MS])?;
                 KafkaConfigOptionName::StatisticsIntervalMs

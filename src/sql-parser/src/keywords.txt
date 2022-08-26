@@ -79,6 +79,7 @@ Connections
 Consistency
 Constraint
 Copy
+Count
 Counter
 Create
 Cross
@@ -109,6 +110,7 @@ Distinct
 Dot
 Double
 Drop
+Duration
 Else
 Enable
 End
@@ -121,6 +123,7 @@ Exists
 Explain
 Extended
 Extract
+Factor
 False
 Fetch
 Fields
@@ -206,6 +209,7 @@ Mode
 Month
 Months
 Ms
+Name
 Names
 Natural
 Next
@@ -266,9 +270,12 @@ Repeatable
 Replace
 Replica
 Replicas
+Replication
 Reset
 Restrict
+Retention
 Returning
+Reuse
 Right
 Role
 Roles
