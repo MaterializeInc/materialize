@@ -158,8 +158,8 @@ impl Compactor {
                     metrics.compaction.applied.inc();
                 } else {
                     metrics.compaction.noop.inc();
-                    for key in res.output.keys {
-                        let key = key.complete(&machine.shard_id());
+                    for part in res.output.parts {
+                        let key = part.key.complete(&machine.shard_id());
                         retry_external(&metrics.retries.external.compaction_noop_delete, || {
                             blob.delete(&key)
                         })
@@ -204,14 +204,14 @@ impl Compactor {
             // and also resolve the (much much harder) issue of new persist
             // batch sorted-ness.
             let mut updates = Vec::new();
-            for part in req.inputs.iter() {
-                for key in part.keys.iter() {
+            for batch in req.inputs.iter() {
+                for part in batch.parts.iter() {
                     fetch_batch_part(
                         &req.shard_id,
                         blob.as_ref(),
                         &metrics,
-                        key,
-                        &part.desc,
+                        &part.key,
+                        &batch.desc,
                         |k, v, mut t, d| {
                             t.advance_by(req.desc.since().borrow());
                             let d = D::decode(d);
@@ -240,12 +240,12 @@ impl Compactor {
                     .write(chunk, req.desc.upper().clone(), req.desc.since().clone())
                     .await;
             }
-            let keys = parts.finish().await;
+            let parts = parts.finish().await;
 
             Ok(CompactRes {
                 output: HollowBatch {
                     desc: req.desc,
-                    keys,
+                    parts,
                     len,
                 },
             })
@@ -348,11 +348,11 @@ mod tests {
 
         assert_eq!(res.output.desc, req.desc);
         assert_eq!(res.output.len, 1);
-        assert_eq!(res.output.keys.len(), 1);
-        let key = &res.output.keys[0];
+        assert_eq!(res.output.parts.len(), 1);
+        let part = &res.output.parts[0];
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
-            &key.complete(&write.machine.shard_id()),
+            &part.key.complete(&write.machine.shard_id()),
         )
         .await;
         assert_eq!(part.desc, res.output.desc);

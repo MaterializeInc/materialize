@@ -534,12 +534,12 @@ where
         batch: HollowBatch<T>,
         metadata: SerdeLeasedBatchPartMetadata,
     ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
-        batch.keys.into_iter().map(move |key| LeasedBatchPart {
+        batch.parts.into_iter().map(move |part| LeasedBatchPart {
             shard_id: self.machine.shard_id(),
             reader_id: self.reader_id.clone(),
             metadata: metadata.clone(),
             desc: batch.desc.clone(),
-            key,
+            key: part.key,
             leased_seqno: Some(self.lease_seqno()),
         })
     }

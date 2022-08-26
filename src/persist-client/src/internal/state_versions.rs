@@ -218,6 +218,7 @@ impl StateVersions {
                 shard_metrics.set_upper(&new_state.upper());
                 shard_metrics.set_batch_count(new_state.batch_count());
                 shard_metrics.set_update_count(new_state.num_updates());
+                shard_metrics.set_encoded_batch_size(new_state.encoded_batch_size());
                 shard_metrics.set_seqnos_held(new_state.seqnos_held());
                 shard_metrics.inc_encoded_diff_size(payload_len);
                 Ok(Ok(()))

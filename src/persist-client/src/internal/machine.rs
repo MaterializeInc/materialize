@@ -864,7 +864,7 @@ mod tests {
                                 let mut batches = vec![];
                                 x.collections.trace.map_batches(|b| {
                                     for (batch_name, original_batch) in &state.batches {
-                                        if original_batch.keys == b.keys {
+                                        if original_batch.parts == b.parts {
                                             batches.push(batch_name.to_owned());
                                             break;
                                         }
@@ -921,16 +921,17 @@ mod tests {
                                 .expect("invalid batch")
                                 .into_hollow_batch();
                             state.batches.insert(output.to_owned(), batch.clone());
-                            format!("parts={} len={}\n", batch.keys.len(), batch.len)
+                            format!("parts={} len={}\n", batch.parts.len(), batch.len)
                         }
                         "fetch-batch" => {
                             let input = get_arg(&tc.args, "input").expect("missing input");
                             let batch = state.batches.get(input).expect("unknown batch").clone();
 
                             let mut s = String::new();
-                            for (idx, key) in batch.keys.iter().enumerate() {
+                            for (idx, part) in batch.parts.iter().enumerate() {
                                 write!(s, "<part {idx}>\n");
-                                let blob_batch = client.blob.get(&key.complete(&shard_id)).await;
+                                let blob_batch =
+                                    client.blob.get(&part.key.complete(&shard_id)).await;
                                 match blob_batch {
                                     Ok(Some(_)) | Err(_) => {}
                                     // don't try to fetch/print the keys of the batch part
@@ -944,7 +945,7 @@ mod tests {
                                     &shard_id,
                                     client.blob.as_ref(),
                                     client.metrics.as_ref(),
-                                    key,
+                                    &part.key,
                                     &batch.desc,
                                     |k, _v, t, d| {
                                         let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
@@ -976,7 +977,7 @@ mod tests {
                                 Ok(()) => {
                                     batch.desc = truncated_desc;
                                     state.batches.insert(output.to_owned(), batch.clone());
-                                    format!("parts={} len={}\n", batch.keys.len(), batch.len)
+                                    format!("parts={} len={}\n", batch.parts.len(), batch.len)
                                 }
                                 Err(err) => format!("error: {}\n", err),
                             }
@@ -1022,7 +1023,7 @@ mod tests {
                                     state.batches.insert(output.to_owned(), res.output.clone());
                                     format!(
                                         "parts={} len={}\n",
-                                        res.output.keys.len(),
+                                        res.output.parts.len(),
                                         res.output.len
                                     )
                                 }
