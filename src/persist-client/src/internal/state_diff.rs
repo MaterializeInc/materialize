@@ -13,14 +13,19 @@ use std::fmt::Debug;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::cast::CastFrom;
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist_types::Codec64;
+use mz_proto::TryFromProtoError;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::debug;
 
 use crate::internal::paths::PartialRollupKey;
-use crate::internal::state::{HollowBatch, ReaderState, State, StateCollections, WriterState};
+use crate::internal::state::{
+    HollowBatch, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ReaderState,
+    State, StateCollections, WriterState,
+};
 use crate::internal::trace::Trace;
 use crate::read::ReaderId;
 use crate::write::WriterId;
@@ -58,7 +63,7 @@ pub struct StateDiff<T> {
     pub(crate) spine: Vec<StateFieldDiff<HollowBatch<T>, ()>>,
 }
 
-impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
+impl<T: Timestamp + Codec64> StateDiff<T> {
     pub fn new(
         applier_version: semver::Version,
         seqno_from: SeqNo,
@@ -78,7 +83,9 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             spine: Vec::default(),
         }
     }
+}
 
+impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     pub fn from_diff<K, V, D>(from: &State<K, V, T, D>, to: &State<K, V, T, D>) -> Self {
         // Deconstruct from and to so we get a compile failure if new
         // fields are added.
@@ -594,4 +601,132 @@ fn sniff_compaction<'a, T: Timestamp + Lattice>(
     }
 
     Some((compaction_inputs, compaction_output.clone()))
+}
+
+impl ProtoStateFieldDiffs {
+    pub fn push_data(&mut self, mut data: Vec<u8>) {
+        self.data_lens.push(u64::cast_from(data.len()));
+        self.data_bytes.append(&mut data);
+    }
+
+    pub fn iter<'a>(&'a self) -> ProtoStateFieldDiffsIter<'a> {
+        let len = self.fields.len();
+        assert_eq!(self.diff_types.len(), len);
+
+        ProtoStateFieldDiffsIter {
+            len,
+            diff_idx: 0,
+            data_idx: 0,
+            data_offset: 0,
+            diffs: self,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.fields.len() != self.diff_types.len() {
+            return Err(format!(
+                "fields {} and diff_types {} lengths disagree",
+                self.fields.len(),
+                self.diff_types.len()
+            ));
+        }
+
+        let mut expected_data_slices = 0;
+        for diff_type in self.diff_types.iter() {
+            // We expect one for the key.
+            expected_data_slices += 1;
+            // And 1 or 2 for val depending on the diff type.
+            match ProtoStateFieldDiffType::from_i32(*diff_type) {
+                Some(ProtoStateFieldDiffType::Insert) => expected_data_slices += 1,
+                Some(ProtoStateFieldDiffType::Update) => expected_data_slices += 2,
+                Some(ProtoStateFieldDiffType::Delete) => expected_data_slices += 1,
+                None => return Err(format!("unknown diff_type {}", diff_type)),
+            }
+        }
+        if expected_data_slices != self.data_lens.len() {
+            return Err(format!(
+                "expected {} data slices got {}",
+                expected_data_slices,
+                self.data_lens.len()
+            ));
+        }
+
+        let expected_data_bytes = usize::cast_from(self.data_lens.iter().copied().sum::<u64>());
+        if expected_data_bytes != self.data_bytes.len() {
+            return Err(format!(
+                "expected {} data bytes got {}",
+                expected_data_bytes,
+                self.data_bytes.len()
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct ProtoStateFieldDiff<'a> {
+    pub key: &'a [u8],
+    pub diff_type: ProtoStateFieldDiffType,
+    pub from: &'a [u8],
+    pub to: &'a [u8],
+}
+
+pub struct ProtoStateFieldDiffsIter<'a> {
+    len: usize,
+    diff_idx: usize,
+    data_idx: usize,
+    data_offset: usize,
+    diffs: &'a ProtoStateFieldDiffs,
+}
+
+impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
+    type Item = Result<(ProtoStateField, ProtoStateFieldDiff<'a>), TryFromProtoError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.diff_idx >= self.len {
+            return None;
+        }
+        let mut next_data = || {
+            let start = self.data_offset;
+            let end = start + usize::cast_from(self.diffs.data_lens[self.data_idx]);
+            let data = &self.diffs.data_bytes[start..end];
+            self.data_idx += 1;
+            self.data_offset = end;
+            data
+        };
+        let field = match ProtoStateField::from_i32(self.diffs.fields[self.diff_idx]) {
+            Some(x) => x,
+            None => {
+                return Some(Err(TryFromProtoError::unknown_enum_variant(format!(
+                    "ProtoStateField({})",
+                    self.diffs.fields[self.diff_idx]
+                ))))
+            }
+        };
+        let diff_type =
+            match ProtoStateFieldDiffType::from_i32(self.diffs.diff_types[self.diff_idx]) {
+                Some(x) => x,
+                None => {
+                    return Some(Err(TryFromProtoError::unknown_enum_variant(format!(
+                        "ProtoStateFieldDiffType({})",
+                        self.diffs.diff_types[self.diff_idx]
+                    ))))
+                }
+            };
+        let key = next_data();
+        let (from, to): (&[u8], &[u8]) = match diff_type {
+            ProtoStateFieldDiffType::Insert => (&[], next_data()),
+            ProtoStateFieldDiffType::Update => (next_data(), next_data()),
+            ProtoStateFieldDiffType::Delete => (next_data(), &[]),
+        };
+        let diff = ProtoStateFieldDiff {
+            key,
+            diff_type,
+            from,
+            to,
+        };
+        self.diff_idx += 1;
+        Some(Ok((field, diff)))
+    }
 }
