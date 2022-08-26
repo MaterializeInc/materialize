@@ -456,7 +456,7 @@ pub struct AlterIndexResetOptionsPlan {
     pub options: HashSet<IndexOptionName>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AlterSourceItem {
     Set(String),
     Reset,
