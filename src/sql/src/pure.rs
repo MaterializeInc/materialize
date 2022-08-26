@@ -99,7 +99,7 @@ pub async fn purify_create_source(
 
                     let with_options: KafkaConfigOptionExtracted =
                         base_with_options.clone().try_into()?;
-                    let (offset_type, with_options): (_, BTreeMap<String, StringOrSecret>) =
+                    let (offset_type, _, with_options): (_, _, BTreeMap<String, StringOrSecret>) =
                         with_options.try_into()?;
 
                     let consumer = kafka_util::create_consumer(

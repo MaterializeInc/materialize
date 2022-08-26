@@ -2048,6 +2048,7 @@ impl<'a> Parser<'a> {
             CLIENT,
             ENABLE,
             FETCH,
+            GROUP,
             ISOLATION,
             STATISTICS,
             TOPIC,
@@ -2070,6 +2071,10 @@ impl<'a> Parser<'a> {
             FETCH => {
                 self.expect_keywords(&[MESSAGE, crate::keywords::MAX, BYTES])?;
                 KafkaConfigOptionName::FetchMessageMaxBytes
+            }
+            GROUP => {
+                self.expect_keywords(&[ID, PREFIX])?;
+                KafkaConfigOptionName::GroupIdPrefix
             }
             ISOLATION => {
                 self.expect_keyword(LEVEL)?;

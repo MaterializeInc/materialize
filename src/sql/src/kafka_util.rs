@@ -39,6 +39,7 @@ generate_extracted_config!(
     (EnableAutoCommit, bool),
     (EnableIdempotence, bool),
     (FetchMessageMaxBytes, i32),
+    (GroupIdPrefix, String),
     (
         IsolationLevel,
         String,
@@ -63,6 +64,7 @@ pub enum KafkaStartOffsetType {
 impl TryFrom<KafkaConfigOptionExtracted>
     for (
         Option<KafkaStartOffsetType>,
+        Option<String>,
         BTreeMap<String, StringOrSecret>,
     )
 {
@@ -74,6 +76,7 @@ impl TryFrom<KafkaConfigOptionExtracted>
             enable_auto_commit,
             enable_idempotence,
             fetch_message_max_bytes,
+            group_id_prefix,
             isolation_level,
             statistics_interval_ms,
             topic_metadata_refresh_interval_ms,
@@ -85,6 +88,7 @@ impl TryFrom<KafkaConfigOptionExtracted>
     ) -> Result<
         (
             Option<KafkaStartOffsetType>,
+            Option<String>,
             BTreeMap<String, StringOrSecret>,
         ),
         Self::Error,
@@ -149,7 +153,7 @@ impl TryFrom<KafkaConfigOptionExtracted>
             _ => None,
         };
 
-        Ok((offset, o))
+        Ok((offset, group_id_prefix, o))
     }
 }
 
