@@ -25,5 +25,5 @@ anyhow = "1.0.58"
 mz-ore = { path = "../ore", default-features = false }
 mz-walkabout = { path = "../walkabout" }
 phf = { version = "0.11.0", features = ["uncased"] }
-phf_codegen = "0.11.0"
+phf_codegen = "0.11.1"
 uncased = "0.9.7"
