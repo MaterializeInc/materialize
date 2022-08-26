@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.58"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
-async-trait = "0.1.56"
+async-trait = "0.1.57"
 axum = { version = "0.5.15", features = ["headers"] }
 base64 = "0.13.0"
 bytes = "1.2.1"
