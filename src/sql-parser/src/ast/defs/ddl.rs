@@ -814,6 +814,7 @@ pub enum KafkaConfigOptionName {
     EnableAutoCommit,
     EnableIdempotence,
     FetchMessageMaxBytes,
+    GroupIdPrefix,
     IsolationLevel,
     StatisticsIntervalMs,
     TopicMetadataRefreshIntervalMs,
@@ -830,6 +831,7 @@ impl AstDisplay for KafkaConfigOptionName {
             KafkaConfigOptionName::EnableAutoCommit => "ENABLE AUTO COMMIT",
             KafkaConfigOptionName::EnableIdempotence => "ENABLE IDEMPOTENCE",
             KafkaConfigOptionName::FetchMessageMaxBytes => "FETCH MESSAGE MAX BYTES",
+            KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
             KafkaConfigOptionName::IsolationLevel => "ISOLATION LEVEL",
             KafkaConfigOptionName::StatisticsIntervalMs => "STATISTICS INTERVAL MS",
             KafkaConfigOptionName::TopicMetadataRefreshIntervalMs => {
