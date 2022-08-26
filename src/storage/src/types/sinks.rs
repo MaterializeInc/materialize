@@ -16,6 +16,7 @@ use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
+use tracing::warn;
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
@@ -315,7 +316,6 @@ pub struct KafkaSinkConnection {
     pub connection: KafkaConnection,
     pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
-    pub topic_prefix: String,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub relation_key_indices: Option<Vec<usize>>,
     pub value_desc: RelationDesc,
@@ -344,7 +344,6 @@ proptest::prop_compose! {
         connection in any::<KafkaConnection>(),
         options in any::<BTreeMap<String, StringOrSecret>>(),
         topic in any::<String>(),
-        topic_prefix in any::<String>(),
         key_desc_and_indices in any::<Option<(RelationDesc, Vec<usize>)>>(),
         relation_key_indices in any::<Option<Vec<usize>>>(),
         value_desc in any::<RelationDesc>(),
@@ -357,7 +356,6 @@ proptest::prop_compose! {
             connection,
             options,
             topic,
-            topic_prefix,
             key_desc_and_indices,
             relation_key_indices,
             value_desc,
@@ -422,7 +420,7 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
                 .map(|(k, v)| (k.clone(), v.into_proto()))
                 .collect(),
             topic: self.topic.clone(),
-            topic_prefix: self.topic_prefix.clone(),
+            topic_prefix: self.topic.clone(),
             key_desc_and_indices: self.key_desc_and_indices.into_proto(),
             relation_key_indices: self.relation_key_indices.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
@@ -439,13 +437,20 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             .into_iter()
             .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
             .collect();
+
+        if proto.topic != proto.topic_prefix {
+            warn!(
+                "Ignoring old-style topic prefix {} for topic {}",
+                &proto.topic_prefix, &proto.topic
+            );
+        }
+
         Ok(KafkaSinkConnection {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoKafkaSinkConnection::connection")?,
             options: options?,
             topic: proto.topic,
-            topic_prefix: proto.topic_prefix,
             key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
             relation_key_indices: proto.relation_key_indices.into_rust()?,
             value_desc: proto
@@ -535,16 +540,12 @@ pub struct KafkaSinkConnectionBuilder {
     /// The user-specified key for the sink.
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
-    pub topic_prefix: String,
-    pub consistency_topic_prefix: Option<String>,
+    pub topic_name: String,
+    pub consistency_topic_name: Option<String>,
     pub consistency_format: Option<KafkaSinkFormat>,
-    pub topic_suffix_nonce: String,
     pub partition_count: i32,
     pub replication_factor: i32,
     pub fuel: usize,
-    // Forces the sink to always write to the same topic across restarts instead
-    // of picking a new topic each time.
-    pub reuse_topic: bool,
     pub retention: KafkaSinkConnectionRetention,
 }
 

@@ -1857,12 +1857,11 @@ fn kafka_sink_builder(
     format: Option<Format<Aug>>,
     consistency: Option<KafkaConsistency<Aug>>,
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
-    topic_prefix: String,
+    topic_name: String,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-    topic_suffix_nonce: String,
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let (connection, config_options) = match connection {
         mz_sql_parser::ast::KafkaConnection::Reference {
@@ -1899,9 +1898,13 @@ fn kafka_sink_builder(
 
     let reuse_topic = match with_options.remove("reuse_topic") {
         Some(SqlValueOrSecret::Value(Value::Boolean(b))) => b,
-        None => false,
+        None => true,
         Some(_) => sql_bail!("reuse_topic must be a boolean"),
     };
+
+    if !reuse_topic {
+        sql_bail!("reuse_topic=false is no longer supported");
+    }
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
         Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
@@ -1966,7 +1969,6 @@ fn kafka_sink_builder(
 
             normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
-            let include_transaction = reuse_topic || consistency.is_some();
             let schema_generator = AvroSchemaGenerator::new(
                 avro_key_fullname.as_deref(),
                 avro_value_fullname.as_deref(),
@@ -1975,7 +1977,7 @@ fn kafka_sink_builder(
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
                 matches!(envelope, SinkEnvelope::Debezium),
-                include_transaction,
+                true,
             );
             let value_schema = schema_generator.value_writer_schema().to_string();
             let key_schema = schema_generator
@@ -1993,8 +1995,7 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let consistency_config =
-        get_kafka_sink_consistency_config(&topic_prefix, &format, reuse_topic, consistency)?;
+    let consistency_config = get_kafka_sink_consistency_config(&topic_name, &format, consistency)?;
 
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
@@ -2054,17 +2055,15 @@ fn kafka_sink_builder(
             connection,
             options: config_options,
             format,
-            topic_prefix,
-            consistency_topic_prefix: consistency_topic,
+            topic_name,
+            consistency_topic_name: consistency_topic,
             consistency_format,
-            topic_suffix_nonce,
             partition_count,
             replication_factor,
             fuel: 10000,
             relation_key_indices,
             key_desc_and_indices,
             value_desc,
-            reuse_topic,
             retention,
         },
     ))
@@ -2076,9 +2075,8 @@ fn kafka_sink_builder(
 /// This is slightly complicated because of a desire to maintain backwards compatibility with
 /// previous ways of specifying consistency configuration.
 fn get_kafka_sink_consistency_config(
-    topic_prefix: &str,
+    topic_name: &str,
     sink_format: &KafkaSinkFormat,
-    reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
 ) -> Result<Option<(String, KafkaSinkFormat)>, PlanError> {
     let result = match consistency {
@@ -2131,31 +2129,27 @@ fn get_kafka_sink_consistency_config(
             Some(other) => bail_unsupported!(format!("CONSISTENCY FORMAT {}", &other)),
         },
         None => {
-            if reuse_topic {
-                match sink_format {
-                    KafkaSinkFormat::Avro {
-                        csr_connection,
-                        ..
-                    } => {
-                        let default_consistency_topic = format!("{}-consistency", topic_prefix);
-                        debug!(
-                            "Using default consistency topic '{}' for topic '{}'",
-                            default_consistency_topic, topic_prefix
-                        );
-                        Some((
-                            default_consistency_topic,
-                            KafkaSinkFormat::Avro {
-                                key_schema: None,
-                                value_schema: avro::get_debezium_transaction_schema()
-                                    .canonical_form(),
-                                csr_connection: csr_connection.clone(),
-                            },
-                        ))
-                    }
-                    KafkaSinkFormat::Json => sql_bail!("For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY (TOPIC consistency_topic FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url)'. The default of using a JSON consistency topic is not supported."),
+            match sink_format {
+                KafkaSinkFormat::Avro {
+                    csr_connection,
+                    ..
+                } => {
+                    let default_consistency_topic = format!("{}-consistency", topic_name);
+                    debug!(
+                        "Using default consistency topic '{}' for topic '{}'",
+                        default_consistency_topic, topic_name
+                    );
+                    Some((
+                        default_consistency_topic,
+                        KafkaSinkFormat::Avro {
+                            key_schema: None,
+                            value_schema: avro::get_debezium_transaction_schema()
+                                .canonical_form(),
+                            csr_connection: csr_connection.clone(),
+                        },
+                    ))
                 }
-            } else {
-                None
+                KafkaSinkFormat::Json => sql_bail!("For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY (TOPIC consistency_topic FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url)'. The default of using a JSON consistency topic is not supported."),
             }
         }
     };
@@ -2208,11 +2202,6 @@ pub fn plan_create_sink(
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
     let from = scx.get_item_by_resolved_name(&from)?;
-    let suffix_nonce = format!(
-        "{}-{}",
-        scx.catalog.config().start_time.timestamp(),
-        scx.catalog.config().nonce
-    );
 
     let mut with_options = normalize::options(&with_options)?;
 
@@ -2304,7 +2293,6 @@ pub fn plan_create_sink(
             key_desc_and_indices,
             desc.into_owned(),
             envelope,
-            suffix_nonce,
         )?,
     };
 
