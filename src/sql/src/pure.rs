@@ -11,7 +11,6 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::iter;
 use std::path::Path;
@@ -35,7 +34,7 @@ use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_proto::RustType;
 use mz_repr::strconv;
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
-use mz_storage::types::connections::{Connection, ConnectionContext, StringOrSecret};
+use mz_storage::types::connections::{Connection, ConnectionContext};
 use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
@@ -97,15 +96,18 @@ pub async fn purify_create_source(
                         }
                     };
 
-                    let with_options: KafkaConfigOptionExtracted =
+                    let extracted_options: KafkaConfigOptionExtracted =
                         base_with_options.clone().try_into()?;
-                    let (offset_type, _, with_options): (_, _, BTreeMap<String, StringOrSecret>) =
-                        with_options.try_into()?;
+
+                    let offset_type =
+                        Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
+                    let config_options =
+                        kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
 
                     let consumer = kafka_util::create_consumer(
                         &topic,
                         &connection,
-                        &with_options,
+                        &config_options,
                         connection_context.librdkafka_log_level,
                         &*connection_context.secrets_reader,
                     )
