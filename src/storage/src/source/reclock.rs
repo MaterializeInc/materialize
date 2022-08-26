@@ -63,7 +63,7 @@ impl ReclockFollower {
     /// Pushes new trace updates into this [`ReclockFollower`].
     pub fn push_trace_updates(
         &mut self,
-        updates: impl Iterator<Item = (PartitionId, Vec<(u64, MzOffset)>)>,
+        updates: impl IntoIterator<Item = (PartitionId, Vec<(u64, MzOffset)>)>,
     ) {
         for (pid, updates) in updates {
             for (ts, diff) in updates {
@@ -466,8 +466,8 @@ impl ReclockOperator {
 
     /// Returns the current contents of the remap trace. Suitable for
     /// bootstrapping a `ReclockListener`.
-    pub fn remap_trace(&self) -> Vec<(PartitionId, Vec<(u64, MzOffset)>)> {
-        self.remap_trace.clone().into_iter().collect()
+    pub fn remap_trace(&self) -> HashMap<PartitionId, Vec<(u64, MzOffset)>> {
+        self.remap_trace.clone()
     }
 
     /// Ensures that the persist shard backing this reclock operator contains bindings that cover
@@ -479,7 +479,7 @@ impl ReclockOperator {
     pub async fn mint<P: Borrow<PartitionId>>(
         &mut self,
         source_frontier: &HashMap<P, MzOffset>,
-    ) -> Vec<(PartitionId, Vec<(u64, MzOffset)>)> {
+    ) -> HashMap<PartitionId, Vec<(u64, MzOffset)>> {
         // Any updates to the remap trace that occured during minting.
         let mut trace_updates: HashMap<PartitionId, Vec<(u64, MzOffset)>> = HashMap::new();
 
@@ -519,7 +519,7 @@ impl ReclockOperator {
             }
         }
 
-        trace_updates.into_iter().collect()
+        trace_updates
     }
 
     /// Appends the provided updates to the remap collection at the next available minting

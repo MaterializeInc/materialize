@@ -530,7 +530,7 @@ fn remap_operator<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
     source_upper_summaries: timely::dataflow::Stream<G, SourceUpperSummary>,
 ) -> (
-    timely::dataflow::Stream<G, Vec<(PartitionId, Vec<(u64, MzOffset)>)>>,
+    timely::dataflow::Stream<G, HashMap<PartitionId, Vec<(u64, MzOffset)>>>,
     Rc<dyn Any>,
 )
 where
@@ -712,7 +712,7 @@ fn reclock_operator<G, S: 'static>(
         G,
         Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
     >,
-    remap_trace_updates: timely::dataflow::Stream<G, Vec<(PartitionId, Vec<(u64, MzOffset)>)>>,
+    remap_trace_updates: timely::dataflow::Stream<G, HashMap<PartitionId, Vec<(u64, MzOffset)>>>,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
