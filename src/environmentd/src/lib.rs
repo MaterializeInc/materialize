@@ -116,6 +116,10 @@ pub struct Config {
     /// Callbacks used to modify tracing/logging filters
     pub tracing_target_callbacks: TracingTargetCallbacks,
 
+    /// Where to send usage snapshots
+    pub usage_snapshot_url: Option<String>,
+    // TODO: make the interval configurable
+
     // === Testing options. ===
     /// A now generation function for mocking time.
     pub now: NowFn,
@@ -344,6 +348,38 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     });
 
+    if let Some(url) = self.usage_snapshot_url {
+        task::spawn(|| "usage_snapshotter", {
+            async move {
+                let mut loader = aws_config::from_env();
+                for (k, v) in url.query_pairs() {
+                    if k == "endpoint" {
+                        loader = loader.endpoint_resolver(Endpoint::immutable(
+                            v.parse().expect("valid S3 endpoint URI"),
+                        ));
+                    }
+                }
+                let bucket = url
+                    .host()
+                    .ok_or_else(|| anyhow!("missing bucket: {}", &url.as_str()))?
+                    .to_string();
+                let prefix = url
+                    .path()
+                    .strip_prefix('/')
+                    .unwrap_or_else(|| url.path())
+                    .to_string();
+                let s3_client = aws_sdk_s3::Client::new(&loader.load().await);
+                let usage_snapshot_task = usage::Snapshotter::new(usage::Config {
+                    interval: Duration::from_secs(2),
+                    s3_bucket: bucket,
+                    s3_prefix: prefix,
+                    s3_client: s3_client,
+                    adapter_client: adapter_client,
+                });
+                usage_snapshot_task.run_forever().await;
+            }
+        });
+    }
     Ok(Server {
         sql_local_addr,
         http_local_addr,
