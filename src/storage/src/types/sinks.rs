@@ -16,7 +16,6 @@ use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
-use tracing::warn;
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
@@ -420,7 +419,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
                 .map(|(k, v)| (k.clone(), v.into_proto()))
                 .collect(),
             topic: self.topic.clone(),
-            topic_prefix: self.topic.clone(),
             key_desc_and_indices: self.key_desc_and_indices.into_proto(),
             relation_key_indices: self.relation_key_indices.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
@@ -437,13 +435,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             .into_iter()
             .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
             .collect();
-
-        if proto.topic != proto.topic_prefix {
-            warn!(
-                "Ignoring old-style topic prefix {} for topic {}",
-                &proto.topic_prefix, &proto.topic
-            );
-        }
 
         Ok(KafkaSinkConnection {
             connection: proto

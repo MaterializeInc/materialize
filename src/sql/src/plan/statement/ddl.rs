@@ -1896,16 +1896,6 @@ fn kafka_sink_builder(
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
     };
 
-    let reuse_topic = match with_options.remove("reuse_topic") {
-        Some(SqlValueOrSecret::Value(Value::Boolean(b))) => b,
-        None => true,
-        Some(_) => sql_bail!("reuse_topic must be a boolean"),
-    };
-
-    if !reuse_topic {
-        sql_bail!("reuse_topic=false is no longer supported");
-    }
-
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
         Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
         None => None,
