@@ -558,7 +558,7 @@ macro_rules! generate_extracted_config {
             pub struct [<$option_ty Extracted>] {
                 seen: HashSet::<[<$option_ty Name>]>,
                 $(
-                    [<$option_name:snake>]: $t,
+                    pub(crate) [<$option_name:snake>]: $t,
                 )*
             }
 
