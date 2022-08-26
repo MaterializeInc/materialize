@@ -2310,7 +2310,7 @@ impl<'a> Parser<'a> {
                 SIZE => CreateSourceOptionName::Size,
                 TIMELINE => CreateSourceOptionName::Timeline,
                 TIMESTAMP => {
-                    self.expect_keyword(GRANULARITY)?;
+                    self.expect_keyword(INTERVAL)?;
                     CreateSourceOptionName::TimestampGranularity
                 }
                 _ => unreachable!(),
