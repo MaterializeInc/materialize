@@ -1814,176 +1814,6 @@ pub fn plan_create_materialized_view(
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn kafka_sink_builder(
-    scx: &StatementContext,
-    connection: mz_sql_parser::ast::KafkaConnection<Aug>,
-    format: Option<Format<Aug>>,
-    consistency: Option<KafkaConsistency<Aug>>,
-    topic_name: String,
-    relation_key_indices: Option<Vec<usize>>,
-    key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
-    value_desc: RelationDesc,
-    envelope: SinkEnvelope,
-) -> Result<StorageSinkConnectionBuilder, PlanError> {
-    let (
-        connection,
-        config_options,
-        KafkaConfigOptionExtracted {
-            reuse_topic,
-            avro_key_full_name,
-            avro_value_full_name,
-            partition_count,
-            replication_factor,
-            retention_ms,
-            retention_bytes,
-            ..
-        },
-    ) = match connection {
-        mz_sql_parser::ast::KafkaConnection::Reference {
-            connection,
-            with_options,
-        } => {
-            let item = scx.get_item_by_resolved_name(&connection)?;
-            // Get Kafka connection
-            let connection = match item.connection()? {
-                Connection::Kafka(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a kafka connection", item.name()),
-            };
-
-            for option in with_options.iter() {
-                if matches!(
-                    option.name,
-                    KafkaConfigOptionName::StartOffset | KafkaConfigOptionName::StartTimestamp
-                ) {
-                    sql_bail!("Sinks do not support {}", option.name.to_ast_string());
-                }
-            }
-
-            if !with_options.is_empty() {
-                scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
-            }
-
-            let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
-            let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
-            (connection, config_options, extracted_options)
-        }
-        mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
-    };
-
-    if key_desc_and_indices.is_none() && avro_key_full_name.is_some() {
-        sql_bail!("Cannot specify avro_key_fullname without a corresponding KEY field");
-    }
-
-    if key_desc_and_indices.is_some()
-        && (avro_key_full_name.is_some() ^ avro_value_full_name.is_some())
-    {
-        sql_bail!("Must specify both avro_key_full_name and avro_value_full_name when specifying generated schema names");
-    }
-
-    let format = match format {
-        Some(Format::Avro(AvroSchema::Csr {
-            csr_connection:
-                CsrConnectionAvro {
-                    connection,
-                    seed,
-                    key_strategy,
-                    value_strategy,
-                },
-        })) => {
-            if seed.is_some() {
-                sql_bail!("SEED option does not make sense with sinks");
-            }
-            if key_strategy.is_some() {
-                sql_bail!("KEY STRATEGY option does not make sense with sinks");
-            }
-            if value_strategy.is_some() {
-                sql_bail!("VALUE STRATEGY option does not make sense with sinks");
-            }
-
-            let item = scx.get_item_by_resolved_name(&connection.connection)?;
-            let csr_connection = match item.connection()? {
-                Connection::Csr(connection) => connection.clone(),
-                _ => {
-                    sql_bail!("{} is not a schema registry connection", item.name())
-                }
-            };
-            let schema_generator = AvroSchemaGenerator::new(
-                avro_key_full_name.as_deref(),
-                avro_value_full_name.as_deref(),
-                key_desc_and_indices
-                    .as_ref()
-                    .map(|(desc, _indices)| desc.clone()),
-                value_desc.clone(),
-                matches!(envelope, SinkEnvelope::Debezium),
-                true,
-            );
-            let value_schema = schema_generator.value_writer_schema().to_string();
-            let key_schema = schema_generator
-                .key_writer_schema()
-                .map(|key_schema| key_schema.to_string());
-
-            KafkaSinkFormat::Avro {
-                key_schema,
-                value_schema,
-                csr_connection,
-            }
-        }
-        Some(Format::Json) => KafkaSinkFormat::Json,
-        Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
-        None => bail_unsupported!("sink without format"),
-    };
-
-    let consistency_config =
-        get_kafka_sink_consistency_config(scx, &topic_name, &format, consistency)?;
-
-    if partition_count == 0 || partition_count < -1 {
-        sql_bail!(
-            "PARTION COUNT for sink topics must be a positive integer or -1 for broker default"
-        );
-    }
-
-    if replication_factor == 0 || replication_factor < -1 {
-        sql_bail!(
-            "REPLICATION FACTOR for sink topics must be a positive integer or -1 for broker default"
-        );
-    }
-
-    if retention_ms.unwrap_or(0) < -1 {
-        sql_bail!("RETENTION MS for sink topics must be greater than or equal to -1");
-    }
-
-    if retention_bytes.unwrap_or(0) < -1 {
-        sql_bail!("RETENTION BYTES for sink topics must be greater than or equal to -1");
-    }
-
-    let retention = KafkaSinkConnectionRetention {
-        duration: retention_ms,
-        bytes: retention_bytes,
-    };
-
-    let consistency_topic = consistency_config.clone().map(|config| config.0);
-    let consistency_format = consistency_config.map(|config| config.1);
-
-    Ok(StorageSinkConnectionBuilder::Kafka(
-        KafkaSinkConnectionBuilder {
-            connection,
-            options: config_options,
-            format,
-            topic_name,
-            consistency_topic_name: consistency_topic,
-            consistency_format,
-            partition_count,
-            replication_factor,
-            fuel: 10000,
-            relation_key_indices,
-            key_desc_and_indices,
-            value_desc,
-            retention,
-        },
-    ))
-}
-
 /// Determines the consistency configuration (topic and format) that should be used for a Kafka
 /// sink based on the given configuration items.
 ///
@@ -2268,6 +2098,175 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
         user_keys,
         existing_keys
     )
+}
+
+fn kafka_sink_builder(
+    scx: &StatementContext,
+    connection: mz_sql_parser::ast::KafkaConnection<Aug>,
+    format: Option<Format<Aug>>,
+    consistency: Option<KafkaConsistency<Aug>>,
+    topic_name: String,
+    relation_key_indices: Option<Vec<usize>>,
+    key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    value_desc: RelationDesc,
+    envelope: SinkEnvelope,
+) -> Result<StorageSinkConnectionBuilder, PlanError> {
+    let (
+        connection,
+        config_options,
+        KafkaConfigOptionExtracted {
+            reuse_topic,
+            avro_key_full_name,
+            avro_value_full_name,
+            partition_count,
+            replication_factor,
+            retention_ms,
+            retention_bytes,
+            ..
+        },
+    ) = match connection {
+        mz_sql_parser::ast::KafkaConnection::Reference {
+            connection,
+            with_options,
+        } => {
+            let item = scx.get_item_by_resolved_name(&connection)?;
+            // Get Kafka connection
+            let connection = match item.connection()? {
+                Connection::Kafka(connection) => connection.clone(),
+                _ => sql_bail!("{} is not a kafka connection", item.name()),
+            };
+
+            for option in with_options.iter() {
+                if matches!(
+                    option.name,
+                    KafkaConfigOptionName::StartOffset | KafkaConfigOptionName::StartTimestamp
+                ) {
+                    sql_bail!("Sinks do not support {}", option.name.to_ast_string());
+                }
+            }
+
+            if !with_options.is_empty() {
+                scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
+            }
+
+            let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
+            let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+            (connection, config_options, extracted_options)
+        }
+        mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
+    };
+
+    if key_desc_and_indices.is_none() && avro_key_full_name.is_some() {
+        sql_bail!("Cannot specify avro_key_fullname without a corresponding KEY field");
+    }
+
+    if key_desc_and_indices.is_some()
+        && (avro_key_full_name.is_some() ^ avro_value_full_name.is_some())
+    {
+        sql_bail!("Must specify both avro_key_full_name and avro_value_full_name when specifying generated schema names");
+    }
+
+    let format = match format {
+        Some(Format::Avro(AvroSchema::Csr {
+            csr_connection:
+                CsrConnectionAvro {
+                    connection,
+                    seed,
+                    key_strategy,
+                    value_strategy,
+                },
+        })) => {
+            if seed.is_some() {
+                sql_bail!("SEED option does not make sense with sinks");
+            }
+            if key_strategy.is_some() {
+                sql_bail!("KEY STRATEGY option does not make sense with sinks");
+            }
+            if value_strategy.is_some() {
+                sql_bail!("VALUE STRATEGY option does not make sense with sinks");
+            }
+
+            let item = scx.get_item_by_resolved_name(&connection.connection)?;
+            let csr_connection = match item.connection()? {
+                Connection::Csr(connection) => connection.clone(),
+                _ => {
+                    sql_bail!("{} is not a schema registry connection", item.name())
+                }
+            };
+            let schema_generator = AvroSchemaGenerator::new(
+                avro_key_full_name.as_deref(),
+                avro_value_full_name.as_deref(),
+                key_desc_and_indices
+                    .as_ref()
+                    .map(|(desc, _indices)| desc.clone()),
+                value_desc.clone(),
+                matches!(envelope, SinkEnvelope::Debezium),
+                true,
+            );
+            let value_schema = schema_generator.value_writer_schema().to_string();
+            let key_schema = schema_generator
+                .key_writer_schema()
+                .map(|key_schema| key_schema.to_string());
+
+            KafkaSinkFormat::Avro {
+                key_schema,
+                value_schema,
+                csr_connection,
+            }
+        }
+        Some(Format::Json) => KafkaSinkFormat::Json,
+        Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
+        None => bail_unsupported!("sink without format"),
+    };
+
+    let consistency_config =
+        get_kafka_sink_consistency_config(scx, &topic_name, &format, consistency)?;
+
+    if partition_count == 0 || partition_count < -1 {
+        sql_bail!(
+            "PARTION COUNT for sink topics must be a positive integer or -1 for broker default"
+        );
+    }
+
+    if replication_factor == 0 || replication_factor < -1 {
+        sql_bail!(
+            "REPLICATION FACTOR for sink topics must be a positive integer or -1 for broker default"
+        );
+    }
+
+    if retention_ms.unwrap_or(0) < -1 {
+        sql_bail!("RETENTION MS for sink topics must be greater than or equal to -1");
+    }
+
+    if retention_bytes.unwrap_or(0) < -1 {
+        sql_bail!("RETENTION BYTES for sink topics must be greater than or equal to -1");
+    }
+
+    let retention = KafkaSinkConnectionRetention {
+        duration: retention_ms,
+        bytes: retention_bytes,
+    };
+
+    let consistency_topic = consistency_config.clone().map(|config| config.0);
+    let consistency_format = consistency_config.map(|config| config.1);
+
+    Ok(StorageSinkConnectionBuilder::Kafka(
+        KafkaSinkConnectionBuilder {
+            connection,
+            options: config_options,
+            format,
+            topic_name,
+            consistency_topic_name: consistency_topic,
+            consistency_format,
+            partition_count,
+            replication_factor,
+            fuel: 10000,
+            relation_key_indices,
+            key_desc_and_indices,
+            value_desc,
+            retention,
+        },
+    ))
 }
 
 pub fn describe_create_index(
