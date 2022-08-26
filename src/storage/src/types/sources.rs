@@ -1197,7 +1197,7 @@ pub struct SourceDesc {
     pub encoding: encoding::SourceDataEncoding,
     pub envelope: SourceEnvelope,
     pub metadata_columns: Vec<IncludedColumnSource>,
-    pub timestamp_granularity: Duration,
+    pub timestamp_interval: Duration,
 }
 
 impl Arbitrary for SourceDesc {
@@ -1213,12 +1213,12 @@ impl Arbitrary for SourceDesc {
             any::<Duration>(),
         )
             .prop_map(
-                |(connection, encoding, envelope, metadata_columns, timestamp_granularity)| Self {
+                |(connection, encoding, envelope, metadata_columns, timestamp_interval)| Self {
                     connection,
                     encoding,
                     envelope,
                     metadata_columns,
-                    timestamp_granularity,
+                    timestamp_interval,
                 },
             )
             .boxed()
@@ -1232,7 +1232,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             encoding: Some(self.encoding.into_proto()),
             envelope: Some(self.envelope.into_proto()),
             metadata_columns: self.metadata_columns.into_proto(),
-            timestamp_granularity: Some(self.timestamp_granularity.into_proto()),
+            timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
     }
 
@@ -1248,9 +1248,9 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
                 .envelope
                 .into_rust_if_some("ProtoSourceDesc::envelope")?,
             metadata_columns: proto.metadata_columns.into_rust()?,
-            timestamp_granularity: proto
-                .timestamp_granularity
-                .into_rust_if_some("ProtoSourceDesc::timestamp_granularity")?,
+            timestamp_interval: proto
+                .timestamp_interval
+                .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
         })
     }
 }

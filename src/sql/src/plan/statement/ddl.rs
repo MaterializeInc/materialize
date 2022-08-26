@@ -315,7 +315,7 @@ generate_extracted_config!(
     (Remote, String),
     (Size, String),
     (Timeline, String),
-    (TimestampGranularity, Interval)
+    (TimestampInterval, Interval)
 );
 
 pub fn plan_create_source(
@@ -793,7 +793,7 @@ pub fn plan_create_source(
         remote,
         size,
         timeline,
-        timestamp_granularity,
+        timestamp_interval,
         ignore_keys,
         seen: _,
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
@@ -853,9 +853,9 @@ pub fn plan_create_source(
         (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
     };
 
-    let timestamp_granularity = match timestamp_granularity {
-        Some(timestamp_granularity) => timestamp_granularity.duration()?,
-        None => scx.catalog.config().timestamp_granularity,
+    let timestamp_interval = match timestamp_interval {
+        Some(timestamp_interval) => timestamp_interval.duration()?,
+        None => scx.catalog.config().timestamp_interval,
     };
 
     let if_not_exists = *if_not_exists;
@@ -885,7 +885,7 @@ pub fn plan_create_source(
             encoding,
             envelope,
             metadata_columns: metadata_column_types,
-            timestamp_granularity,
+            timestamp_interval,
         },
         desc,
     };
@@ -3778,7 +3778,7 @@ pub fn plan_alter_source(
                 remote: remote_opt,
                 size: size_opt,
                 timeline: timeline_opt,
-                timestamp_granularity: timestamp_granularity_opt,
+                timestamp_interval: timestamp_interval_opt,
                 ignore_keys: ignore_keys_opt,
             } = CreateSourceOptionExtracted::try_from(options)?;
 
@@ -3791,8 +3791,8 @@ pub fn plan_alter_source(
             if let Some(_) = timeline_opt {
                 sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
             }
-            if let Some(_) = timestamp_granularity_opt {
-                sql_bail!("Cannot modify the TIMESTAMP GRANULARITY of a SOURCE.");
+            if let Some(_) = timestamp_interval_opt {
+                sql_bail!("Cannot modify the TIMESTAMP INTERVAL of a SOURCE.");
             }
             if let Some(_) = ignore_keys_opt {
                 sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
@@ -3810,8 +3810,8 @@ pub fn plan_alter_source(
                     CreateSourceOptionName::Timeline => {
                         sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
                     }
-                    CreateSourceOptionName::TimestampGranularity => {
-                        sql_bail!("Cannot modify the TIMESTAMP GRANULARITY of a SOURCE.");
+                    CreateSourceOptionName::TimestampInterval => {
+                        sql_bail!("Cannot modify the TIMESTAMP INTERVAL of a SOURCE.");
                     }
                     CreateSourceOptionName::IgnoreKeys => {
                         sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");

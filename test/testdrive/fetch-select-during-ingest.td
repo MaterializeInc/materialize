@@ -21,7 +21,7 @@ $ kafka-create-topic topic=tail-fetch-during-ingest
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tail-fetch-during-ingest-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
-  WITH (TIMESTAMP GRANULARITY '100ms')
+  WITH (TIMESTAMP INTERVAL '100ms')
 
 $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestamp=1
 {"f1": 123}
