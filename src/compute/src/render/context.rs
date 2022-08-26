@@ -23,6 +23,7 @@ use differential_dataflow::Collection;
 use differential_dataflow::Data;
 use mz_compute_client::plan::AvailableCollections;
 use timely::communication::message::RefOrMut;
+use timely::container::columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
@@ -64,7 +65,7 @@ pub(crate) type ErrArrangementImport<S, T> = Arranged<
 /// former must refine the latter. The former is the timestamp used by the scope in question,
 /// and the latter is the timestamp of imported traces. The two may be different in the case
 /// of regions or iteration.
-pub struct Context<S: Scope, V: Data, T = mz_repr::Timestamp>
+pub struct Context<S: Scope, V: Data + columnation::Columnation, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -82,7 +83,7 @@ where
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
 }
 
-impl<S: Scope, V: Data> Context<S, V>
+impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
 where
     S::Timestamp: Lattice + Refines<mz_repr::Timestamp>,
 {
@@ -105,7 +106,7 @@ where
     }
 }
 
-impl<S: Scope, V: Data, T> Context<S, V, T>
+impl<S: Scope, V: Data + columnation::Columnation, T> Context<S, V, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -152,7 +153,7 @@ where
 
 /// Describes flavor of arrangement: local or imported trace.
 #[derive(Clone)]
-pub enum ArrangementFlavor<S: Scope, V: Data, T = mz_repr::Timestamp>
+pub enum ArrangementFlavor<S: Scope, V: Data + columnation::Columnation, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -264,7 +265,7 @@ where
 /// This type maintains the invariant that it does contain at least one valid
 /// source of data, either a collection or at least one arrangement.
 #[derive(Clone)]
-pub struct CollectionBundle<S: Scope, V: Data, T = mz_repr::Timestamp>
+pub struct CollectionBundle<S: Scope, V: Data + columnation::Columnation, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
@@ -273,7 +274,7 @@ where
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, V, T>>,
 }
 
-impl<S: Scope, V: Data, T: Lattice> CollectionBundle<S, V, T>
+impl<S: Scope, V: Data + columnation::Columnation, T: Lattice> CollectionBundle<S, V, T>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
