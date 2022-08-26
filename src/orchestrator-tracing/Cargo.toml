@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.58"
-async-trait = "0.1.56"
+async-trait = "0.1.57"
 clap = { version = "3.2.17", features = ["env", "derive"] }
 futures-core = "0.3.21"
 http = "0.2.8"

@@ -31,7 +31,7 @@ bench = false
 [dependencies]
 anyhow = { version = "1.0.58", features = ["backtrace"] }
 async-stream = "0.3.3"
-async-trait = "0.1.0"
+async-trait = "0.1.57"
 bincode = "1.3.3"
 bytes = "1.2.1"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
@@ -57,7 +57,7 @@ uuid = { version = "1.1.2", features = ["v4"] }
 tokio-console = ["mz-ore/tokio-console"]
 
 [dev-dependencies]
-async-trait = "0.1.56"
+async-trait = "0.1.57"
 axum = "0.5.15"
 clap = { version = "3.2.17", features = ["derive", "env"] }
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["html_reports"] }
