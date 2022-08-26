@@ -120,6 +120,8 @@ def validate(c: Composition) -> None:
         """
 # Dataflows
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 > SET cluster=cluster2
 
 > SELECT * FROM v1;
@@ -191,7 +193,7 @@ A
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
-{"before": null, "after": {"row":{"c1": 3}}}
+{"before": null, "after": {"row":{"c1": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
 """,
     )
 

@@ -11,6 +11,8 @@
 
 # Test a basic sink with multiple rows.
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 > CREATE MATERIALIZED VIEW data (a, b) AS VALUES (1, 1), (2, 1), (3, 1), (1, 2)
 
 > CREATE CONNECTION kafka_conn
@@ -21,10 +23,10 @@
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
-{"before": null, "after": {"row": {"a": 1, "b": 2}}}
-{"before": null, "after": {"row": {"a": 2, "b": 1}}}
-{"before": null, "after": {"row": {"a": 3, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # More complex sinks, with multiple keys and/or a consistency topic. We test
 # all the possible combinations of user-specified sink key and
@@ -113,8 +115,8 @@ $ kafka-create-topic topic=input
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK non_keyed_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'non-keyed-sink'
-  CONSISTENCY (TOPIC 'non-keyed-sink-consistency') FORMAT AVRO
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'non-keyed-sink-${testdrive.seed}'
+  CONSISTENCY (TOPIC 'non-keyed-sink-consistency-${testdrive.seed}') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE VIEW max_view AS SELECT a, MAX(b) as b FROM input GROUP BY a
@@ -122,23 +124,23 @@ $ kafka-create-topic topic=input
 # the sinked relation has the natural primary key (a)
 
 > CREATE SINK non_keyed_sink_of_keyed_relation FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'non-keyed-sink-of-keyed-relation'
-  CONSISTENCY (TOPIC 'non-keyed-sink-of-keyed-relation-consistency') FORMAT AVRO
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'non-keyed-sink-of-keyed-relation-${testdrive.seed}'
+  CONSISTENCY (TOPIC 'non-keyed-sink-of-keyed-relation-consistency-${testdrive.seed}') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK keyed_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'keyed-sink' KEY (a)
-  CONSISTENCY (TOPIC 'keyed-sink-consistency') FORMAT AVRO
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'keyed-sink-${testdrive.seed}' KEY (a)
+  CONSISTENCY (TOPIC 'keyed-sink-consistency-${testdrive.seed}') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK keyed_sink_of_keyed_relation FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'keyed-sink-of-keyed-relation' KEY (b)
-  CONSISTENCY (TOPIC 'keyed-sink-of-keyed-relation-consistency') FORMAT AVRO
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'keyed-sink-of-keyed-relation-${testdrive.seed}' KEY (b)
+  CONSISTENCY (TOPIC 'keyed-sink-of-keyed-relation-consistency-${testdrive.seed}') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK multi_keyed_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'multi-keyed-sink' KEY (b, a)
-  CONSISTENCY (TOPIC 'multi-keyed-sink-consistency') FORMAT AVRO
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'multi-keyed-sink-${testdrive.seed}' KEY (b, a)
+  CONSISTENCY (TOPIC 'multi-keyed-sink-consistency-${testdrive.seed}') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-ingest format=avro topic=input schema=${schema}

@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 $ set schema={
     "name": "row",
     "type": "record",
@@ -64,8 +66,8 @@ a
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
 
 $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
-{"before": null, "after": {"row":{"a": 1}}}
-{"before": null, "after": {"row":{"a": 2}}}
+{"before": null, "after": {"row":{"a": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"a": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # todo: re-enable this as part of #13453
 # Ensure that our test infra correctly sets up certs by failing when CSR is not
