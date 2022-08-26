@@ -753,7 +753,7 @@ mod tests {
 
         // InvalidUsage from ReadHandle methods.
         {
-            let mut snap = read0
+            let snap = read0
                 .snapshot(Antichain::from_elem(3))
                 .await
                 .expect("cannot serve requested as_of");
@@ -765,15 +765,17 @@ mod tests {
                 .expect_open::<String, String, u64, i64>(shard_id1)
                 .await;
             let fetcher1 = read1.clone().await.batch_fetcher().await;
-            let (batch, res) = fetcher1.fetch_batch(snap.pop().unwrap()).await;
-            read0.process_returned_leased_batch(batch);
-            assert_eq!(
-                res.unwrap_err(),
-                InvalidUsage::BatchNotFromThisShard {
-                    batch_shard: shard_id0,
-                    handle_shard: shard_id1,
-                }
-            );
+            for batch in snap {
+                let (batch, res) = fetcher1.fetch_batch(batch).await;
+                read0.process_returned_leased_batch(batch);
+                assert_eq!(
+                    res.unwrap_err(),
+                    InvalidUsage::BatchNotFromThisShard {
+                        batch_shard: shard_id0,
+                        handle_shard: shard_id1,
+                    }
+                );
+            }
         }
 
         // InvalidUsage from WriteHandle methods.

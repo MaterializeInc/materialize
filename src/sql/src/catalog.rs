@@ -213,8 +213,8 @@ pub struct CatalogConfig {
     pub unsafe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// Default timestamp granularity.
-    pub timestamp_granularity: Duration,
+    /// Default timestamp interval.
+    pub timestamp_interval: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
@@ -607,7 +607,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     session_id: Uuid::from_u128(0),
     unsafe_mode: true,
     build_info: &DUMMY_BUILD_INFO,
-    timestamp_granularity: Duration::from_secs(1),
+    timestamp_interval: Duration::from_secs(1),
     now: NOW_ZERO.clone(),
 });
 

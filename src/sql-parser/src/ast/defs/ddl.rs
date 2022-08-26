@@ -1282,7 +1282,7 @@ pub enum CreateSourceOptionName {
     Remote,
     Size,
     Timeline,
-    TimestampGranularity,
+    TimestampInterval,
 }
 
 impl AstDisplay for CreateSourceOptionName {
@@ -1292,7 +1292,7 @@ impl AstDisplay for CreateSourceOptionName {
             CreateSourceOptionName::Remote => "REMOTE",
             CreateSourceOptionName::Size => "SIZE",
             CreateSourceOptionName::Timeline => "TIMELINE",
-            CreateSourceOptionName::TimestampGranularity => "TIMESTAMP GRANULARITY",
+            CreateSourceOptionName::TimestampInterval => "TIMESTAMP INTERVAL",
         })
     }
 }

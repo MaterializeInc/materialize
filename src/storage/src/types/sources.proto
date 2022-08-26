@@ -160,7 +160,7 @@ message ProtoSourceDesc {
     mz_storage.types.sources.encoding.ProtoSourceDataEncoding encoding = 2;
     ProtoSourceEnvelope envelope = 3;
     repeated ProtoIncludedColumnSource metadata_columns = 4;
-    mz_proto.ProtoDuration timestamp_granularity = 5;
+    mz_proto.ProtoDuration timestamp_interval = 5;
 }
 
 message ProtoSourceConnection {
