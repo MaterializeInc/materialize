@@ -787,6 +787,13 @@ pub enum KafkaConfigOptionName {
     TransactionTimeoutMs,
     StartTimestamp,
     StartOffset,
+    ReuseTopic,
+    AvroKeyFullName,
+    AvroValueFullName,
+    PartitionCount,
+    ReplicationFactor,
+    RetentionMs,
+    RetentionBytes,
 }
 
 impl AstDisplay for KafkaConfigOptionName {
@@ -804,8 +811,15 @@ impl AstDisplay for KafkaConfigOptionName {
                 "TOPIC METADATA REFRESH INTERVAL MS"
             }
             KafkaConfigOptionName::TransactionTimeoutMs => "TRANSACTION TIMEOUT MS",
-            KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",
             KafkaConfigOptionName::StartOffset => "START OFFSET",
+            KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",
+            KafkaConfigOptionName::AvroKeyFullName => "AVRO KEY FULL NAME",
+            KafkaConfigOptionName::AvroValueFullName => "AVRO VALUE FULL NAME",
+            KafkaConfigOptionName::PartitionCount => "PARTITION COUNT",
+            KafkaConfigOptionName::ReplicationFactor => "REPLICATION FACTOR",
+            KafkaConfigOptionName::RetentionBytes => "RETENTION BYTES",
+            KafkaConfigOptionName::RetentionMs => "RETENTION MS",
+            KafkaConfigOptionName::ReuseTopic => "REUSE TOPIC",
         })
     }
 }

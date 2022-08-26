@@ -46,7 +46,14 @@ generate_extracted_config!(
     (TopicMetadataRefreshIntervalMs, i32),
     (TransactionTimeoutMs, i32),
     (StartTimestamp, i64),
-    (StartOffset, Vec<i64>)
+    (StartOffset, Vec<i64>),
+    (AvroKeyFullName, String),
+    (AvroValueFullName, String),
+    (PartitionCount, i32, Default(-1)),
+    (ReplicationFactor, i32, Default(-1)),
+    (RetentionBytes, i64),
+    (RetentionMs, i64),
+    (ReuseTopic, bool, Default(false))
 );
 
 /// The config options we expect to pass along when connecting to librdkafka
