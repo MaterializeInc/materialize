@@ -31,7 +31,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-top1-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
-  WITH (TIMESTAMP GRANULARITY '100ms')
+  WITH (TIMESTAMP INTERVAL '100ms')
 
 #
 # Over constants

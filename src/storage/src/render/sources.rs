@@ -103,7 +103,7 @@ where
         encoding,
         envelope,
         metadata_columns,
-        timestamp_granularity,
+        timestamp_interval,
     } = description.desc;
 
     // All sources should push their various error streams into this vector,
@@ -136,7 +136,7 @@ where
         scope,
         // Distribute read responsibility among workers.
         active: active_read_worker,
-        timestamp_granularity,
+        timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
         encoding: encoding.clone(),

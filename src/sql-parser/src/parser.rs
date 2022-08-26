@@ -2311,7 +2311,7 @@ impl<'a> Parser<'a> {
                 TIMELINE => CreateSourceOptionName::Timeline,
                 TIMESTAMP => {
                     self.expect_keyword(INTERVAL)?;
-                    CreateSourceOptionName::TimestampGranularity
+                    CreateSourceOptionName::TimestampInterval
                 }
                 _ => unreachable!(),
             };

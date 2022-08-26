@@ -107,7 +107,7 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub worker_count: usize,
     /// Granularity with which timestamps should be closed (and capabilities
     /// downgraded).
-    pub timestamp_granularity: Duration,
+    pub timestamp_interval: Duration,
     /// Whether this worker has been chosen to actually receive data.
     pub active: bool,
     /// Data encoding
@@ -417,7 +417,7 @@ pub trait SourceReader {
     /// within each partition.
     async fn next(
         &mut self,
-        timestamp_granularity: Duration,
+        timestamp_interval: Duration,
     ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
     {
         // Compatiblity implementation that delegates to the deprecated [Self::get_next_method]
@@ -433,7 +433,7 @@ pub trait SourceReader {
                     tokio::time::sleep(Duration::from_millis(1)).await
                 }
                 // There were no new messages, check again after a delay
-                Ok(NextMessage::Pending) => tokio::time::sleep(timestamp_granularity).await,
+                Ok(NextMessage::Pending) => tokio::time::sleep(timestamp_interval).await,
                 Ok(NextMessage::Finished) => return None,
             }
         }
@@ -458,7 +458,7 @@ pub trait SourceReader {
     /// The stream produces the messages that would be produced by repeated calls to `next`.
     fn into_stream<'a>(
         mut self,
-        timestamp_granularity: Duration,
+        timestamp_interval: Duration,
     ) -> LocalBoxStream<
         'a,
         Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>,
@@ -467,7 +467,7 @@ pub trait SourceReader {
         Self: Sized + 'a,
     {
         Box::pin(async_stream::stream!({
-            while let Some(msg) = self.next(timestamp_granularity).await {
+            while let Some(msg) = self.next(timestamp_interval).await {
                 yield msg;
             }
         }))
@@ -721,7 +721,7 @@ where
         worker_id,
         worker_count,
         active,
-        timestamp_granularity,
+        timestamp_interval,
         encoding,
         storage_metadata,
         resume_upper,
@@ -750,7 +750,7 @@ where
                 Arc::clone(&persist_clients),
                 storage_metadata.clone(),
                 now.clone(),
-                timestamp_granularity.clone(),
+                timestamp_interval.clone(),
                 as_of,
             )
             .await
@@ -808,12 +808,12 @@ where
             );
             let source_stream = source_reader
                 .expect("Failed to create source")
-                .into_stream(timestamp_granularity)
+                .into_stream(timestamp_interval)
                 .fuse();
 
             tokio::pin!(source_stream);
 
-            let mut timestamp_interval = tokio::time::interval(timestamp_granularity);
+            let mut timestamp_interval = tokio::time::interval(timestamp_interval);
             timestamp_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
             let mut ts_upper = Antichain::from_elem(Timestamp::minimum());
