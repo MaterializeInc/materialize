@@ -42,6 +42,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Broadcast, CapabilitySet};
 use timely::dataflow::Scope;
+use timely::order::PartialOrder;
 use timely::progress::Antichain;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
@@ -66,7 +67,7 @@ use crate::source::util::source;
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::SourceError;
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{MzOffset, SourceConnection};
+use crate::types::sources::{MzOffset, SourceConnection, SourceEnvelope};
 
 // Interval after which the source operator will yield control.
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);
@@ -103,6 +104,9 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub resume_upper: Antichain<Timestamp>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    /// The `SourceEnvelope` that is used after this raw source.
+    /// Required for the `resumption_operator`
+    pub envelope: SourceEnvelope,
 }
 
 /// A batch of messages from a source reader, along with the current upper and
@@ -154,8 +158,15 @@ where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
 {
-    let ((batches, source_upper_summaries), source_reader_token) =
-        source_reader_operator::<G, S>(config.clone(), source_connection, connection_context);
+    let (resume_stream, resume_token) = super::resumption::resumption_operator(config.clone());
+    let resume_stream = resume_stream.broadcast();
+
+    let ((batches, source_upper_summaries), source_reader_token) = source_reader_operator::<G, S>(
+        config.clone(),
+        source_connection,
+        connection_context,
+        resume_stream,
+    );
 
     let (remap_stream, remap_token) =
         remap_operator::<G, S>(config.clone(), source_upper_summaries);
@@ -163,7 +174,7 @@ where
     let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
         reclock_operator::<G, S>(config, batches, remap_stream);
 
-    let token = Rc::new((source_reader_token, remap_token));
+    let token = Rc::new((source_reader_token, remap_token, resume_token));
 
     ((reclocked_stream, reclocked_err_stream), Some(token))
 }
@@ -177,6 +188,7 @@ fn source_reader_operator<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
     source_connection: &SourceConnection,
     connection_context: ConnectionContext,
+    resume_stream: timely::dataflow::Stream<G, ()>,
 ) -> (
     (
         timely::dataflow::Stream<
@@ -205,15 +217,21 @@ where
         base_metrics,
         now,
         persist_clients,
+        // Unused by this raw source operator
+        envelope: _,
     } = config;
 
-    let (stream, capability) = source(scope, name.clone(), move |info| {
+    let (stream, capability) = source(scope, name.clone(), Some(resume_stream), move |info| {
         let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
         let waker = futures::task::waker(waker_activator);
 
         let metrics_name = upstream_name.clone().unwrap_or_else(|| name.clone());
         let source_metrics =
             SourceMetrics::new(base_metrics, &metrics_name, id, &worker_id.to_string());
+
+        // The maximal resume_upper we have seen from the resumption operator, starting at the
+        // _initial_ resume_upper
+        let mut resumption_frontier = resume_upper.clone();
 
         let sync_activator = scope.sync_activator_for(&info.address[..]);
         let base_metrics = base_metrics.clone();
@@ -402,12 +420,24 @@ where
         }));
 
         let activator = scope.activator_for(&info.address[..]);
-        move |cap_set, output| {
+        move |cap_set, output, input_resumption_frontier| {
             // Record operator has been scheduled
             //
             // WIP: Should we have these metrics for all three involved
             // operators?
             source_metrics.operator_scheduled_counter.inc();
+
+            // manage new resumption frontiers first
+            if !PartialOrder::less_equal(
+                &input_resumption_frontier.unwrap().frontier(),
+                &resumption_frontier.borrow(),
+            ) {
+                tracing::info!(
+                    resumption_frontier = ?input_resumption_frontier.unwrap().frontier(),
+                    "received new resumption frontier"
+                );
+                resumption_frontier = input_resumption_frontier.unwrap().frontier().to_owned();
+            }
 
             let mut context = Context::from_waker(&waker);
 
@@ -551,6 +581,7 @@ where
         base_metrics: _,
         now,
         persist_clients,
+        envelope: _,
     } = config;
 
     let chosen_worker = (id.hashed() % worker_count as u64) as usize;
@@ -746,6 +777,7 @@ where
         base_metrics,
         now: _,
         persist_clients: _,
+        envelope: _,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();

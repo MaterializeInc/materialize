@@ -121,6 +121,7 @@ where
         resume_upper: resume_upper.clone(),
         storage_metadata: description.storage_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
+        envelope: envelope.clone(),
     };
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the

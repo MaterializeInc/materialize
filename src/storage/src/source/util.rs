@@ -9,11 +9,13 @@
 
 use std::rc::Rc;
 
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::{Scope, Stream};
+use timely::progress::frontier::MutableAntichain;
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
@@ -49,7 +51,12 @@ use crate::source::types::SourceToken;
 ///
 /// When the source token is dropped, the timestamping_flag is set to false
 /// to terminate any spawned threads in the source operator
-pub fn source<G, D, B, L>(scope: &G, name: String, construct: B) -> (Stream<G, D>, SourceToken)
+pub fn source<G, D, B, L>(
+    scope: &G,
+    name: String,
+    input: Option<Stream<G, ()>>,
+    construct: B,
+) -> (Stream<G, D>, SourceToken)
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
@@ -57,6 +64,7 @@ where
     L: FnMut(
             &mut CapabilitySet<Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
+            Option<&MutableAntichain<Timestamp>>,
         ) -> ()
         + 'static,
 {
@@ -67,6 +75,8 @@ where
 
     let (mut data_output, data_stream) = builder.new_output();
     builder.set_notify(false);
+
+    let input = input.map(|input| builder.new_input(&input, Pipeline));
 
     builder.build(|capabilities| {
         let cap_set = CapabilitySet::from_elem(capabilities.into_element());
@@ -86,7 +96,7 @@ where
         let tick = construct(operator_info);
         let mut cap_and_tick = Some((cap_set, tick));
 
-        move |_frontier| {
+        move |frontier| {
             // Drop all capabilities if `token` is dropped.
             if drop_activator_weak.upgrade().is_none() {
                 // Drop the tick closure, too, in case dropping anything it owns
@@ -100,7 +110,11 @@ where
             if let Some((cap, tick)) = &mut cap_and_tick {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
-                tick(cap, &mut data_output.activate());
+                tick(
+                    cap,
+                    &mut data_output.activate(),
+                    input.as_ref().map(|_| &frontier[0]),
+                );
                 if cap.is_empty() {
                     // The inner source is finished. Drop our capability.
                     cap_and_tick = None;
