@@ -63,7 +63,7 @@ impl ReclockFollower {
     /// Pushes new trace updates into this [`ReclockFollower`].
     pub fn push_trace_updates(
         &mut self,
-        updates: impl IntoIterator<Item = (PartitionId, Vec<(u64, MzOffset)>)>,
+        updates: impl IntoIterator<Item = (PartitionId, Vec<(Timestamp, MzOffset)>)>,
     ) {
         for (pid, updates) in updates {
             for (ts, diff) in updates {
@@ -261,7 +261,7 @@ pub struct ReclockOperator {
     /// The function that should be used to get the current time when minting new bindings
     now: NowFn,
     /// Values of current time will be rounded to be multiples of this duration in milliseconds
-    update_interval_ms: u64,
+    update_interval_ms: Timestamp,
 }
 
 impl ReclockOperator {
@@ -313,7 +313,8 @@ impl ReclockOperator {
             read_handle,
             listener,
             now,
-            update_interval_ms: u64::try_from(update_interval.as_millis()).expect("huge duration"),
+            update_interval_ms: Timestamp::try_from(update_interval.as_millis())
+                .expect("huge duration"),
         };
 
         // Load the initial state that might exist in the shard
@@ -413,10 +414,10 @@ impl ReclockOperator {
     async fn sync(
         &mut self,
         target_upper: &Antichain<Timestamp>,
-    ) -> Vec<(PartitionId, Vec<(u64, MzOffset)>)> {
+    ) -> Vec<(PartitionId, Vec<(Timestamp, MzOffset)>)> {
         let mut pending_batch = vec![];
 
-        let mut trace_updates: HashMap<PartitionId, Vec<(u64, MzOffset)>> = HashMap::new();
+        let mut trace_updates: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> = HashMap::new();
 
         // If this is the first sync and the collection is non-empty load the initial snapshot
         let first_sync = self.upper.elements() == [Timestamp::minimum()];
@@ -466,7 +467,7 @@ impl ReclockOperator {
 
     /// Returns the current contents of the remap trace. Suitable for
     /// bootstrapping a `ReclockListener`.
-    pub fn remap_trace(&self) -> HashMap<PartitionId, Vec<(u64, MzOffset)>> {
+    pub fn remap_trace(&self) -> HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> {
         self.remap_trace.clone()
     }
 
@@ -479,9 +480,9 @@ impl ReclockOperator {
     pub async fn mint<P: Borrow<PartitionId>>(
         &mut self,
         source_frontier: &HashMap<P, MzOffset>,
-    ) -> HashMap<PartitionId, Vec<(u64, MzOffset)>> {
+    ) -> HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> {
         // Any updates to the remap trace that occured during minting.
-        let mut trace_updates: HashMap<PartitionId, Vec<(u64, MzOffset)>> = HashMap::new();
+        let mut trace_updates: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> = HashMap::new();
 
         loop {
             let mut updates = vec![];
@@ -532,7 +533,7 @@ impl ReclockOperator {
     async fn append<P>(
         &mut self,
         updates: &[(P, MzOffset)],
-    ) -> Result<Vec<(PartitionId, Vec<(u64, MzOffset)>)>, Upper<Timestamp>>
+    ) -> Result<Vec<(PartitionId, Vec<(Timestamp, MzOffset)>)>, Upper<Timestamp>>
     where
         P: Borrow<PartitionId>,
     {
@@ -717,7 +718,7 @@ mod tests {
         as_of: Antichain<Timestamp>,
     ) -> (ReclockOperator, ReclockFollower) {
         let start = tokio::time::Instant::now();
-        let now_fn = NowFn::from(move || start.elapsed().as_millis() as u64);
+        let now_fn = NowFn::from(move || start.elapsed().as_millis() as Timestamp);
 
         let metadata = CollectionMetadata {
             persist_location: PersistLocation {
