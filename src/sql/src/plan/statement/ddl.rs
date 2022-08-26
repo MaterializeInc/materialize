@@ -1923,7 +1923,6 @@ pub fn plan_create_sink(
         name,
         from,
         connection,
-        with_options,
         format,
         envelope,
         with_snapshot,
@@ -1948,8 +1947,6 @@ pub fn plan_create_sink(
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
     let from = scx.get_item_by_resolved_name(&from)?;
-
-    let mut with_options = normalize::options(&with_options)?;
 
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
     let key_indices = match &connection {
@@ -2036,8 +2033,6 @@ pub fn plan_create_sink(
             envelope,
         )?,
     };
-
-    normalize::ensure_empty_options(&with_options, "CREATE SINK")?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
