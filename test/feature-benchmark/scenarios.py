@@ -1025,7 +1025,6 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 > CREATE SINK sink1 FROM source1
   INTO KAFKA CONNECTION s1_conn TOPIC 'testdrive-sink-output-${testdrive.seed}'
   KEY (f1)
-  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
@@ -1282,7 +1281,6 @@ $ kafka-ingest format=avro topic=startup-time schema=${{schema}} publish=true re
 > CREATE SINK sink{i} FROM source{i}
   INTO KAFKA CONNECTION s1_conn TOPIC 'testdrive-sink-output-${{testdrive.seed}}'
   KEY (f2)
-  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
 """
             for i in range(0, self.n())

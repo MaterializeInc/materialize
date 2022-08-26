@@ -30,5 +30,4 @@ New York,NY,10004
 
 > CREATE SINK output FROM input
   INTO KAFKA CONNECTION kafka_conn TOPIC 'output-byo-sink-${testdrive.seed}'
-  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

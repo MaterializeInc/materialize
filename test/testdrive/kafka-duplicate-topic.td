@@ -35,13 +35,11 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema} publish=true repeat=1
 > CREATE SINK sink0 FROM source0
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-sink-output-${testdrive.seed}'
   KEY (f2)
-  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK sink1 FROM source1
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-sink-output-${testdrive.seed}'
   KEY (f2)
-  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ set-regex match=\d{13} replacement=<TIMESTAMP>

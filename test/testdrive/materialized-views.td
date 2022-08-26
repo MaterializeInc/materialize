@@ -54,7 +54,6 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 > CREATE SINK sink1 FROM v1
   INTO KAFKA CONNECTION kafka_conn
   TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}'
-  WITH (reuse_topic = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SOURCE sink1_check

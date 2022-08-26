@@ -69,7 +69,7 @@ class SinkUpsert(Check):
 
                 > CREATE SINK sink_sink1 FROM sink_source_view
                   INTO KAFKA CONNECTION kafka_conn
-                  TOPIC 'sink-sink1' WITH (reuse_topic=true)
+                  TOPIC 'sink-sink1'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                 """
             )
@@ -89,7 +89,7 @@ class SinkUpsert(Check):
 
                 > CREATE SINK sink_sink2 FROM sink_source_view
                   INTO KAFKA CONNECTION kafka_conn
-                  TOPIC 'sink-sink2' WITH (reuse_topic=true)
+                  TOPIC 'sink-sink2'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                 """,
                 """
@@ -100,7 +100,7 @@ class SinkUpsert(Check):
 
                 > CREATE SINK sink_sink3 FROM sink_source_view
                   INTO KAFKA CONNECTION kafka_conn
-                  TOPIC 'sink-sink3' WITH (reuse_topic=true)
+                  TOPIC 'sink-sink3'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                 """,
             ]
@@ -205,7 +205,6 @@ class SinkTables(Check):
                 > CREATE SINK sink_large_transaction_sink1 FROM sink_large_transaction_view
                   INTO KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}'
-                  WITH (reuse_topic=true)
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
                 """
             )
