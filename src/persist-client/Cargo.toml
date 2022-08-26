@@ -46,7 +46,7 @@ prometheus = { version = "0.13.1", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 prost = { version = "0.10.3", features = ["no-recursion-limit"] }
-semver = "1.0.12"
+semver = "1.0.13"
 serde = { version = "1.0.140", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
