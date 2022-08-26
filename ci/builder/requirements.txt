@@ -5,12 +5,12 @@
 # wheels for a wide variety of platforms, including M1 Macs.
 
 black==22.6.0
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.24.56
-boto3==1.24.56
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.24.60.post1
+boto3==1.24.60
 click==8.1.3
 cryptography==37.0.4
 colored==1.4.3
-docker==5.0.3
+docker==6.0.0
 ec2instanceconnectcli==1.0.2
 flake8==5.0.4
 humanize==4.3.0
@@ -26,10 +26,10 @@ parameterized==0.8.1
 paramiko==2.11.0
 pdoc3==0.10.0
 pg8000==1.29.1
-prettytable==3.3.0
+prettytable==3.4.0
 psutil==5.9.1
 # psycopg2 intentionally omitted. Use pg8000 instead.
-pydantic==1.9.1
+pydantic==1.9.2
 PyMySQL==1.0.2
 pytest==7.1.2
 pyyaml==6.0
@@ -46,5 +46,5 @@ types-psutil==5.9.5
 types-PyMYSQL==1.0.19
 types-PyYAML==6.0.11
 types-requests==2.28.9
-types-setuptools==65.1.0
+types-setuptools==65.3.0
 types-toml==0.10.8
