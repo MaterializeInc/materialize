@@ -79,6 +79,7 @@ pub enum PlanError {
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
+    UnacceptableTimelineName(String),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -108,6 +109,9 @@ impl PlanError {
             }
             Self::ExplainViewOnMaterializedView(_) => {
                 Some("Use EXPLAIN [...] MATERIALIZED VIEW to explain a materialized view.".into())
+            }
+            Self::UnacceptableTimelineName(_) => {
+                Some("The prefix \"mz_\" is reserved for system timelines.".into())
             }
             _ => None,
         }
@@ -176,6 +180,11 @@ impl fmt::Display for PlanError {
                 f,
                 "schema name '{}' cannot have more than two components",
                 name
+            ),
+            Self::UnacceptableTimelineName(name) => write!(
+                f,
+                "unacceptable timeline name {}",
+                name.quoted(),
             ),
             Self::SubqueriesDisallowed { context } => {
                 write!(f, "{} does not allow subqueries", context)
