@@ -24,6 +24,7 @@
 use std::error::Error;
 use std::fmt;
 use std::iter;
+use tracing::error;
 
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
@@ -425,8 +426,18 @@ impl Optimizer {
         &mut self,
         mut relation: MirRelationExpr,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
-        self.transform(&mut relation, &EmptyIndexOracle)?;
-        Ok(mz_expr::OptimizedMirRelationExpr(relation))
+        let transform_result = self.transform(&mut relation, &EmptyIndexOracle);
+        match transform_result {
+            Ok(_) => Ok(mz_expr::OptimizedMirRelationExpr(relation)),
+            Err(e) => {
+                // Without this, the dropping of `relation` (which happens automatically when
+                // returning from this function) might run into a stack overflow, see
+                // https://github.com/MaterializeInc/materialize/issues/14141
+                relation.destroy_carefully();
+                error!("Optimizer::optimize(): {}", e);
+                Err(e)
+            }
+        }
     }
 
     /// Optimizes the supplied relation expression in place, using available arrangements.
