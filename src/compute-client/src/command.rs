@@ -347,6 +347,10 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     /// the upper bound of `since` frontiers contributing to the dataflow.
     /// It is an error for this to be set to a frontier not beyond that default.
     pub as_of: Option<Antichain<T>>,
+    /// Frontier beyond which the dataflow should not execute.
+    /// Specifically, updates at times greater or equal to this frontier are suppressed.
+    /// This is often set to `as_of + 1` to enable "batch" computations.
+    pub until: Antichain<T>,
     /// Human readable name
     pub debug_name: String,
     /// Unique ID of the dataflow
@@ -410,6 +414,7 @@ proptest::prop_compose! {
             } else {
                 None
             },
+            until: Antichain::new(),
             debug_name,
             id,
         }
@@ -435,6 +440,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             index_exports: Default::default(),
             sink_exports: Default::default(),
             as_of: Default::default(),
+            until: Antichain::new(),
             debug_name: name,
             id: uuid::Uuid::new_v4(),
         }
@@ -672,6 +678,7 @@ impl RustType<ProtoDataflowDescription>
             index_exports: self.index_exports.into_proto(),
             sink_exports: self.sink_exports.into_proto(),
             as_of: self.as_of.as_ref().map(Into::into),
+            until: Some((&self.until).into()),
             debug_name: self.debug_name.clone(),
             id: Some(self.id.into_proto()),
         }
@@ -685,6 +692,7 @@ impl RustType<ProtoDataflowDescription>
             index_exports: proto.index_exports.into_rust()?,
             sink_exports: proto.sink_exports.into_rust()?,
             as_of: proto.as_of.map(Into::into),
+            until: proto.until.map(Into::into).unwrap_or_else(Antichain::new),
             debug_name: proto.debug_name,
             id: proto.id.into_rust_if_some("ProtoDataflowDescription::id")?,
         })

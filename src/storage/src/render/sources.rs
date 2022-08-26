@@ -428,7 +428,14 @@ where
                 move |(input_row, time, diff)| {
                     let arena = mz_repr::RowArena::new();
                     let mut datums_local = datum_vec.borrow_with(&input_row);
-                    linear_op_mfp.evaluate(&mut datums_local, &arena, time, diff, &mut row_builder)
+                    linear_op_mfp.evaluate(
+                        &mut datums_local,
+                        &arena,
+                        time,
+                        diff,
+                        |_time| true,
+                        &mut row_builder,
+                    )
                 }
             });
 

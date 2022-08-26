@@ -1505,6 +1505,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             index_exports: desc.index_exports,
             sink_exports: desc.sink_exports,
             as_of: desc.as_of,
+            until: desc.until,
             debug_name: desc.debug_name,
             id: desc.id,
         })

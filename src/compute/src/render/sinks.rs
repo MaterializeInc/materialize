@@ -67,7 +67,7 @@ where
             let (permutation, thinning) = permutation_for_arrangement(&key, unthinned_arity);
             let mut mfp = MapFilterProject::new(unthinned_arity);
             mfp.permute(permutation, thinning.len() + key.len());
-            bundle.as_collection_core(mfp, Some((key.clone(), None)))
+            bundle.as_collection_core(mfp, Some((key.clone(), None)), self.until.clone())
         };
 
         let sink_token = sink_render.render_continuous_sink(
