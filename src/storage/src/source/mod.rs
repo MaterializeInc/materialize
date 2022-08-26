@@ -43,7 +43,6 @@ use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Broadcast, CapabilitySet};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
-use timely::scheduling::activate::SyncActivator;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::StreamExt;
@@ -70,6 +69,7 @@ use crate::types::errors::SourceError;
 use crate::types::sources::encoding::SourceDataEncoding;
 use crate::types::sources::{MzOffset, SourceConnection};
 
+mod delimited_value_reader;
 pub mod generator;
 mod healthcheck;
 mod kafka;
@@ -82,6 +82,7 @@ mod s3;
 pub mod types;
 pub mod util;
 
+pub use delimited_value_reader::DelimitedValueSource;
 pub use generator::LoadGeneratorSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
@@ -124,100 +125,6 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub resume_upper: Antichain<Timestamp>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
-}
-
-/// A wrapper that converts a delimited source reader that only provides
-/// values into a key/value reader whose key is always None
-pub struct DelimitedValueSource<S>(S);
-
-impl<S, D: timely::Data> SourceReader for DelimitedValueSource<S>
-where
-    S: SourceReader<Key = (), Value = Option<Vec<u8>>, Diff = D>,
-{
-    type Key = Option<Vec<u8>>;
-    type Value = Option<Vec<u8>>;
-    type Diff = D;
-
-    fn new(
-        source_name: String,
-        source_id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
-        consumer_activator: SyncActivator,
-        connection: SourceConnection,
-        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
-        encoding: SourceDataEncoding,
-        metrics: crate::source::metrics::SourceBaseMetrics,
-        connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
-        S::new(
-            source_name,
-            source_id,
-            worker_id,
-            worker_count,
-            consumer_activator,
-            connection,
-            restored_offsets,
-            encoding,
-            metrics,
-            connection_context,
-        )
-        .map(Self)
-    }
-
-    fn get_next_message(
-        &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
-        match self.0.get_next_message()? {
-            NextMessage::Ready(SourceMessageType::Finalized(SourceMessage {
-                key: _,
-                value,
-                partition,
-                offset,
-                upstream_time_millis,
-                headers,
-                specific_diff,
-            })) => Ok(NextMessage::Ready(SourceMessageType::Finalized(
-                SourceMessage {
-                    key: None,
-                    value,
-                    partition,
-                    offset,
-                    upstream_time_millis,
-                    headers,
-                    specific_diff,
-                },
-            ))),
-            NextMessage::Ready(SourceMessageType::InProgress(SourceMessage {
-                key: _,
-                value,
-                partition,
-                offset,
-                upstream_time_millis,
-                headers,
-                specific_diff,
-            })) => Ok(NextMessage::Ready(SourceMessageType::InProgress(
-                SourceMessage {
-                    key: None,
-                    value,
-                    partition,
-                    offset,
-                    upstream_time_millis,
-                    headers,
-                    specific_diff,
-                },
-            ))),
-            NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(pids)) => Ok(
-                NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(pids)),
-            ),
-            NextMessage::Ready(SourceMessageType::SourceStatus(update)) => {
-                Ok(NextMessage::Ready(SourceMessageType::SourceStatus(update)))
-            }
-            NextMessage::Pending => Ok(NextMessage::Pending),
-            NextMessage::TransientDelay => Ok(NextMessage::TransientDelay),
-            NextMessage::Finished => Ok(NextMessage::Finished),
-        }
-    }
 }
 
 /// A batch of messages from a source reader, along with the current upper and
