@@ -25,7 +25,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -313,8 +313,6 @@ where
             let mut non_definite_errors = vec![];
             loop {
                 // TODO(guswyn): move lots of this out of the macro so rustfmt works better
-                // TODO(aljoscha): Get rid of the async stream here. To ease my
-                // cancel-safety anxiety.
                 tokio::select! {
                     // N.B. This branch is cancel-safe because `next` only borrows the underlying stream.
                     item = source_stream.next() => {
@@ -421,14 +419,15 @@ where
 
             while let Poll::Ready(Some(update)) = source_reader.as_mut().poll_next(&mut context) {
                 let (messages, non_definite_errors, unconsumed_partitions, source_upper) =
-                    if let Some(update) = update {
-                        update
-                    } else {
-                        trace!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
-                        // We will never produce more data, clear our capabilities to
-                        // communicate this downstream.
-                        cap_set.downgrade(&[]);
-                        return;
+                    match update {
+                        Some(update) => update,
+                        None => {
+                            trace!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
+                            // We will never produce more data, clear our capabilities to
+                            // communicate this downstream.
+                            cap_set.downgrade(&[]);
+                            return;
+                        }
                     };
 
                 trace!(
@@ -570,8 +569,6 @@ where
         vec![Antichain::new()],
     );
 
-    let activator = scope.activator_for(&remap_op.operator_info().address[..]);
-
     let token = Rc::new(());
     let token_weak = Rc::downgrade(&token);
 
@@ -665,11 +662,8 @@ where
                     }
                 });
 
-                if let Err(wait_time) = timestamper.next_mint_timestamp() {
-                    activator.activate_after(wait_time);
-                    continue;
-                }
-
+                // This will wait for the next mint timestamp to be available,
+                // if necessary.
                 let remap_trace_updates = timestamper.mint(&global_source_upper).await;
                 let mut remap_output = remap_output.activate();
                 let cap = cap_set.delayed(cap_set.first().unwrap());
@@ -779,7 +773,7 @@ where
         // The global view of the source_upper, which we track by combining
         // summaries from the raw reader operators.
         let mut global_source_upper = HashMap::new();
-        let mut untimestamped_batches = Vec::new();
+        let mut untimestamped_batches = VecDeque::new();
 
         let upper_ts = resume_upper.as_option().copied().unwrap();
         let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
@@ -799,7 +793,7 @@ where
                             assert!(previous_offset <= *offset);
                         }
                     }
-                    untimestamped_batches.push(batch);
+                    untimestamped_batches.push_back(batch)
                 }
             });
 
@@ -829,73 +823,74 @@ where
                 untimestamped_batches.len(),
             );
 
-            // WIP: Be smarter about this.
-            while let Some(untimestamped_batch) = untimestamped_batches.first_mut() {
+            while let Some(untimestamped_batch) = untimestamped_batches.front_mut() {
                 let reclocked = match timestamper.reclock(&mut untimestamped_batch.messages) {
                     Ok(reclocked) => reclocked,
                     Err((pid, offset)) => panic!("failed to reclock {} @ {}", pid, offset),
                 };
 
-                if let Some(reclocked) = reclocked {
-                    let mut output = reclocked_output.activate();
-
-                    for (_, part_messages) in reclocked {
-                        for (message, ts) in part_messages {
-                            trace!(
-                                "reclock({id}) {worker_id}/{worker_count}: \
-                                handling reclocked message: {:?}:{:?} -> {}",
-                                message.partition,
-                                message.offset,
-                                ts
-                            );
-                            handle_message::<S>(
-                                message,
-                                &mut bytes_read,
-                                &cap_set,
-                                &mut output,
-                                &mut metric_updates,
-                                ts,
-                            )
-                        }
-                    }
-
-                    // TODO: We should not emit the non-definite errors as
-                    // DataflowErrors, which will make them end up on the
-                    // persist shard for this source. Instead they should be
-                    // reported to the Healthchecker. But that's future work.
-                    if !untimestamped_batch.non_definite_errors.is_empty() {
-                        // If there are errors, it means that someone must also
-                        // have given us a capability because a
-                        // batch/batch-summary was emitted to the remap
-                        // operator.
-                        let err_cap = cap_set.delayed(
-                            cap_set
-                                .first()
-                                .expect("missing a capability for emitting errors"),
+                let reclocked = match reclocked {
+                    Some(reclocked) => reclocked,
+                    None => {
+                        trace!(
+                            "reclock({id}) {worker_id}/{worker_count}: \
+                                cannot yet reclock batch with source frontier {:?} \
+                                reclock.source_frontier: {:?}",
+                            untimestamped_batch.source_upper,
+                            timestamper.source_upper
                         );
-                        let mut session = output.session(&err_cap);
-                        let errors = untimestamped_batch
-                            .non_definite_errors
-                            .iter()
-                            .map(|e| Err(e.clone()));
-                        session.give_iterator(errors);
+                        // We keep batches in the order they arrive from the
+                        // source. And we assume that the source frontier never
+                        // regressses. So we can break now.
+                        break;
                     }
+                };
 
-                    // Pop off the processed batch.
-                    untimestamped_batches.remove(0);
-                } else {
-                    trace!(
-                        "reclock({id}) {worker_id}/{worker_count}: \
-                        cannot yet reclock batch with source frontier {:?} \
-                        reclock.source_frontier: {:?}",
-                        untimestamped_batch.source_upper,
-                        timestamper.source_upper
-                    );
-                    // We keep batches in the order they arrive from the
-                    // source. And we assume that the source frontier never
-                    // regressses. So we can break now.
-                    break;
+                let mut output = reclocked_output.activate();
+
+                for (_, part_messages) in reclocked {
+                    for (message, ts) in part_messages {
+                        trace!(
+                            "reclock({id}) {worker_id}/{worker_count}: \
+                                handling reclocked message: {:?}:{:?} -> {}",
+                            message.partition,
+                            message.offset,
+                            ts
+                        );
+                        handle_message::<S>(
+                            message,
+                            &mut bytes_read,
+                            &cap_set,
+                            &mut output,
+                            &mut metric_updates,
+                            ts,
+                        )
+                    }
                 }
+
+                // TODO: We should not emit the non-definite errors as
+                // DataflowErrors, which will make them end up on the persist
+                // shard for this source. Instead they should be reported to the
+                // Healthchecker. But that's future work.
+                if !untimestamped_batch.non_definite_errors.is_empty() {
+                    // If there are errors, it means that someone must also have
+                    // given us a capability because a batch/batch-summary was
+                    // emitted to the remap operator.
+                    let err_cap = cap_set.delayed(
+                        cap_set
+                            .first()
+                            .expect("missing a capability for emitting errors"),
+                    );
+                    let mut session = output.session(&err_cap);
+                    let errors = untimestamped_batch
+                        .non_definite_errors
+                        .iter()
+                        .map(|e| Err(e.clone()));
+                    session.give_iterator(errors);
+                }
+
+                // Pop off the processed batch.
+                untimestamped_batches.pop_front();
             }
 
             bytes_read_counter.inc_by(bytes_read as u64);
@@ -916,8 +911,9 @@ where
             );
 
             // It can happen that our view of the global source_upper is not yet
-            // up to date with what the ReclockOperator thinks. Ignore that for
-            // now.
+            // up to date with what the ReclockOperator thinks. We will
+            // evantually learn about an up-to-date frontier in a future
+            // invocation.
             if let Ok(new_ts_upper) = timestamper.reclock_frontier(&global_source_upper) {
                 let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
                 for partition_metrics in source_metrics.partition_metrics.values_mut() {
