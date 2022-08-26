@@ -280,8 +280,8 @@ select_stmt ::=
   ( 'OPTION' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
   ( 'HAVING' expr )?
   ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )?
-  ( 'LIMIT' expr )?
-  ( 'OFFSET' expr )?
+  ( 'LIMIT' integer )?
+  ( 'OFFSET' integer )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)
