@@ -311,6 +311,7 @@ pub fn describe_create_source(
 
 generate_extracted_config!(
     CreateSourceOption,
+    (IgnoreKeys, bool),
     (Remote, String),
     (Size, String),
     (Timeline, String),
@@ -787,13 +788,16 @@ pub fn plan_create_source(
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
-    let ignore_source_keys = match legacy_with_options.remove("ignore_source_keys") {
-        None => false,
-        Some(SqlValueOrSecret::Value(Value::Boolean(b))) => b,
-        Some(_) => sql_bail!("ignore_source_keys must be a boolean"),
-    };
+    let CreateSourceOptionExtracted {
+        remote,
+        size,
+        timeline,
+        timestamp_granularity,
+        ignore_keys,
+        seen: _,
+    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    if ignore_source_keys {
+    if ignore_keys.unwrap_or(false) {
         desc = desc.without_keys();
     }
 
@@ -840,14 +844,6 @@ pub fn plan_create_source(
             desc = desc.with_key(key_indices);
         }
     }
-
-    let CreateSourceOptionExtracted {
-        remote,
-        size,
-        timeline,
-        timestamp_granularity,
-        ..
-    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     let host_config = match (remote, size) {
         (None, None) => StorageHostConfig::Undefined,
@@ -3784,6 +3780,7 @@ pub fn plan_alter_source(
                 size: size_opt,
                 timeline: timeline_opt,
                 timestamp_granularity: timestamp_granularity_opt,
+                ignore_keys: ignore_keys_opt,
             } = CreateSourceOptionExtracted::try_from(options)?;
 
             if let Some(value) = remote_opt {
@@ -3797,6 +3794,9 @@ pub fn plan_alter_source(
             }
             if let Some(_) = timestamp_granularity_opt {
                 sql_bail!("Cannot modify the TIMESTAMP GRANULARITY of a SOURCE.");
+            }
+            if let Some(_) = ignore_keys_opt {
+                sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
             }
         }
         AlterSourceAction::ResetOptions(reset) => {
@@ -3813,6 +3813,9 @@ pub fn plan_alter_source(
                     }
                     CreateSourceOptionName::TimestampGranularity => {
                         sql_bail!("Cannot modify the TIMESTAMP GRANULARITY of a SOURCE.");
+                    }
+                    CreateSourceOptionName::IgnoreKeys => {
+                        sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
                     }
                 }
             }

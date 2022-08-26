@@ -181,11 +181,9 @@ impl fmt::Display for PlanError {
                 "schema name '{}' cannot have more than two components",
                 name
             ),
-            Self::UnacceptableTimelineName(name) => write!(
-                f,
-                "unacceptable timeline name {}",
-                name.quoted(),
-            ),
+            Self::UnacceptableTimelineName(name) => {
+                write!(f, "unacceptable timeline name {}", name.quoted(),)
+            }
             Self::SubqueriesDisallowed { context } => {
                 write!(f, "{} does not allow subqueries", context)
             }

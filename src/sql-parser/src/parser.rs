@@ -2295,16 +2295,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[REMOTE, SIZE, TIMELINE, TIMESTAMP])? {
-            REMOTE => CreateSourceOptionName::Remote,
-            SIZE => CreateSourceOptionName::Size,
-            TIMELINE => CreateSourceOptionName::Timeline,
-            TIMESTAMP => {
-                self.expect_keyword(GRANULARITY)?;
-                CreateSourceOptionName::TimestampGranularity
-            }
-            _ => unreachable!(),
-        };
+        let name =
+            match self.expect_one_of_keywords(&[IGNORE, REMOTE, SIZE, TIMELINE, TIMESTAMP])? {
+                IGNORE => {
+                    self.expect_keyword(KEYS)?;
+                    CreateSourceOptionName::IgnoreKeys
+                }
+                REMOTE => CreateSourceOptionName::Remote,
+                SIZE => CreateSourceOptionName::Size,
+                TIMELINE => CreateSourceOptionName::Timeline,
+                TIMESTAMP => {
+                    self.expect_keyword(GRANULARITY)?;
+                    CreateSourceOptionName::TimestampGranularity
+                }
+                _ => unreachable!(),
+            };
         Ok(name)
     }
 

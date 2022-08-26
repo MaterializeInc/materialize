@@ -59,7 +59,6 @@ Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
 `client_id`                          | `text`    | Use the supplied value as the Kafka client identifier.
 `group_id_prefix`                    | `text`    | Use the specified prefix in the consumer group ID. The resulting `group.id` looks like `<group_id_prefix>materialize-X-Y`, where `X` and `Y` are values that allow multiple concurrent Kafka consumers from the same topic.
-`ignore_source_keys`                 | `boolean` | Default: `false`. If `true`, do not perform optimizations assuming uniqueness of primary keys in schemas.
 `isolation_level`                    | `text`    | Default: `read_committed`. Controls how to read messages that were transactionally written to Kafka. Supported options are `read_committed` to read only committed messages and `read_uncommitted` to read all messages, including those that are part of an open transaction or were aborted.
 `statistics_interval_ms`             | `int`     | `librdkafka` statistics emit interval in `ms`. A value of 0 disables statistics. Statistics can be queried using the `mz_kafka_source_statistics` system table. Accepts values [0, 86400000].
 `topic_metadata_refresh_interval_ms` | `int`     | Default: `300000`. Sets the frequency in `ms` at which the system checks for new partitions. Accepts values [0,3600000].
