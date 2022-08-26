@@ -1110,46 +1110,46 @@ CREATE CLUSTER cluster REPLICAS ()
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([])] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL '1s'
 ----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL '1s'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(String("1s")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(String("1s")))] })
 
 parse-statement
-CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s', REPLICAS ()
+CREATE CLUSTER cluster INTROSPECTION INTERVAL '1s', REPLICAS ()
 ----
-CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s', REPLICAS ()
+CREATE CLUSTER cluster INTROSPECTION INTERVAL '1s', REPLICAS ()
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [IntrospectionGranularity(Value(String("1s"))), Replicas([])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [IntrospectionInterval(Value(String("1s"))), Replicas([])] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = '1s'
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL = '1s'
 ----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL '1s'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(String("1s")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(String("1s")))] })
 
 parse-statement
-CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION GRANULARITY = '1s'
+CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION INTERVAL = '1s'
 ----
 error: Expected one of REPLICAS or INTROSPECTION, found WITH
-CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION GRANULARITY = '1s'
+CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION INTERVAL = '1s'
                        ^
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = 0
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL = 0
 ----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY 0
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL 0
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(Number("0")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(Number("0")))] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = NULL
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL = NULL
 ----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY NULL
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL NULL
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(Null))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(Null))] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (), BADOPT
@@ -1166,11 +1166,11 @@ CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1']))
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }] }])] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')), INTROSPECTION INTERVAL '1s'
 ----
-error: Expected end of statement, found INTROSPECTION
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
-                                                                     ^
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1']), b (SIZE = '1')), INTROSPECTION INTERVAL '1s'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }]), IntrospectionInterval(Value(String("1s")))] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], SIZE '1'))

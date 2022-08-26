@@ -2908,16 +2908,16 @@ impl<'a> Parser<'a> {
                 self.expect_token(&Token::RParen)?;
                 Ok(ClusterOption::Replicas(replicas))
             }
-            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
+            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => {
                     let _ = self.consume_token(&Token::Eq);
                     Ok(ClusterOption::IntrospectionDebugging(
                         self.parse_with_option_value()?,
                     ))
                 }
-                GRANULARITY => {
+                INTERVAL => {
                     let _ = self.consume_token(&Token::Eq);
-                    Ok(ClusterOption::IntrospectionGranularity(
+                    Ok(ClusterOption::IntrospectionInterval(
                         self.parse_with_option_value()?,
                     ))
                 }

@@ -2698,7 +2698,7 @@ pub fn plan_create_cluster(
 ) -> Result<Plan, PlanError> {
     let mut replicas_definitions = None;
     let mut introspection_debugging = None;
-    let mut introspection_granularity: Option<Option<Interval>> = None;
+    let mut introspection_interval: Option<Option<Interval>> = None;
 
     for option in options {
         match option {
@@ -2711,13 +2711,13 @@ pub fn plan_create_cluster(
                         .map_err(|e| sql_err!("invalid INTROSPECTION DEBUGGING: {}", e))?,
                 );
             }
-            ClusterOption::IntrospectionGranularity(interval) => {
-                if introspection_granularity.is_some() {
-                    sql_bail!("INTROSPECTION GRANULARITY specified more than once");
+            ClusterOption::IntrospectionInterval(interval) => {
+                if introspection_interval.is_some() {
+                    sql_bail!("INTROSPECTION INTERVAL specified more than once");
                 }
-                introspection_granularity = Some(
+                introspection_interval = Some(
                     OptionalInterval::try_from_value(interval)
-                        .map_err(|e| sql_err!("invalid INTROSPECTION GRANULARITY: {}", e))?
+                        .map_err(|e| sql_err!("invalid INTROSPECTION INTERVAL: {}", e))?
                         .0,
                 );
             }
@@ -2740,19 +2740,17 @@ pub fn plan_create_cluster(
         None => bail_unsupported!("CLUSTER without REPLICAS option"),
     };
 
-    let introspection_granularity =
-        introspection_granularity.unwrap_or(Some(DEFAULT_INTROSPECTION_GRANULARITY));
+    let introspection_interval =
+        introspection_interval.unwrap_or(Some(DEFAULT_INTROSPECTION_INTERVAL));
 
-    let config = match (introspection_debugging, introspection_granularity) {
+    let config = match (introspection_debugging, introspection_interval) {
         (None | Some(false), None) => None,
-        (debugging, Some(granularity)) => Some(ComputeInstanceIntrospectionConfig {
+        (debugging, Some(interval)) => Some(ComputeInstanceIntrospectionConfig {
             debugging: debugging.unwrap_or(false),
-            granularity: granularity.duration()?,
+            interval: interval.duration()?,
         }),
         (Some(true), None) => {
-            sql_bail!(
-                "INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION GRANULARITY"
-            )
+            sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
         }
     };
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
@@ -2762,7 +2760,7 @@ pub fn plan_create_cluster(
     }))
 }
 
-const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
+const DEFAULT_INTROSPECTION_INTERVAL: Interval = Interval {
     micros: 1_000_000,
     months: 0,
     days: 0,

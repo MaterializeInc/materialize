@@ -265,7 +265,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         use crate::logging::BatchLogger;
         use timely::dataflow::operators::capture::event::link::EventLink;
 
-        let granularity_ms = std::cmp::max(1, logging.granularity_ns / 1_000_000) as Timestamp;
+        let interval = std::cmp::max(1, logging.interval_ns / 1_000_000) as Timestamp;
 
         // Track time relative to the Unix epoch, rather than when the server
         // started, so that the logging sources can be joined with tables and
@@ -277,13 +277,13 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
         // Establish loggers first, so we can either log the logging or not, as we like.
         let t_linked = std::rc::Rc::new(EventLink::new());
-        let mut t_logger = BatchLogger::new(Rc::clone(&t_linked), granularity_ms);
+        let mut t_logger = BatchLogger::new(Rc::clone(&t_linked), interval);
         let r_linked = std::rc::Rc::new(EventLink::new());
-        let mut r_logger = BatchLogger::new(Rc::clone(&r_linked), granularity_ms);
+        let mut r_logger = BatchLogger::new(Rc::clone(&r_linked), interval);
         let d_linked = std::rc::Rc::new(EventLink::new());
-        let mut d_logger = BatchLogger::new(Rc::clone(&d_linked), granularity_ms);
+        let mut d_logger = BatchLogger::new(Rc::clone(&d_linked), interval);
         let c_linked = std::rc::Rc::new(EventLink::new());
-        let mut c_logger = BatchLogger::new(Rc::clone(&c_linked), granularity_ms);
+        let mut c_logger = BatchLogger::new(Rc::clone(&c_linked), interval);
 
         let mut t_traces = HashMap::new();
         let mut r_traces = HashMap::new();
@@ -747,7 +747,7 @@ impl PendingPeek {
         while cursor.key_valid(&storage) {
             while cursor.val_valid(&storage) {
                 // TODO: This arena could be maintained and reuse for longer
-                // but it wasn't clear at what granularity we should flush
+                // but it wasn't clear at what interval we should flush
                 // it to ensure we don't accidentally spike our memory use.
                 // This choice is conservative, and not the end of the world
                 // from a performance perspective.

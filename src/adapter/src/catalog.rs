@@ -649,7 +649,7 @@ impl CatalogState {
                     active_logs.insert(log.variant.clone(), index_id);
                 }
                 Some(DataflowLoggingConfig {
-                    granularity_ns: introspection.granularity.as_nanos(),
+                    interval_ns: introspection.interval.as_nanos(),
                     log_logging: introspection.debugging,
                     active_logs,
                     sink_logs: BTreeMap::new(),

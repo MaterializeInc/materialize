@@ -224,7 +224,7 @@ async fn migrate<S: Append>(
                     name: "default".into(),
                     config: Some(ComputeInstanceIntrospectionConfig {
                         debugging: false,
-                        granularity: Duration::from_secs(1),
+                        interval: Duration::from_secs(1),
                     }),
                 },
             )?;
