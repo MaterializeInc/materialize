@@ -105,6 +105,7 @@ pub enum Datum<'a> {
     JsonNull,
     /// A universally unique identifier.
     Uuid(Uuid),
+    MzTimestamp(crate::Timestamp),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -165,6 +166,7 @@ impl<'a> Serialize for Datum<'a> {
             Map(m) => m.serialize(serializer),
             Numeric(n) => serializer.serialize_str(&n.to_string()),
             Uuid(u) => u.serialize(serializer),
+            MzTimestamp(t) => serializer.serialize_str(&t.to_string()),
             Dummy => serializer.serialize_str("Dummy"),
             JsonNull => serializer.serialize_str("JsonNull"),
             Null => serializer.serialize_none(),
@@ -693,6 +695,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the mz_repr::Timestamp value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::MzTimestamp`].
+    #[track_caller]
+    pub fn unwrap_mztimestamp(&self) -> crate::Timestamp {
+        match self {
+            Datum::MzTimestamp(t) => *t,
+            _ => panic!("Datum::unwrap_mztimestamp called on {:?}", self),
+        }
+    }
+
     /// Reports whether this datum is an instance of the specified column type.
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
@@ -791,6 +806,8 @@ impl<'a> Datum<'a> {
                     (Datum::JsonNull, _) => false,
                     (Datum::Numeric(_), ScalarType::Numeric { .. }) => true,
                     (Datum::Numeric(_), _) => false,
+                    (Datum::MzTimestamp(_), ScalarType::MzTimestamp) => true,
+                    (Datum::MzTimestamp(_), _) => false,
                 }
             }
         }
@@ -945,6 +962,11 @@ impl<'a> From<Uuid> for Datum<'a> {
         Datum::Uuid(uuid)
     }
 }
+impl<'a> From<crate::Timestamp> for Datum<'a> {
+    fn from(ts: crate::Timestamp) -> Datum<'a> {
+        Datum::MzTimestamp(ts)
+    }
+}
 
 impl<'a, T> From<Option<T>> for Datum<'a>
 where
@@ -1034,6 +1056,7 @@ impl fmt::Display for Datum<'_> {
                 f.write_str("}")
             }
             Datum::Numeric(n) => write!(f, "{}", n.0.to_standard_notation_string()),
+            Datum::MzTimestamp(t) => write!(f, "{}", t),
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
         }
@@ -1096,6 +1119,7 @@ impl From<&Datum<'_>> for serde_json::Value {
             | Datum::Time(_)
             | Datum::Timestamp(_)
             | Datum::TimestampTz(_)
+            | Datum::MzTimestamp(_)
             | Datum::Uuid(_) => serde_json::Value::String(datum.to_string()),
         }
     }
@@ -1223,6 +1247,8 @@ pub enum ScalarType {
     /// A vector on small ints; this is a legacy type in PG used primarily in
     /// the catalog.
     Int2Vector,
+    /// A Materialize timestamp.
+    MzTimestamp,
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
@@ -1304,6 +1330,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                     value_type: Some(value_type.into_proto()),
                     custom_id: custom_id.map(|id| id.into_proto()),
                 })),
+                ScalarType::MzTimestamp => MzTimestamp(()),
             }),
         }
     }
@@ -1375,6 +1402,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                 ),
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
+            MzTimestamp(()) => Ok(ScalarType::MzTimestamp),
         }
     }
 }
@@ -1488,6 +1516,7 @@ impl_datum_type_copy!(DateTime<Utc>, TimestampTz);
 impl_datum_type_copy!(Uuid, Uuid);
 impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
+impl_datum_type_copy!(crate::Timestamp, MzTimestamp);
 
 impl<'a, E> DatumType<'a, E> for Datum<'a> {
     fn nullable() -> bool {

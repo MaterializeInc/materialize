@@ -32,7 +32,6 @@ use mz_expr::{
 };
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
 
@@ -62,7 +61,7 @@ pub enum ExprPrepStyle<'a> {
     /// The expression is being prepared to run once at the specified logical
     /// time in the specified session.
     OneShot {
-        logical_time: Option<u64>,
+        logical_time: Option<mz_repr::Timestamp>,
         session: &'a Session,
     },
     /// The expression is being prepared for evaluation in an AS OF clause.
@@ -574,7 +573,7 @@ pub fn prep_scalar_expr(
 fn eval_unmaterializable_func(
     state: &CatalogState,
     f: &UnmaterializableFunc,
-    logical_time: Option<u64>,
+    logical_time: Option<mz_repr::Timestamp>,
     session: &Session,
 ) -> Result<MirScalarExpr, AdapterError> {
     let pack_1d_array = |datums: Vec<Datum>| {
@@ -637,9 +636,9 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::CurrentTimestamp => pack(Datum::from(session.pcx().wall_time)),
         UnmaterializableFunc::CurrentUser => pack(Datum::from(session.user())),
         UnmaterializableFunc::MzEnvironmentId => pack(Datum::from(&*state.config().environment_id)),
-        UnmaterializableFunc::MzLogicalTimestamp => match logical_time {
-            None => coord_bail!("cannot call mz_logical_timestamp in this context"),
-            Some(logical_time) => pack(Datum::from(Numeric::from(logical_time))),
+        UnmaterializableFunc::MzNow => match logical_time {
+            None => coord_bail!("cannot call mz_now in this context"),
+            Some(logical_time) => pack(Datum::MzTimestamp(logical_time)),
         },
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
         UnmaterializableFunc::MzUptime => {

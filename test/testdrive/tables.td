@@ -198,8 +198,8 @@ contains:null value in column "a" violates not-null constraint
 ! CREATE INDEX ON v (now())
 contains:cannot materialize call to current_timestamp
 
-! CREATE INDEX ON v (mz_logical_timestamp())
-contains:cannot materialize call to mz_logical_timestamp
+! CREATE INDEX ON v (mz_now())
+contains:cannot materialize call to mz_now
 
 ! CREATE INDEX ON v (mz_version())
 contains:cannot materialize call to mz_version

@@ -18,6 +18,7 @@ use std::str;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use mz_ore::soft_assert;
 use mz_ore::vec::Vector;
+use mz_persist_types::Codec64;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -37,7 +38,7 @@ use crate::adt::interval::Interval;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
 use crate::scalar::arb_datum;
-use crate::Datum;
+use crate::{Datum, Timestamp};
 
 mod encoding;
 
@@ -306,6 +307,7 @@ enum Tag {
     Numeric,
     UInt16,
     UInt64,
+    MzTimestamp,
 }
 
 // --------------------------------------------------------------------------------
@@ -510,6 +512,10 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let d = Numeric::from_raw_parts(digits, exponent.into(), bits, lsu);
             Datum::from(d)
         }
+        Tag::MzTimestamp => {
+            let t = Timestamp::decode(read_byte_array(data, offset));
+            Datum::MzTimestamp(t)
+        }
     }
 }
 
@@ -683,6 +689,10 @@ where
             push_untagged_bytes(data, &dict.data);
         }
         Datum::JsonNull => data.push(Tag::JsonNull.into()),
+        Datum::MzTimestamp(t) => {
+            data.push(Tag::MzTimestamp.into());
+            data.extend_from_slice(&t.encode());
+        }
         Datum::Dummy => data.push(Tag::Dummy.into()),
         Datum::Numeric(mut n) => {
             // Pseudo-canonical representation of decimal values with
@@ -799,6 +809,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::List(list) => 1 + size_of::<u64>() + list.data.len(),
         Datum::Map(dict) => 1 + size_of::<u64>() + dict.data.len(),
         Datum::JsonNull => 1,
+        Datum::MzTimestamp(_) => 1 + size_of::<Timestamp>(),
         Datum::Dummy => 1,
         Datum::Numeric(d) => {
             let mut d = d.0.clone();

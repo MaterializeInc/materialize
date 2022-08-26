@@ -8,14 +8,14 @@
 # by the Apache License, Version 2.0.
 
 #
-# Make sure that mz_logical_timestamp and other functions with special
+# Make sure that mz_now and other functions with special
 # handling whose code has been refactored repeatedly are not mangled
 # during a restart
 #
 
 > CREATE TABLE special_functions (f1 BIGINT);
 
-> CREATE MATERIALIZED VIEW special_functions_view AS SELECT * FROM special_functions where mz_logical_timestamp() > f1;
+> CREATE MATERIALIZED VIEW special_functions_view AS SELECT * FROM special_functions where mz_now() > f1;
 
 # Do not allow NOW / CURRENT_TIMESTAMP to be persisted at all
 # if they ever are allowed, add an upgrade test for them

@@ -134,6 +134,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             }
             Datum::JsonNull => DatumType::Other(ProtoDatumOther::JsonNull.into()),
             Datum::Uuid(x) => DatumType::Uuid(x.as_bytes().to_vec()),
+            Datum::MzTimestamp(x) => DatumType::MzTimestamp(x.into()),
             Datum::Dummy => DatumType::Other(ProtoDatumOther::Dummy.into()),
             Datum::Null => DatumType::Other(ProtoDatumOther::Null.into()),
         };
@@ -245,6 +246,7 @@ impl RowPacker<'_> {
                 let n = Decimal::from_packed_bcd(&x.bcd, x.scale).map_err(|err| err.to_string())?;
                 self.push(Datum::from(n))
             }
+            Some(DatumType::MzTimestamp(x)) => self.push(Datum::MzTimestamp((*x).into())),
             None => return Err("unknown datum type".into()),
         };
         Ok(())

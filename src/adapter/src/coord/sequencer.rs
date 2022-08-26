@@ -1916,7 +1916,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
         // Queries are independent of the logical timestamp iff there are no referenced
-        // sources or indexes and there is no reference to `mz_logical_timestamp()`.
+        // sources or indexes and there is no reference to `mz_now()`.
         let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
         // For queries that do not use AS OF, get the
         // timestamp of the in-progress transaction or create one. If this is an AS OF
@@ -2046,7 +2046,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.catalog.state(),
                 plan,
                 ExprPrepStyle::OneShot {
-                    logical_time: Some(timestamp.into()),
+                    logical_time: Some(timestamp),
                     session,
                 },
             )?;
@@ -2782,7 +2782,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 if selection.contains_temporal() {
                     tx.send(
                         Err(AdapterError::Unsupported(
-                            "calls to mz_logical_timestamp in write statements",
+                            "calls to mz_now in write statements",
                         )),
                         session,
                     );
@@ -2956,8 +2956,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let ts = self.get_local_read_ts();
-        // TODO: Convert to MzTimestamp.
-        let ts = MirScalarExpr::literal_ok(Datum::from(u64::from(ts)), ScalarType::UInt64);
+        let ts = MirScalarExpr::literal_ok(Datum::from(ts), ScalarType::MzTimestamp);
         let peek_response = match self
             .sequence_peek(
                 &mut session,
