@@ -5,15 +5,15 @@
 # wheels for a wide variety of platforms, including M1 Macs.
 
 black==22.6.0
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.24.36.post1
-boto3==1.24.36
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.24.56
+boto3==1.24.56
 click==8.1.3
 cryptography==37.0.4
 colored==1.4.3
 docker==5.0.3
 ec2instanceconnectcli==1.0.2
-flake8==4.0.1
-humanize==4.2.3
+flake8==5.0.4
+humanize==4.3.0
 isort==5.10.1
 junit-xml==1.9
 kubernetes==22.6.0
@@ -42,9 +42,9 @@ toml==0.10.2
 twine==4.0.1
 types-pkg-resources==0.1.3
 types-prettytable==3.3.1
-types-psutil==5.9.2
+types-psutil==5.9.5
 types-PyMYSQL==1.0.19
 types-PyYAML==6.0.11
-types-requests==2.28.3
-types-setuptools==63.2.1
+types-requests==2.28.9
+types-setuptools==65.1.0
 types-toml==0.10.8
