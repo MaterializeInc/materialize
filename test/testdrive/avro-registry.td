@@ -207,9 +207,9 @@ a count
 
 > CREATE SOURCE data_v4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  LEGACYWITH (ignore_source_keys = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
+  WITH (IGNORE KEYS)
 
 > SELECT a, count(*) FROM data_v4
   GROUP BY a
