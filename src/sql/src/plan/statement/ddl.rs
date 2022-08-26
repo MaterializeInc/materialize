@@ -865,19 +865,22 @@ pub fn plan_create_source(
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
-    // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
-    let timeline = if let Some(timeline) = timeline {
-        Timeline::User(timeline)
-    } else {
-        match envelope {
-            SourceEnvelope::CdcV2 => match legacy_with_options.remove("epoch_ms_timeline") {
-                None => Timeline::External(name.to_string()),
-                Some(SqlValueOrSecret::Value(Value::Boolean(true))) => Timeline::EpochMilliseconds,
-                Some(v) => sql_bail!("unsupported epoch_ms_timeline value {}", v),
-            },
+    // Allow users to specify a timeline. If they do not, determine a default
+    // timeline for the source.
+    let timeline = match timeline {
+        None => match envelope {
+            SourceEnvelope::CdcV2 => Timeline::External(name.to_string()),
             _ => Timeline::EpochMilliseconds,
+        },
+        // TODO(benesch): if we stabilize this, can we find a better name than
+        // `mz_epoch_ms`? Maybe just `mz_system`?
+        Some(timeline) if timeline == "mz_epoch_ms" => Timeline::EpochMilliseconds,
+        Some(timeline) if timeline.starts_with("mz_") => {
+            return Err(PlanError::UnacceptableTimelineName(timeline));
         }
+        Some(timeline) => Timeline::User(timeline),
     };
+
     let source = Source {
         create_sql,
         source_desc: SourceDesc {
