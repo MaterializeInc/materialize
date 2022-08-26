@@ -401,6 +401,11 @@ pub fn plan_create_source(
                         scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
                     }
 
+                    kafka_util::validate_options_for_context(
+                        &with_options,
+                        kafka_util::KafkaOptionCheckContext::Source,
+                    )?;
+
                     let extracted_options: KafkaConfigOptionExtracted =
                         with_options.clone().try_into()?;
                     let optional_start_offset =
@@ -2131,18 +2136,14 @@ fn kafka_sink_builder(
                 _ => sql_bail!("{} is not a kafka connection", item.name()),
             };
 
-            for option in with_options.iter() {
-                if matches!(
-                    option.name,
-                    KafkaConfigOptionName::StartOffset | KafkaConfigOptionName::StartTimestamp
-                ) {
-                    sql_bail!("Sinks do not support {}", option.name.to_ast_string());
-                }
-            }
-
             if !with_options.is_empty() {
                 scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
             }
+
+            kafka_util::validate_options_for_context(
+                &with_options,
+                kafka_util::KafkaOptionCheckContext::Sink,
+            )?;
 
             let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
             let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;

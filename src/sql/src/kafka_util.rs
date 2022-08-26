@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use anyhow::bail;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -21,13 +22,64 @@ use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{KafkaConfigOption, KafkaConfigOptionName};
+use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
 use mz_storage::types::connections::{KafkaConnection, StringOrSecret};
 
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum KafkaOptionCheckContext {
+    Source,
+    Sink,
+}
+
+/// Verifies that [`KafkaConfigOption`]s are only used in the appropriate contexts
+pub fn validate_options_for_context<T: AstInfo>(
+    options: &[KafkaConfigOption<T>],
+    context: KafkaOptionCheckContext,
+) -> Result<(), anyhow::Error> {
+    use KafkaConfigOptionName::*;
+    use KafkaOptionCheckContext::*;
+
+    for KafkaConfigOption { name, .. } in options {
+        let limited_to_context = match name {
+            Acks => None,
+            ClientId => None,
+            EnableAutoCommit => None,
+            EnableIdempotence => None,
+            FetchMessageMaxBytes => None,
+            GroupIdPrefix => None,
+            IsolationLevel => None,
+            StatisticsIntervalMs => None,
+            TopicMetadataRefreshIntervalMs => None,
+            TransactionTimeoutMs => None,
+            StartTimestamp => Some(Source),
+            StartOffset => Some(Source),
+            AvroKeyFullName => Some(Sink),
+            AvroValueFullName => Some(Sink),
+            PartitionCount => Some(Sink),
+            ReplicationFactor => Some(Sink),
+            RetentionBytes => Some(Sink),
+            RetentionMs => Some(Sink),
+            ReuseTopic => Some(Sink),
+        };
+        if limited_to_context.is_some() && limited_to_context != Some(context) {
+            bail!(
+                "cannot set {} for {}",
+                name.to_ast_string(),
+                match context {
+                    Source => "SOURCE",
+                    Sink => "SINK",
+                }
+            );
+        }
+    }
+
+    Ok(())
+}
 
 generate_extracted_config!(
     KafkaConfigOption,
