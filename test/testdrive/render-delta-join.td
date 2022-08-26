@@ -57,7 +57,7 @@ count
               FROM mz_catalog.mz_dataflow_addresses
               WHERE id =
                   (SELECT DISTINCT id
-                   FROM mz_catalog.mz_dataflow_names
+                   FROM mz_catalog.mz_dataflows
                    WHERE name LIKE '%.delta_join%')))
   GROUP BY id, source_node, target_node, source_port, target_port
   HAVING sum(sent) > 100

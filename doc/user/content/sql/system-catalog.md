@@ -141,9 +141,9 @@ Field         | Type       | Meaning
 `target_node` | [`bigint`] | The ID of the target operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
 `target_port` | [`bigint`] | The target operator's input port.
 
-### `mz_dataflow_names`
+### `mz_dataflows`
 
-The `mz_dataflow_names` view describes the [dataflows][dataflow] in the system.
+The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
 
 Field      | Type       | Meaning
 -----------|------------|--------
@@ -391,7 +391,7 @@ For the same information aggregated across all workers, see
 
 Field     | Type        | Meaning
 ----------|-------------|--------
-`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflow_names.id`](#mz_dataflow_names).
+`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
 `name`    | [`text`]    | The internal name of the dataflow.
 `worker`  | [`bigint`]  | The ID of the worker thread hosting the dataflow.
 `records` | [`numeric`] | The number of records in the dataflow.
@@ -406,7 +406,7 @@ For the same information broken down across workers, see
 
 Field     | Type        | Meaning
 ----------|-------------|--------
-`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflow_names.id`](#mz_dataflow_names).
+`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
 `name`    | [`text`]    | The internal name of the dataflow.
 `records` | [`numeric`] | The number of records in the dataflow.
 
@@ -420,7 +420,7 @@ Field         | Type        | Meaning
 `id`          | [`bigint`]  | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
 `name`        | [`text`]    | The internal name of the dataflow.
 `worker`      | [`bigint`]  | The ID of the worker thread hosting the dataflow.
-`dataflow_id` | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflow_names.id`](#mz_dataflow_names).
+`dataflow_id` | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
 `records`     | [`numeric`] | The number of records in the dataflow.
 
 ### `mz_relations`

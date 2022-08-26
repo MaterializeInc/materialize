@@ -376,7 +376,7 @@ impl LogView {
                         mz_dataflow_addresses_{}.id = mz_dataflow_operators_{}.id AND
                         mz_dataflow_addresses_{}.worker = mz_dataflow_operators_{}.worker AND
                         mz_catalog.list_length(mz_dataflow_addresses_{}.address) = 1",
-                "mz_dataflow_names_{}",
+                "mz_dataflows_{}",
             ),
 
             LogView::MzDataflowOperatorDataflows => (
@@ -384,17 +384,17 @@ impl LogView {
                     mz_dataflow_operators_{}.id,
                     mz_dataflow_operators_{}.name,
                     mz_dataflow_operators_{}.worker,
-                    mz_dataflow_names_{}.id as dataflow_id,
-                    mz_dataflow_names_{}.name as dataflow_name
+                    mz_dataflows_{}.id as dataflow_id,
+                    mz_dataflows_{}.name as dataflow_name
                 FROM
                     mz_catalog.mz_dataflow_operators_{},
                     mz_catalog.mz_dataflow_addresses_{},
-                    mz_catalog.mz_dataflow_names_{}
+                    mz_catalog.mz_dataflows_{}
                 WHERE
                     mz_dataflow_operators_{}.id = mz_dataflow_addresses_{}.id AND
                     mz_dataflow_operators_{}.worker = mz_dataflow_addresses_{}.worker AND
-                    mz_dataflow_names_{}.local_id = mz_dataflow_addresses_{}.address[1] AND
-                    mz_dataflow_names_{}.worker = mz_dataflow_addresses_{}.worker",
+                    mz_dataflows_{}.local_id = mz_dataflow_addresses_{}.address[1] AND
+                    mz_dataflows_{}.worker = mz_dataflow_addresses_{}.worker",
                 "mz_dataflow_operator_dataflows_{}",
             ),
 
@@ -482,18 +482,18 @@ impl LogView {
             LogView::MzRecordsPerDataflow => (
                 "SELECT
                     mz_records_per_dataflow_operator_{}.dataflow_id as id,
-                    mz_dataflow_names_{}.name,
+                    mz_dataflows_{}.name,
                     mz_records_per_dataflow_operator_{}.worker,
                     pg_catalog.SUM(mz_records_per_dataflow_operator_{}.records) as records
                 FROM
                     mz_catalog.mz_records_per_dataflow_operator_{},
-                    mz_catalog.mz_dataflow_names_{}
+                    mz_catalog.mz_dataflows_{}
                 WHERE
-                    mz_records_per_dataflow_operator_{}.dataflow_id = mz_dataflow_names_{}.id AND
-                    mz_records_per_dataflow_operator_{}.worker = mz_dataflow_names_{}.worker
+                    mz_records_per_dataflow_operator_{}.dataflow_id = mz_dataflows_{}.id AND
+                    mz_records_per_dataflow_operator_{}.worker = mz_dataflows_{}.worker
                 GROUP BY
                     mz_records_per_dataflow_operator_{}.dataflow_id,
-                    mz_dataflow_names_{}.name,
+                    mz_dataflows_{}.name,
                     mz_records_per_dataflow_operator_{}.worker",
                 "mz_records_per_dataflow_{}",
             ),
