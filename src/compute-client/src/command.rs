@@ -839,7 +839,9 @@ impl RustType<ProtoIndexDesc> for IndexDesc {
 pub struct Peek<T = mz_repr::Timestamp> {
     /// The identifier of the arrangement.
     pub id: GlobalId,
-    /// An optional key that should be used for the arrangement.
+    /// If `Some`, then look up only the given keys from the arrangement (instead of a full scan).
+    /// The vector is never empty.
+    #[proptest(strategy = "proptest::option::of(proptest::collection::vec(any::<Row>(), 1..5))")]
     pub literal_constraints: Option<Vec<Row>>,
     /// The identifier of this peek request.
     ///
