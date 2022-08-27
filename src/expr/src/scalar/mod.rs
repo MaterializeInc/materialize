@@ -793,7 +793,7 @@ impl MirScalarExpr {
                                 func: VariadicFunc::RecordCreate { .. },
                                 exprs: rec_create_args,
                             },
-                        ) = (func, (**expr1).clone(), (**expr2).clone())
+                        ) = (&*func, &**expr1, &**expr2)
                         {
                             // Literal([c1, c2]) = record_create(e1, e2)
                             //  -->
@@ -803,7 +803,6 @@ impl MirScalarExpr {
                             //
                             // `MapFilterProject::literal_constraints` relies on this transform,
                             // because `(e1,e2) IN ((1,2))` is desugared using `record_create`.
-
                             match lit_row.unpack_first() {
                                 Datum::List(datum_list) => {
                                     *e = MirScalarExpr::CallVariadic {
@@ -817,14 +816,49 @@ impl MirScalarExpr {
                                             func: BinaryFunc::Eq,
                                             expr1: Box::new(MirScalarExpr::Literal(
                                                 Ok(Row::pack_slice(&[d])),
-                                                typ,
+                                                typ.clone(),
                                             )),
-                                            expr2: Box::new(a),
+                                            expr2: Box::new(a.clone()),
                                         })
                                         .collect(),
                                     };
                                 }
                                 _ => {}
+                            }
+                        } else if let (
+                            BinaryFunc::Eq,
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate { .. },
+                                exprs: rec_create_args1,
+                            },
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate { .. },
+                                exprs: rec_create_args2,
+                            },
+                        ) = (&*func, &**expr1, &**expr2)
+                        {
+                            // record_create(a1, a2, ...) = record_create(b1, b2, ...)
+                            //  -->
+                            // a1 = b1 AND a2 = b2 AND ...
+                            //
+                            // This is similar to the previous reduction, but this one kicks in also
+                            // when only some (or none) of the record fields are literals. This
+                            // enables the discovery of literal constraints for those fields.
+                            //
+                            // Note that there is a similar decomposition in
+                            // `mz_sql::plan::transform_ast::Desugarer`, but that is earlier in the
+                            // pipeline than the compilation of IN lists to `record_create`.
+                            *e = MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::And,
+                                exprs: rec_create_args1
+                                    .into_iter()
+                                    .zip(rec_create_args2)
+                                    .map(|(a, b)| MirScalarExpr::CallBinary {
+                                        func: BinaryFunc::Eq,
+                                        expr1: Box::new(a.clone()),
+                                        expr2: Box::new(b.clone()),
+                                    })
+                                    .collect(),
                             }
                         }
                     }
