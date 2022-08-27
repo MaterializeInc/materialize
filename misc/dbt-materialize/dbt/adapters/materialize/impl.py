@@ -15,19 +15,63 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, List, Mapping, Optional
 
+import dbt.exceptions
 from dbt.adapters.base.impl import AdapterConfig
 from dbt.adapters.materialize import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
+from dbt.dataclass_schema import ValidationError, dbtClassMixin
 from dbt.exceptions import RuntimeException
 
 
 @dataclass
+class MaterializeIndexConfig(dbtClassMixin):
+    columns: List[str]
+    unique: bool = False
+    type: Optional[str] = None
+    name: Optional[str] = None
+    cluster: Optional[str] = None
+
+    def render(self, relation):
+        # We append the current timestamp to the index name because otherwise
+        # the index will only be created on every other run. See
+        # https://github.com/dbt-labs/dbt-core/issues/1945#issuecomment-576714925
+        # for an explanation.
+        now = datetime.utcnow().isoformat()
+        inputs = self.columns + [
+            relation.render(),
+            str(self.unique),
+            str(self.type),
+            now,
+        ]
+        string = "_".join(inputs)
+        return dbt.utils.md5(string)
+
+    @classmethod
+    def parse(cls, raw_index) -> Optional["MaterializeIndexConfig"]:
+        if raw_index is None:
+            return None
+        try:
+            cls.validate(raw_index)
+            return cls.from_dict(raw_index)
+        except ValidationError as exc:
+            msg = dbt.exceptions.validator_error_message(exc)
+            dbt.exceptions.raise_compiler_error(f"Could not parse index config: {msg}")
+        except TypeError:
+            dbt.exceptions.raise_compiler_error(
+                f"Invalid index config:\n"
+                f"  Got: {raw_index}\n"
+                f'  Expected a dictionary with at minimum a "columns" key'
+            )
+
+
+@dataclass
 class MaterializeConfig(AdapterConfig):
-    materialize_cluster: Optional[str] = None
+    cluster: Optional[str] = None
 
 
 class MaterializeAdapter(PostgresAdapter):
@@ -52,6 +96,9 @@ class MaterializeAdapter(PostgresAdapter):
 
     def verify_database(self, database):
         pass
+
+    def parse_index(self, raw_index: Any) -> Optional[MaterializeIndexConfig]:
+        return MaterializeIndexConfig.parse(raw_index)
 
     def list_relations_without_caching(
         self, schema_relation: MaterializeRelation
@@ -91,7 +138,7 @@ class MaterializeAdapter(PostgresAdapter):
 
     def pre_model_hook(self, config: Mapping[str, Any]) -> Optional[str]:
         default_cluster = self.config.credentials.cluster
-        cluster = config.get("materialize_cluster", default_cluster)
+        cluster = config.get("cluster", default_cluster)
         if cluster == default_cluster or cluster is None:
             return None
         previous = self._get_cluster()

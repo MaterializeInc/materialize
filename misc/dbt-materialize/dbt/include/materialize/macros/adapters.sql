@@ -67,11 +67,18 @@
   {%- set comma_separated_columns = ", ".join(index_config.columns) -%}
   {%- set index_name = index_config.render(relation) -%}
     create index if not exists
-      "{{ index_name }}"
-      on {{ relation }} {% if index_config.type -%}
-        using {{ index_config.type }}
-  {%- endif %}
-  ({{ comma_separated_columns }});
+    {% if index_config.name -%}
+        "{{ index_config.name }}"
+    {%- else %}
+        "{{ index_name }}"
+    {%- endif %}
+    {% if index_config.cluster -%}
+      in cluster {{ index_config.cluster }}
+    {%- endif %}
+    {% if index_config.type -%}
+      using {{ index_config.type }}
+    {%- endif %}
+    on {{ relation }} ({{ comma_separated_columns }});
 {%- endmacro %}
 
 -- In the dbt-adapter we extend the Relation class to include sinks and indexes
