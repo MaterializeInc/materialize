@@ -69,16 +69,17 @@ use crate::ast::{
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
     CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
-    CreateSecretStatement, CreateSinkConnection, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
-    CreateViewsSourceTarget, CreateViewsStatement, CsrConnection, CsrConnectionAvro,
-    CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
-    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
-    KafkaConnectionOption, KafkaConnectionOptionName, KafkaConsistency, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
+    CsrConnection, CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName,
+    CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode, DbzTxMetadataOption,
+    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
+    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName, KafkaConnectionOption,
+    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
     PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
@@ -1917,6 +1918,8 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(CreateSinkOption, (Snapshot, bool, Default(true)));
+
 pub fn plan_create_sink(
     scx: &StatementContext,
     stmt: CreateSinkStatement<Aug>,
@@ -1930,8 +1933,8 @@ pub fn plan_create_sink(
         connection,
         format,
         envelope,
-        with_snapshot,
         if_not_exists,
+        with_options,
     } = stmt;
 
     let envelope = match envelope {
@@ -2039,6 +2042,8 @@ pub fn plan_create_sink(
         )?,
     };
 
+    let CreateSinkOptionExtracted { snapshot, seen: _ } = with_options.try_into()?;
+
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
         sink: Sink {
@@ -2047,7 +2052,7 @@ pub fn plan_create_sink(
             connection_builder,
             envelope,
         },
-        with_snapshot,
+        with_snapshot: snapshot,
         if_not_exists,
     }))
 }

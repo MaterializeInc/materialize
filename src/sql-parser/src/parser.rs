@@ -2348,16 +2348,14 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let with_snapshot = if self.parse_keyword(WITH) {
-            self.expect_keyword(SNAPSHOT)?;
-            true
-        } else if self.parse_keyword(WITHOUT) {
-            self.expect_keyword(SNAPSHOT)?;
-            false
+
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_sink_options)?;
+            self.expect_token(&Token::RParen)?;
+            options
         } else {
-            // If neither WITH nor WITHOUT SNAPSHOT is provided,
-            // default to WITH SNAPSHOT.
-            true
+            vec![]
         };
 
         Ok(Statement::CreateSink(CreateSinkStatement {
@@ -2366,9 +2364,22 @@ impl<'a> Parser<'a> {
             connection,
             format,
             envelope,
-            with_snapshot,
             if_not_exists,
+            with_options,
         }))
+    }
+
+    fn parse_create_sink_options(&mut self) -> Result<CreateSinkOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[SNAPSHOT])? {
+            SNAPSHOT => CreateSinkOptionName::Snapshot,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(CreateSinkOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_create_source_connection(

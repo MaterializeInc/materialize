@@ -145,22 +145,22 @@ $ kafka-verify format=avro sink=materialize.public.snk4
 {"before": null, "after": {"row":{"c": true}}, "transaction": {"id": "<TIMESTAMP>"}}
 {"before": null, "after": {"row":{"c": true}}, "transaction": {"id": "<TIMESTAMP>"}}
 
-# Test AS OF and WITH/WITHOUT SNAPSHOT.
+# Test WITH (SNAPSHOT).
 #
 # N.B. It's important that we've verified above that a sink exporting
 # src_materialized has processed the row. This means the data has a definite
-# timestamp.  Without that, WITHOUT SNAPSHOT could correct either include or
+# timestamp.  Without that, WITH (SNAPSHOT = false) could correct either include or
 # exclude the old rows.
 
 > CREATE SINK snk5 FROM src_materialized
   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk5'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  WITHOUT SNAPSHOT
+  WITH (SNAPSHOT = false)
 
 > CREATE SINK snk6 FROM src_materialized
   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk6'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  WITH SNAPSHOT
+  WITH (SNAPSHOT = true)
 
 $ kafka-ingest topic=test format=bytes
 extra,row
@@ -173,19 +173,19 @@ $ kafka-verify format=avro sink=materialize.public.snk6 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
 {"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
 
-# Test that we are correctly handling WITH/WITHOUT SNAPSHOT on views with
-# empty upper frontier
+# Test that we are correctly handling SNAPSHOT on views with empty upper
+# frontier
 > CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);
 
 > CREATE SINK snk7 FROM foo
   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk7'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  WITHOUT SNAPSHOT
+  WITH (SNAPSHOT = false)
 
 > CREATE SINK snk8 FROM foo
   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk8'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  WITH SNAPSHOT
+  WITH (SNAPSHOT)
 
 $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
