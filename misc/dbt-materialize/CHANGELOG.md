@@ -1,13 +1,15 @@
 # dbt-materialize Changelog
 ## 1.1.4 - 2022-08-24
 
-* Enable cluster use for materialize cloud deployments.
+* Enable configuration of [clusters](https://materialize.com/docs/unstable/sql/create-cluster/#conceptual-framework), which are a feature in a forthcoming version of Materialize Cloud, via:
+
+  * A new `cluster` connection parameter, which specifies the default cluster for the connection.
+  * A new `materialize_cluster` option for materializedview materializations, which specifies the cluster for an individual materialized view.
 
   ```sql
   {{ config(materialize_cluster='not_default', materialized='materializedview') }}
     SELECT ...
   ```
-* Run tests against materialize/materialized:v0.26.4 and cloud(main).
 
 ## 1.1.3 - 2022-08-17
 
