@@ -397,7 +397,6 @@ pub fn create_statement(
             connection: _,
             format: _,
             envelope: _,
-            with_snapshot: _,
             if_not_exists,
             ..
         }) => {
