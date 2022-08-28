@@ -17,9 +17,13 @@ INSERT INTO array_type VALUES ('{foo, null}');
 
 $ schema-registry-wait-schema schema=postgres.public.array_type-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE array_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.array_type'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 # Cast to `text` to work around TD's lack of support for PG arrays

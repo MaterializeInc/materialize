@@ -19,9 +19,13 @@ $ kafka-create-topic topic=resolution-arrays
 $ kafka-ingest format=avro topic=resolution-arrays schema=${array-int} publish=true timestamp=1
 {"f1": [ 123 ] }
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE resolution_arrays
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-arrays-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 $ kafka-ingest format=avro topic=resolution-arrays schema=${array-double} publish=true timestamp=2

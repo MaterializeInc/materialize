@@ -36,10 +36,14 @@ $ kafka-create-topic topic=t1
 
 $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys} schema=${schema} publish=true
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE t1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-t1-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
 > CREATE DEFAULT INDEX ON t1
@@ -149,7 +153,7 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
 > CREATE SOURCE t1_pkne (PRIMARY KEY (key1, key2) NOT ENFORCED)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-t1-pkne-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE;
 
 > CREATE DEFAULT INDEX ON t1_pkne

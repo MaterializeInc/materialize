@@ -20,9 +20,13 @@ INSERT INTO update_update VALUES (10);
 
 $ schema-registry-wait-schema schema=postgres.public.update_update-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE update_update
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.update_update'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres

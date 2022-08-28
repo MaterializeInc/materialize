@@ -28,9 +28,13 @@ $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value sc
 
 $ kafka-create-topic topic=evolution partitions=1
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE evolution FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-evolution-${testdrive.seed}'
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"i": 1}

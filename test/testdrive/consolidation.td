@@ -105,10 +105,14 @@ $ kafka-create-topic topic=nums
 > ALTER INDEX materialize.public.nums_primary_idx
   SET (LOGICAL COMPACTION WINDOW = 0)
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 # Create a sink before we ingest any data, to ensure the sink starts AS OF 0
 > CREATE SINK nums_sink FROM nums
   INTO KAFKA CONNECTION kafka_conn TOPIC 'nums-sink-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # ==> Test consolidation.
 
@@ -145,7 +149,7 @@ $ kafka-verify format=avro sink=materialize.public.nums_sink sort-messages=true
 # # is fully consolidated.
 # > CREATE SINK nums_sink FROM nums
 #   INTO KAFKA CONNECTION kafka_conn TOPIC 'nums-sink'
-#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   AS OF 3
 #
 # $ kafka-verify format=avro sink=materialize.public.nums_sink

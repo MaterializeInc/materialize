@@ -27,9 +27,13 @@ $ kafka-create-topic topic=top1
 
 $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=1
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE t1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-top1-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
   WITH (TIMESTAMP INTERVAL '100ms')
 

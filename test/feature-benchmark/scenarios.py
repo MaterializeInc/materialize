@@ -665,20 +665,26 @@ $ kafka-ingest format=avro topic=kafka-raw schema=${{schema}} publish=true repea
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
-> DROP CONNECTION IF EXISTS s1_conn CASCADE
 
 > SELECT COUNT(*) = 0
   FROM mz_kafka_source_statistics
   WHERE CAST(statistics->'topics'->'testdrive-kafka-raw-${{testdrive.seed}}'->'partitions'->'0'->'msgs' AS INT) > 0
 true
 
-> CREATE CONNECTION s1_conn
+> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
+> DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
+
+> CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
+> CREATE CONNECTION IF NOT EXISTS s1_csr_conn
+FOR CONFLUENT SCHEMA REGISTRY
+URL '${{testdrive.schema-registry-url}}';
+
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_conn
+  FROM KAFKA CONNECTION s1_kafka_conn
   TOPIC 'testdrive-kafka-raw-${{testdrive.seed}}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE
   /* A */
 
@@ -706,13 +712,13 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
-> DROP CONNECTION IF EXISTS s1_conn CASCADE
+> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
-> CREATE CONNECTION s1_conn
+> CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_conn
+  FROM KAFKA CONNECTION s1_kafka_conn
   TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}'
   FORMAT BYTES
   ENVELOPE NONE
@@ -744,15 +750,19 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
     def benchmark(self) -> MeasurementSource:
         return Td(
             """
-> DROP CONNECTION IF EXISTS s1_conn CASCADE
+> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
-> CREATE CONNECTION s1_conn
+> CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
+         
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_conn
+  FROM KAFKA CONNECTION s1_kafka_conn
   TOPIC 'testdrive-kafka-upsert-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
   /* A */
 
@@ -780,16 +790,21 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
-> DROP CONNECTION IF EXISTS s1_conn CASCADE
+> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
+> DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 
-> CREATE CONNECTION s1_conn
+> CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
+
+> CREATE CONNECTION IF NOT EXISTS s1_csr_conn
+FOR CONFLUENT SCHEMA REGISTRY
+URL '${{testdrive.schema-registry-url}}';
 
   /* A */
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_conn
+  FROM KAFKA CONNECTION s1_kafka_conn
   TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn'
   ENVELOPE UPSERT
 
 > SELECT COUNT(*) FROM s1;
@@ -817,13 +832,20 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
     def init(self) -> Action:
         return TdAction(
             f"""
-> CREATE CONNECTION s1_conn
+> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
+> DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
+
+> CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
+> CREATE CONNECTION IF NOT EXISTS s1_csr_conn
+FOR CONFLUENT SCHEMA REGISTRY
+URL '${{testdrive.schema-registry-url}}';
+
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_conn
+  FROM KAFKA CONNECTION s1_kafka_conn
   TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT;
 
 # Make sure we are fully caught up before continuing
@@ -893,11 +915,11 @@ class KafkaRestartBig(ScenarioBig):
     def init(self) -> Action:
         return TdAction(
             """
-> CREATE CONNECTION s1_conn
+> CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_conn
+  FROM KAFKA CONNECTION s1_kafka_conn
   TOPIC 'testdrive-kafka-recovery-big-${testdrive.seed}'
   FORMAT BYTES
   ENVELOPE UPSERT;
@@ -953,13 +975,13 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
-> DROP CONNECTION IF EXISTS s1_conn CASCADE
+> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
-> CREATE CONNECTION s1_conn
+> CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_conn
+  FROM KAFKA CONNECTION s1_kafka_conn
   TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}'
   FORMAT BYTES
   ENVELOPE NONE
@@ -999,13 +1021,20 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
     def init(self) -> Action:
         return TdAction(
             f"""
-> CREATE CONNECTION s1_conn
+> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
+> DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
+
+> CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
+> CREATE CONNECTION s1_csr_conn
+FOR CONFLUENT SCHEMA REGISTRY
+URL '${{testdrive.schema-registry-url}}';
+
 > CREATE SOURCE source1
-  FROM KAFKA CONNECTION s1_conn
+  FROM KAFKA CONNECTION s1_kafka_conn
   TOPIC 'testdrive-sink-input-${{testdrive.seed}}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT;
 
 > SELECT COUNT(*) FROM source1;
@@ -1016,24 +1045,24 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
     def benchmark(self) -> MeasurementSource:
         return Td(
             """
-> DROP CONNECTION IF EXISTS s1_conn CASCADE
+> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
   /* A */
 
-> CREATE CONNECTION s1_conn
+> CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 > CREATE SINK sink1 FROM source1
-  INTO KAFKA CONNECTION s1_conn TOPIC 'testdrive-sink-output-${testdrive.seed}'
+  INTO KAFKA CONNECTION s1_kafka_conn TOPIC 'testdrive-sink-output-${testdrive.seed}'
   KEY (f1)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 
 > CREATE SOURCE sink1_check
-  FROM KAFKA CONNECTION s1_conn
+  FROM KAFKA CONNECTION s1_kafka_conn
   TOPIC 'testdrive-sink-output-${testdrive.seed}'
-  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
 > CREATE MATERIALIZED VIEW sink1_check_v AS SELECT COUNT(*) FROM sink1_check;
@@ -1256,13 +1285,20 @@ $ kafka-ingest format=avro topic=startup-time schema=${{schema}} publish=true re
         )
         create_sources = "\n".join(
             f"""
-> CREATE CONNECTION s1_conn
+> DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
+> DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
+
+> CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
+> CREATE CONNECTION IF NOT EXISTS s1_csr_conn
+FOR CONFLUENT SCHEMA REGISTRY
+URL '${{testdrive.schema-registry-url}}';
+
 > CREATE SOURCE source{i}
-  FROM KAFKA CONNECTION s1_conn
+  FROM KAFKA CONNECTION s1_kafka_conn
   TOPIC 'testdrive-startup-time-${{testdrive.seed}}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_kafka_conn
   ENVELOPE NONE
 """
             for i in range(0, self.n())
@@ -1279,9 +1315,9 @@ $ kafka-ingest format=avro topic=startup-time schema=${{schema}} publish=true re
         create_sinks = "\n".join(
             f"""
 > CREATE SINK sink{i} FROM source{i}
-  INTO KAFKA CONNECTION s1_conn TOPIC 'testdrive-sink-output-${{testdrive.seed}}'
+  INTO KAFKA CONNECTION s1_kafka_conn TOPIC 'testdrive-sink-output-${{testdrive.seed}}'
   KEY (f2)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
 """
             for i in range(0, self.n())
         )

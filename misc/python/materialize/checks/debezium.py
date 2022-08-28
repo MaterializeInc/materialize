@@ -51,11 +51,15 @@ class DebeziumPostgres(Check):
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+                > CREATE CONNECTION IF NOT EXISTS csr_conn
+                  FOR CONFLUENT SCHEMA REGISTRY
+                  URL '${testdrive.schema-registry-url}';
+
                 # UPSERT is requred due to https://github.com/MaterializeInc/materialize/issues/14211
                 > CREATE SOURCE debezium_source1
                   FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'postgres.public.debezium_table'
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM UPSERT;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
@@ -83,7 +87,7 @@ class DebeziumPostgres(Check):
 
                 > CREATE SOURCE debezium_source2
                   FROM KAFKA CONNECTION kafka_conn TOPIC 'postgres.public.debezium_table'
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM UPSERT;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
@@ -103,7 +107,7 @@ class DebeziumPostgres(Check):
 
                 > CREATE SOURCE debezium_source3
                   FROM KAFKA CONNECTION kafka_conn TOPIC 'postgres.public.debezium_table'
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM UPSERT;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source

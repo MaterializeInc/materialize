@@ -31,6 +31,10 @@ $ kafka-create-topic topic=avroavro
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
 {"key": "fish"} {"f1": "fish", "f2": 1000}
 {"key": "bird1"} {"f1":"goose", "f2": 1}
@@ -45,7 +49,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 > CREATE SOURCE avroavro
   FROM KAFKA CONNECTION kafka_conn
   TOPIC 'testdrive-avroavro-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > SELECT * from avroavro
@@ -294,8 +298,8 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 > CREATE SOURCE realtimeavroavro (f3, f4, f1, f2)
   FROM KAFKA CONNECTION kafka_conn
   TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
-  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED VIEW realtimeavroavro_view as SELECT * from realtimeavroavro;
@@ -312,8 +316,8 @@ water     <null>  crocodile      7
   FROM KAFKA CONNECTION kafka_conn
   WITH (START OFFSET=[1])
   TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
-  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > SELECT * FROM realtimeavroavro_ff
@@ -374,8 +378,8 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
 > CREATE SOURCE realtimefilteravro
   FROM KAFKA CONNECTION kafka_conn
   TOPIC 'testdrive-realtimefilteravro-${testdrive.seed}'
-  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 # filter on key only
@@ -520,8 +524,8 @@ librairie 10
   FROM KAFKA CONNECTION kafka_conn
   WITH (START OFFSET=[1])
   TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
-  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET
   ENVELOPE UPSERT
 
@@ -536,8 +540,8 @@ earth     dao       rhinoceros   211   0         12
   FROM KAFKA CONNECTION kafka_conn
   WITH (START OFFSET=[1])
   TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
-  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET, TIMESTAMP as ts
   ENVELOPE UPSERT
 

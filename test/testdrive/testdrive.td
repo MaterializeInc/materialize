@@ -86,11 +86,15 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE MATERIALIZED VIEW sort_messages (a) AS VALUES (2),(1),(3);
 
 > CREATE SINK sort_messages_sink FROM sort_messages
   INTO KAFKA CONNECTION kafka_conn TOPIC 'sort-messages-sink-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.sort_messages_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
@@ -128,7 +132,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repea
 > CREATE SOURCE kafka_ingest_repeat_input
   FROM KAFKA CONNECTION kafka_conn TOPIC
   'testdrive-kafka-ingest-repeat-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 > SELECT * FROM kafka_ingest_repeat_input;
@@ -165,7 +169,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 
 > CREATE SOURCE kafka_ingest_no_partition
   FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-kafka-ingest-no-partition-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 > SELECT COUNT(*) FROM kafka_ingest_no_partition;
@@ -177,7 +181,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 
 > CREATE SINK kafka_verify_regexp_sink FROM kafka_verify_regexp
   INTO KAFKA CONNECTION kafka_conn TOPIC 'kafka-verify-regexp-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort-messages=true
 {"before": null, "after": {"row": {"a": "u123"}}, "transaction": {"id": "<TIMESTAMP>"}}

@@ -68,12 +68,22 @@ pub async fn create_kafka_sink(
     mz_client::execute(&mz_client, &query).await?;
 
     let query = format!(
+        "CREATE CONNECTION IF NOT EXISTS {sink}_csr_conn
+            FOR CONFLUENT SCHEMA REGISTRY
+            URL '{schema_registry_url}'",
+        sink = sink_name,
+        schema_registry_url = schema_registry_url,
+    );
+
+    debug!("creating confluent schema registry connection=> {}", query);
+    mz_client::execute(&mz_client, &query).await?;
+
+    let query = format!(
             "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA CONNECTION {sink}_kafka_conn TOPIC '{topic}' \
              CONSISTENCY (TOPIC '{topic}-consistency' )
-             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}'",
+             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {sink}_csr_conn",
              sink = sink_name,
              topic = sink_topic_name,
-             schema_registry = schema_registry_url
          );
 
     debug!("creating sink=> {}", query);
@@ -130,12 +140,27 @@ pub async fn reingest_sink(
     source_name: &str,
     topic_name: &str,
 ) -> Result<()> {
-    let query = format!("CREATE SOURCE {source_name} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic_name}' \
-                     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}' ENVELOPE DEBEZIUM",
-                    source_name = source_name,
-                    kafka_url = kafka_url,
-                    topic_name = topic_name,
-                    schema_registry = schema_registry_url);
+    let query = format!(
+        "CREATE CONNECTION IF NOT EXISTS {source}_csr_conn
+            FOR CONFLUENT SCHEMA REGISTRY
+            URL '{schema_registry_url}'",
+        source = source_name,
+        schema_registry_url = schema_registry_url,
+    );
+
+    debug!("creating confluent schema registry connection=> {}", query);
+    mz_client::execute(&mz_client, &query).await?;
+
+    let query = format!(
+        "
+        CREATE SOURCE {source_name} \
+        FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic_name}' \
+        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {source_name}_csr_conn \
+        ENVELOPE DEBEZIUM",
+        source_name = source_name,
+        kafka_url = kafka_url,
+        topic_name = topic_name
+    );
 
     debug!("creating source to reingest sink=> {}", query);
     mz_client::execute(&mz_client, &query).await?;

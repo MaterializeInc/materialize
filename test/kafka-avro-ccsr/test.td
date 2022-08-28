@@ -21,9 +21,13 @@ $ kafka-ingest format=avro topic=schema-strategy-test schema=${first-writer-sche
 $ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-schema} timestamp=1 publish=true
 {"a": 2, "b": 3, "c": {"long": 4}}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE schema_strategy_test_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY INLINE '${reader-schema}'
   ENVELOPE NONE
 
@@ -35,7 +39,7 @@ a
 
 > CREATE SOURCE schema_strategy_test_id
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY ID 1
   ENVELOPE NONE
 
@@ -47,7 +51,7 @@ a b
 
 > CREATE SOURCE schema_strategy_test_id2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY ID 2
   ENVELOPE NONE
 
@@ -59,7 +63,7 @@ a b c
 
 > CREATE SOURCE schema_strategy_test_latest
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY LATEST
   ENVELOPE NONE
 

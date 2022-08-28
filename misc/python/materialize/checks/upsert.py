@@ -50,10 +50,14 @@ class UpsertInsert(Check):
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+                > CREATE CONNECTION IF NOT EXISTS csr_conn
+                  FOR CONFLUENT SCHEMA REGISTRY
+                  URL '${testdrive.schema-registry-url}';
+
                 > CREATE SOURCE upsert_insert
                   FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-upsert-insert-${testdrive.seed}'
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_insert_view AS SELECT COUNT(DISTINCT key1 || ' ' || f1) FROM upsert_insert;
@@ -106,7 +110,7 @@ class UpsertUpdate(Check):
                 > CREATE SOURCE upsert_update
                   FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-upsert-update-${testdrive.seed}'
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_update_view AS SELECT LEFT(f1, 1), COUNT(*) AS c1, COUNT(DISTINCT key1) AS c2, COUNT(DISTINCT f1) AS c3 FROM upsert_update GROUP BY LEFT(f1, 1);
@@ -156,7 +160,7 @@ class UpsertDelete(Check):
                 > CREATE SOURCE upsert_delete
                   FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-upsert-delete-${testdrive.seed}'
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_delete_view AS SELECT COUNT(*), MIN(key1), MAX(key1) FROM upsert_delete;

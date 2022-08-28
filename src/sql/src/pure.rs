@@ -357,25 +357,17 @@ async fn purify_csr_connection_proto(
         };
 
     let CsrConnectionProtobuf {
-        connection,
         seed,
-        with_options: ccsr_options,
+        with_options: _ccsr_options,
+        connection: CsrConnection { connection },
     } = csr_connection;
     match seed {
         None => {
-            let ccsr_connection = match connection {
-                CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                    url.parse()?,
-                    &mut normalize::options(&ccsr_options)?,
-                )?,
-                CsrConnection::Reference { connection } => {
-                    let scx = StatementContext::new(None, &*catalog);
-                    let item = scx.get_item_by_resolved_name(&connection)?;
-                    match item.connection()? {
-                        Connection::Csr(connection) => connection.clone(),
-                        _ => bail!("{} is not a schema registry connection", item.name()),
-                    }
-                }
+            let scx = StatementContext::new(None, &*catalog);
+
+            let ccsr_connection = match scx.get_item_by_resolved_name(&connection)?.connection()? {
+                Connection::Csr(connection) => connection.clone(),
+                _ => bail!("{} is not a schema registry connection", connection),
             };
 
             let ccsr_client = ccsr_connection
@@ -414,28 +406,19 @@ async fn purify_csr_connection_avro(
         };
 
     let CsrConnectionAvro {
-        connection,
+        connection: CsrConnection { connection },
         seed,
         key_strategy,
         value_strategy,
         with_options: ccsr_options,
     } = csr_connection;
     if seed.is_none() {
-        let ccsr_connection = match connection {
-            CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                url.parse()?,
-                &mut normalize::options(&ccsr_options)?,
-            )?,
-            CsrConnection::Reference { connection } => {
-                let scx = StatementContext::new(None, &*catalog);
-                let item = scx.get_item_by_resolved_name(&connection)?;
-                match item.connection()? {
-                    Connection::Csr(connection) => connection.clone(),
-                    _ => bail!("{} is not a schema registry connection", item.name()),
-                }
-            }
+        let scx = StatementContext::new(None, &*catalog);
+        let csr_connection = match scx.get_item_by_resolved_name(&connection)?.connection()? {
+            Connection::Csr(connection) => connection.clone(),
+            _ => bail!("{} is not a schema registry connection", connection),
         };
-        let ccsr_client = ccsr_connection
+        let ccsr_client = csr_connection
             .connect(&*connection_context.secrets_reader)
             .await?;
         let Schema {

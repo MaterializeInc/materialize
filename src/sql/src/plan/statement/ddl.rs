@@ -1234,22 +1234,14 @@ fn get_encoding_inner(
                         },
                 } => {
                     let mut normalized_options = normalize::options(&ccsr_options)?;
-                    let csr_connection = match connection {
-                        CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                            url.parse()
-                                .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
-                            &mut normalized_options,
-                        )?,
-                        CsrConnection::Reference { connection } => {
-                            let item = scx.get_item_by_resolved_name(&connection)?;
-                            match item.connection()? {
-                                Connection::Csr(connection) => connection.clone(),
-                                _ => {
-                                    sql_bail!("{} is not a schema registry connection", item.name())
-                                }
-                            }
+                    let item = scx.get_item_by_resolved_name(&connection.connection)?;
+                    let csr_connection = match item.connection()? {
+                        Connection::Csr(connection) => connection.clone(),
+                        _ => {
+                            sql_bail!("{} is not a schema registry connection", item.name())
                         }
                     };
+
                     normalize::ensure_empty_options(
                         &normalized_options,
                         "CONFLUENT SCHEMA REGISTRY",
@@ -1302,22 +1294,14 @@ fn get_encoding_inner(
                     // even though we don't actually use the connection. (It
                     // was used during purification.)
                     let mut normalized_options = normalize::options(&ccsr_options)?;
-                    let _ = match connection {
-                        CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                            url.parse()
-                                .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
-                            &mut normalized_options,
-                        )?,
-                        CsrConnection::Reference { connection } => {
-                            let item = scx.get_item_by_resolved_name(&connection)?;
-                            match item.connection()? {
-                                Connection::Csr(connection) => connection.clone(),
-                                _ => {
-                                    sql_bail!("{} is not a schema registry connection", item.name())
-                                }
-                            }
+                    let item = scx.get_item_by_resolved_name(&connection.connection)?;
+                    let _ = match item.connection()? {
+                        Connection::Csr(connection) => connection.clone(),
+                        _ => {
+                            sql_bail!("{} is not a schema registry connection", item.name())
                         }
                     };
+
                     normalize::ensure_empty_options(
                         &normalized_options,
                         "CONFLUENT SCHEMA REGISTRY",
@@ -1939,20 +1923,11 @@ fn kafka_sink_builder(
             }
 
             let mut normalized_with_options = normalize::options(&with_options)?;
-            let csr_connection = match connection {
-                CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                    url.parse()
-                        .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
-                    &mut normalized_with_options,
-                )?,
-                CsrConnection::Reference { connection } => {
-                    let item = scx.get_item_by_resolved_name(&connection)?;
-                    match item.connection()? {
-                        Connection::Csr(connection) => connection.clone(),
-                        _ => {
-                            sql_bail!("{} is not a schema registry connection", item.name())
-                        }
-                    }
+            let item = scx.get_item_by_resolved_name(&connection.connection)?;
+            let csr_connection = match item.connection()? {
+                Connection::Csr(connection) => connection.clone(),
+                _ => {
+                    sql_bail!("{} is not a schema registry connection", item.name())
                 }
             };
 
@@ -1984,7 +1959,8 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let consistency_config = get_kafka_sink_consistency_config(&topic_name, &format, consistency)?;
+    let consistency_config =
+        get_kafka_sink_consistency_config(scx, &topic_name, &format, consistency)?;
 
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
@@ -2064,6 +2040,7 @@ fn kafka_sink_builder(
 /// This is slightly complicated because of a desire to maintain backwards compatibility with
 /// previous ways of specifying consistency configuration.
 fn get_kafka_sink_consistency_config(
+    scx: &StatementContext,
     topic_name: &str,
     sink_format: &KafkaSinkFormat,
     consistency: Option<KafkaConsistency<Aug>>,
@@ -2076,7 +2053,7 @@ fn get_kafka_sink_consistency_config(
             Some(Format::Avro(AvroSchema::Csr {
                 csr_connection:
                     CsrConnectionAvro {
-                        connection: CsrConnection::Inline { url },
+                        connection: CsrConnection { connection },
                         seed,
                         key_strategy,
                         value_strategy,
@@ -2093,11 +2070,13 @@ fn get_kafka_sink_consistency_config(
                     sql_bail!("VALUE STRATEGY option does not make sense with sinks");
                 }
 
-                let csr_connection = kafka_util::generate_ccsr_connection(
-                    url.parse()
-                        .map_err(|e| sql_err!("parsing schema registry url: {e}"))?,
-                    &mut normalize::options(&with_options)?,
-                )?;
+                let item = scx.get_item_by_resolved_name(&connection)?;
+                let csr_connection = match item.connection()? {
+                    Connection::Csr(connection) => connection.clone(),
+                    _ => {
+                        sql_bail!("{} is not a schema registry connection", item.name())
+                    }
+                };
 
                 Some((
                     topic,

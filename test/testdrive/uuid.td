@@ -55,9 +55,13 @@ u      false     uuid
 > SELECT '85907cb9-ac9b-4e35-84b8-60dc69368aca'::uuid::text
 "85907cb9-ac9b-4e35-84b8-60dc69368aca"
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SINK uuid_sink_${testdrive.seed} FROM data
   INTO KAFKA CONNECTION kafka_conn TOPIC 'data'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sort-messages=true sink=materialize.public.uuid_sink_${testdrive.seed}
 {"before": null, "after": {"row":{"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}, "transaction": {"id": "<TIMESTAMP>"}}

@@ -52,10 +52,14 @@ class CreateSource(Action):
             envelope = str(self.topic.envelope).split(".")[1]
             c.testdrive(
                 f"""
+> CREATE CONNECTION IF NOT EXISTS {self.source.name}_csr_conn
+FOR CONFLUENT SCHEMA REGISTRY
+URL '${{testdrive.schema-registry-url}}';
+
 > CREATE SOURCE {self.source.name}
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}'
   TOPIC 'testdrive-{self.topic.name}-${{testdrive.seed}}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn
   ENVELOPE {envelope}
 """
             )

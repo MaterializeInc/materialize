@@ -18,9 +18,13 @@ INSERT INTO char_varchar_type VALUES ('a ', 'a ');
 
 $ schema-registry-wait-schema schema=postgres.public.char_varchar_type-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE char_varchar_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.char_varchar_type'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 # Type information is not carried over as the AVRO protocol does not have CHAR/VARCHAR

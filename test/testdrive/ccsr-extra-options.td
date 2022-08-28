@@ -29,14 +29,18 @@ $ kafka-ingest format=avro key-format=avro topic=input schema=${schema} key-sche
 > CREATE CONNECTION IF NOT EXISTS kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE input
   FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 ! CREATE SINK output FROM input
   INTO KAFKA CONNECTION kafka_conn TOPIC 'output1-view-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   WITH (
     gus = "gus"
   )
@@ -44,7 +48,7 @@ contains:unexpected parameters for CONFLUENT SCHEMA REGISTRY: gus
 
 ! CREATE SOURCE input_bad
   FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   WITH (
     gus = "gus"
   )
