@@ -8,7 +8,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 globset = "0.4.9"
 http = "0.2.8"
 mz-ore = { path = "../ore", default-features = false }

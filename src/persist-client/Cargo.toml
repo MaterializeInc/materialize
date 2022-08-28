@@ -29,7 +29,7 @@ name = "persistcli"
 bench = false
 
 [dependencies]
-anyhow = { version = "1.0.58", features = ["backtrace"] }
+anyhow = { version = "1.0.62", features = ["backtrace"] }
 async-stream = "0.3.3"
 async-trait = "0.1.57"
 bytes = "1.2.1"

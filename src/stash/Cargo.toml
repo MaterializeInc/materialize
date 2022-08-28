@@ -31,7 +31,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tracing = "0.1.36"
 
 [dev-dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 # benchmark is currently unused
 # criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = [ "html_reports" ] }
 mz-postgres-util = { path = "../postgres-util" }

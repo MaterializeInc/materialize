@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 async-trait = "0.1.57"
 clap = { version = "3.2.17", features = ["env", "derive"] }
 futures-core = "0.3.21"

@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 async-stream = "0.3.3"
 async-trait = "0.1.57"
 chrono = { version = "0.4.19", default_features = false }
