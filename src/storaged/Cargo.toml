@@ -18,7 +18,7 @@ mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof" }
 mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
-once_cell = "1.13.0"
+once_cell = "1.13.1"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["net"] }
 tracing = "0.1.36"

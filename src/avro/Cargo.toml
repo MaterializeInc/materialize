@@ -30,7 +30,7 @@ tracing = "0.1.36"
 uuid = "1.1.2"
 
 [dev-dependencies]
-once_cell = "1.13.0"
+once_cell = "1.13.1"
 md-5 = "0.10.1"
 
 [features]
