@@ -1228,12 +1228,10 @@ fn get_encoding_inner(
                         CsrConnectionAvro {
                             connection,
                             seed,
-                            with_options: ccsr_options,
                             key_strategy: _,
                             value_strategy: _,
                         },
                 } => {
-                    let mut normalized_options = normalize::options(&ccsr_options)?;
                     let item = scx.get_item_by_resolved_name(&connection.connection)?;
                     let csr_connection = match item.connection()? {
                         Connection::Csr(connection) => connection.clone(),
@@ -1242,10 +1240,6 @@ fn get_encoding_inner(
                         }
                     };
 
-                    normalize::ensure_empty_options(
-                        &normalized_options,
-                        "CONFLUENT SCHEMA REGISTRY",
-                    )?;
                     if let Some(seed) = seed {
                         Schema {
                             key_schema: seed.key_schema.clone(),
@@ -1282,30 +1276,17 @@ fn get_encoding_inner(
         }
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr {
-                csr_connection:
-                    CsrConnectionProtobuf {
-                        connection,
-                        seed,
-                        with_options: ccsr_options,
-                    },
+                csr_connection: CsrConnectionProtobuf { connection, seed },
             } => {
                 if let Some(CsrSeedProtobuf { key, value }) = seed {
-                    // We validate to match the behavior of Avro CSR connections,
-                    // even though we don't actually use the connection. (It
-                    // was used during purification.)
-                    let mut normalized_options = normalize::options(&ccsr_options)?;
                     let item = scx.get_item_by_resolved_name(&connection.connection)?;
                     let _ = match item.connection()? {
-                        Connection::Csr(connection) => connection.clone(),
+                        Connection::Csr(connection) => connection,
                         _ => {
                             sql_bail!("{} is not a schema registry connection", item.name())
                         }
                     };
 
-                    normalize::ensure_empty_options(
-                        &normalized_options,
-                        "CONFLUENT SCHEMA REGISTRY",
-                    )?;
                     let value = DataEncodingInner::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
                         message_name: value.message_name.clone(),
@@ -1909,7 +1890,6 @@ fn kafka_sink_builder(
                     seed,
                     key_strategy,
                     value_strategy,
-                    with_options,
                 },
         })) => {
             if seed.is_some() {
@@ -1922,7 +1902,6 @@ fn kafka_sink_builder(
                 sql_bail!("VALUE STRATEGY option does not make sense with sinks");
             }
 
-            let mut normalized_with_options = normalize::options(&with_options)?;
             let item = scx.get_item_by_resolved_name(&connection.connection)?;
             let csr_connection = match item.connection()? {
                 Connection::Csr(connection) => connection.clone(),
@@ -1930,9 +1909,6 @@ fn kafka_sink_builder(
                     sql_bail!("{} is not a schema registry connection", item.name())
                 }
             };
-
-            normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
-
             let schema_generator = AvroSchemaGenerator::new(
                 avro_key_fullname.as_deref(),
                 avro_value_fullname.as_deref(),
@@ -2057,7 +2033,6 @@ fn get_kafka_sink_consistency_config(
                         seed,
                         key_strategy,
                         value_strategy,
-                        with_options,
                     },
             })) => {
                 if seed.is_some() {

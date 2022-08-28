@@ -25,7 +25,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOption, WithOptionValue};
+use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -172,7 +172,6 @@ pub struct CsrConnectionAvro<T: AstInfo> {
     pub key_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub value_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub seed: Option<CsrSeedAvro>,
-    pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
@@ -183,11 +182,6 @@ impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
             f.write_str(" ");
             f.write_node(seed);
         }
-        if !&self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
-        }
     }
 }
 impl_display_t!(CsrConnectionAvro);
@@ -196,7 +190,6 @@ impl_display_t!(CsrConnectionAvro);
 pub struct CsrConnectionProtobuf<T: AstInfo> {
     pub connection: CsrConnection<T>,
     pub seed: Option<CsrSeedProtobuf>,
-    pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectionProtobuf<T> {
@@ -207,12 +200,6 @@ impl<T: AstInfo> AstDisplay for CsrConnectionProtobuf<T> {
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
-        }
-
-        if !&self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
         }
     }
 }
