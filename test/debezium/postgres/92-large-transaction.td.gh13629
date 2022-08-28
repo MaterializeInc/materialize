@@ -53,21 +53,25 @@ $ schema-registry-wait-schema schema=postgres.public.large_distinct_rows-value
 
 $ schema-registry-wait-schema schema=postgres.public.large_same_rows-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE postgres_tx_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.transaction'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE;
 
 > CREATE SOURCE large_distinct_rows
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.large_distinct_rows'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (SOURCE postgres_tx_metadata, COLLECTION 'public.large_distinct_rows')
   );
 
 > CREATE SOURCE large_same_rows
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.large_same_rows'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (SOURCE postgres_tx_metadata, COLLECTION 'public.large_same_rows')
   );

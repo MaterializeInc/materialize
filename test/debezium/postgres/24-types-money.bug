@@ -15,10 +15,14 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE money_type (f1 MONEY);
 ALTER TABLE money_type REPLICA IDENTITY FULL;
 INSERT INTO money_type VALUES (NULL), (12.34);
+         
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE money_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.money_type'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 ! SELECT * FROM money_type;

@@ -23,9 +23,13 @@ $ kafka-create-topic topic=re-created partitions=1
 $ kafka-ingest format=avro topic=re-created schema=${schema} publish=true repeat=10
 {"f1": ${kafka-ingest.iteration}}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE re_created
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-re-created-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
 

@@ -149,9 +149,8 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CsrConnection<T: AstInfo> {
-    Inline { url: String },
-    Reference { connection: T::ObjectName },
+pub struct CsrConnection<T: AstInfo> {
+    pub connection: T::ObjectName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -178,18 +177,8 @@ pub struct CsrConnectionAvro<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
-        match &self.connection {
-            CsrConnection::Inline { url: uri, .. } => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(uri));
-                f.write_str("'");
-            }
-            CsrConnection::Reference { connection, .. } => {
-                f.write_str("CONNECTION ");
-                f.write_node(connection);
-            }
-        }
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION");
+        f.write_node(&self.connection.connection);
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
@@ -212,18 +201,8 @@ pub struct CsrConnectionProtobuf<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for CsrConnectionProtobuf<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
-        match &self.connection {
-            CsrConnection::Inline { url: uri, .. } => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(uri));
-                f.write_str("'");
-            }
-            CsrConnection::Reference { connection, .. } => {
-                f.write_str("CONNECTION ");
-                f.write_node(connection);
-            }
-        }
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION");
+        f.write_node(&self.connection.connection);
 
         if let Some(seed) = &self.seed {
             f.write_str(" ");

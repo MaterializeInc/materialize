@@ -18,9 +18,13 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SINK data_sink FROM data
   INTO KAFKA CONNECTION kafka_conn TOPIC 'data-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
@@ -117,7 +121,7 @@ $ kafka-create-topic topic=input
 > CREATE SINK non_keyed_sink FROM input
   INTO KAFKA CONNECTION kafka_conn TOPIC 'non-keyed-sink-${testdrive.seed}'
   CONSISTENCY (TOPIC 'non-keyed-sink-consistency-${testdrive.seed}') FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE VIEW max_view AS SELECT a, MAX(b) as b FROM input GROUP BY a
 

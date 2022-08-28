@@ -23,15 +23,19 @@ $ schema-registry-wait-schema schema=mysql.transaction-value
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
+       
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE mysql_tx_metadata
   FROM KAFKA CONNECTION kafka_conn TOPIC 'mysql.transaction'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE;
 
 > CREATE SOURCE t1
   FROM KAFKA CONNECTION kafka_conn TOPIC 'mysql.test.t1'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (SOURCE mysql_tx_metadata, COLLECTION 'test.t1')
   );

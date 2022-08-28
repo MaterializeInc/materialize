@@ -18,9 +18,13 @@ INSERT INTO enum_type VALUES ('val1'), ('val2');
 
 $ schema-registry-wait-schema schema=postgres.public.enum_type-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE enum_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.enum_type'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > SELECT pg_typeof(f1), f1 FROM enum_type;

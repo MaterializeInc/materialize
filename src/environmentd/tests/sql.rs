@@ -117,10 +117,14 @@ fn test_no_block() -> Result<(), anyhow::Error> {
                 info!("test_no_block: in thread; executing create source");
                 let result = client
                     .batch_execute(&format!(
-                        "CREATE SOURCE foo \
+                        "CREATE CONNECTION IF NOT EXISTS csr_conn
+                        FOR CONFLUENT SCHEMA REGISTRY
+                        URL 'http://{}';
+                        
+                        CREATE SOURCE foo \
                         FROM KAFKA BROKER '{}' TOPIC 'foo' \
-                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://{}'",
-                        &*KAFKA_ADDRS, schema_registry_server.addr,
+                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                        schema_registry_server.addr, &*KAFKA_ADDRS,
                     ))
                     .await;
                 info!("test_no_block: in thread; create source done");

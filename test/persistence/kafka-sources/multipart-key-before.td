@@ -36,9 +36,13 @@ $ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keys
 {"f1": "KEY1", "f2": "${kafka-ingest.iteration}"} {"f3": "KEY1", "f4": "${kafka-ingest.iteration}"}
 {"f1": "${kafka-ingest.iteration}", "f2": "KEY2"} {"f3": "${kafka-ingest.iteration}", "f4": "KEY2"}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE multipart_key
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-multipart-key-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
 > SELECT COUNT(*) FROM multipart_key;

@@ -19,9 +19,13 @@ $ kafka-create-topic topic=resolution-enums
 $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} publish=true timestamp=1
 {"f1": "E1" }
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE resolution_enums
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-enums-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 # E5 will be recorded as E_DEFAULT

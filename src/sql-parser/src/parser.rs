@@ -1756,15 +1756,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_connection_avro(&mut self) -> Result<CsrConnectionAvro<Raw>, ParserError> {
-        let connection = if self.parse_keyword(CONNECTION) {
-            CsrConnection::Reference {
-                connection: self.parse_raw_name()?,
-            }
-        } else {
-            CsrConnection::Inline {
-                url: self.parse_literal_string()?,
-            }
+        self.expect_keyword(CONNECTION)?;
+        let connection = CsrConnection {
+            connection: self.parse_raw_name()?,
         };
+
         let seed = if self.parse_keyword(SEED) {
             let key_schema = if self.parse_keyword(KEY) {
                 self.expect_keyword(SCHEMA)?;
@@ -1827,14 +1823,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_connection_proto(&mut self) -> Result<CsrConnectionProtobuf<Raw>, ParserError> {
-        let connection = if self.parse_keyword(CONNECTION) {
-            CsrConnection::Reference {
-                connection: self.parse_raw_name()?,
-            }
-        } else {
-            CsrConnection::Inline {
-                url: self.parse_literal_string()?,
-            }
+        self.expect_keyword(CONNECTION)?;
+
+        let connection = CsrConnection {
+            connection: self.parse_raw_name()?,
         };
 
         let seed = if self.parse_keyword(SEED) {
