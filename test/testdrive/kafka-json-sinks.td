@@ -14,11 +14,15 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SINK simple_view_sink FROM simple_view
   INTO KAFKA CONNECTION kafka_conn TOPIC 'unnamed-cols-sink-${testdrive.seed}'
   CONSISTENCY (
     TOPIC 'unnamed-cols-sink-consistency-${testdrive.seed}' FORMAT AVRO
-    USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   )
   FORMAT JSON
 
@@ -30,7 +34,7 @@ $ kafka-verify format=json sink=materialize.public.simple_view_sink key=false
   KEY (b)
   CONSISTENCY (
     TOPIC 'unnamed-upsert-${testdrive.seed}' FORMAT AVRO
-    USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   )
   FORMAT JSON
   ENVELOPE UPSERT
@@ -60,7 +64,7 @@ $ kafka-verify format=json sink=materialize.public.simple_view_upsert key=true
   INTO KAFKA CONNECTION kafka_conn TOPIC 'types-sink'
   CONSISTENCY (
     TOPIC 'types-sink-${testdrive.seed}' FORMAT AVRO
-    USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   )
   FORMAT JSON
 
@@ -77,7 +81,7 @@ $ kafka-verify format=json sink=materialize.public.types_sink key=false
   INTO KAFKA CONNECTION kafka_conn TOPIC 'special-characters-sink'
   CONSISTENCY (
     TOPIC 'special-characters-sink-${testdrive.seed}' FORMAT AVRO
-    USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   )
   FORMAT JSON
 
@@ -92,7 +96,7 @@ $ kafka-verify format=json sink=materialize.public.special_characters_sink key=f
   INTO KAFKA CONNECTION kafka_conn TOPIC 'record-sink'
   CONSISTENCY (
     TOPIC 'record-sink-${testdrive.seed}' FORMAT AVRO
-    USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   )
   FORMAT JSON
 
@@ -122,7 +126,7 @@ contains:column "a" specified more than once
   INTO KAFKA CONNECTION kafka_conn TOPIC 'complex-type-sink'
   CONSISTENCY (
     TOPIC 'complex-type-sink-${testdrive.seed}' FORMAT AVRO
-    USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   )
   FORMAT JSON
 

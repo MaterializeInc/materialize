@@ -52,9 +52,7 @@ class CreateSource(Action):
             envelope = str(self.topic.envelope).split(".")[1]
             c.testdrive(
                 f"""
-> CREATE CONNECTION IF NOT EXISTS {self.source.name}_csr_conn
-FOR CONFLUENT SCHEMA REGISTRY
-URL '${{testdrive.schema-registry-url}}';
+> CREATE CONNECTION IF NOT EXISTS {self.source.name}_csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
 
 > CREATE SOURCE {self.source.name}
   FROM KAFKA BROKER '${{testdrive.kafka-addr}}'

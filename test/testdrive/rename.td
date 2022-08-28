@@ -202,7 +202,7 @@ materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"de
 > SHOW CREATE SINK renamed_sink
 Sink                            "Create Sink"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" TOPIC 'snk1' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn WITH SNAPSHOT"
+materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" TOPIC 'snk1' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" WITH SNAPSHOT"
 
 # Simple dependencies with both fully qualified and unqualified item references are renamed
 > SHOW CREATE VIEW byzantine_view

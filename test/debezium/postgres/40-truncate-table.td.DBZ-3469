@@ -16,7 +16,7 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE truncate_table (f1 INTEGER PRIMARY KEY);
 INSERT INTO truncate_table VALUES (1),(2),(3);
-         
+
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';

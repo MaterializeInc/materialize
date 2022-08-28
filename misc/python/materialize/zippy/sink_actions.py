@@ -54,9 +54,7 @@ class CreateSink(Action):
             dedent(
                 f"""
                 > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
-                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_csr_conn
-                    FOR CONFLUENT SCHEMA REGISTRY
-                    URL '${{testdrive.schema-registry-url}}';
+                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
 
                 > CREATE SINK {self.sink.name} FROM {self.source_view.name}
                   INTO KAFKA CONNECTION {self.sink.name}_kafka_conn

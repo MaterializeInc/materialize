@@ -278,6 +278,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 name            type
 --------------------------
 bool            user
+csr_conn        user
 int_list        user
 v1              user
 v2              user
