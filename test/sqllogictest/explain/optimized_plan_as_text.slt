@@ -205,7 +205,7 @@ Explained Query
               Negate // { non_negative: false }
                 Project () // { non_negative: true }
                   Get l0 // { non_negative: true }
-              Constant // { non_negative: false }
+              Constant // { non_negative: true }
                 - ()
     Where
       l0 =
@@ -676,14 +676,14 @@ WHERE a = 0
 GROUP BY a
 ----
 Explained Query
-  Project (#1, #0) // { non_negative: false }
-    Map (0) // { non_negative: false }
-      Reduce aggregates=[max(#0)] // { non_negative: false }
-        Project (#1) // { non_negative: false }
-          Join on=(#0 = #2) type=indexed_filter // { non_negative: false }
+  Project (#1, #0) // { non_negative: true }
+    Map (0) // { non_negative: true }
+      Reduce aggregates=[max(#0)] // { non_negative: true }
+        Project (#1) // { non_negative: true }
+          Join on=(#0 = #2) type=indexed_filter // { non_negative: true }
             ArrangeBy keys=[[#0]] // { non_negative: true }
               Get materialize.public.t // { non_negative: true }
-            Constant // { non_negative: false }
+            Constant // { non_negative: true }
               - (0)
 
 Used Indexes:
@@ -705,8 +705,8 @@ WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
 GROUP BY a
 ----
 Explained Query
-  Reduce group_by=[#0] aggregates=[max(#1)] // { non_negative: false }
-    Project (#0, #1) // { non_negative: false }
+  Reduce group_by=[#0] aggregates=[max(#1)] // { non_negative: true }
+    Project (#0, #1) // { non_negative: true }
       Lookup (#0 = 0 AND #1 = 1) OR (#0 = 3 AND #1 = 4) OR (#0 = 7 AND #1 = 8)
         ArrangeBy keys=[[#0, #1]] // { non_negative: true }
           Get materialize.public.t // { non_negative: true }
