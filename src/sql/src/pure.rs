@@ -358,7 +358,6 @@ async fn purify_csr_connection_proto(
 
     let CsrConnectionProtobuf {
         seed,
-        with_options: _ccsr_options,
         connection: CsrConnection { connection },
     } = csr_connection;
     match seed {
@@ -410,7 +409,6 @@ async fn purify_csr_connection_avro(
         seed,
         key_strategy,
         value_strategy,
-        with_options: ccsr_options,
     } = csr_connection;
     if seed.is_none() {
         let scx = StatementContext::new(None, &*catalog);

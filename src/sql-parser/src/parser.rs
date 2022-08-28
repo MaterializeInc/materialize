@@ -1806,17 +1806,9 @@ impl<'a> Parser<'a> {
         let key_strategy = parse_schema_strategy(&[KEY, STRATEGY])?;
         let value_strategy = parse_schema_strategy(&[VALUE, STRATEGY])?;
 
-        // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
-        // accept `WITH (...)` here.
-        let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-            self.parse_opt_with_options()?
-        } else {
-            vec![]
-        };
         Ok(CsrConnectionAvro {
             connection,
             seed,
-            with_options,
             key_strategy,
             value_strategy,
         })
@@ -1857,19 +1849,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
-        // accept `WITH (...)` here.
-        let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-            self.parse_opt_with_options()?
-        } else {
-            vec![]
-        };
-
-        Ok(CsrConnectionProtobuf {
-            connection,
-            seed,
-            with_options,
-        })
+        Ok(CsrConnectionProtobuf { connection, seed })
     }
 
     fn parse_schema(&mut self) -> Result<Schema, ParserError> {

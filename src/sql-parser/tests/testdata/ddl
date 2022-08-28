@@ -447,16 +447,16 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' INCLUDE KEY ENVELOPE NONE
 ----
+error: Expected CONNECTION, found string literal "http://localhost:8081"
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' INCLUDE KEY ENVELOPE NONE
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } }), value: Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } }) }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [] })
+                                                                                                                ^
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE UPSERT
 ----
+error: Expected CONNECTION, found string literal "http://localhost:8081"
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE UPSERT
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } })), envelope: Some(Upsert), if_not_exists: false, key_constraint: None, with_options: [] })
+                                                                                                            ^
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
@@ -626,9 +626,9 @@ CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username=user)) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username = user)) FORMAT BYTES WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [WithOption { key: Ident("username"), value: Some(Ident(Ident("user"))) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true })
+error: Expected CONNECTION, found string literal "http://localhost:8081"
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username=user)) FORMAT BYTES
+                                                                                                                                                         ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY FORMAT BYTES
@@ -1373,17 +1373,13 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
+reparse failed: Expected CONNECTION, found identifier "connectionconn2"
 
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
+reparse failed: Expected CONNECTION, found identifier "connectionconn2"
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
