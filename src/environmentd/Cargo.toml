@@ -18,7 +18,7 @@ bytes = "1.2.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.2.17", features = ["wrap_help", "env", "derive"] }
 fail = { version = "0.5.0", features = ["failpoints"] }
-futures = "0.3.21"
+futures = "0.3.23"
 headers = "0.3.7"
 hex = "0.4.3"
 http = "0.2.8"

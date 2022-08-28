@@ -12,7 +12,7 @@ bytes = "1.2.1"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 clap = { version = "3.2.17", features = ["derive"] }
 fallible-iterator = "0.2.0"
-futures = "0.3.21"
+futures = "0.3.23"
 junit-report = "0.7.1"
 once_cell = "1.13.0"
 md-5 = "0.10.1"
