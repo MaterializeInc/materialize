@@ -17,7 +17,7 @@ byteorder = "1.4.3"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 itertools = "0.10.3"
-once_cell = "1.13.0"
+once_cell = "1.13.1"
 maplit = "1.0.2"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-avro-derive = { path = "../avro-derive" }
