@@ -176,7 +176,7 @@ pub struct CsrConnectionAvro<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION");
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION ");
         f.write_node(&self.connection.connection);
         if let Some(seed) = &self.seed {
             f.write_str(" ");
@@ -194,7 +194,7 @@ pub struct CsrConnectionProtobuf<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for CsrConnectionProtobuf<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION");
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION ");
         f.write_node(&self.connection.connection);
 
         if let Some(seed) = &self.seed {

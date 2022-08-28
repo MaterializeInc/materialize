@@ -55,30 +55,30 @@ name
 ----
 
 # # We should refuse to create a sink with an invalid schema registry URL.
-# 
+#
 # # Invalid in that the address is not well formed
 # ! CREATE SINK bad_schema_registry FROM v3
 #   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.kafka-addr}'
 # contains:cannot construct a CCSR client with a cannot-be-a-base URL
-# 
+#
 # # Invalid in that the address points to an invalid host
 # ! CREATE SINK bad_schema_registry FROM v3
 #   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://no-such-host'
 # contains:unable to publish value schema to registry in kafka sink
-# 
+#
 # # Invalid in that the address is not for a schema registry
 # ! CREATE SINK bad_schema_registry FROM v3
 #   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://materialized:6875'
 # contains:unable to publish value schema to registry in kafka sink
-# 
+#
 # ! CREATE SINK bad_view FROM v1
 #   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 # contains:v1 is a view, which cannot be exported as a sink
-# 
+#
 # # ...Even if that view is based on a materialized source
 # ! CREATE SINK bad_view2 FROM v2
 #   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'

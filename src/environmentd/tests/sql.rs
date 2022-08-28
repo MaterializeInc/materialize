@@ -116,15 +116,20 @@ fn test_no_block() -> Result<(), anyhow::Error> {
             let slow_task = task::spawn(|| "slow_client", async move {
                 info!("test_no_block: in thread; executing create source");
                 let result = client
-                    .batch_execute(&format!(
-                        "CREATE CONNECTION IF NOT EXISTS csr_conn
-                        FOR CONFLUENT SCHEMA REGISTRY
-                        URL 'http://{}';
-                        
+                .batch_execute(&format!(
+                    "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://{}';",
+                    schema_registry_server.addr,
+                ))
+                .await;
+                info!("test_no_block: in thread; create CSR conn done");
+                let _ = result?;
+
+                let result = client
+                    .batch_execute(&format!("
                         CREATE SOURCE foo \
                         FROM KAFKA BROKER '{}' TOPIC 'foo' \
                         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
-                        schema_registry_server.addr, &*KAFKA_ADDRS,
+                        &*KAFKA_ADDRS,
                     ))
                     .await;
                 info!("test_no_block: in thread; create source done");

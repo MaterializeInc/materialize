@@ -9,6 +9,10 @@
 
 # Tests that hit the Confluent Schema Registry.
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 # Verify the error message is useful when a schema is not present in the
 # registry.
 
@@ -135,10 +139,6 @@ $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema-v1} publish=true timestamp=1
 {"before": null, "after": {"row": {"a": 1}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
-
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE data_v1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'

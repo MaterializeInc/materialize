@@ -23,7 +23,7 @@ $ schema-registry-wait-schema schema=mysql.transaction-value
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
-       
+
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';

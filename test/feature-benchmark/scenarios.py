@@ -754,7 +754,7 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 
 > CREATE CONNECTION s1_kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
-         
+
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';

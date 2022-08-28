@@ -280,7 +280,7 @@ $ kafka-create-topic topic=non-keyed-input
 
 > CREATE SINK not_enforced_key FROM non_keyed_input
   INTO KAFKA CONNECTION kafka_conn TOPIC 'not-enforced-sink-${testdrive.seed}' KEY (a) NOT ENFORCED
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 # Bad upsert keys
 

@@ -352,7 +352,7 @@ $ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true 
 ! CREATE SINK json_reuse_topic_no_parens FROM simple_view
   INTO KAFKA CONNECTION kafka_conn TOPIC 'json-reuse-topic'
   FORMAT JSON
-contains:For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY (TOPIC consistency_topic FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONECTION...)'. The default of using a JSON consistency topic is not supported.
+contains:For FORMAT JSON, you need to manually specify an Avro consistency topic
 
 > CREATE SINK json_reuse_topic_with_parens FROM rt_binding_consistency_test_source
   INTO KAFKA CONNECTION kafka_conn TOPIC 'json-reuse-topic-2'
@@ -362,7 +362,7 @@ contains:For FORMAT JSON, you need to manually specify an Avro consistency topic
 # Same as above!
 > CREATE SINK json_reuse_topic_with_parens_and_with FROM rt_binding_consistency_test_source
   INTO KAFKA CONNECTION kafka_conn TOPIC 'json-reuse-topic-3'
-    CONSISTENCY (TOPIC 'consistency-json-avro-3' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn WITH (dummy='unused'))
+    CONSISTENCY (TOPIC 'consistency-json-avro-3' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn)
   FORMAT JSON
 
 # Default consistency format is Avro if consistency_topic is used

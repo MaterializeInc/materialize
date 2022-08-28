@@ -1373,13 +1373,17 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 ----
-reparse failed: Expected CONNECTION, found identifier "connectionconn2"
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
 
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 ----
-reparse failed: Expected CONNECTION, found identifier "connectionconn2"
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, seed: None } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))

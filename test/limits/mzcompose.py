@@ -415,7 +415,7 @@ class KafkaSinks(Generator):
         print(f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinks.COUNT * 10};")
         for i in cls.all():
             print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
-        
+
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
@@ -1400,7 +1400,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
                          > CREATE MATERIALIZED VIEW v_{cluster_name} AS
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
-                        
+
                         > CREATE CONNECTION IF NOT EXISTS csr_conn
                           FOR CONFLUENT SCHEMA REGISTRY
                           URL '${{testdrive.schema-registry-url}}';

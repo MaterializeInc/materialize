@@ -19,8 +19,3 @@
 > CREATE SINK upgrade_kafka_sink FROM static_view
   INTO KAFKA CONNECTION kafka_conn TOPIC 'upgrade-kafka-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-
-$ kafka-verify format=avro sink=materialize.public.upgrade_kafka_sink sort-messages=true
-{"before": null, "after": {"row": {"f1": 1}}}
-{"before": null, "after": {"row": {"f1": 2}}}
-{"before": null, "after": {"row": {"f1": 3}}}
