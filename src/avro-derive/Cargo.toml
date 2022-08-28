@@ -10,5 +10,5 @@ rust-version = "1.63.0"
 proc-macro = true
 
 [dependencies]
-quote = "1.0.20"
+quote = "1.0.21"
 syn = { version = "1.0.99", features = ["full"] }
