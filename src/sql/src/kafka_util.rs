@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
-use reqwest::Url;
 use tokio::time::Duration;
 
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
@@ -23,12 +22,10 @@ use mz_ore::task;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage::types::connections::{
-    CsrConnection, CsrConnectionHttpAuth, KafkaConnection, StringOrSecret, TlsIdentity,
-};
+use mz_storage::types::connections::{KafkaConnection, StringOrSecret};
 
 use crate::names::Aug;
-use crate::normalize::{generate_extracted_config, SqlValueOrSecret};
+use crate::normalize::generate_extracted_config;
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError;
 
@@ -154,75 +151,6 @@ impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
             _ => None,
         })
     }
-}
-
-// todo: remove this type entirely when getting rid of string-keyed options for
-// CSR connections.
-enum ValType {
-    StringOrSecret,
-    Secret,
-}
-
-// Describes Kafka cluster configurations users can supply using `CREATE
-// SOURCE...WITH (option_list)`.
-struct Config {
-    name: &'static str,
-    val_type: ValType,
-    default: Option<String>,
-}
-
-impl Config {
-    fn new(name: &'static str, val_type: ValType) -> Self {
-        Config {
-            name,
-            val_type,
-            default: None,
-        }
-    }
-    /// Shorthand for a config option that can be either a string or a secret.
-    fn string_or_secret(name: &'static str) -> Self {
-        Config::new(name, ValType::StringOrSecret)
-    }
-
-    /// Shorthand for secret config options.
-    fn secret(name: &'static str) -> Self {
-        Config::new(name, ValType::Secret)
-    }
-
-    /// Get the appropriate String to use as the Kafka config key.
-    fn get_kafka_config_key(&self) -> String {
-        self.name.replace('_', ".")
-    }
-}
-
-fn extract(
-    input: &mut BTreeMap<String, SqlValueOrSecret>,
-    configs: &[Config],
-) -> Result<BTreeMap<String, StringOrSecret>, PlanError> {
-    let mut out = BTreeMap::new();
-    for config in configs {
-        // Look for config.name
-        let value = match (input.remove(config.name), &config.val_type) {
-            (Some(SqlValueOrSecret::Secret(id)), ValType::Secret)
-            | (Some(SqlValueOrSecret::Secret(id)), ValType::StringOrSecret) => {
-                StringOrSecret::Secret(id)
-            }
-            // Check for default values
-            (None, _) => match &config.default {
-                Some(v) => StringOrSecret::String(v.to_string()),
-                None => continue,
-            },
-            (Some(SqlValueOrSecret::Value(v)), _) => {
-                sql_bail!(
-                    "Invalid WITH option {}={}: unexpected value type",
-                    config.name,
-                    v
-                );
-            }
-        };
-        out.insert(config.get_kafka_config_key(), value);
-    }
-    Ok(out)
 }
 
 /// Create a new `rdkafka::ClientConfig` with the provided
@@ -427,53 +355,4 @@ impl ClientContext for KafkaErrCheckContext {
         *self.error.lock().expect("lock poisoned") = Some(reason.to_string());
         MzClientContext.error(error, reason)
     }
-}
-
-// Generates a `CsrConnection` based on the configuration extracted from
-// `extract_security_config()`.
-pub fn generate_ccsr_connection(
-    url: Url,
-    ccsr_options: &mut BTreeMap<String, SqlValueOrSecret>,
-) -> Result<CsrConnection, PlanError> {
-    let mut ccsr_options = extract(
-        ccsr_options,
-        &[
-            Config::string_or_secret("ssl_ca_pem"),
-            Config::secret("ssl_key_pem"),
-            Config::string_or_secret("ssl_certificate_pem"),
-            Config::string_or_secret("username"),
-            Config::secret("password"),
-        ],
-    )?;
-
-    let tls_root_cert = ccsr_options.remove("ssl.ca.pem");
-    let cert = ccsr_options.remove("ssl.certificate.pem");
-    let key = ccsr_options.remove("ssl.key.pem");
-    let tls_identity = match (cert, key) {
-        (None, None) => None,
-        (Some(cert), Some(key)) => {
-            // `key` was verified to be a secret by `extract`.
-            let key = key.unwrap_secret();
-            Some(TlsIdentity { cert, key })
-        }
-        _ => sql_bail!(
-            "Reading from SSL-auth Confluent Schema Registry \
-             requires both ssl.key.pem and ssl.certificate.pem"
-        ),
-    };
-    let http_auth = match ccsr_options.remove("username") {
-        None => None,
-        Some(username) => {
-            let password = ccsr_options.remove("password");
-            // `password` was verified to be a secret by `extract`.
-            let password = password.map(|p| p.unwrap_secret());
-            Some(CsrConnectionHttpAuth { username, password })
-        }
-    };
-    Ok(CsrConnection {
-        url,
-        tls_root_cert,
-        tls_identity,
-        http_auth,
-    })
 }
