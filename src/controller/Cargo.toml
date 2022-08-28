@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.58"
 chrono = { version = "0.4.0", default-features = false, features = ["std", "clock"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.21"
+futures = "0.3.23"
 maplit = "1.0.2"
 mz-build-info = { path = "../build-info" }
 mz-compute-client = { path = "../compute-client" }

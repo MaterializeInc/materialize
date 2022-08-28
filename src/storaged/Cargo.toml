@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.58"
 axum = "0.5.15"
 clap = { version = "3.2.17", features = ["derive", "env"] }
-futures = "0.3.21"
+futures = "0.3.23"
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
