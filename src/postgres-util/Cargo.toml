@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 mz-ore = { path = "../ore", features = ["task"] }
 mz-proto = { path = "../proto" }
 openssl = { version = "0.10.41", features = ["vendored"] }

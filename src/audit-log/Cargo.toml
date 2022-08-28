@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 mz-ore = { path = "../ore" }
 serde = { version = "1.0.144", features = ["derive"] }
 serde_json = "1.0.82"

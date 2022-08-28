@@ -17,7 +17,7 @@ mz-storage = { path = "../storage" }
 tracing = "0.1.36"
 
 [dev-dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
