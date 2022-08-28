@@ -16,7 +16,7 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use differential_dataflow::Hashable;
-use futures_util::Stream as FuturesStream;
+use futures::Stream as FuturesStream;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Map, OkErr};
@@ -164,7 +164,7 @@ where
         format!("persist_source {:?}: batch distribution", source_id),
         move |info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-            let waker = futures_util::task::waker(waker_activator);
+            let waker = futures::task::waker(waker_activator);
 
             let mut current_ts = 0;
 

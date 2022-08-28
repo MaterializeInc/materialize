@@ -20,7 +20,6 @@ clap = { version = "3.2.17", features = ["wrap_help", "env", "derive"] }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.23"
 headers = "0.3.7"
-hex = "0.4.3"
 http = "0.2.8"
 hyper = { version = "0.14.20", features = ["http1", "server"] }
 hyper-openssl = "0.9.2"
@@ -53,7 +52,6 @@ num_cpus = "1.13.1"
 openssl = { version = "0.10.41", features = ["vendored"] }
 openssl-sys = { version = "0.9.75", features = ["vendored"] }
 os_info = "3.5.0"
-prometheus = { version = "0.13.1", default-features = false, features = ["process"] }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 rand = "0.8.5"
 reqwest = { version = "0.11.11", features = ["json"] }

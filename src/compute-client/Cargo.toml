@@ -8,7 +8,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.58"
-async-stream = "0.3.3"
 async-trait = "0.1.57"
 chrono = { version = "0.4.0", default-features = false, features = ["std", "clock"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
