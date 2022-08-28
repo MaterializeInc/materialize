@@ -52,7 +52,7 @@ tokio = { version = "1.19.2", features = ["rt", "time"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-stream = "0.1.9"
 tracing = "0.1.36"
-thiserror = "1.0.31"
+thiserror = "1.0.32"
 uncased = "0.9.7"
 uuid = { version = "1.1.2", features = ["v4"] }
 

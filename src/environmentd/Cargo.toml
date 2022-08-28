@@ -61,10 +61,10 @@ rlimit = "0.8.3"
 serde = { version = "1.0.140", features = ["derive"] }
 serde_json = "1.0.82"
 shell-words = "1.1.0"
-sysctl = "0.4.4"
+sysctl = "0.4.6"
 sysinfo = "0.25.3"
 tempfile = "3.2.0"
-thiserror = "1.0.31"
+thiserror = "1.0.32"
 tokio = { version = "1.19.2", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

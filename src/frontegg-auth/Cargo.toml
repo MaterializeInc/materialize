@@ -14,7 +14,7 @@ jsonwebtoken = "8.1.1"
 mz-ore = { path = "../ore" }
 reqwest = "0.11.11"
 serde = { version = "1.0.140", features = ["derive"] }
-thiserror = "1.0.31"
+thiserror = "1.0.32"
 tokio = "1.19.2"
 tracing = "0.1.36"
 uuid = "1.1.2"
