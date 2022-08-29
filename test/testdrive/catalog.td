@@ -415,8 +415,8 @@ mz_dataflow_operator_reachability_internal
 mz_dataflow_operator_reachability_internal_1
 mz_dataflow_operators
 mz_dataflow_operators_1
-mz_materialization_dependencies
-mz_materialization_dependencies_1
+mz_worker_materialization_dependencies
+mz_worker_materialization_dependencies_1
 mz_materializations
 mz_materializations_1
 mz_message_counts_received_internal
@@ -457,8 +457,8 @@ mz_dataflow_operator_reachability_internal    system log
 mz_dataflow_operator_reachability_internal_1  system log
 mz_dataflow_operators                         system log
 mz_dataflow_operators_1                       system log
-mz_materialization_dependencies               system log
-mz_materialization_dependencies_1             system log
+mz_worker_materialization_dependencies        system log
+mz_worker_materialization_dependencies_1      system log
 mz_materializations                           system log
 mz_materializations_1                         system log
 mz_message_counts_received_internal           system log
