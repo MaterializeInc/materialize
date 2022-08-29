@@ -658,7 +658,6 @@ mz_arrangement_sharing
 mz_arrangement_sharing_1
 mz_arrangement_sizes
 mz_arrangement_sizes_1
-mz_catalog_names
 mz_cluster_replicas
 mz_dataflows
 mz_dataflows_1
@@ -693,7 +692,6 @@ mz_arrangement_sharing               system
 mz_arrangement_sharing_1             system
 mz_arrangement_sizes                 system
 mz_arrangement_sizes_1               system
-mz_catalog_names                     system
 mz_cluster_replicas                  system
 mz_dataflows                         system
 mz_dataflows_1                       system

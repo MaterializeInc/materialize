@@ -91,7 +91,7 @@ pub async fn create_kafka_sink(
     // Get the topic for the newly-created sink.
     let row = mz_client
         .query_one(
-            "SELECT topic FROM mz_kafka_sinks JOIN mz_catalog_names ON sink_id = global_id \
+            "SELECT topic FROM mz_kafka_sinks JOIN mz_sinks ON mz_kafka_sinks.sink_id = mz_sinks.id \
                  WHERE name = 'materialize.public.' || $1",
             &[&sink_name],
         )
