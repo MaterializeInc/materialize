@@ -278,6 +278,9 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with new upper frontiers.
+    ///
+    /// TODO(teskje): Consider also reporting the previous upper frontier and using that
+    /// information to assert the correct implementation of our protocols at various places.
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
 }
 

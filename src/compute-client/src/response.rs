@@ -33,6 +33,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.response.rs"));
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with new upper frontiers.
+    ///
+    /// TODO(teskje): Consider also reporting the previous upper frontier and using that
+    /// information to assert the correct implementation of our protocols at various places.
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
     /// The worker's response to a specified (by connection id) peek.
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
