@@ -1,14 +1,32 @@
 [bans]
 multiple-versions = "deny"
 # Do not add exemptions for duplicate dependencies! Duplicate dependencies slow
-# down compilation and bloat the binary. Submit PRs upstream to remove
-# duplicated transitive dependencies. If necessary, use patch directives in the
-# root Cargo.toml to point at a Materialize-maintained fork that avoids the
+# down compilation, bloat the binary, and tickle race conditions in `cargo doc`
+# (see rust-lang/cargo#3613). Submit PRs upstream to remove duplicated
+# transitive dependencies. If necessary, use patch directives in the root
+# Cargo.toml to point at a Materialize-maintained fork that avoids the
 # duplicated transitive dependencies.
 
 # Use `tracing` instead.
 [[bans.deny]]
 name = "env_logger"
+
+# Use `md-5` instead, which is part of the RustCrypto ecosystem.
+[[bans.deny]]
+name = "md5"
+
+# Use `sha1` instead, which the RustCrypto ecosystem recently took control of.
+# `sha-1` is the older and now deprecated name.
+[[bans.deny]]
+name = "sha-1"
+wrappers = [
+    # https://github.com/hyperium/headers/pull/117
+    "headers",
+    # https://github.com/blackbeam/rust_mysql_common/pull/71
+    "mysql_common",
+    # https://github.com/snapview/tungstenite-rs/pull/299
+    "tungstenite",
+]
 
 # Use `prost` or `protobuf-native` instead.
 [[bans.deny]]

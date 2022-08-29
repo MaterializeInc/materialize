@@ -3322,7 +3322,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_regex",
- "sha-1",
+ "sha1",
  "sha2",
  "uncased",
  "uuid",
