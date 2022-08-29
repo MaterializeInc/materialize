@@ -181,12 +181,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                     // TODO(guswynn&&petrosagg): remove all uses of `block_on` in
                     // timely workers
-                    let resume_upper = TokioHandle::current().block_on(
+                    println!("HERE");
+                    let resume_upper = dbg!(TokioHandle::current().block_on(
                         ingestion.description.storage_metadata.get_resume_upper(
                             &self.storage_state.persist_clients,
                             &ingestion.description.desc.envelope,
                         ),
-                    );
+                    ));
+                    println!("AFTER");
 
                     crate::render::build_ingestion_dataflow(
                         &mut self.timely_worker,

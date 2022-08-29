@@ -422,34 +422,45 @@ impl CollectionMetadata {
     where
         T: timely::progress::Timestamp + Lattice + Codec64,
     {
+        println!("before lock");
         let persist = persist
             .lock()
             .await
             .open(self.persist_location.clone())
             .await
             .unwrap();
+        println!("after lock");
         // Calculate the point at which we can resume ingestion computing the greatest
         // antichain that is less or equal to all state and output shard uppers.
         let mut resume_upper: Antichain<T> = Antichain::new();
-        let remap_write = persist
-            .open_writer::<(), PartitionId, T, MzOffset>(self.remap_shard)
+        let mut remap_read = persist
+            .open_reader::<(), PartitionId, T, MzOffset>(dbg!(self.remap_shard))
             .await
             .unwrap();
-        for t in remap_write.upper().elements() {
+        dbg!(remap_read
+            .snapshot_and_fetch(Antichain::from_elem(T::minimum()))
+            .await
+            .unwrap());
+        let remap_write = persist
+            .open_writer::<(), PartitionId, T, MzOffset>(dbg!(self.remap_shard))
+            .await
+            .unwrap();
+        for t in dbg!(remap_write.upper()).elements() {
             resume_upper.insert(t.clone());
         }
         let data_write = persist
-            .open_writer::<SourceData, (), T, Diff>(self.data_shard)
+            .open_writer::<SourceData, (), T, Diff>(dbg!(self.data_shard))
             .await
             .unwrap();
-        for t in data_write.upper().elements() {
+        for t in dbg!(data_write.upper()).elements() {
             resume_upper.insert(t.clone());
         }
 
+        dbg!(&resume_upper);
         // Check if this ingestion is using any operators that are stateful AND are not
         // storing their state in persist shards. This whole section should be eventually
         // removed as we make each operator durably record its state in persist shards.
-        let resume_upper = match envelope {
+        let resume_upper = match dbg!(envelope) {
             // We can only resume with the None envelope, which is stateless,
             // or with the [Debezium] Upsert envelope, which is easy
             //   (re-ingest the last emitted state)

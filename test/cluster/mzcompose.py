@@ -249,9 +249,7 @@ def workflow_test_remote_storaged(c: Composition) -> None:
             "materialized",
             "postgres",
             "storaged",
-            "zookeeper",
-            "kafka",
-            "schema-registry",
+            "redpanda",
         ]
         c.start_and_wait_for_tcp(
             services=dependencies,
@@ -265,6 +263,9 @@ def workflow_test_remote_storaged(c: Composition) -> None:
 
         c.kill("storaged")
         c.run("testdrive", "storaged/03-while-storaged-down.td")
+
+        print("Sleeping for 20 seconds")
+        time.sleep(20)
 
         c.up("storaged")
         c.run("testdrive", "storaged/04-after-storaged-restart.td")
