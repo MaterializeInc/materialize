@@ -261,7 +261,7 @@ async fn main() {
                                     Ok(cloud_providers) => {
                                         let parsed_cloud_provider_region =
                                             CloudProviderRegion::parse_region(
-                                                cloud_provider_region,
+                                                &cloud_provider_region,
                                             );
                                         let filtered_providers: Vec<CloudProvider> =
                                             cloud_providers

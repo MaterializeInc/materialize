@@ -34,8 +34,8 @@ impl CloudProviderRegion {
             _ => panic!("Unknown region."),
         }
     }
-    pub fn parse_region(region: String) -> &'static str {
-        match region.as_str() {
+    pub fn parse_region(region: &str) -> &'static str {
+        match region {
             "aws/us-east-1" => "us-east-1",
             "aws/eu-west-1" => "eu-west-1",
             _ => panic!("Unknown region."),

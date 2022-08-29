@@ -51,7 +51,7 @@ pub(crate) async fn enable_region(
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
     let region_url: String = format_region_url(cloud_provider_region);
 
-    let headers = build_region_request_headers(authorization.as_str());
+    let headers = build_region_request_headers(&authorization);
     let mut body = HashMap::new();
     body.insert("environmentd_image_ref", &"materialize/environmentd:latest");
 
@@ -72,7 +72,7 @@ pub(crate) async fn cloud_provider_region_details(
     frontegg_auth_machine: &FronteggAuthMachine,
 ) -> Result<Option<Vec<Region>>, Error> {
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
-    let headers = build_region_request_headers(authorization.as_str());
+    let headers = build_region_request_headers(&authorization);
     let mut region_api_url = cloud_provider_region.environment_controller_url.clone();
     region_api_url.push_str("/api/environment");
 
@@ -133,7 +133,7 @@ pub(crate) async fn list_cloud_providers(
 ) -> Result<Vec<CloudProvider>, Error> {
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
 
-    let headers = build_region_request_headers(authorization.as_str());
+    let headers = build_region_request_headers(&authorization);
 
     client
         .get(CLOUD_PROVIDERS_URL)
