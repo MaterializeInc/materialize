@@ -11,6 +11,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::ComputeInstanceId;
+use mz_ore::soft_assert;
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql::names::FullObjectName;
 use mz_sql::plan::StatementDesc;
@@ -29,12 +30,15 @@ use crate::{ExecuteResponse, PeekResponseUnary};
 
 /// Handles responding to clients.
 #[derive(Debug)]
-pub struct ClientTransmitter<T> {
+pub struct ClientTransmitter<T: Transmittable> {
     tx: Option<oneshot::Sender<Response<T>>>,
     internal_cmd_tx: UnboundedSender<Message>,
+    /// Expresses an optional [`soft_assert`] on the set of values allowed to be
+    /// sent from `self`.
+    allowed: Option<Vec<T::Allowed>>,
 }
 
-impl<T> ClientTransmitter<T> {
+impl<T: Transmittable> ClientTransmitter<T> {
     /// Creates a new client transmitter.
     pub fn new(
         tx: oneshot::Sender<Response<T>>,
@@ -43,12 +47,27 @@ impl<T> ClientTransmitter<T> {
         ClientTransmitter {
             tx: Some(tx),
             internal_cmd_tx,
+            allowed: None,
         }
     }
 
     /// Transmits `result` to the client, returning ownership of the session
     /// `session` as well.
+    ///
+    /// # Panics
+    /// - If in `soft_assert`, `result.is_ok()`, `self.allowed.is_some()`, and
+    ///   the result value is not in the set of allowed values.
     pub fn send(mut self, result: Result<T, AdapterError>, session: Session) {
+        // Guarantee that the value sent is of an allowed type.
+        soft_assert!(
+            match (&result, self.allowed.take()) {
+                (Ok(ref t), Some(allowed)) => allowed.contains(&t.to_allowed()),
+                _ => true,
+            },
+            "tried to send disallowed value through ClientTransmitter; \
+            see ClientTransmitter::set_allowed"
+        );
+
         // If we were not able to send a message, we must clean up the session
         // ourselves. Return it to the caller for disposal.
         if let Err(res) = self.tx.take().unwrap().send(Response { result, session }) {
@@ -63,18 +82,41 @@ impl<T> ClientTransmitter<T> {
     pub fn take(mut self) -> oneshot::Sender<Response<T>> {
         self.tx.take().unwrap()
     }
+
+    /// Sets `self` so that the next call to [`Self::send`] will [`soft_assert`]
+    /// that, if `Ok`, the value is one of `allowed`, as determined by
+    /// [`Transmittable::to_allowed`].
+    pub fn set_allowed(&mut self, allowed: Vec<T::Allowed>) {
+        self.allowed = Some(allowed);
+    }
+}
+
+/// A helper trait for [`ClientTransmitter`].
+pub trait Transmittable {
+    /// The type of values used to express which set of values are allowed.
+    type Allowed: Eq + PartialEq + std::fmt::Debug;
+    /// The conversion from the [`ClientTransmitter`]'s type to `Allowed`.
+    ///
+    /// The benefit of this style of trait, rather than relying on a bound on
+    /// `Allowed`, are:
+    /// - Not requiring a clone
+    /// - The flexibility for facile implementations that do not plan to make
+    ///   use of the `allowed` feature. Those types can simply implement this
+    ///   trait for `bool`, and return `true`. However, it might not be
+    ///   semantically appropriate to expose `From<&Self> for bool`.
+    fn to_allowed(&self) -> Self::Allowed;
 }
 
 /// `ClientTransmitter` with a response to send.
 #[derive(Debug)]
-pub struct CompletedClientTransmitter<T> {
+pub struct CompletedClientTransmitter<T: Transmittable> {
     client_transmitter: ClientTransmitter<T>,
     response: Result<T, AdapterError>,
     session: Session,
     action: EndTransactionAction,
 }
 
-impl<T> CompletedClientTransmitter<T> {
+impl<T: Transmittable> CompletedClientTransmitter<T> {
     /// Creates a new completed client transmitter.
     pub fn new(
         client_transmitter: ClientTransmitter<T>,
@@ -98,7 +140,7 @@ impl<T> CompletedClientTransmitter<T> {
     }
 }
 
-impl<T> Drop for ClientTransmitter<T> {
+impl<T: Transmittable> Drop for ClientTransmitter<T> {
     fn drop(&mut self) {
         if self.tx.is_some() {
             panic!("client transmitter dropped without send")

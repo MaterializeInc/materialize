@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use derivative::Derivative;
+use enum_kinds::EnumKind;
 use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -29,6 +30,7 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::ClientSeverity;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
+use crate::util::Transmittable;
 
 #[derive(Debug)]
 pub enum Command {
@@ -120,6 +122,15 @@ pub struct StartupResponse {
     pub messages: Vec<StartupMessage>,
 }
 
+// Facile implementation for `StartupResponse`, which does not use the `allowed`
+// feature of `ClientTransmitter`.
+impl Transmittable for StartupResponse {
+    type Allowed = bool;
+    fn to_allowed(&self) -> Self::Allowed {
+        true
+    }
+}
+
 /// Messages in a [`StartupResponse`].
 #[derive(Debug)]
 pub enum StartupMessage {
@@ -165,8 +176,9 @@ pub struct ExecuteResponsePartialError {
 }
 
 /// The response to [`SessionClient::execute`](crate::SessionClient::execute).
-#[derive(Derivative)]
+#[derive(EnumKind, Derivative)]
 #[derivative(Debug)]
+#[enum_kind(ExecuteResponseKind)]
 pub enum ExecuteResponse {
     /// The active transaction was exited.
     TransactionExited {
@@ -591,6 +603,16 @@ impl ExecuteResponse {
         );
 
         r
+    }
+}
+
+/// This implementation is meant to ensure that we maintain updated information
+/// about which types of `ExecuteResponse`s are permitted to be sent, which will
+/// be a function of which plan we're executing.
+impl Transmittable for ExecuteResponse {
+    type Allowed = ExecuteResponseKind;
+    fn to_allowed(&self) -> Self::Allowed {
+        ExecuteResponseKind::from(self)
     }
 }
 

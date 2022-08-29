@@ -3045,6 +3045,7 @@ dependencies = [
  "dec",
  "derivative",
  "differential-dataflow",
+ "enum-kinds",
  "fail",
  "futures",
  "itertools",
