@@ -19,14 +19,6 @@ name = "md5"
 # `sha-1` is the older and now deprecated name.
 [[bans.deny]]
 name = "sha-1"
-wrappers = [
-    # https://github.com/hyperium/headers/pull/117
-    "headers",
-    # https://github.com/blackbeam/rust_mysql_common/pull/71
-    "mysql_common",
-    # https://github.com/snapview/tungstenite-rs/pull/299
-    "tungstenite",
-]
 
 # Use `prost` or `protobuf-native` instead.
 [[bans.deny]]
@@ -172,6 +164,18 @@ allow-git = [
 
     # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
     "https://github.com/MaterializeInc/serde-value.git",
+
+    # Waiting on https://github.com/hyperium/headers/pull/117 to make it into
+    # a release.
+    "https://github.com/hyperium/headers.git",
+
+    # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/71 to make
+    # it into a release.
+    "https://github.com/blackbeam/rust_mysql_common.git",
+
+    # Waiting on https://github.com/snapview/tungstenite-rs/pull/299 to make
+    # it into a release.
+    "https://github.com/snapview/tungstenite-rs.git",
 
     # Dependencies that we control upstream whose official releases we don't
     # care about.
