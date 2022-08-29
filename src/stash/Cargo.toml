@@ -20,7 +20,7 @@ postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 rand = "0.8.5"
 rusqlite = { version = "0.28.0", features = ["bundled"] }
 serde = "1.0.144"
-serde_json = "1.0.82"
+serde_json = "1.0.85"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 tokio = "1.19.2"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = [ "with-serde_json-1" ] }

@@ -31,7 +31,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-storage = { path = "../storage" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 regex = "1.6.0"
-serde_json = "1.0.82"
+serde_json = "1.0.85"
 tempfile = "3.2.0"
 time = "0.3.14"
 tokio = "1.19.2"

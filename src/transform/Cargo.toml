@@ -23,4 +23,4 @@ mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.43"
-serde_json = "1.0.82"
+serde_json = "1.0.85"
