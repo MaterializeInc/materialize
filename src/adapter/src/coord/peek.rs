@@ -28,6 +28,7 @@ use mz_compute_client::command::{DataflowDescription, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, RelationType, Row};
@@ -441,7 +442,13 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                 }
             }
-            let results = finishing.finish(results);
+            let results = match finishing.finish(
+                results,
+                usize::cast_from(self.catalog.state().system_config().max_result_size()),
+            ) {
+                Ok(rows) => rows,
+                Err(e) => return Err(AdapterError::ResultSize(e)),
+            };
             return Ok(send_immediate_rows(results));
         }
 
@@ -564,6 +571,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .unwrap();
 
         // Prepare the receiver to return as a response.
+        let max_result_size = self.catalog.state().system_config().max_result_size();
         let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
             .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
                 match (memo, resp) {
@@ -580,7 +588,12 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 }
             })
             .map(move |resp| match resp {
-                PeekResponse::Rows(rows) => PeekResponseUnary::Rows(finishing.finish(rows)),
+                PeekResponse::Rows(rows) => {
+                    match finishing.finish(rows, usize::cast_from(max_result_size)) {
+                        Ok(rows) => PeekResponseUnary::Rows(rows),
+                        Err(e) => PeekResponseUnary::Error(e),
+                    }
+                }
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),
             });
