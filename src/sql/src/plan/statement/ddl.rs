@@ -372,15 +372,14 @@ pub fn plan_create_source(
             {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
                     scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
-                    let mut options = BTreeMap::new();
-                    options.insert(
-                        "bootstrap.servers".into(),
-                        KafkaAddrs::from_str(broker)
-                            .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
-                            .to_string()
-                            .into(),
-                    );
-                    let connection = KafkaConnection::try_from(&mut options)?;
+                    let connection = KafkaConnection {
+                        brokers: vec![broker.clone()],
+                        progress_topic: None,
+                        security: None,
+                    };
+
+                    let options = connection.clone().into();
+
                     (connection, options, None, None)
                 }
                 mz_sql_parser::ast::KafkaConnection::Reference {
