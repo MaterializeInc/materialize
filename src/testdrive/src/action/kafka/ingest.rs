@@ -115,10 +115,7 @@ impl Transcoder {
         R: BufRead,
     {
         match self {
-            Transcoder::ConfluentAvro {
-                schema,
-                schema_id,
-            } => {
+            Transcoder::ConfluentAvro { schema, schema_id } => {
                 if let Some(val) = Self::decode_json(row)? {
                     let val = avro::from_json(&val, schema.top_node())?;
                     let mut out = vec![];
@@ -135,9 +132,7 @@ impl Transcoder {
                     Ok(None)
                 }
             }
-            Transcoder::PlainAvro {
-                schema,
-            } => {
+            Transcoder::PlainAvro { schema } => {
                 if let Some(val) = Self::decode_json(row)? {
                     let val = avro::from_json(&val, schema.top_node())?;
                     let mut out = vec![];
