@@ -20,7 +20,7 @@ $ kafka-create-topic topic=re-created partitions=1
 # Make sure that we can render a source (by creating an indexed view), drop
 # it, and render it again.
 
-$ kafka-ingest format=avro topic=re-created schema=${schema} publish=true repeat=10
+$ kafka-ingest format=avro topic=re-created schema=${schema} repeat=10
 {"f1": ${kafka-ingest.iteration}}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn

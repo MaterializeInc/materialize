@@ -15,7 +15,7 @@ $ set int-schema={"type": "record", "name": "schema_int", "fields": [ {"name": "
 
 $ kafka-create-topic topic=resolution-no-publish-writer
 
-$ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schema} timestamp=1
 {"f1": 123}
 
 > DROP SCHEMA IF EXISTS public CASCADE

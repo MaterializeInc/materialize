@@ -25,7 +25,7 @@ $ set schema={
 
 # Delete 5K records post-restart
 
-$ kafka-ingest format=avro topic=upsert-deletion key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=5000
+$ kafka-ingest format=avro topic=upsert-deletion key-format=avro key-schema=${keyschema} schema=${schema} repeat=5000
 {"f1": ${kafka-ingest.iteration}}
 
 > SELECT COUNT(*), MIN(f1), MAX(f1), MIN(f2) , MAX(f2) FROM upsert_deletion;

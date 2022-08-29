@@ -33,7 +33,7 @@ $ set upsert-schema={
 
 $ kafka-create-topic topic=upsert-avro
 
-$ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema} publish=true
+$ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema}
 {"key1": "fish", "key2": 2} {"f1": "fish", "f2": 1000}
 {"key1": "fisch", "key2": 42} {"f1": "fish", "f2": 1000}
 
@@ -59,7 +59,7 @@ $ kafka-verify format=avro sink=materialize.public.upsert_input_sink sort-messag
 {"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "fish", "f2": 1000, "transaction": {"id": "<TIMESTAMP>"}}
 {"key1": "fish", "key2": 2} {"key1": "fish", "key2": 2, "f1": "fish", "f2": 1000, "transaction": {"id": "<TIMESTAMP>"}}
 
-$ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema} publish=true
+$ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema}
 {"key1": "fisch", "key2": 42} {"f1": "richtig, fisch", "f2": 2000}
 
 $ kafka-verify format=avro sink=materialize.public.upsert_input_sink

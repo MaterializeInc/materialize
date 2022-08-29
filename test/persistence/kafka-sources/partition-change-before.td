@@ -29,7 +29,7 @@ $ set schema={
 
 $ kafka-create-topic topic=partition-change partitions=5
 
-$ kafka-ingest format=avro topic=partition-change key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=partition-change key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn
@@ -51,5 +51,5 @@ true
 
 $ kafka-add-partitions topic=partition-change total-partitions=10
 
-$ kafka-ingest format=avro topic=partition-change key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=1000
+$ kafka-ingest format=avro topic=partition-change key-format=avro key-schema=${keyschema} schema=${schema} repeat=1000
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}

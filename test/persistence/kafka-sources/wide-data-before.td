@@ -37,7 +37,7 @@ $ set schema={
 
 $ kafka-create-topic topic=wide-data-ten
 
-$ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10
+$ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keyschema} schema=${schema} repeat=10
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn

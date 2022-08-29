@@ -30,10 +30,10 @@ $ set schema={
 
 $ kafka-create-topic topic=failpoint partitions=5
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "a${kafka-ingest.iteration}"} {"f2": "a${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "b${kafka-ingest.iteration}"} {"f2": "b${kafka-ingest.iteration}"}
 
 > CREATE CONNECTION kafka_conn
@@ -55,10 +55,10 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "c${kafka-ingest.iteration}"} {"f2": "c${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "d${kafka-ingest.iteration}"} {"f2": "d${kafka-ingest.iteration}"}
 
 # Make sure that we read (and persisted) at least one message before activating the failpoint.
@@ -67,20 +67,20 @@ true
 
 > SET failpoints = '${arg.failpoint}=${arg.action}';
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "e${kafka-ingest.iteration}"} {"f2": "e${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "f${kafka-ingest.iteration}"} {"f2": "f${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "g${kafka-ingest.iteration}"} {"f2": "g${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "h${kafka-ingest.iteration}"} {"f2": "h${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "i${kafka-ingest.iteration}"} {"f2": "i${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "j${kafka-ingest.iteration}"} {"f2": "j${kafka-ingest.iteration}"}

@@ -25,7 +25,7 @@ $ set schema={
 
 # Update 5K records
 
-$ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=${keyschema} schema=${schema} publish=true start-iteration=2500 repeat=5000
+$ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=${keyschema} schema=${schema} start-iteration=2500 repeat=5000
 {"f1": ${kafka-ingest.iteration}} {"f2": "a${kafka-ingest.iteration}"}
 
 > SELECT COUNT(*), MIN(f1), MAX(f1) FROM upsert_modification;

@@ -25,7 +25,7 @@ $ set schema={
   }
 
 $ kafka-create-topic topic=avro-data partitions=1
-$ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflictkeyschema} schema=${schema} timestamp=1 publish=true
+$ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflictkeyschema} schema=${schema} timestamp=1
 {"id": 1} {"id": 2, "b": 3}
 
 ! CREATE SOURCE missing_key_format

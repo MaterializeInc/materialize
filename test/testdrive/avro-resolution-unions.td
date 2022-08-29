@@ -17,7 +17,7 @@ $ set union-int={"type": "record", "name": "schema_union", "fields": [ {"name": 
 
 $ kafka-create-topic topic=resolution-unions
 
-$ kafka-ingest format=avro topic=resolution-unions schema=${union-int} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-unions schema=${union-int} timestamp=1
 {"f1": {"int": 123 } }
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -29,7 +29,7 @@ $ kafka-ingest format=avro topic=resolution-unions schema=${union-int} publish=t
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=resolution-unions schema=${union-int-string} publish=true timestamp=2
+$ kafka-ingest format=avro topic=resolution-unions schema=${union-int-string} timestamp=2
 {"f1": {"int": 123 } }
 {"f1": {"string": "abc" } }
 

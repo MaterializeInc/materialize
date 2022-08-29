@@ -17,7 +17,7 @@ $ set schema={
 
 $ kafka-create-topic topic=data
 
-$ kafka-ingest format=avro topic=data schema=${schema} publish=true
+$ kafka-ingest format=avro topic=data schema=${schema}
 {"a": 1}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
