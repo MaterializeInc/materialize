@@ -703,7 +703,12 @@ where
                 }
                 ComputeResponse::TailResponse(global_id, response) => {
                     let new_upper = match &response {
-                        TailResponse::Batch(TailBatch { upper, .. }) => upper.clone(),
+                        TailResponse::Batch(TailBatch { lower, upper, .. }) => {
+                            // Ensure there are no gaps in the tail stream we receive.
+                            assert_eq!(lower, &self.compute.collections[&global_id].write_frontier);
+
+                            upper.clone()
+                        }
                         // The tail will not be written to again, but we should not confuse that
                         // with the source of the TAIL being complete through this time.
                         TailResponse::DroppedAt(_) => Antichain::new(),
