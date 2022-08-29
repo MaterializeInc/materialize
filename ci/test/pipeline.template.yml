@@ -537,9 +537,6 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_cloudtest_*.xml
     inputs: [test/cloudtest]
-    # TODO: re-enable cloudtest.
-    # See: https://github.com/MaterializeInc/materialize/issues/14359
-    soft_fail: true
     plugins:
       - ./ci/plugins/cloudtest:
           args: [test/cloudtest/]
