@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{process::exit, string::ParseError};
 use std::str::FromStr;
+use std::{process::exit, string::ParseError};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -23,17 +23,10 @@ pub(crate) enum CloudProviderRegion {
 
 /// Implementation to name the possible values and parse every option.
 impl CloudProviderRegion {
-
     pub fn variants() -> [&'static str; 2] {
         ["aws/us-east-1", "aws/eu-west-1"]
     }
-    pub fn parse(region: &str) -> CloudProviderRegion {
-        match region {
-            "aws/us-east-1" => CloudProviderRegion::AwsUsEast1,
-            "aws/eu-west-1" => CloudProviderRegion::AwsEuWest1,
-            _ => panic!("Unknown region."),
-        }
-    }
+
     /// Return the region name inside a cloud provider.
     pub fn region_name(self) -> &'static str {
         match self {
@@ -42,12 +35,12 @@ impl CloudProviderRegion {
         }
     }
 
-    /// Return the cloud provider name.
-    pub fn cloud_provider(self) -> &'static str {
-        match self {
-            CloudProviderRegion::AwsUsEast1 |  CloudProviderRegion::AwsEuWest1 => "aws",
-        }
-    }
+    // / Return the cloud provider name.
+    // pub fn cloud_provider(self) -> &'static str {
+    //     match self {
+    //         CloudProviderRegion::AwsUsEast1 |  CloudProviderRegion::AwsEuWest1 => "aws",
+    //     }
+    // }
 }
 
 impl FromStr for CloudProviderRegion {
