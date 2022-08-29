@@ -578,51 +578,31 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         self.validate_resource_limit(
-            self.catalog
-                .user_tables()
-                .count()
-                .try_into()
-                .expect("number of tables should fit into i32"),
+            self.catalog.user_tables().count(),
             new_tables,
             SystemVars::max_tables,
             "Table",
         )?;
         self.validate_resource_limit(
-            self.catalog
-                .user_sources()
-                .count()
-                .try_into()
-                .expect("number of sources should fit into i32"),
+            self.catalog.user_sources().count(),
             new_sources,
             SystemVars::max_sources,
             "Source",
         )?;
         self.validate_resource_limit(
-            self.catalog
-                .user_sinks()
-                .count()
-                .try_into()
-                .expect("number of sinks should fit into i32"),
+            self.catalog.user_sinks().count(),
             new_sinks,
             SystemVars::max_sinks,
             "Sink",
         )?;
         self.validate_resource_limit(
-            self.catalog
-                .user_materialized_views()
-                .count()
-                .try_into()
-                .expect("number of materialized views should fit into i32"),
+            self.catalog.user_materialized_views().count(),
             new_materialized_views,
             SystemVars::max_materialized_views,
             "Materialized view",
         )?;
         self.validate_resource_limit(
-            self.catalog
-                .compute_instances()
-                .count()
-                .try_into()
-                .expect("number of compute instances should fit into i32"),
+            self.catalog.compute_instances().count(),
             new_clusters,
             SystemVars::max_clusters,
             "Cluster",
@@ -632,13 +612,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let current_amount = self
                 .catalog
                 .resolve_compute_instance(cluster_name)
-                .map(|instance| {
-                    instance
-                        .replicas_by_id
-                        .len()
-                        .try_into()
-                        .expect("number of replicas should fit into i32")
-                })
+                .map(|instance| instance.replicas_by_id.len())
                 .unwrap_or(0);
             self.validate_resource_limit(
                 current_amount,
@@ -648,23 +622,14 @@ impl<S: Append + 'static> Coordinator<S> {
             )?;
         }
         self.validate_resource_limit(
-            self.catalog
-                .databases()
-                .count()
-                .try_into()
-                .expect("number of databases should fit into i32"),
+            self.catalog.databases().count(),
             new_databases,
             SystemVars::max_databases,
             "Database",
         )?;
         for (database_id, new_schemas) in new_schemas_per_database {
             self.validate_resource_limit(
-                self.catalog
-                    .get_database(database_id)
-                    .schemas_by_id
-                    .len()
-                    .try_into()
-                    .expect("number of schemas should fit into i32"),
+                self.catalog.get_database(database_id).schemas_by_id.len(),
                 new_schemas,
                 SystemVars::max_schemas_per_database,
                 "Schemas per database",
@@ -675,30 +640,20 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.catalog
                     .get_schema(&database_spec, &schema_spec, conn_id)
                     .items
-                    .len()
-                    .try_into()
-                    .expect("number of items should fit into i32"),
+                    .len(),
                 new_objects,
                 SystemVars::max_objects_per_schema,
                 "Objects per schema",
             )?;
         }
         self.validate_resource_limit(
-            self.catalog
-                .user_secrets()
-                .count()
-                .try_into()
-                .expect("number of secrets should fit into i32"),
+            self.catalog.user_secrets().count(),
             new_secrets,
             SystemVars::max_secrets,
             "Secret",
         )?;
         self.validate_resource_limit(
-            self.catalog
-                .user_roles()
-                .count()
-                .try_into()
-                .expect("number of secrets should fit into i32"),
+            self.catalog.user_roles().count(),
             new_roles,
             SystemVars::max_roles,
             "Role",
@@ -709,16 +664,30 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Validate a specific type of resource limit and return an error if that limit is exceeded.
     fn validate_resource_limit<F>(
         &self,
-        current_amount: i32,
+        current_amount: usize,
         new_instances: i32,
         resource_limit: F,
         resource_type: &str,
     ) -> Result<(), AdapterError>
     where
-        F: Fn(&SystemVars) -> i32,
+        F: Fn(&SystemVars) -> u32,
     {
         let limit = resource_limit(self.catalog.state().system_config());
-        if new_instances > 0 && current_amount + new_instances > limit {
+        let exceeds_limit = match (u32::try_from(current_amount), u32::try_from(new_instances)) {
+            // 0 new instances are always ok.
+            (_, Ok(new_instances)) if new_instances == 0 => false,
+            // negative instances are always ok.
+            (_, Err(_)) => false,
+            // more than u32 for the current amount is too much.
+            (Err(_), _) => true,
+            (Ok(current_amount), Ok(new_instances)) => {
+                match current_amount.checked_add(new_instances) {
+                    Some(new_amount) => new_amount > limit,
+                    None => true,
+                }
+            }
+        };
+        if exceeds_limit {
             Err(AdapterError::ResourceExhaustion {
                 resource_type: resource_type.to_string(),
                 limit,
