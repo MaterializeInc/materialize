@@ -219,6 +219,7 @@ impl ConfigKey for KafkaConnectionOptionName {
         use KafkaConnectionOptionName::*;
         match self {
             Broker | Brokers => "bootstrap.servers",
+            ProgressTopic => unimplemented!("not a kafka config"),
             SslKey => "ssl.key.pem",
             SslCertificate => "ssl.certificate.pem",
             SslCertificateAuthority => "ssl.ca.pem",
@@ -233,6 +234,7 @@ impl ConfigKey for KafkaConnectionOptionName {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection {
     pub brokers: Vec<String>,
+    pub progress_topic: Option<String>,
     pub security: Option<KafkaSecurity>,
 }
 
@@ -328,6 +330,10 @@ impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
             None
         };
 
+        // NB: there's no way to configure the progress topic via a kafka connection map.
+        // This is expected to be removed entirely once inline connection declarations are dropped.
+        let progress_topic = None;
+
         let brokers = match map.remove(&Broker.config_key()) {
             Some(v) => KafkaAddrs::from_str(&v.unwrap_string())?
                 .to_string()
@@ -337,7 +343,11 @@ impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
             None => bail!("must specify {}", Broker.config_key()),
         };
 
-        Ok(KafkaConnection { brokers, security })
+        Ok(KafkaConnection {
+            brokers,
+            progress_topic,
+            security,
+        })
     }
 }
 
@@ -408,6 +418,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn into_proto(&self) -> ProtoKafkaConnection {
         ProtoKafkaConnection {
             brokers: self.brokers.into_proto(),
+            progress_topic: self.progress_topic.into_proto(),
             security: self.security.into_proto(),
         }
     }
@@ -415,6 +426,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaConnection {
             brokers: proto.brokers,
+            progress_topic: proto.progress_topic,
             security: proto.security.into_rust()?,
         })
     }

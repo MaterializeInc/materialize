@@ -2814,6 +2814,7 @@ generate_extracted_config!(
     KafkaConnectionOption,
     (Broker, String),
     (Brokers, Vec<String>),
+    (ProgressTopic, String),
     (SslKey, with_options::Secret),
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
@@ -2920,6 +2921,7 @@ impl TryFrom<KafkaConnectionOptionExtracted> for KafkaConnection {
         Ok(KafkaConnection {
             brokers: value.get_brokers()?,
             security: (&value).try_into()?,
+            progress_topic: value.progress_topic,
         })
     }
 }

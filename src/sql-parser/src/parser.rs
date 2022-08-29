@@ -1967,9 +1967,13 @@ impl<'a> Parser<'a> {
     fn parse_kafka_connection_options(
         &mut self,
     ) -> Result<KafkaConnectionOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, SASL, SSL])? {
+        let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, PROGRESS, SASL, SSL])? {
             BROKER => KafkaConnectionOptionName::Broker,
             BROKERS => KafkaConnectionOptionName::Brokers,
+            PROGRESS => {
+                self.expect_keyword(TOPIC)?;
+                KafkaConnectionOptionName::ProgressTopic
+            }
             SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
                 MECHANISMS => KafkaConnectionOptionName::SaslMechanisms,
                 PASSWORD => KafkaConnectionOptionName::SaslPassword,

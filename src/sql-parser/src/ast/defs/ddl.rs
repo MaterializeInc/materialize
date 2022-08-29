@@ -520,6 +520,7 @@ impl_display_t!(DbzTxMetadataOption);
 pub enum KafkaConnectionOptionName {
     Broker,
     Brokers,
+    ProgressTopic,
     SslKey,
     SslCertificate,
     SslCertificateAuthority,
@@ -533,6 +534,7 @@ impl AstDisplay for KafkaConnectionOptionName {
         f.write_str(match self {
             KafkaConnectionOptionName::Broker => "BROKER",
             KafkaConnectionOptionName::Brokers => "BROKERS",
+            KafkaConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
             KafkaConnectionOptionName::SslKey => "SSL KEY",
             KafkaConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             KafkaConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
