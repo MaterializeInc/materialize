@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
+use mz_sql::plan::PlanKind;
 use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -603,6 +604,74 @@ impl ExecuteResponse {
         );
 
         r
+    }
+
+    /// Expresses which [`PlanKind`] generate which set of
+    /// [`ExecuteResponseKind`].
+    pub fn generated_from(plan: PlanKind) -> Vec<ExecuteResponseKind> {
+        use ExecuteResponseKind::*;
+        use PlanKind::*;
+        match plan {
+            AbortTransaction | CommitTransaction => vec![TransactionExited],
+            AlterItemRename | AlterNoop | AlterSecret | AlterSource | RotateKeys => {
+                vec![AlteredObject]
+            }
+            AlterIndexSetOptions | AlterIndexResetOptions => {
+                vec![AlteredObject, AlteredIndexLogicalCompaction]
+            }
+            AlterSystemSet | AlterSystemReset | AlterSystemResetAll => {
+                vec![AlteredSystemConfiguraion]
+            }
+            Close => vec![ClosedCursor],
+            PlanKind::CopyFrom => vec![ExecuteResponseKind::CopyFrom],
+            CreateConnection => vec![CreatedConnection],
+            CreateDatabase => vec![CreatedDatabase],
+            CreateSchema => vec![CreatedSchema],
+            CreateRole => vec![CreatedRole],
+            CreateComputeInstance => vec![CreatedComputeInstance],
+            CreateComputeInstanceReplica => vec![CreatedComputeInstanceReplica],
+            CreateSource => vec![CreatedSource, CreatedSources],
+            CreateSecret => vec![CreatedSecret],
+            CreateSink => vec![CreatedSink],
+            CreateTable => vec![CreatedTable],
+            CreateView | CreateViews => vec![CreatedView],
+            CreateMaterializedView => vec![CreatedMaterializedView],
+            CreateIndex => vec![CreatedIndex],
+            CreateType => vec![CreatedType],
+            PlanKind::Deallocate => vec![ExecuteResponseKind::Deallocate],
+            Declare => vec![DeclaredCursor],
+            DiscardTemp => vec![DiscardedTemp],
+            DiscardAll => vec![DiscardedAll],
+            DropDatabase => vec![DroppedDatabase],
+            DropSchema => vec![DroppedSchema],
+            DropRoles => vec![DroppedRole],
+            DropComputeInstances => vec![DroppedComputeInstance],
+            DropComputeInstanceReplica => vec![DroppedComputeInstanceReplicas],
+            DropItems => vec![
+                DroppedConnection,
+                DroppedSource,
+                DroppedTable,
+                DroppedView,
+                DroppedMaterializedView,
+                DroppedIndex,
+                DroppedSink,
+                DroppedType,
+                DroppedSecret,
+            ],
+            PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
+            Explain | Peek | SendRows | ShowAllVariables | ShowVariable => {
+                vec![SendingRows]
+            }
+            Execute => vec![],
+            PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
+            Insert => vec![Inserted, SendingRows],
+            PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
+            PlanKind::Raise => vec![ExecuteResponseKind::Raise],
+            ReadThenWrite | SendDiffs => vec![Deleted, Inserted, SendingRows, Updated],
+            PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
+            Tail => vec![Tailing, CopyTo],
+            StartTransaction => vec![StartedTransaction],
+        }
     }
 }
 

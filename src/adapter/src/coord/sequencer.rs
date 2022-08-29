@@ -53,8 +53,9 @@ use mz_sql::plan::{
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
-    RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
+    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
+    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom,
+    TailPlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
@@ -87,12 +88,15 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_plan(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
+        mut tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
+        let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        tx.set_allowed(responses);
+
         match plan {
             Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateConnection(plan) => {

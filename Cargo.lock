@@ -4053,6 +4053,7 @@ dependencies = [
  "aws-sdk-sts",
  "chrono",
  "datadriven",
+ "enum-kinds",
  "globset",
  "hex",
  "itertools",
