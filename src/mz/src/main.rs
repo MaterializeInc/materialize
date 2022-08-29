@@ -44,7 +44,7 @@ use crate::shell::shell;
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
-    #[clap(short, long, env="MZ_PROFILE", default_value="default")]
+    #[clap(short, long, env = "MZ_PROFILE", default_value = "default")]
     profile: String,
 }
 
