@@ -370,18 +370,8 @@ pub fn plan_create_source(
             let (kafka_connection, options, optional_start_offset, group_id_prefix) = match &kafka
                 .connection
             {
-                mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
-                    scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
-                    let mut options = BTreeMap::new();
-                    options.insert(
-                        "bootstrap.servers".into(),
-                        KafkaAddrs::from_str(broker)
-                            .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
-                            .to_string()
-                            .into(),
-                    );
-                    let connection = KafkaConnection::try_from(&mut options)?;
-                    (connection, options, None, None)
+                mz_sql_parser::ast::KafkaConnection::Inline { broker: _ } => {
+                    sql_bail!("inline kafka connection specification is no longer supported")
                 }
                 mz_sql_parser::ast::KafkaConnection::Reference {
                     connection,
