@@ -30,8 +30,10 @@ $ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schem
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schema} timestamp=1
-{"f1": 123}
+# The value is {"f1": 123}.
+# We encode it manually to avoid publishing it.
+$ kafka-ingest format=bytes topic=resolution-no-publish-writer timestamp=1
+\\x00\x00\x00\x00\x01\xf6\x01
 
 ! SELECT * FROM resolution_no_publish_writer;
 contains:to resolve
