@@ -17,7 +17,7 @@
 
 use crate::attribute::non_negative::NonNegative;
 use crate::attribute::subtree_size::SubtreeSize;
-use crate::attribute::Attribute;
+use crate::attribute::{AttributeBuilder, AttributeDeriver};
 use crate::TransformArgs;
 
 use mz_expr::visit::{Visit, VisitorMut};
@@ -38,27 +38,28 @@ impl crate::Transform for ThresholdElision {
     }
 }
 
-#[derive(Default)]
 struct ThresholdElisionAction {
-    non_negative: NonNegative,
-    subtree_size: SubtreeSize,
+    deriver: AttributeDeriver,
+}
+
+impl Default for ThresholdElisionAction {
+    fn default() -> Self {
+        let mut builder = AttributeBuilder::default();
+        builder.add_attribute::<NonNegative>();
+        builder.add_attribute::<SubtreeSize>();
+        Self {
+            deriver: builder.finish(),
+        }
+    }
 }
 
 impl VisitorMut<MirRelationExpr> for ThresholdElisionAction {
     fn pre_visit(&mut self, expr: &mut MirRelationExpr) {
-        self.subtree_size.schedule_env_tasks(expr);
-        self.non_negative.schedule_env_tasks(expr);
+        self.deriver.pre_visit(expr);
     }
 
     fn post_visit(&mut self, expr: &mut MirRelationExpr) {
-        // Derive attributes in reverse dependency order before
-        // attempting the transform.
-        // as the latter depens on the former.
-        self.subtree_size.derive(expr, &());
-        self.non_negative.derive(expr, &self.subtree_size);
-        // Handle environment maintenance tasks for all attributes.
-        self.subtree_size.handle_env_tasks();
-        self.non_negative.handle_env_tasks();
+        self.deriver.post_visit(expr);
         self.action(expr);
     }
 }
@@ -68,8 +69,8 @@ impl ThresholdElisionAction {
     pub fn action(&mut self, expr: &mut MirRelationExpr) {
         // The results vectors or all attributes should be equal after each step.
         debug_assert_eq!(
-            self.non_negative.results.len(),
-            self.subtree_size.results.len()
+            self.deriver.get_results::<NonNegative>().len(),
+            self.deriver.get_results::<SubtreeSize>().len()
         );
 
         if let MirRelationExpr::Threshold { input } = expr {
@@ -83,9 +84,11 @@ impl ThresholdElisionAction {
                         // - the Union (i.e., the Threshold input) is n - 2,
                         // - the Union input[0] is at position n - 3 and its subtree size is m,
                         // - the Union base therefore is at position n - m - 3
-                        let n = self.non_negative.results.len();
-                        let m = self.subtree_size.results[n - 3];
-                        if self.non_negative.results[n - m - 3] && is_superset_of(base, &*input) {
+                        let n = self.deriver.get_results::<NonNegative>().len();
+                        let m = self.deriver.get_results::<SubtreeSize>()[n - 3];
+                        if self.deriver.get_results::<NonNegative>()[n - m - 3]
+                            && is_superset_of(base, &*input)
+                        {
                             should_replace = true;
                         }
                     }
@@ -95,12 +98,11 @@ impl ThresholdElisionAction {
                 // Replace the root Threshold with its input.
                 *expr = input.take_dangerous();
                 // Trim the attribute result vectors inferred so far to adjust for the above change.
-                self.subtree_size.results.pop();
-                self.non_negative.results.pop();
+                self.deriver.trim();
                 // We can be a bit smarter when adjusting the NonNegative result. Since the Threshold
                 // at the root can only be safely elided iff its input is non-negative, we can overwrite
                 // the new last value to be `true`.
-                if let Some(result) = self.non_negative.results.last_mut() {
+                if let Some(result) = self.deriver.get_results_mut::<NonNegative>().last_mut() {
                     *result = true;
                 }
             }

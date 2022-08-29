@@ -60,6 +60,9 @@ pub mod dataflow;
 pub use dataflow::optimize_dataflow;
 use mz_ore::stack::RecursionLimitError;
 
+#[macro_use]
+extern crate num_derive;
+
 /// Arguments that get threaded through all transforms.
 #[derive(Debug)]
 pub struct TransformArgs<'a> {

@@ -11,22 +11,29 @@
 
 use std::collections::HashMap;
 
+use num_traits::FromPrimitive;
+use typemap_rev::{TypeMap, TypeMapKey};
+
 use mz_expr::{LocalId, MirRelationExpr};
+
+use self::{
+    arity::Arity, non_negative::NonNegative, relation_type::RelationType,
+    subtree_size::SubtreeSize, /*unique_keys::UniqueKeys,*/
+};
 
 pub mod arity;
 pub mod non_negative;
 pub mod relation_type;
 pub mod subtree_size;
+//pub mod unique_keys;
 
 /// A common interface to be implemented by all derived attributes.
 pub trait Attribute {
     /// The domain of the attribute values.
     type Value: Clone + Eq + PartialEq;
-    /// The domain of the dependencies.
-    type Dependencies;
 
     /// Derive an attribute.
-    fn derive(&mut self, expr: &MirRelationExpr, deps: &Self::Dependencies);
+    fn derive(&mut self, expr: &MirRelationExpr, deps: &TypeMap);
 
     /// Schedule environment maintenance tasks.
     ///
@@ -35,8 +42,19 @@ pub trait Attribute {
 
     /// Handle scheduled environment maintenance tasks.
     ///
-    /// Deletate to [`Env::handle_tasks`] if this attribute has an [`Env`] field.
+    /// Delegate to [`Env::handle_tasks`] if this attribute has an [`Env`] field.
     fn handle_env_tasks(&mut self) {}
+
+    /// The attribute ids of all other attributes that this attribute depends on.
+    fn add_dependencies(builder: &mut AttributeBuilder)
+    where
+        Self: Sized;
+
+    /// Attributes for each subexpression, visited in post-order
+    fn get_results(&self) -> &Vec<Self::Value>;
+
+    /// Mutable attributes for each subexpression, visited in post-order
+    fn get_results_mut(&mut self) -> &mut Vec<Self::Value>;
 }
 
 /// A map that keeps the computed `A` values for all `LocalId`
@@ -57,7 +75,7 @@ impl<A: Attribute> Env<A> {
 }
 
 impl<A: Attribute> Env<A> {
-    /// Schedules evinronment maintenance tasks.
+    /// Schedules environment maintenance tasks.
     ///
     /// Should be called from a `Visitor<MirRelationExpr>::pre_visit` implementaion.
     pub fn schedule_tasks(&mut self, expr: &MirRelationExpr) {
@@ -153,4 +171,196 @@ enum EnvTask<T> {
     Remove(LocalId),
     /// Do not do anything.
     NoOp,
+}
+
+#[allow(missing_debug_implementations)]
+#[derive(Default)]
+/// Builds an [AttributeDeriver]
+pub struct AttributeBuilder {
+    attributes: TypeMap,
+}
+
+impl AttributeBuilder {
+    /// Add an attribute that [AttributeDeriver] should derive
+    pub fn add_attribute<T: TypeMapKey>(&mut self)
+    where
+        T::Value: Attribute + Default,
+    {
+        if !self.attributes.contains_key::<T>() {
+            T::Value::add_dependencies(self);
+            self.attributes.insert::<T>(T::Value::default());
+        }
+    }
+
+    /// Consume `self`, producing an [AttributeDeriver]
+    pub fn finish(self) -> AttributeDeriver {
+        AttributeDeriver {
+            attributes: self.attributes,
+        }
+    }
+}
+
+#[allow(missing_debug_implementations)]
+/// Derives an attribute and any attribute it depends on.
+///
+/// Can only be constructed from a [AttributeBuilder].
+pub struct AttributeDeriver {
+    attributes: TypeMap,
+}
+
+/// A topological sort of extant attributes.
+/// 
+/// The attribute assigned value 0 depends on no other attributes.
+/// We expect the attributes to be assigned numbers in the range
+/// 0..TOTAL_ATTRIBUTES with no gaps in between.
+#[derive(FromPrimitive)]
+enum AttributeId {
+    SubtreeSize = 0,
+    NonNegative = 1,
+    Arity = 2,
+    RelationType = 3,
+    //UniqueKeys = 4,
+}
+
+/// Should always be equal to the number of attributes
+const TOTAL_ATTRIBUTES: usize = 4;
+
+impl AttributeDeriver {
+    /// Does derivation work required upon entering a subexpression
+    pub fn pre_visit(&mut self, expr: &MirRelationExpr) {
+        fn schedule_env_tasks<T: TypeMapKey>(attributes: &mut TypeMap, expr: &MirRelationExpr)
+        where
+            T::Value: Attribute,
+        {
+            if let Some(attr) = attributes.get_mut::<T>() {
+                attr.schedule_env_tasks(expr)
+            }
+        }
+        for i in 0..TOTAL_ATTRIBUTES {
+            match FromPrimitive::from_usize(i) {
+                Some(AttributeId::SubtreeSize) => {
+                    schedule_env_tasks::<SubtreeSize>(&mut self.attributes, expr);
+                }
+                Some(AttributeId::NonNegative) => {
+                    schedule_env_tasks::<NonNegative>(&mut self.attributes, expr);
+                }
+                Some(AttributeId::RelationType) => {
+                    schedule_env_tasks::<RelationType>(&mut self.attributes, expr);
+                }
+                Some(AttributeId::Arity) => {
+                    schedule_env_tasks::<Arity>(&mut self.attributes, expr);
+                }
+                /*Some(AttributeId::UniqueKeys) => {
+                    schedule_env_tasks::<UniqueKeys>(&mut self.attributes, expr);
+                }*/
+                None => {}
+            }
+        }
+    }
+
+    /// Does derivation work required upon exiting a subexpression
+    pub fn post_visit(&mut self, expr: &MirRelationExpr) {
+        let mut deps = TypeMap::default();
+        fn post<T: TypeMapKey>(attributes: &mut TypeMap, expr: &MirRelationExpr, deps: &mut TypeMap)
+        where
+            T::Value: Attribute,
+        {
+            if let Some(mut attr) = attributes.remove::<T>() {
+                attr.derive(expr, &deps);
+                attr.handle_env_tasks();
+                deps.insert::<T>(attr);
+            }
+        }
+        for i in 0..TOTAL_ATTRIBUTES {
+            match FromPrimitive::from_usize(i) {
+                Some(AttributeId::SubtreeSize) => {
+                    post::<SubtreeSize>(&mut self.attributes, expr, &mut deps);
+                }
+                Some(AttributeId::NonNegative) => {
+                    post::<NonNegative>(&mut self.attributes, expr, &mut deps);
+                }
+                Some(AttributeId::RelationType) => {
+                    post::<RelationType>(&mut self.attributes, expr, &mut deps);
+                }
+                Some(AttributeId::Arity) => {
+                    post::<Arity>(&mut self.attributes, expr, &mut deps);
+                }
+                /*Some(AttributeId::UniqueKeys) => {
+                    post::<UniqueKeys>(&mut self.attributes, expr, &mut deps);
+                }*/
+                None => {}
+            }
+        }
+        self.attributes = deps;
+    }
+
+    /// Get a reference to the attributes derived so far.
+    pub fn get_results<T: TypeMapKey>(&self) -> &Vec<<<T as TypeMapKey>::Value as Attribute>::Value>
+    where
+        T::Value: Attribute,
+    {
+        self.attributes.get::<T>().unwrap().get_results()
+    }
+
+    /// Get a mutable reference to the attributes derived so far.
+    ///
+    /// Calling this and modifying the result risks messing up subsequent
+    /// derivations.
+    pub fn get_results_mut<T: TypeMapKey>(
+        &mut self,
+    ) -> &mut Vec<<<T as TypeMapKey>::Value as Attribute>::Value>
+    where
+        T::Value: Attribute,
+    {
+        self.attributes.get_mut::<T>().unwrap().get_results_mut()
+    }
+
+    /// Call when the most recently exited node of the [MirRelationExpr]
+    /// has been deleted.
+    ///
+    /// For each attribute, removes the last value derived.
+    pub fn trim(&mut self) {
+        for i in 0..TOTAL_ATTRIBUTES {
+            match FromPrimitive::from_usize(i) {
+                Some(AttributeId::SubtreeSize) => {
+                    self.attributes
+                        .get_mut::<SubtreeSize>()
+                        .iter_mut()
+                        .for_each(|r| {
+                            r.results.pop();
+                        });
+                }
+                Some(AttributeId::NonNegative) => {
+                    self.attributes
+                        .get_mut::<NonNegative>()
+                        .iter_mut()
+                        .for_each(|r| {
+                            r.results.pop();
+                        });
+                }
+                Some(AttributeId::RelationType) => {
+                    self.attributes
+                        .get_mut::<RelationType>()
+                        .iter_mut()
+                        .for_each(|r| {
+                            r.results.pop();
+                        });
+                }
+                Some(AttributeId::Arity) => {
+                    self.attributes.get_mut::<Arity>().iter_mut().for_each(|r| {
+                        r.results.pop();
+                    });
+                }
+                /*Some(AttributeId::UniqueKeys) => {
+                    post::<UniqueKeys>(&mut self.attributes, expr, &mut deps);
+                }*/
+                None => {}
+            }
+        }
+    }
+
+    /// Consumes `self`, returning the inner map of attributes.
+    pub fn take(self) -> TypeMap {
+        self.attributes
+    }
 }
