@@ -1346,27 +1346,6 @@ UNION ALL
     SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret' FROM mz_catalog.mz_secrets",
 };
 
-// For historical reasons, this view does not properly escape identifiers. For
-// example, a table named 'cAp.S' in the default database and schema will be
-// rendered as `materialize.public.cAp.S`. This is *not* a valid SQL identifier,
-// as it has an extra dot, and the capitals will be folded to lowercase. This
-// view is thus only fit for use in debugging queries where the names are for
-// human consumption. Applications should instead pull the names of individual
-// components out of mz_objects, mz_schemas, and mz_databases to avoid these
-// escaping issues.
-//
-// TODO(benesch): deprecate this view.
-pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
-    name: "mz_catalog_names",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_catalog_names AS SELECT
-    o.id AS global_id,
-    coalesce(d.name || '.', '') || s.name || '.' || o.name AS name
-FROM mz_catalog.mz_objects o
-JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
-LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
-};
-
 pub const MZ_DATAFLOW_NAMES: BuiltinView = BuiltinView {
     name: "mz_dataflow_names",
     schema: MZ_CATALOG_SCHEMA,
@@ -2296,7 +2275,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_STORAGE_USAGE),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
-        Builtin::View(&MZ_CATALOG_NAMES),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES),
         Builtin::View(&MZ_DATAFLOW_NAMES),

@@ -104,11 +104,11 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         &["v"]
     );
 
-    // Test that catalog recovery correctly populates `mz_catalog_names`.
+    // Test that catalog recovery correctly populates `mz_objects`.
     assert_eq!(
         client
             .query(
-                "SELECT global_id FROM mz_catalog_names WHERE global_id LIKE 'u%' ORDER BY 1",
+                "SELECT id FROM mz_objects WHERE id LIKE 'u%' ORDER BY 1",
                 &[]
             )?
             .into_iter()
