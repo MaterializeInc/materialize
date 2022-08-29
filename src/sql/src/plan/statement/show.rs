@@ -328,7 +328,7 @@ pub fn show_objects<'a>(
         ObjectType::MaterializedView => {
             show_materialized_views(scx, full, from, in_cluster, filter)
         }
-        ObjectType::Sink => show_sinks(scx, full, from, in_cluster, filter),
+        ObjectType::Sink => show_sinks(scx, full, from, filter),
         ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
         ObjectType::Role => bail_unsupported!("SHOW ROLES"),
@@ -486,33 +486,25 @@ fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
     from: Option<ResolvedSchemaName>,
-    in_cluster: Option<ResolvedClusterName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filters = vec![];
 
     if let Some(ResolvedSchemaName::Schema { schema_spec, .. }) = from {
         query_filters.push(format!("schema_id = {}", schema_spec));
-    } else if in_cluster.is_none() {
+    } else {
         query_filters.push(format!("schema_id = {}", scx.resolve_active_schema()?));
     };
-
-    if let Some(cluster) = in_cluster {
-        query_filters.push(format!("clusters.id = {}", cluster.id));
-    }
 
     let query_filters = itertools::join(query_filters.iter(), " AND ");
 
     let query = if full {
         format!(
             "SELECT
-            clusters.name AS cluster,
             sinks.name,
             mz_internal.mz_classify_object_id(sinks.id) AS type
         FROM
             mz_catalog.mz_sinks AS sinks
-            JOIN mz_catalog.mz_clusters AS clusters ON
-                    clusters.id = sinks.cluster_id
         WHERE {}",
             query_filters
         )
@@ -522,8 +514,6 @@ fn show_sinks<'a>(
             sinks.name
         FROM
             mz_catalog.mz_sinks AS sinks
-            JOIN mz_catalog.mz_clusters AS clusters ON
-                    clusters.id = sinks.cluster_id
         WHERE {}",
             query_filters
         )

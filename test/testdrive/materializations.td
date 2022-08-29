@@ -21,8 +21,11 @@ $ set schema={
 
 $ kafka-create-topic topic=data
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > SELECT * FROM data
@@ -139,15 +142,22 @@ a  b
 3  1
 1  2
 
-# Can create sink from unmaterialized view.
-> CREATE SINK not_mat_sink2 FROM data_view
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
+# Cannot create sink from unmaterialized view.
+! CREATE SINK not_mat_sink2 FROM data_view
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-view2-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+contains:data_view is a view, which cannot be exported as a sink
 
 # Can create indexed view from unmaterialized view.
 > CREATE VIEW test5 AS
   SELECT b, max(a) AS c FROM data_view GROUP BY b
 > CREATE DEFAULT INDEX ON test5
+
+# or from an indexed unmaterialized view
+! CREATE SINK not_mat_sink2 FROM test5
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-view2-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+contains:test5 is a view, which cannot be exported as a sink
 
 $ set-regex match=(\s\(u\d+\)|\n) replacement=
 
@@ -300,7 +310,7 @@ b  c
 $ kafka-create-topic topic=mat
 
 > CREATE SOURCE mat_data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mat-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-mat-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE DEFAULT INDEX ON mat_data

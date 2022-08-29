@@ -20,19 +20,13 @@ def test_secrets(mz: MaterializeApplication) -> None:
             > CREATE SECRET username AS '123';
             > CREATE SECRET password AS '234';
 
-            # Our Redpanda instance is not configured for SASL, so we can not
-            # really establish a successful connection.
-
+            # Cloud test doesn't yet work with `CONNECTION`, so we cannot specify the necessary options to support complex auth.
             ! CREATE SOURCE secrets_source
               FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-secrets-topic-${testdrive.seed}' WITH (
-                  security_protocol = 'SASL_SSL',
-                  sasl_mechanisms = 'PLAIN',
-                  sasl_username = SECRET username,
-                  sasl_password = SECRET password
-              )
+              TOPIC 'testdrive-secrets-topic-${testdrive.seed}'
               FORMAT BYTES
               ENVELOPE NONE;
+
             contains: SSL handshake failed
             """
         )

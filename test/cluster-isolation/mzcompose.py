@@ -149,6 +149,8 @@ t1
 > SELECT * FROM v2;
 3
 
+> CREATE MATERIALIZED VIEW v1mat AS SELECT * FROM v1;
+
 > CREATE INDEX i2 IN CLUSTER cluster2 ON t1 (f1);
 
 > SELECT f1 FROM t1;
@@ -170,21 +172,22 @@ t1
 
 # Sources
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 $ kafka-create-topic topic=source1 partitions=1
 $ kafka-ingest format=bytes topic=source1
 A
 
 > CREATE SOURCE source1
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-source1-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-source1-${testdrive.seed}'
   FORMAT BYTES
 
 > SELECT * FROM source1
 A
 
 # Sinks
-
-> CREATE SINK sink1 FROM v1
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink1'
+> CREATE SINK sink1 FROM v1mat
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'sink1'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true

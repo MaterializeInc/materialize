@@ -11,4 +11,4 @@
 #
 # mzcompose — runs Docker Compose with Materialize customizations.
 
-exec "$(dirname "$0")"/pyactivate -u -m pytest -s "$@"
+exec "$(dirname "$0")"/pyactivate -u -m pytest -s --tb=native "$@"

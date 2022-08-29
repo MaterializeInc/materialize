@@ -21,4 +21,3 @@ pub(crate) mod sink;
 mod typedefs;
 
 pub use arrangement::manager::{TraceManager, TraceMetrics};
-pub use sink::SinkBaseMetrics;

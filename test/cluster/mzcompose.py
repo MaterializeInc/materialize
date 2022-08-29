@@ -70,10 +70,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
         "test-cluster",
         "test-github-12251",
+        "test-github-13603",
         "test-remote-storaged",
         "test-drop-default-cluster",
-        "test-builtin-migration",
         "test-upsert",
+        "test-resource-limits",
+        # Disabled to permit a breaking change.
+        # See: https://materializeinc.slack.com/archives/C02FWJ94HME/p1661288774456699?thread_ts=1661288684.301649&cid=C02FWJ94HME
+        # "test-builtin-migration",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -122,6 +126,29 @@ def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> Non
     # Leave only replica 2 up and verify that tests still pass.
     c.sql("DROP CLUSTER REPLICA cluster1.replica1")
     c.run("testdrive", *args.glob)
+
+
+def workflow_test_github_13603(c: Composition) -> None:
+    """Test that multi woker replicas terminate eagerly upon rehydration"""
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.wait_for_materialized()
+
+    c.up("computed_1")
+    c.up("computed_2")
+    c.sql(
+        "CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100', 'computed_2:2100']));"
+    )
+
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized()
+
+    # Ensure the computeds have crashed
+    c1 = c.invoke("logs", "computed_1", capture=True)
+    assert "panicked" in c1.stdout
+    c2 = c.invoke("logs", "computed_2", capture=True)
+    assert "panicked" in c2.stdout
 
 
 def workflow_test_github_12251(c: Composition) -> None:
@@ -181,6 +208,14 @@ def workflow_test_upsert(c: Composition) -> None:
         )
 
         c.run("testdrive", "upsert/01-create-sources.td")
+        # Sleep to make sure the errors have made it to persist.
+        # This isn't necessary for correctness,
+        # as we should be able to crash at any point and re-start.
+        # But if we don't sleep here, then we might be ingesting the errored
+        # records in the new process, and so we won't actually be testing
+        # the ability to retract error values that make it to persist.
+        print("Sleeping for ten seconds")
+        time.sleep(10)
         c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged`")
         c.run("testdrive", "upsert/02-after-storaged-restart.td")
 
@@ -236,6 +271,24 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
     c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
 
 
+def workflow_test_resource_limits(c: Composition) -> None:
+    """Test resource limits in Materialize."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.wait_for_materialized()
+
+        c.run("testdrive", "resources/resource-limits.td")
+
+
+# TODO: Would be nice to update this test to use a builtin table that can be materialized.
+#  pg_roles, and most postgres catalog views, cannot be materialized because they use
+#  pg_catalog.current_database(). So we can't test making indexes and materialized views.
 def workflow_test_builtin_migration(c: Composition) -> None:
     """Exercise the builtin object migration code by upgrading between two versions
     that will have a migration triggered between them. Create a materialized view
@@ -244,76 +297,47 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
+        # Random commit before pg_roles was updated.
+        Materialized(
+            image="materialize/materialized:devel-9efd269199b1510b3e8f90196cb4fa3072a548a1",
+        ),
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
         c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.wait_for_materialized()
 
-        # Use storage external to the mz image because the above sha used postgres but
-        # we now use cockroach, so the data are lost.
-        mz_options = " ".join(
-            [
-                "--persist-consensus-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=consensus",
-                "--storage-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=storage",
-                "--adapter-stash-url=postgresql://postgres:postgres@postgres:5432?options=--search_path=adapter",
-            ]
+        c.testdrive(
+            input=dedent(
+                """
+        > CREATE VIEW v1 AS SELECT COUNT(*) FROM pg_roles;
+        > SELECT * FROM v1;
+        2
+        ! SELECT DISTINCT rolconnlimit FROM pg_roles;
+        contains:column "rolconnlimit" does not exist
+    """
+            )
         )
 
-        with c.override(
-            # This commit introduced the pg_authid builtin view with a missing column. The column was added in a
-            # later commit.
-            Materialized(
-                image="materialize/materialized:devel-4a26e59ac9da694d21b60c8d4d4a7b67c8b3b78d",
-                options=mz_options,
-            ),
-            Postgres(image="postgres:14.4"),
-        ):
-            c.up("postgres")
-            c.wait_for_postgres(service="postgres")
-            c.sql(
-                sql=f"""
-                CREATE SCHEMA IF NOT EXISTS consensus;
-                CREATE SCHEMA IF NOT EXISTS storage;
-                CREATE SCHEMA IF NOT EXISTS adapter;
-            """,
-                service="postgres",
-                user="postgres",
-                password="postgres",
-            )
+        c.kill("materialized")
 
-            c.up("materialized")
-            c.wait_for_materialized()
+    with c.override(
+        # This will stop working if we introduce a breaking change.
+        Materialized(),
+        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.wait_for_materialized()
 
-            c.testdrive(
-                input=dedent(
-                    """
-            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM pg_authid;
-            > CREATE DEFAULT INDEX ON v1;
-            > SELECT * FROM v1;
-            2
-        """
-                )
-            )
-
-            c.kill("materialized")
-
-        with c.override(
-            # If this ever stops working, add the following argument:
-            # image="materialize/materialized:devel-438ea318093b3a15a924fbdae70e0db6d379a921"
-            # That commit added the missing column rolconnlimit to pg_authid.
-            Materialized(options=mz_options)
-        ):
-            c.up("materialized")
-            c.wait_for_materialized()
-
-            c.testdrive(
-                input=dedent(
-                    """
+        c.testdrive(
+            input=dedent(
+                """
        > SELECT * FROM v1;
        2
-
        # This column is new after the migration
-       > SELECT DISTINCT rolconnlimit FROM pg_authid;
+       > SELECT DISTINCT rolconnlimit FROM pg_roles;
        -1
     """
-                )
             )
+        )

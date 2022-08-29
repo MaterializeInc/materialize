@@ -11,6 +11,7 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
+use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::iter;
 use std::path::Path;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ResourceName as AmazonResourceName;
 use mz_kafka_util::KafkaAddrs;
+use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{
     CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, KafkaConnection,
     KafkaSourceConnection, ReaderSchemaSelectionStrategy,
@@ -35,7 +37,7 @@ use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_proto::RustType;
 use mz_repr::strconv;
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
-use mz_storage::types::connections::{Connection, ConnectionContext};
+use mz_storage::types::connections::{Connection, ConnectionContext, StringOrSecret};
 use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
@@ -45,6 +47,7 @@ use crate::ast::{
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
+use crate::kafka_util::KafkaConfigOptionExtracted;
 use crate::names::Aug;
 use crate::normalize;
 use crate::plan::StatementContext;
@@ -81,29 +84,38 @@ pub async fn purify_create_source(
         CreateSourceConnection::Kafka(KafkaSourceConnection {
             connection, topic, ..
         }) => {
-            // Extract any/all configuration options
-            let mut connection_options = kafka_util::extract_config(&mut with_options_map)?;
-
-            let connection = match connection {
-                KafkaConnection::Reference { connection } => {
+            let (connection, connection_options) = match connection {
+                KafkaConnection::Reference {
+                    connection,
+                    with_options,
+                } => {
                     let scx = StatementContext::new(None, &*catalog);
                     let item = scx.get_item_by_resolved_name(&connection)?;
                     // Get Kafka connection
-                    match item.connection()? {
+                    let connection = match item.connection()? {
                         Connection::Kafka(connection) => connection.clone(),
                         _ => bail!("{} is not a kafka connection", item.name()),
-                    }
+                    };
+
+                    let with_options: KafkaConfigOptionExtracted =
+                        with_options.clone().try_into()?;
+                    let with_options: BTreeMap<String, StringOrSecret> = with_options.try_into()?;
+
+                    (connection, with_options)
                 }
                 KafkaConnection::Inline { broker } => {
+                    let mut connection_options = BTreeMap::new();
                     // Add broker option
                     connection_options.insert(
                         "bootstrap.servers".into(),
                         KafkaAddrs::from_str(&broker)?.to_string().into(),
                     );
 
-                    mz_storage::types::connections::KafkaConnection::try_from(
+                    let connection = mz_storage::types::connections::KafkaConnection::try_from(
                         &mut connection_options,
-                    )?
+                    )?;
+
+                    (connection, connection_options)
                 }
             };
             let consumer = kafka_util::create_consumer(
@@ -145,25 +157,46 @@ pub async fn purify_create_source(
                 None => {}
             }
         }
-        CreateSourceConnection::S3 { .. } => {
-            let aws_config = normalize::aws_config(&mut with_options_map, None)?;
+        CreateSourceConnection::S3 { connection, .. } => {
+            let scx = StatementContext::new(None, &*catalog);
+            let connection = {
+                let item = scx.get_item_by_resolved_name(&connection)?;
+                match item.connection()? {
+                    Connection::Aws(connection) => connection.clone(),
+                    _ => bail!("{} is not an AWS connection", item.name()),
+                }
+            };
+
+            let aws_config = normalize::aws_config(&mut with_options_map, None, connection)?;
             validate_aws_credentials(
                 &aws_config,
                 connection_context.aws_external_id_prefix.as_ref(),
+                &*connection_context.secrets_reader,
             )
             .await?;
         }
-        CreateSourceConnection::Kinesis { arn } => {
+        CreateSourceConnection::Kinesis { connection, arn } => {
             let region = arn
                 .parse::<AmazonResourceName>()
                 .context("Unable to parse provided ARN")?
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-            let aws_config = normalize::aws_config(&mut with_options_map, Some(region.into()))?;
+            let scx = StatementContext::new(None, &*catalog);
+            let connection = {
+                let item = scx.get_item_by_resolved_name(&connection)?;
+                match item.connection()? {
+                    Connection::Aws(connection) => connection.clone(),
+                    _ => bail!("{} is not an AWS connection", item.name()),
+                }
+            };
+
+            let aws_config =
+                normalize::aws_config(&mut with_options_map, Some(region.into()), connection)?;
             validate_aws_credentials(
                 &aws_config,
                 connection_context.aws_external_id_prefix.as_ref(),
+                &*connection_context.secrets_reader,
             )
             .await?;
         }
@@ -566,8 +599,9 @@ async fn compile_proto(
 async fn validate_aws_credentials(
     config: &AwsConfig,
     external_id_prefix: Option<&AwsExternalIdPrefix>,
+    secrets_reader: &dyn SecretsReader,
 ) -> Result<(), anyhow::Error> {
-    let config = config.load(external_id_prefix, None).await;
+    let config = config.load(external_id_prefix, None, secrets_reader).await;
     let sts_client = aws_sdk_sts::Client::new(&config);
     let _ = sts_client
         .get_caller_identity()

@@ -250,7 +250,12 @@ impl<'a> Lowerer<'a> {
                     let input_type = input.typ();
                     let default = aggregates
                         .iter()
-                        .map(|agg| (agg.func.default(), agg.typ(&input_type).scalar_type))
+                        .map(|agg| {
+                            (
+                                agg.func.default(),
+                                agg.typ(&input_type.column_types).scalar_type,
+                            )
+                        })
                         .collect_vec();
 
                     input = SR::Reduce {

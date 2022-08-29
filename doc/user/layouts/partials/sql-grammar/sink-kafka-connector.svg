@@ -1,28 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="895" height="281">
    <polygon points="11 17 3 13 3 21"/>
    <polygon points="19 17 11 13 11 21"/>
-   <rect x="33" y="3" width="130" height="32" rx="10"/>
+   <rect x="33" y="3" width="68" height="32" rx="10"/>
    <rect x="31"
          y="1"
-         width="130"
+         width="68"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="41" y="21">KAFKA BROKER</text>
-   <rect x="183" y="3" width="48" height="32"/>
-   <rect x="181" y="1" width="48" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="191" y="21">host</text>
-   <rect x="251" y="3" width="64" height="32" rx="10"/>
-   <rect x="249"
+   <text class="terminal" x="41" y="21">KAFKA</text>
+   <rect x="121" y="3" width="116" height="32" rx="10"/>
+   <rect x="119"
+         y="1"
+         width="116"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="129" y="21">CONNECTION</text>
+   <rect x="257" y="3" width="52" height="32"/>
+   <rect x="255" y="1" width="52" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="265" y="21">conn</text>
+   <rect x="329" y="3" width="64" height="32" rx="10"/>
+   <rect x="327"
          y="1"
          width="64"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="259" y="21">TOPIC</text>
-   <rect x="335" y="3" width="98" height="32"/>
-   <rect x="333" y="1" width="98" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="343" y="21">topic-prefix</text>
+   <text class="terminal" x="337" y="21">TOPIC</text>
+   <rect x="413" y="3" width="98" height="32"/>
+   <rect x="411" y="1" width="98" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="421" y="21">topic-prefix</text>
    <rect x="301" y="113" width="48" height="32" rx="10"/>
    <rect x="299"
          y="111"
@@ -105,7 +113,7 @@
          rx="10"/>
    <text class="terminal" x="829" y="233">)</text>
    <path class="line"
-         d="m19 17 h2 m0 0 h10 m130 0 h10 m0 0 h10 m48 0 h10 m0 0 h10 m64 0 h10 m0 0 h10 m98 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-196 110 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m48 0 h10 m0 0 h10 m26 0 h10 m20 0 h10 m98 0 h10 m-138 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m118 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-118 0 h10 m24 0 h10 m0 0 h74 m20 44 h10 m26 0 h10 m-338 0 h20 m318 0 h20 m-358 0 q10 0 10 10 m338 0 q0 -10 10 -10 m-348 10 v14 m338 0 v-14 m-338 14 q0 10 10 10 m318 0 q10 0 10 -10 m-328 10 h10 m0 0 h308 m22 -34 l2 0 m2 0 l2 0 m2 0 l2 0 m-638 70 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h812 m-842 0 h20 m822 0 h20 m-862 0 q10 0 10 10 m842 0 q0 -10 10 -10 m-852 10 v12 m842 0 v-12 m-842 12 q0 10 10 10 m822 0 q10 0 10 -10 m-832 10 h10 m122 0 h10 m0 0 h10 m26 0 h10 m0 0 h10 m64 0 h10 m0 0 h10 m138 0 h10 m20 0 h10 m0 0 h296 m-326 0 h20 m306 0 h20 m-346 0 q10 0 10 10 m326 0 q0 -10 10 -10 m-336 10 v12 m326 0 v-12 m-326 12 q0 10 10 10 m306 0 q10 0 10 -10 m-316 10 h10 m80 0 h10 m0 0 h10 m186 0 h10 m20 -32 h10 m26 0 h10 m23 -32 h-3"/>
+         d="m19 17 h2 m0 0 h10 m68 0 h10 m0 0 h10 m116 0 h10 m0 0 h10 m52 0 h10 m0 0 h10 m64 0 h10 m0 0 h10 m98 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-274 110 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m48 0 h10 m0 0 h10 m26 0 h10 m20 0 h10 m98 0 h10 m-138 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m118 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-118 0 h10 m24 0 h10 m0 0 h74 m20 44 h10 m26 0 h10 m-338 0 h20 m318 0 h20 m-358 0 q10 0 10 10 m338 0 q0 -10 10 -10 m-348 10 v14 m338 0 v-14 m-338 14 q0 10 10 10 m318 0 q10 0 10 -10 m-328 10 h10 m0 0 h308 m22 -34 l2 0 m2 0 l2 0 m2 0 l2 0 m-638 70 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h812 m-842 0 h20 m822 0 h20 m-862 0 q10 0 10 10 m842 0 q0 -10 10 -10 m-852 10 v12 m842 0 v-12 m-842 12 q0 10 10 10 m822 0 q10 0 10 -10 m-832 10 h10 m122 0 h10 m0 0 h10 m26 0 h10 m0 0 h10 m64 0 h10 m0 0 h10 m138 0 h10 m20 0 h10 m0 0 h296 m-326 0 h20 m306 0 h20 m-346 0 q10 0 10 10 m326 0 q0 -10 10 -10 m-336 10 v12 m326 0 v-12 m-326 12 q0 10 10 10 m306 0 q10 0 10 -10 m-316 10 h10 m80 0 h10 m0 0 h10 m186 0 h10 m20 -32 h10 m26 0 h10 m23 -32 h-3"/>
    <polygon points="885 197 893 193 893 201"/>
    <polygon points="885 197 877 193 877 201"/>
 </svg>

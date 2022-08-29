@@ -7,29 +7,30 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> CREATE SECRET IF NOT EXISTS s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
+
+> CREATE CONNECTION IF NOT EXISTS s3_conn FOR AWS
+  ACCESS KEY ID = '${testdrive.aws-access-key-id}',
+  SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
+  TOKEN = '${testdrive.aws-token}';
+
 > CREATE SOURCE s3_text
-  FROM S3
+  FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 's3/*.text'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT TEXT;
 
 > CREATE SOURCE s3_gzip
-  FROM S3
+  FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 's3/*.gzip'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
   COMPRESSION GZIP
   WITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT TEXT;

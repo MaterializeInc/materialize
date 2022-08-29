@@ -17,31 +17,31 @@ use serde::{Deserialize, Serialize};
 use mz_expr::EvalError;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Row};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.types.errors.rs"));
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub enum DecodeError {
-    Text(String),
+pub struct DecodeError {
+    pub kind: DecodeErrorKind,
+    pub raw: Option<Vec<u8>>,
 }
 
 impl RustType<ProtoDecodeError> for DecodeError {
     fn into_proto(&self) -> ProtoDecodeError {
-        use proto_decode_error::Kind::*;
         ProtoDecodeError {
-            kind: Some(match self {
-                DecodeError::Text(v) => Text(v.clone()),
-            }),
+            kind: Some(RustType::into_proto(&self.kind)),
+            raw: self.raw.clone(),
         }
     }
 
     fn from_proto(proto: ProtoDecodeError) -> Result<Self, TryFromProtoError> {
-        use proto_decode_error::Kind::*;
-        match proto.kind {
-            Some(Text(v)) => Ok(DecodeError::Text(v)),
-            None => Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
-        }
+        let ProtoDecodeError { kind, raw } = proto;
+        let kind = match kind {
+            Some(kind) => RustType::from_proto(kind)?,
+            None => return Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
+        };
+        Ok(Self { kind, raw })
     }
 }
 
@@ -50,10 +50,13 @@ impl Codec for DecodeError {
         "protobuf[DecodeError]".into()
     }
 
-    fn encode<B: BufMut>(&self, buf: &mut B) {
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
         self.into_proto()
             .encode(buf)
-            .expect("no required fields means no initialization errors");
+            .expect("no required fields means no initialization errors")
     }
 
     fn decode(buf: &[u8]) -> Result<Self, String> {
@@ -64,8 +67,189 @@ impl Codec for DecodeError {
 
 impl Display for DecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.raw {
+            None => write!(f, "{}", self.kind),
+            Some(raw) => write!(f, "{} (original bytes: {:x?})", self.kind, raw),
+        }
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum DecodeErrorKind {
+    Text(String),
+}
+
+impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
+    fn into_proto(&self) -> ProtoDecodeErrorKind {
+        use proto_decode_error_kind::Kind::*;
+        ProtoDecodeErrorKind {
+            kind: Some(match self {
+                DecodeErrorKind::Text(v) => Text(v.clone()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoDecodeErrorKind) -> Result<Self, TryFromProtoError> {
+        use proto_decode_error_kind::Kind::*;
+        match proto.kind {
+            Some(Text(v)) => Ok(DecodeErrorKind::Text(v)),
+            None => Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
+        }
+    }
+}
+
+impl Display for DecodeErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DecodeError::Text(e) => write!(f, "Text: {}", e),
+            DecodeErrorKind::Text(e) => write!(f, "Text: {}", e),
+        }
+    }
+}
+
+/// Errors arising during envelope processing.
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+pub enum EnvelopeError {
+    /// An error arising while processing the Debezium envelope.
+    Debezium(String),
+    /// An error that can be retracted by a future message using upsert logic.
+    Upsert(UpsertError),
+    /// Errors corresponding to `ENVELOPE NONE`. Naming this
+    /// `None`, though, would have been too confusing.
+    Flat(String),
+}
+
+impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
+    fn into_proto(&self) -> ProtoEnvelopeErrorV1 {
+        use proto_envelope_error_v1::Kind;
+        ProtoEnvelopeErrorV1 {
+            kind: Some(match self {
+                EnvelopeError::Debezium(text) => Kind::Debezium(text.clone()),
+                EnvelopeError::Upsert(rust) => Kind::Upsert(Box::new(rust.into_proto())),
+                EnvelopeError::Flat(text) => Kind::Flat(text.clone()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoEnvelopeErrorV1) -> Result<Self, TryFromProtoError> {
+        use proto_envelope_error_v1::Kind;
+        match proto.kind {
+            Some(Kind::Debezium(text)) => Ok(Self::Debezium(text)),
+            Some(Kind::Upsert(proto)) => {
+                let rust = RustType::from_proto(*proto)?;
+                Ok(Self::Upsert(rust))
+            }
+            Some(Kind::Flat(text)) => Ok(Self::Flat(text)),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoEnvelopeErrorV1::kind",
+            )),
+        }
+    }
+}
+
+impl Display for EnvelopeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EnvelopeError::Debezium(err) => write!(f, "Debezium: {err}"),
+            EnvelopeError::Upsert(err) => write!(f, "Upsert: {err}"),
+            EnvelopeError::Flat(err) => write!(f, "Flat: {err}"),
+        }
+    }
+}
+
+/// An error from a value in an upsert source. The corresponding key is included, allowing
+/// us to reconstruct their entry in the upsert map upon restart.
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct UpsertValueError {
+    /// The underlying error. Boxed because this is a recursive type.
+    pub inner: Box<DataflowError>,
+    /// The (good) key associated with the errored value.
+    pub for_key: Row,
+}
+
+impl RustType<ProtoUpsertValueError> for UpsertValueError {
+    fn into_proto(&self) -> ProtoUpsertValueError {
+        ProtoUpsertValueError {
+            inner: Some(self.inner.into_proto()),
+            for_key: Some(self.for_key.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoUpsertValueError) -> Result<Self, TryFromProtoError> {
+        let inner = match proto.inner {
+            Some(inner) => RustType::from_proto(inner)?,
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoUpsertValueError::inner",
+                ))
+            }
+        };
+        let for_key = match proto.for_key {
+            Some(key) => RustType::from_proto(key)?,
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoUpsertValueError::for_key",
+                ))
+            }
+        };
+        Ok(Self { inner, for_key })
+    }
+}
+
+impl Display for UpsertValueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let UpsertValueError { inner, for_key } = self;
+        write!(f, "{inner}, decoded key: {for_key:?}")
+    }
+}
+
+/// An error that can be retracted by a future message using upsert logic.
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum UpsertError {
+    /// Wrapper around a key decoding error.
+    /// We use this instead of emitting the underlying `DataflowError::DecodeError` because with only
+    /// the underlying error, we can't distinguish between an error with the key and an error
+    /// with the value.
+    ///
+    /// It is necessary to distinguish them because the necessary record to retract them is different.
+    /// (K, <errored V>) is retracted by (K, null), whereas (<errored K>, anything) is retracted by
+    /// ("bytes", null), where "bytes" is the string that failed to correctly decode as a key.
+    KeyDecode(DecodeError),
+    /// Wrapper around an error related to the value.
+    Value(UpsertValueError),
+}
+
+impl RustType<ProtoUpsertError> for UpsertError {
+    fn into_proto(&self) -> ProtoUpsertError {
+        use proto_upsert_error::Kind;
+        ProtoUpsertError {
+            kind: Some(match self {
+                UpsertError::KeyDecode(err) => Kind::KeyDecode(err.into_proto()),
+                UpsertError::Value(err) => Kind::Value(Box::new(err.into_proto())),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoUpsertError) -> Result<Self, TryFromProtoError> {
+        use proto_upsert_error::Kind;
+        match proto.kind {
+            Some(Kind::KeyDecode(proto)) => {
+                let rust = RustType::from_proto(proto)?;
+                Ok(Self::KeyDecode(rust))
+            }
+            Some(Kind::Value(proto)) => {
+                let rust = RustType::from_proto(*proto)?;
+                Ok(Self::Value(rust))
+            }
+            None => Err(TryFromProtoError::missing_field("ProtoUpsertError::kind")),
+        }
+    }
+}
+
+impl Display for UpsertError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpsertError::KeyDecode(err) => write!(f, "Key decode: {err}"),
+            UpsertError::Value(err) => write!(f, "Value error: {err}"),
         }
     }
 }
@@ -161,11 +345,12 @@ impl Display for SourceErrorDetails {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
 pub enum DataflowError {
     DecodeError(DecodeError),
     EvalError(EvalError),
     SourceError(SourceError),
+    EnvelopeError(EnvelopeError),
 }
 
 impl Error for DataflowError {}
@@ -178,6 +363,7 @@ impl RustType<ProtoDataflowError> for DataflowError {
                 DataflowError::DecodeError(err) => DecodeError(err.into_proto()),
                 DataflowError::EvalError(err) => EvalError(err.into_proto()),
                 DataflowError::SourceError(err) => SourceError(err.into_proto()),
+                DataflowError::EnvelopeError(err) => EnvelopeErrorV1(Box::new(err.into_proto())),
             }),
         }
     }
@@ -189,6 +375,7 @@ impl RustType<ProtoDataflowError> for DataflowError {
                 DecodeError(err) => Ok(DataflowError::DecodeError(err.into_rust()?)),
                 EvalError(err) => Ok(DataflowError::EvalError(err.into_rust()?)),
                 SourceError(err) => Ok(DataflowError::SourceError(err.into_rust()?)),
+                EnvelopeErrorV1(err) => Ok(DataflowError::EnvelopeError((*err).into_rust()?)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoDataflowError::kind")),
         }
@@ -218,6 +405,7 @@ impl Display for DataflowError {
             DataflowError::DecodeError(e) => write!(f, "Decode error: {}", e),
             DataflowError::EvalError(e) => write!(f, "Evaluation error: {}", e),
             DataflowError::SourceError(e) => write!(f, "Source error: {}", e),
+            DataflowError::EnvelopeError(e) => write!(f, "Envelope error: {}", e),
         }
     }
 }
@@ -233,9 +421,16 @@ impl From<EvalError> for DataflowError {
         Self::EvalError(e)
     }
 }
+
 impl From<SourceError> for DataflowError {
     fn from(e: SourceError) -> Self {
         Self::SourceError(e)
+    }
+}
+
+impl From<EnvelopeError> for DataflowError {
+    fn from(e: EnvelopeError) -> Self {
+        Self::EnvelopeError(e)
     }
 }
 
@@ -243,11 +438,16 @@ impl From<SourceError> for DataflowError {
 mod tests {
     use mz_persist_types::Codec;
 
+    use crate::types::errors::DecodeErrorKind;
+
     use super::DecodeError;
 
     #[test]
     fn test_decode_error_codec_roundtrip() -> Result<(), String> {
-        let original = DecodeError::Text("ciao".to_string());
+        let original = DecodeError {
+            kind: DecodeErrorKind::Text("ciao".to_string()),
+            raw: Some(b"oaic".to_vec()),
+        };
         let mut encoded = Vec::new();
         original.encode(&mut encoded);
         let decoded = DecodeError::decode(&encoded)?;

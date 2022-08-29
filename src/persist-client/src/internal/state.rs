@@ -19,19 +19,20 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
+use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
-use crate::r#impl::paths::PartialBlobKey;
-use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes, Trace};
+use crate::internal::paths::PartialBlobKey;
+use crate::internal::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_persist_client.r#impl.state.rs"
+    "/mz_persist_client.internal.state.rs"
 ));
 
 #[derive(Clone, Debug, PartialEq)]
@@ -46,6 +47,9 @@ pub struct ReaderState<T> {
 pub struct WriterState {
     /// UNIX_EPOCH timestamp (in millis) of this writer's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
+    /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
+    /// after which this writer may be expired
+    pub lease_duration_ms: u64,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -63,6 +67,7 @@ pub struct HollowBatch<T> {
 
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct StateCollections<T> {
     pub(crate) last_gc_req: SeqNo,
 
@@ -96,10 +101,13 @@ where
     pub fn register_writer(
         &mut self,
         writer_id: &WriterId,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, (Upper<T>, WriterState)> {
         let writer_state = WriterState {
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+            lease_duration_ms: u64::try_from(lease_duration.as_millis())
+                .expect("lease duration as millis must fit within u64"),
         };
         self.writers.insert(writer_id.clone(), writer_state.clone());
         Continue((Upper(self.trace.upper().clone()), writer_state))
@@ -125,6 +133,7 @@ where
         &mut self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
+        heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Result<Upper<T>, InvalidUsage<T>>, Vec<FueledMergeReq<T>>> {
         if !self.writers.contains_key(writer_id) {
             return Break(Err(InvalidUsage::UnknownWriter(writer_id.clone())));
@@ -157,6 +166,9 @@ where
         }
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
 
+        // Also use this as an opportunity to heartbeat the writer
+        self.writer(writer_id).last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+
         Continue(self.trace.take_merge_reqs())
     }
 
@@ -169,6 +181,7 @@ where
         &mut self,
         reader_id: &ReaderId,
         seqno: SeqNo,
+        outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, Since<T>> {
@@ -177,6 +190,21 @@ where
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
         reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+
+        let seqno = match outstanding_seqno {
+            Some(outstanding_seqno) => {
+                assert!(
+                    outstanding_seqno >= reader_state.seqno,
+                    "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
+                    is behind current reader_state ({:?})",
+                    outstanding_seqno,
+                    reader_state.seqno,
+                );
+                std::cmp::min(outstanding_seqno, seqno)
+            }
+            None => seqno,
+        };
+
         reader_state.seqno = seqno;
 
         let reader_current_since = if PartialOrder::less_than(&reader_state.since, new_since) {
@@ -212,6 +240,16 @@ where
         Continue(existed)
     }
 
+    pub fn heartbeat_writer(
+        &mut self,
+        writer_id: &WriterId,
+        heartbeat_timestamp_ms: u64,
+    ) -> ControlFlow<Infallible, ()> {
+        let writer_state = self.writer(writer_id);
+        writer_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+        Continue(())
+    }
+
     pub fn expire_writer(&mut self, writer_id: &WriterId) -> ControlFlow<Infallible, bool> {
         let existed = self.writers.remove(writer_id).is_some();
         // No-op if existed is false, but still commit the state change so that
@@ -224,9 +262,22 @@ where
             .get_mut(id)
             // The only (tm) ways to hit this are (1) inventing a ReaderId
             // instead of getting it from Register or (2) if a lease expired.
-            // (1) is a gross mis-use and (2) isn't implemented yet, so it feels
-            // okay to leave this for followup work.
-            .expect("TODO: Implement automatic lease renewals")
+            // (1) is a gross mis-use and (2) may happen if a reader did not
+            // get to heartbeat for a long time. Readers are expected to
+            // heartbeat/downgrade their since regularly.
+            .unwrap_or_else(|| panic!("ReaderId({}) was expired due to inactivity", id))
+    }
+
+    fn writer(&mut self, id: &WriterId) -> &mut WriterState {
+        self.writers
+            .get_mut(id)
+            // The only (tm) ways to hit this are (1) inventing a WriterId
+            // instead of getting it from Register or (2) if a lease expired.
+            // (1) is a gross mis-use and (2) may happen if the writer did
+            // not get to heartbeat for a long time. Writers are expected to
+            // append updates regularly, even empty batches to maintain their
+            // lease.
+            .unwrap_or_else(|| panic!("WriterId({}) was expired due to inactivity", id))
     }
 
     fn update_since(&mut self) {
@@ -242,13 +293,15 @@ where
         while let Some(reader) = readers.next() {
             since.meet_assign(&reader.since);
         }
-        self.trace.downgrade_since(since);
+        self.trace.downgrade_since(&since);
     }
 }
 
 // TODO: Document invariants.
 #[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct State<K, V, T, D> {
+    pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
 
     pub(crate) seqno: SeqNo,
@@ -264,10 +317,10 @@ pub struct State<K, V, T, D> {
     pub(crate) _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
-// Impl Clone regardless of the type params.
-impl<K, V, T: Clone, D> Clone for State<K, V, T, D> {
-    fn clone(&self) -> Self {
+impl<K, V, T: Clone, D> State<K, V, T, D> {
+    pub(crate) fn clone(&self, applier_version: Version) -> Self {
         Self {
+            applier_version,
             shard_id: self.shard_id.clone(),
             seqno: self.seqno.clone(),
             collections: self.collections.clone(),
@@ -283,8 +336,9 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Codec64,
 {
-    pub fn new(shard_id: ShardId) -> Self {
+    pub fn new(applier_version: Version, shard_id: ShardId) -> Self {
         State {
+            applier_version,
             shard_id,
             seqno: SeqNo::minimum(),
             collections: StateCollections {
@@ -309,15 +363,19 @@ where
         self.collections.trace.since()
     }
 
-    pub fn upper(&self) -> Antichain<T> {
-        self.collections.trace.upper().clone()
+    pub fn upper(&self) -> &Antichain<T> {
+        self.collections.trace.upper()
     }
 
     pub fn batch_count(&self) -> usize {
         self.collections.trace.num_hollow_batches()
     }
 
-    fn seqno_since(&self) -> SeqNo {
+    pub fn num_updates(&self) -> usize {
+        self.collections.trace.num_updates()
+    }
+
+    pub(super) fn seqno_since(&self) -> SeqNo {
         let mut seqno_since = self.seqno;
         for cap in self.collections.readers.values() {
             seqno_since = std::cmp::min(seqno_since, cap.seqno);
@@ -364,11 +422,16 @@ where
         usize::cast_from(self.seqno.0.saturating_sub(self.seqno_since().0))
     }
 
-    pub fn clone_apply<R, E, WorkFn>(&self, work_fn: &mut WorkFn) -> ControlFlow<E, (R, Self)>
+    pub fn clone_apply<R, E, WorkFn>(
+        &self,
+        build_version: &Version,
+        work_fn: &mut WorkFn,
+    ) -> ControlFlow<E, (R, Self)>
     where
         WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<E, R>,
     {
         let mut new_state = State {
+            applier_version: build_version.clone(),
             shard_id: self.shard_id,
             seqno: self.seqno.next(),
             collections: self.collections.clone(),
@@ -432,12 +495,15 @@ where
         ret
     }
 
-    pub fn readers_needing_expiration(&self, now_ms: EpochMillis) -> Vec<ReaderId> {
+    pub fn handles_needing_expiration(
+        &self,
+        now_ms: EpochMillis,
+    ) -> (Vec<ReaderId>, Vec<WriterId>) {
         // TODO: Give lots of extra leeway in this temporary hack version of
         // automatic expiry.
         let read_lease_duration = PersistConfig::FAKE_READ_LEASE_DURATION * 15;
 
-        let mut ret = Vec::new();
+        let mut readers = Vec::new();
         for (reader, state) in self.collections.readers.iter() {
             // TODO: We likely want to store the lease duration in state, so the
             // answer to which readers are considered expired doesn't depend on
@@ -445,10 +511,18 @@ where
             let time_since_last_heartbeat_ms =
                 now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
             if Duration::from_millis(time_since_last_heartbeat_ms) > read_lease_duration {
-                ret.push(reader.clone());
+                readers.push(reader.clone());
             }
         }
-        ret
+        let mut writers = Vec::new();
+        for (writer, state) in self.collections.writers.iter() {
+            let time_since_last_heartbeat_ms =
+                now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
+            if time_since_last_heartbeat_ms > state.lease_duration_ms {
+                writers.push(writer.clone());
+            }
+        }
+        (readers, writers)
     }
 }
 
@@ -472,6 +546,7 @@ impl<T> Determinacy for Upper<T> {
 
 #[cfg(test)]
 mod tests {
+    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
 
     use super::*;
@@ -495,7 +570,8 @@ mod tests {
 
     #[test]
     fn downgrade_since() {
-        let mut state = State::<(), (), u64, i64>::new(ShardId::new());
+        let mut state =
+            State::<(), (), u64, i64>::new(DUMMY_BUILD_INFO.semver_version(), ShardId::new());
         let reader = ReaderId::new();
         let seqno = SeqNo::minimum();
         let now = SYSTEM_TIME.clone();
@@ -506,25 +582,37 @@ mod tests {
 
         // Greater
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(2), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(2),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Equal (no-op)
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(2), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(2),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Less (no-op)
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(1), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(1),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
@@ -535,17 +623,25 @@ mod tests {
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader2, seqno, &Antichain::from_elem(3), now()),
+            state.collections.downgrade_since(
+                &reader2,
+                seqno,
+                None,
+                &Antichain::from_elem(3),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(3)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Shard since == 3 when all readers have since >= 3.
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(5), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(5),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(5)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
@@ -560,9 +656,13 @@ mod tests {
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader3, seqno, &Antichain::from_elem(10), now()),
+            state.collections.downgrade_since(
+                &reader3,
+                seqno,
+                None,
+                &Antichain::from_elem(10),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(10)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
@@ -579,10 +679,15 @@ mod tests {
     #[test]
     fn compare_and_append() {
         mz_ore::test::init_logging();
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        )
+        .collections;
 
         let writer_id = WriterId::new();
-        let _ = state.register_writer(&writer_id, 0);
+        let _ = state.register_writer(&writer_id, Duration::from_secs(10), 0);
+        let now = SYSTEM_TIME.clone();
 
         // State is initially empty.
         assert_eq!(state.trace.num_spine_batches(), 0);
@@ -591,18 +696,18 @@ mod tests {
 
         // Cannot insert a batch with a lower != current shard upper.
         assert_eq!(
-            state.compare_and_append(&hollow(1, 2, &["key1"], 1), &writer_id),
+            state.compare_and_append(&hollow(1, 2, &["key1"], 1), &writer_id, now()),
             Break(Ok(Upper(Antichain::from_elem(0))))
         );
 
         // Insert an empty batch with an upper > lower..
         assert!(state
-            .compare_and_append(&hollow(0, 5, &[], 0), &writer_id)
+            .compare_and_append(&hollow(0, 5, &[], 0), &writer_id, now())
             .is_continue());
 
         // Cannot insert a batch with a upper less than the lower.
         assert_eq!(
-            state.compare_and_append(&hollow(5, 4, &["key1"], 1), &writer_id),
+            state.compare_and_append(&hollow(5, 4, &["key1"], 1), &writer_id, now()),
             Break(Err(InvalidBounds {
                 lower: Antichain::from_elem(5),
                 upper: Antichain::from_elem(4)
@@ -611,7 +716,7 @@ mod tests {
 
         // Cannot insert a nonempty batch with an upper equal to lower.
         assert_eq!(
-            state.compare_and_append(&hollow(5, 5, &["key1"], 1), &writer_id),
+            state.compare_and_append(&hollow(5, 5, &["key1"], 1), &writer_id, now()),
             Break(Err(InvalidEmptyTimeInterval {
                 lower: Antichain::from_elem(5),
                 upper: Antichain::from_elem(5),
@@ -621,7 +726,7 @@ mod tests {
 
         // Can insert an empty batch with an upper equal to lower.
         assert!(state
-            .compare_and_append(&hollow(5, 5, &[], 0), &writer_id)
+            .compare_and_append(&hollow(5, 5, &[], 0), &writer_id, now())
             .is_continue());
     }
 
@@ -630,7 +735,10 @@ mod tests {
         mz_ore::test::init_logging();
         let now = SYSTEM_TIME.clone();
 
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        );
         // Cannot take a snapshot with as_of == shard upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(0)),
@@ -644,12 +752,14 @@ mod tests {
         );
 
         let writer_id = WriterId::new();
-        let _ = state.collections.register_writer(&writer_id, 0);
+        let _ = state
+            .collections
+            .register_writer(&writer_id, Duration::from_secs(10), 0);
 
         // Advance upper to 5.
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 5, &["key1"], 1), &writer_id)
+            .compare_and_append(&hollow(0, 5, &["key1"], 1), &writer_id, now())
             .is_continue());
 
         // Can take a snapshot with as_of < upper.
@@ -683,6 +793,7 @@ mod tests {
             state.collections.downgrade_since(
                 &reader,
                 SeqNo::minimum(),
+                None,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -698,7 +809,7 @@ mod tests {
         // Advance the upper to 10 via an empty batch.
         assert!(state
             .collections
-            .compare_and_append(&hollow(5, 10, &[], 0), &writer_id)
+            .compare_and_append(&hollow(5, 10, &[], 0), &writer_id, now())
             .is_continue());
 
         // Can still take snapshots at times < upper.
@@ -716,7 +827,7 @@ mod tests {
         // Advance upper to 15.
         assert!(state
             .collections
-            .compare_and_append(&hollow(10, 15, &["key2"], 1), &writer_id)
+            .compare_and_append(&hollow(10, 15, &["key2"], 1), &writer_id, now())
             .is_continue());
 
         // Filter out batches whose lowers are less than the requested as of (the
@@ -750,7 +861,10 @@ mod tests {
     fn next_listen_batch() {
         mz_ore::test::init_logging();
 
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        );
 
         // Empty collection never has any batches to listen for, regardless of the
         // current frontier.
@@ -758,16 +872,19 @@ mod tests {
         assert_eq!(state.next_listen_batch(&Antichain::new()), None);
 
         let writer_id = WriterId::new();
-        let _ = state.collections.register_writer(&writer_id, 0);
+        let _ = state
+            .collections
+            .register_writer(&writer_id, Duration::from_secs(10), 0);
+        let now = SYSTEM_TIME.clone();
 
         // Add two batches of data, one from [0, 5) and then another from [5, 10).
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 5, &["key1"], 1), &writer_id)
+            .compare_and_append(&hollow(0, 5, &["key1"], 1), &writer_id, now())
             .is_continue());
         assert!(state
             .collections
-            .compare_and_append(&hollow(5, 10, &["key2"], 1), &writer_id)
+            .compare_and_append(&hollow(5, 10, &["key2"], 1), &writer_id, now())
             .is_continue());
 
         // All frontiers in [0, 5) return the first batch.
@@ -798,33 +915,39 @@ mod tests {
     fn expire_writer() {
         mz_ore::test::init_logging();
 
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        );
+        let now = SYSTEM_TIME.clone();
 
         let writer_id_one = WriterId::new();
 
         // Writer has not been registered and should be unable to write
         assert_eq!(
-            state
-                .collections
-                .compare_and_append(&hollow(0, 2, &["key1"], 1), &writer_id_one),
+            state.collections.compare_and_append(
+                &hollow(0, 2, &["key1"], 1),
+                &writer_id_one,
+                now()
+            ),
             Break(Err(InvalidUsage::UnknownWriter(writer_id_one.clone())))
         );
 
         assert!(state
             .collections
-            .register_writer(&writer_id_one, 0)
+            .register_writer(&writer_id_one, Duration::from_secs(10), 0)
             .is_continue());
 
         let writer_id_two = WriterId::new();
         assert!(state
             .collections
-            .register_writer(&writer_id_two, 0)
+            .register_writer(&writer_id_two, Duration::from_secs(10), 0)
             .is_continue());
 
         // Writer is registered and is now eligible to write
         assert!(state
             .collections
-            .compare_and_append(&hollow(0, 2, &["key1"], 1), &writer_id_one)
+            .compare_and_append(&hollow(0, 2, &["key1"], 1), &writer_id_one, now())
             .is_continue());
 
         assert!(state
@@ -834,23 +957,28 @@ mod tests {
 
         // Writer has been expired and should be fenced off from further writes
         assert_eq!(
-            state
-                .collections
-                .compare_and_append(&hollow(2, 5, &["key2"], 1), &writer_id_one),
+            state.collections.compare_and_append(
+                &hollow(2, 5, &["key2"], 1),
+                &writer_id_one,
+                now()
+            ),
             Break(Err(InvalidUsage::UnknownWriter(writer_id_one.clone())))
         );
 
         // But other writers should still be able to write
         assert!(state
             .collections
-            .compare_and_append(&hollow(2, 5, &["key2"], 1), &writer_id_two)
+            .compare_and_append(&hollow(2, 5, &["key2"], 1), &writer_id_two, now())
             .is_continue());
     }
 
     #[test]
     fn maybe_gc() {
         mz_ore::test::init_logging();
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+        let mut state = State::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+        );
 
         // Empty state doesn't need gc, regardless of is_write.
         assert_eq!(state.maybe_gc(true), None);
@@ -863,7 +991,9 @@ mod tests {
 
         // When a writer is present, non-writes don't gc.
         let writer_id = WriterId::new();
-        let _ = state.collections.register_writer(&writer_id, 0);
+        let _ = state
+            .collections
+            .register_writer(&writer_id, Duration::from_secs(10), 0);
         assert_eq!(state.maybe_gc(false), None);
 
         // A write will gc though.

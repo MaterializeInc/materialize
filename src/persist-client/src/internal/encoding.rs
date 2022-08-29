@@ -12,24 +12,31 @@ use std::marker::PhantomData;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist_types::{Codec, Codec64};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use prost::Message;
-use serde::{Deserialize, Serialize};
+use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use uuid::Uuid;
 
+use mz_persist_types::{Codec, Codec64};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+
 use crate::error::CodecMismatch;
-use crate::r#impl::paths::PartialBlobKey;
-use crate::r#impl::state::proto_hollow_batch_reader_metadata;
-use crate::r#impl::state::{
-    HollowBatch, ProtoHollowBatch, ProtoHollowBatchReaderMetadata, ProtoReadEnrichedHollowBatch,
-    ProtoReaderState, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
-    ProtoWriterState, ReaderState, State, StateCollections, WriterState,
+use crate::fetch::{LeasedBatch, LeasedBatchMetadata};
+use crate::internal::paths::PartialBlobKey;
+use crate::internal::state::proto_leased_batch_metadata;
+use crate::internal::state::{
+    HollowBatch, ProtoHollowBatch, ProtoLeasedBatchMetadata, ProtoReaderState, ProtoStateRollup,
+    ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState, ReaderState, State,
+    StateCollections, WriterState,
 };
-use crate::r#impl::trace::Trace;
-use crate::read::{HollowBatchReaderMetadata, ReaderEnrichedHollowBatch, ReaderId};
+
+// This has to be exposed to [`crate::fetch::SerdeLeasedBatch`], which we in
+// turn want to make publicly accessible as part of the persist API.
+pub(crate) use crate::internal::state::ProtoLeasedBatch;
+
+use crate::internal::trace::Trace;
+use crate::read::ReaderId;
 use crate::{ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
@@ -98,14 +105,52 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Codec64,
 {
-    pub fn decode(buf: &[u8]) -> Result<Self, CodecMismatch> {
+    pub fn decode(build_version: &Version, buf: &[u8]) -> Result<Self, CodecMismatch> {
         let proto = ProtoStateRollup::decode(buf)
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable
             // data was corrupted, or if operations messes up deployment. In any
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
-        Self::try_from(proto).expect("internal error: invalid encoded state")
+        let state = Self::try_from(proto).expect("internal error: invalid encoded state")?;
+
+        // If persist gets some encoded ProtoState from the future (e.g. two
+        // versions of code are running simultaneously against the same shard),
+        // it might have a field that the current code doesn't know about. This
+        // would be silently discarded at proto decode time. Unknown Fields [1]
+        // are a tool we can use in the future to help deal with this, but in
+        // the short-term, it's best to keep the persist read-modify-CaS loop
+        // simple for as long as we can get away with it (i.e. until we have to
+        // offer the ability to do rollbacks).
+        //
+        // [1]:
+        //     https://developers.google.com/protocol-buffers/docs/proto3#unknowns
+        //
+        // To detect the bad situation and disallow it, we tag every version of
+        // state written to consensus with the version of code used to encode
+        // it. Then at decode time, we're able to compare the current version
+        // against any we receive and assert as necessary.
+        //
+        // Initially we reject any version from the future (no forward
+        // compatibility, most conservative but easiest to reason about) but
+        // allow any from the past (permanent backward compatibility). If/when
+        // we support deploy rollbacks and rolling upgrades, we can adjust this
+        // assert as necessary to reflect the policy (e.g. by adding some window
+        // of X allowed versions of forward compatibility, computed by comparing
+        // semvers).
+        //
+        // We could do the same for blob data, but it shouldn't be necessary.
+        // Any blob data we read is going to be because we fetched it using a
+        // pointer stored in some persist state. If we can handle the state, we
+        // can handle the blobs it references, too.
+        if build_version < &state.applier_version {
+            panic!(
+                "{} received persist state from the future {}",
+                build_version, state.applier_version
+            );
+        }
+
+        Ok(state)
     }
 }
 
@@ -149,6 +194,7 @@ where
 {
     fn into_proto(&self) -> ProtoStateRollup {
         ProtoStateRollup {
+            applier_version: self.applier_version.to_string(),
             shard_id: self.shard_id.into_proto(),
             seqno: self.seqno.into_proto(),
             key_codec: K::codec_name(),
@@ -174,6 +220,7 @@ where
                 .map(|(id, writer)| ProtoWriterState {
                     writer_id: id.into_proto(),
                     last_heartbeat_timestamp_ms: writer.last_heartbeat_timestamp_ms,
+                    lease_duration_ms: writer.lease_duration_ms,
                 })
                 .collect(),
             trace: Some(self.collections.trace.into_proto()),
@@ -213,6 +260,20 @@ where
             }));
         }
 
+        let applier_version = if x.applier_version.is_empty() {
+            // Backward compatibility with versions of ProtoState before we set
+            // this field: if it's missing (empty), assume an infinitely old
+            // version.
+            semver::Version::new(0, 0, 0)
+        } else {
+            semver::Version::parse(&x.applier_version).map_err(|err| {
+                TryFromProtoError::InvalidSemverVersion(format!(
+                    "invalid applier_version {}: {}",
+                    x.applier_version, err
+                ))
+            })?
+        };
+
         let mut readers = HashMap::with_capacity(x.readers.len());
         for proto in x.readers {
             let reader_id = proto.reader_id.into_rust()?;
@@ -230,6 +291,7 @@ where
                 writer_id,
                 WriterState {
                     last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms,
+                    lease_duration_ms: proto.lease_duration_ms,
                 },
             );
         }
@@ -240,6 +302,7 @@ where
             trace: x.trace.into_rust_if_some("trace")?,
         };
         Ok(Ok(State {
+            applier_version,
             shard_id: x.shard_id.into_rust()?,
             seqno: x.seqno.into_rust()?,
             collections,
@@ -262,7 +325,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
 
     fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
         let mut ret = Trace::default();
-        ret.downgrade_since(proto.since.into_rust_if_some("since")?);
+        ret.downgrade_since(&proto.since.into_rust_if_some("since")?);
         for batch in proto.spine.into_iter() {
             let batch: HollowBatch<T> = batch.into_rust()?;
             if PartialOrder::less_than(ret.since(), batch.desc.since()) {
@@ -342,98 +405,103 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchReaderMetadata>
-    for HollowBatchReaderMetadata<T>
-{
-    fn into_proto(&self) -> ProtoHollowBatchReaderMetadata {
-        use proto_hollow_batch_reader_metadata::*;
-        ProtoHollowBatchReaderMetadata {
+impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatchMetadata> for LeasedBatchMetadata<T> {
+    fn into_proto(&self) -> ProtoLeasedBatchMetadata {
+        use proto_leased_batch_metadata::*;
+        ProtoLeasedBatchMetadata {
             kind: Some(match self {
-                HollowBatchReaderMetadata::Snapshot { as_of } => {
-                    Kind::Snapshot(ProtoHollowBatchReaderMetadataSnapshot {
+                LeasedBatchMetadata::Snapshot { as_of } => {
+                    Kind::Snapshot(ProtoLeasedBatchMetadataSnapshot {
                         as_of: Some(as_of.into_proto()),
                     })
                 }
-                HollowBatchReaderMetadata::Listen {
-                    as_of,
-                    until,
-                    since,
-                } => Kind::Listen(ProtoHollowBatchReaderMetadataListen {
-                    as_of: Some(as_of.into_proto()),
-                    until: Some(until.into_proto()),
-                    since: Some(since.into_proto()),
-                }),
+                LeasedBatchMetadata::Listen { as_of, until } => {
+                    Kind::Listen(ProtoLeasedBatchMetadataListen {
+                        as_of: Some(as_of.into_proto()),
+                        until: Some(until.into_proto()),
+                    })
+                }
             }),
         }
     }
 
-    fn from_proto(proto: ProtoHollowBatchReaderMetadata) -> Result<Self, TryFromProtoError> {
-        use proto_hollow_batch_reader_metadata::Kind::*;
+    fn from_proto(proto: ProtoLeasedBatchMetadata) -> Result<Self, TryFromProtoError> {
+        use proto_leased_batch_metadata::Kind::*;
         Ok(match proto.kind {
-            Some(Snapshot(snapshot)) => HollowBatchReaderMetadata::Snapshot {
+            Some(Snapshot(snapshot)) => LeasedBatchMetadata::Snapshot {
                 as_of: snapshot
                     .as_of
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Snapshot::as_of")?,
+                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Snapshot::as_of")?,
             },
-            Some(Listen(listen)) => HollowBatchReaderMetadata::Listen {
+            Some(Listen(listen)) => LeasedBatchMetadata::Listen {
                 as_of: listen
                     .as_of
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Listen::as_of")?,
+                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Listen::as_of")?,
                 until: listen
                     .until
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Listen::until")?,
-                since: listen
-                    .since
-                    .into_rust_if_some("ProtoHollowBatchReaderMetadata::Kind::Listen::since")?,
+                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Listen::until")?,
             },
             None => {
                 return Err(TryFromProtoError::missing_field(
-                    "ProtoHollowBatchReaderMetadata::Kind",
+                    "ProtoLeasedBatchMetadata::Kind",
                 ))
             }
         })
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SerdeReaderEnrichedHollowBatch(Vec<u8>);
-
-impl<T: Timestamp + Codec64> From<ReaderEnrichedHollowBatch<T>> for SerdeReaderEnrichedHollowBatch {
-    fn from(x: ReaderEnrichedHollowBatch<T>) -> Self {
-        SerdeReaderEnrichedHollowBatch(x.into_proto().encode_to_vec())
-    }
-}
-
-impl<T: Timestamp + Codec64> From<SerdeReaderEnrichedHollowBatch> for ReaderEnrichedHollowBatch<T> {
-    fn from(x: SerdeReaderEnrichedHollowBatch) -> Self {
-        let proto = ProtoReadEnrichedHollowBatch::decode(x.0.as_slice())
-            .expect("internal error: invalid snapshot split");
-        proto
-            .into_rust()
-            .expect("internal error: invalid snapshot split")
-    }
-}
-
-impl<T: Timestamp + Codec64> RustType<ProtoReadEnrichedHollowBatch>
-    for ReaderEnrichedHollowBatch<T>
-{
-    fn into_proto(&self) -> ProtoReadEnrichedHollowBatch {
-        ProtoReadEnrichedHollowBatch {
+impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatch> for LeasedBatch<T> {
+    /// n.b. this is used with [`crate::fetch::SerdeLeasedBatch`].
+    fn into_proto(&self) -> ProtoLeasedBatch {
+        ProtoLeasedBatch {
             shard_id: self.shard_id.into_proto(),
-            reader_metadata: Some(self.reader_metadata.into_proto()),
+            reader_id: self.reader_id.into_proto(),
+            reader_metadata: Some(self.metadata.into_proto()),
             batch: Some(self.batch.into_proto()),
+            leased_seqno: self.leased_seqno.into_proto(),
         }
     }
 
-    fn from_proto(proto: ProtoReadEnrichedHollowBatch) -> Result<Self, TryFromProtoError> {
-        Ok(ReaderEnrichedHollowBatch {
+    /// n.b. this is used with [`crate::fetch::SerdeLeasedBatch`].
+    fn from_proto(proto: ProtoLeasedBatch) -> Result<Self, TryFromProtoError> {
+        Ok(LeasedBatch {
             shard_id: proto.shard_id.into_rust()?,
-            reader_metadata: proto
+            reader_id: proto.reader_id.into_rust()?,
+            metadata: proto
                 .reader_metadata
-                .into_rust_if_some("ProtoReadEnrichedHollowBatch::reader_metadata")?,
-            batch: proto
-                .batch
-                .into_rust_if_some("ProtoReadEnrichedHollowBatch::batch")?,
+                .into_rust_if_some("ProtoLeasedBatch::reader_metadata")?,
+            batch: proto.batch.into_rust_if_some("ProtoLeasedBatch::batch")?,
+            leased_seqno: proto.leased_seqno.into_rust()?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_persist_types::Codec;
+
+    use crate::internal::state::State;
+    use crate::ShardId;
+
+    #[test]
+    fn applier_version() {
+        let v1 = semver::Version::new(1, 0, 0);
+        let v2 = semver::Version::new(2, 0, 0);
+        let v3 = semver::Version::new(3, 0, 0);
+
+        // Code version v2 evaluates and writes out some State.
+        let state = State::<(), (), u64, i64>::new(v2.clone(), ShardId::new());
+        let mut buf = Vec::new();
+        state.encode(&mut buf);
+
+        // We can read it back using persist code v2 and v3.
+        assert_eq!(State::decode(&v2, &buf).as_ref(), Ok(&state));
+        assert_eq!(State::decode(&v3, &buf).as_ref(), Ok(&state));
+
+        // But we can't read it back using v1 because v1 might corrupt it by
+        // losing or misinterpreting something written out by a future version
+        // of code.
+        let v1_res = std::panic::catch_unwind(|| State::<(), (), u64, i64>::decode(&v1, &buf));
+        assert!(v1_res.is_err());
     }
 }

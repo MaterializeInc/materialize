@@ -575,67 +575,67 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red'
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { broker: "baz", topic: "topic", key: None, consistency: None }, with_options: [WithOption { key: Ident("replication_factor"), value: Some(Value(Number("7"))) }, WithOption { key: Ident("retention_ms"), value: Some(Value(Number("10000"))) }, WithOption { key: Ident("retention_bytes"), value: Some(Value(Number("10000000000"))) }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: None, consistency: None }, with_options: [WithOption { key: Ident("replication_factor"), value: Some(Value(Number("7"))) }, WithOption { key: Ident("retention_ms"), value: Some(Value(Number("10000"))) }, WithOption { key: Ident("retention_bytes"), value: Some(Value(Number("10000000000"))) }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) NOT ENFORCED FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) NOT ENFORCED FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) NOT ENFORCED FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) NOT ENFORCED FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY TOPIC 'consistency' CONSISTENCY FORMAT BYTES FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency') FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency') FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency') FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency') FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: None }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: None }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' CONSISTENCY FORMAT BYTES) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' CONSISTENCY FORMAT BYTES) FORMAT BYTES
 ----
 error: Expected right parenthesis, found CONSISTENCY
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' CONSISTENCY FORMAT BYTES) FORMAT BYTES
-                                                                                                           ^
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' CONSISTENCY FORMAT BYTES) FORMAT BYTES
+                                                                                                             ^
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username=user)) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username=user)) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username = user)) FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username = user)) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [WithOption { key: Ident("username"), value: Some(Ident(Ident("user"))) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [WithOption { key: Ident("username"), value: Some(Ident(Ident("user"))) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY FORMAT BYTES
 ----
 error: Expected end of statement, found KEY
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
-                                                               ^
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY FORMAT BYTES
+                                                                 ^
 
 parse-statement
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
@@ -1027,9 +1027,24 @@ ALTER INDEX name RESET (property = true)
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error: Expected RENAME, found SET
+error: Expected one of SIZE or REMOTE, found identifier "property"
 ALTER SOURCE name SET (property = true)
-                  ^
+                       ^
+
+parse-statement
+ALTER SOURCE name SET (SIZE LARGE)
+----
+ALTER SOURCE name SET (SIZE = large)
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }]) })
+
+parse-statement
+ALTER SOURCE name RESET (SIZE)
+----
+ALTER SOURCE name RESET (SIZE)
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: ResetOptions([Size]) })
+
 
 parse-statement
 ALTER VIEW name SET (property = true)
@@ -1346,7 +1361,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' WITH (consistency = '
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])) }, topic: "baz", key: None }), legacy_with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL 'http://localhost:8081', USERNAME 'user', PASSWORD 'word'
@@ -1360,7 +1375,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT AVRO USING CON
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])) }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
 
 
 parse-statement
@@ -1368,21 +1383,21 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT PROTOBUF USING
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])) }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])) }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")]))), Collection(Value(String("foo")))] })), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")]))), Collection(Value(String("foo")))] })), if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])) }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Collection(Value(String("foo"))), Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))] })), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Collection(Value(String("foo"))), Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))] })), if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah'
@@ -1474,91 +1489,91 @@ ALTER SYSTEM SET wal_level TO logical
 ----
 ALTER SYSTEM SET wal_level = logical
 =>
-AlterSystem(AlterSystemStatement { name: Ident("wal_level"), value: Ident(Ident("logical")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("wal_level"), value: Ident(Ident("logical")) })
 
 parse-statement
 ALTER SYSTEM SET wal_level = logical
 ----
 ALTER SYSTEM SET wal_level = logical
 =>
-AlterSystem(AlterSystemStatement { name: Ident("wal_level"), value: Ident(Ident("logical")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("wal_level"), value: Ident(Ident("logical")) })
 
 parse-statement
 ALTER SYSTEM SET log_destination TO 'syslog'
 ----
 ALTER SYSTEM SET log_destination = 'syslog'
 =>
-AlterSystem(AlterSystemStatement { name: Ident("log_destination"), value: Literal(String("syslog")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_destination"), value: Literal(String("syslog")) })
 
 parse-statement
 ALTER SYSTEM SET log_destination = 'syslog'
 ----
 ALTER SYSTEM SET log_destination = 'syslog'
 =>
-AlterSystem(AlterSystemStatement { name: Ident("log_destination"), value: Literal(String("syslog")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_destination"), value: Literal(String("syslog")) })
 
 parse-statement
 ALTER SYSTEM SET shared_buffers TO 42
 ----
 ALTER SYSTEM SET shared_buffers = 42
 =>
-AlterSystem(AlterSystemStatement { name: Ident("shared_buffers"), value: Literal(Number("42")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("shared_buffers"), value: Literal(Number("42")) })
 
 parse-statement
 ALTER SYSTEM SET shared_buffers = 42
 ----
 ALTER SYSTEM SET shared_buffers = 42
 =>
-AlterSystem(AlterSystemStatement { name: Ident("shared_buffers"), value: Literal(Number("42")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("shared_buffers"), value: Literal(Number("42")) })
 
 parse-statement
 ALTER SYSTEM SET search_path TO default
 ----
 ALTER SYSTEM SET search_path = DEFAULT
 =>
-AlterSystem(AlterSystemStatement { name: Ident("search_path"), value: Default })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("search_path"), value: Default })
 
 parse-statement
 ALTER SYSTEM SET search_path = default
 ----
 ALTER SYSTEM SET search_path = DEFAULT
 =>
-AlterSystem(AlterSystemStatement { name: Ident("search_path"), value: Default })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("search_path"), value: Default })
 
 parse-statement
 ALTER SYSTEM SET log_connections TO 'default'
 ----
 ALTER SYSTEM SET log_connections = 'default'
 =>
-AlterSystem(AlterSystemStatement { name: Ident("log_connections"), value: Literal(String("default")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), value: Literal(String("default")) })
 
 parse-statement
 ALTER SYSTEM SET log_connections = 'default'
 ----
 ALTER SYSTEM SET log_connections = 'default'
 =>
-AlterSystem(AlterSystemStatement { name: Ident("log_connections"), value: Literal(String("default")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), value: Literal(String("default")) })
 
 parse-statement
 ALTER SYSTEM SET some_array_key = [667, 668]
 ----
 ALTER SYSTEM SET some_array_key = [667, 668]
 =>
-AlterSystem(AlterSystemStatement { name: Ident("some_array_key"), value: Literal(Array([Number("667"), Number("668")])) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("some_array_key"), value: Literal(Array([Number("667"), Number("668")])) })
 
 parse-statement
 ALTER SYSTEM SET quantum_enabled = true
 ----
 ALTER SYSTEM SET quantum_enabled = true
 =>
-AlterSystem(AlterSystemStatement { name: Ident("quantum_enabled"), value: Literal(Boolean(true)) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("quantum_enabled"), value: Literal(Boolean(true)) })
 
 parse-statement
 ALTER SYSTEM SET use_optional = NULL
 ----
 ALTER SYSTEM SET use_optional = NULL
 =>
-AlterSystem(AlterSystemStatement { name: Ident("use_optional"), value: Literal(Null) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("use_optional"), value: Literal(Null) })
 
 parse-statement
 ALTER SYSTEM SET key value
@@ -1566,3 +1581,24 @@ ALTER SYSTEM SET key value
 error: Expected TO or equals sign, found VALUE
 ALTER SYSTEM SET key value
                      ^
+
+parse-statement
+ALTER SYSTEM RESET wal_level
+----
+ALTER SYSTEM RESET wal_level
+=>
+AlterSystemReset(AlterSystemResetStatement { name: Ident("wal_level") })
+
+parse-statement
+ALTER SYSTEM RESET ALL
+----
+ALTER SYSTEM RESET ALL
+=>
+AlterSystemResetAll(AlterSystemResetAllStatement)
+
+parse-statement
+ALTER SYSTEM RESET
+----
+error: Expected identifier, found EOF
+ALTER SYSTEM RESET
+                  ^

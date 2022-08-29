@@ -4,7 +4,7 @@ description = "The lexer and parser for Materialize's SQL dialect."
 version = "0.0.0"
 exclude = ["tests/testdata"]
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 [dependencies]
@@ -13,7 +13,7 @@ itertools = "0.10.3"
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
 phf = { version = "0.11.0", features = ["uncased"] }
 serde = { version = "1.0.140", features = ["derive"] }
-tracing = "0.1.35"
+tracing = "0.1.36"
 uncased = "0.9.7"
 
 [dev-dependencies]

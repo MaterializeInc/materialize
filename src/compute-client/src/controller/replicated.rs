@@ -160,13 +160,16 @@ pub struct ActiveReplicationState<T> {
     uppers: HashMap<GlobalId, (Antichain<T>, HashMap<ReplicaId, MutableAntichain<T>>)>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
-    /// Most recent count of the volume of unpacked commands (e.g. dataflows in `CreateDataflows`).
-    last_command_count: usize,
     /// Responses that should be emitted on the next `recv` call.
     ///
     /// This is introduced to produce peek cancelation responses eagerly, without awaiting a replica
     /// responding with the response itself, which allows us to compact away the peek in `self.history`.
     pending_response: VecDeque<ActiveReplicationResponse<T>>,
+    /// Per-replica uppers for introspection collections.
+    ///
+    /// For each collection, both the previously reported, and current updates.
+    introspection_uppers:
+        BTreeMap<ReplicaId, BTreeMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>>,
 }
 
 impl<T> ActiveReplicationState<T>
@@ -230,11 +233,6 @@ where
 
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
-
-        // If we have reached a point that justifies history reduction, do that.
-        if self.history.len() > 2 * self.last_command_count {
-            self.last_command_count = self.history.reduce(&self.peeks);
-        }
     }
 
     fn handle_response(
@@ -284,8 +282,25 @@ where
                         }
                         changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
                         changes.compact();
+                    } else if let Some((frontier, updates)) = self
+                        .introspection_uppers
+                        .get_mut(&replica_id)
+                        .unwrap()
+                        .get_mut(id)
+                    {
+                        updates.update_iter(changes.drain());
+                        changes.extend(frontier.iter().map(|t| (t.clone(), -1)));
+                        frontier.clear();
+                        for (time1, _neg_one) in changes.iter() {
+                            for time2 in updates.frontier().iter() {
+                                frontier.insert(time1.join(time2));
+                            }
+                        }
+                        changes.extend(frontier.iter().map(|t| (t.clone(), 1)));
+                        changes.compact();
                     }
                 }
+                list.retain(|(_, changes)| !changes.unstable_internal_updates().is_empty());
                 if !list.is_empty() {
                     Some(ActiveReplicationResponse::ComputeResponse(
                         ComputeResponse::FrontierUppers(list),
@@ -370,8 +385,8 @@ impl<T> ActiveReplication<T> {
                 tails: Default::default(),
                 uppers: Default::default(),
                 history: Default::default(),
-                last_command_count: 0,
                 pending_response: Default::default(),
+                introspection_uppers: Default::default(),
             },
         }
     }
@@ -442,6 +457,7 @@ where
         id: ReplicaId,
         addrs: Vec<String>,
         persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+        introspection_uppers: Option<BTreeMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>>,
     ) {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -460,7 +476,27 @@ where
         );
 
         // Take this opportunity to clean up the history we should present.
-        self.state.last_command_count = self.state.history.reduce(&self.state.peeks);
+        self.state.history.retain_peeks(&self.state.peeks);
+        self.state.history.reduce();
+
+        // Introduce new tracked uppers for each replica.
+        self.state
+            .introspection_uppers
+            .insert(id, Default::default());
+        for (gid, _) in persisted_logs.values() {
+            let mut frontier = Antichain::from_elem(T::minimum());
+            if let Some(i_uppers) = &introspection_uppers {
+                if let Some((f, _)) = i_uppers.get(gid) {
+                    frontier.clone_from(f);
+                }
+            }
+            let updates = MutableAntichain::new_bottom(T::minimum());
+            self.state
+                .introspection_uppers
+                .get_mut(&id)
+                .unwrap()
+                .insert(*gid, (frontier, updates));
+        }
 
         let replica_state = ReplicaState {
             command_tx,
@@ -498,13 +534,15 @@ where
         for (_frontier, frontiers) in self.state.uppers.iter_mut() {
             frontiers.1.remove(&id);
         }
+        self.state.introspection_uppers.remove(&id);
     }
 
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let addrs = self.replicas[&id].addrs.clone();
         let persisted_logs = self.replicas[&id].persisted_logs.clone();
+        let introspection_uppers = self.state.introspection_uppers.remove(&id);
         self.remove_replica(id);
-        self.add_replica(id, addrs, persisted_logs);
+        self.add_replica(id, addrs, persisted_logs, introspection_uppers);
     }
 
     // We avoid implementing `GenericClient` here, because the protocol between
@@ -595,25 +633,32 @@ pub enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
 
 #[derive(Debug)]
 pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {
+    /// The number of commands at the last time we compacted the history.
+    reduced_count: usize,
+    /// The sequence of commands that should be applied.
+    ///
+    /// This list may not be "compact" in that there can be commands that could be optimized
+    /// or removed given the context of other commands, for example compaction commands that
+    /// can be unified, or dataflows that can be dropped due to allowed compaction.
     commands: Vec<ComputeCommand<T>>,
 }
 
 impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
+    /// Add a command to the history.
     pub fn push(&mut self, command: ComputeCommand<T>) {
         self.commands.push(command);
+        if self.commands.len() > 2 * self.reduced_count {
+            self.reduce();
+        }
     }
+
     /// Reduces `self.history` to a minimal form.
     ///
     /// This action not only simplifies the issued history, but importantly reduces the instructions
     /// to only reference inputs from times that are still certain to be valid. Commands that allow
     /// compaction of a collection also remove certainty that the inputs will be available for times
     /// not greater or equal to that compaction frontier.
-    ///
-    /// The `peeks` argument should contain those peeks that have yet to be resolved, either through
-    /// response or cancellation.
-    ///
-    /// Returns the number of distinct commands that remain.
-    pub fn reduce<V>(&mut self, peeks: &std::collections::HashMap<uuid::Uuid, V>) -> usize {
+    pub fn reduce(&mut self) {
         // First determine what the final compacted frontiers will be for each collection.
         // These will determine for each collection whether the command that creates it is required,
         // and if required what `as_of` frontier should be used for its updated command.
@@ -650,19 +695,13 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                     }
                 }
                 ComputeCommand::Peek(peek) => {
-                    // We could pre-filter here, but seems hard to access `uuid`
-                    // and take ownership of `peek` at the same time.
                     live_peeks.push(peek);
                 }
-                ComputeCommand::CancelPeeks { mut uuids } => {
-                    uuids.retain(|uuid| peeks.contains_key(uuid));
+                ComputeCommand::CancelPeeks { uuids } => {
                     live_cancels.extend(uuids);
                 }
             }
         }
-
-        // Retain only those peeks that have not yet been processed.
-        live_peeks.retain(|peek| peeks.contains_key(&peek.uuid));
 
         // Determine the required antichains to support live peeks;
         let mut live_peek_frontiers = std::collections::BTreeMap::new();
@@ -744,25 +783,33 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             self.commands.push(drop_command);
         }
 
-        command_count
+        self.reduced_count = command_count;
     }
+
+    /// Retain only those peeks present in `peeks` and discard the rest.
+    pub fn retain_peeks<V>(&mut self, peeks: &std::collections::HashMap<uuid::Uuid, V>) {
+        for command in self.commands.iter_mut() {
+            if let ComputeCommand::CancelPeeks { uuids } = command {
+                uuids.retain(|uuid| peeks.contains_key(uuid));
+            }
+        }
+        self.commands.retain(|command| match command {
+            ComputeCommand::Peek(peek) => peeks.contains_key(&peek.uuid),
+            ComputeCommand::CancelPeeks { uuids } => !uuids.is_empty(),
+            _ => true,
+        });
+    }
+
     /// Iterate through the contained commands.
     pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
         self.commands.iter()
-    }
-
-    /// Report the number of commands.
-    ///
-    /// Importantly, each command can be arbitrarily complicated, so this number could be small
-    /// even while we have few commands that cause many actions to be taken.
-    pub fn len(&self) -> usize {
-        self.commands.len()
     }
 }
 
 impl<T> Default for ComputeCommandHistory<T> {
     fn default() -> Self {
         Self {
+            reduced_count: 0,
             commands: Vec::new(),
         }
     }

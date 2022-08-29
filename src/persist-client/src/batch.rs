@@ -29,10 +29,11 @@ use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 
+use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::retry_external;
-use crate::r#impl::metrics::{BatchWriteMetrics, Metrics};
-use crate::r#impl::paths::{PartId, PartialBlobKey};
+use crate::internal::machine::retry_external;
+use crate::internal::metrics::{BatchWriteMetrics, Metrics};
+use crate::internal::paths::{PartId, PartialBlobKey};
 use crate::{PersistConfig, ShardId, WriterId};
 
 /// A handle to a batch of updates that has been written to blob storage but
@@ -146,8 +147,8 @@ where
     }
 
     #[cfg(test)]
-    pub fn into_hollow_batch(mut self) -> crate::r#impl::state::HollowBatch<T> {
-        let ret = crate::r#impl::state::HollowBatch {
+    pub fn into_hollow_batch(mut self) -> crate::internal::state::HollowBatch<T> {
+        let ret = crate::internal::state::HollowBatch {
             desc: self.desc.clone(),
             keys: self.blob_keys.clone(),
             len: self.num_updates,
@@ -155,6 +156,16 @@ where
         self.mark_consumed();
         ret
     }
+}
+
+/// Indicates what work was done in a call to [BatchBuilder::add]
+#[derive(Debug)]
+pub enum Added {
+    /// A record was inserted into a pending batch part
+    Record,
+    /// A record was inserted into a pending batch part
+    /// and the part was sent to blob storage
+    RecordAndParts,
 }
 
 /// A builder for [Batches](Batch) that allows adding updates piece by piece and
@@ -197,6 +208,7 @@ where
         size_hint: usize,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         shard_id: ShardId,
         writer_id: WriterId,
     ) -> Self {
@@ -207,6 +219,7 @@ where
             writer_id,
             lower.clone(),
             Arc::clone(&blob),
+            cpu_heavy_runtime,
             &metrics.user,
         );
         Self {
@@ -276,7 +289,13 @@ where
     ///
     /// The update timestamp must be greater or equal to `lower` that was given
     /// when creating this [BatchBuilder].
-    pub async fn add(&mut self, key: &K, val: &V, ts: &T, diff: &D) -> Result<(), InvalidUsage<T>> {
+    pub async fn add(
+        &mut self,
+        key: &K,
+        val: &V,
+        ts: &T,
+        diff: &D,
+    ) -> Result<Added, InvalidUsage<T>> {
         if !self.lower.less_equal(ts) {
             return Err(InvalidUsage::UpdateNotBeyondLower {
                 ts: ts.clone(),
@@ -312,6 +331,7 @@ where
 
         // If we've filled up a chunk of ColumnarRecords, flush it out now to
         // blob storage to keep our memory usage capped.
+        let mut part_written = false;
         for part in self.records.take_filled() {
             // TODO: This upper would ideally be `[self.max_ts+1]` but
             // there's nothing that lets us increment a timestamp. An empty
@@ -322,9 +342,14 @@ where
             let upper = Antichain::new();
             let since = Antichain::from_elem(T::minimum());
             self.parts.write(part, upper, since).await;
+            part_written = true;
         }
 
-        Ok(())
+        if part_written {
+            Ok(Added::RecordAndParts)
+        } else {
+            Ok(Added::Record)
+        }
     }
 }
 
@@ -338,6 +363,7 @@ pub(crate) struct BatchParts<T> {
     writer_id: WriterId,
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
+    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     writing_parts: VecDeque<(PartialBlobKey, JoinHandle<()>)>,
     finished_parts: Vec<PartialBlobKey>,
     batch_metrics: BatchWriteMetrics,
@@ -351,6 +377,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         writer_id: WriterId,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         batch_metrics: &BatchWriteMetrics,
     ) -> Self {
         BatchParts {
@@ -360,6 +387,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             writer_id,
             lower,
             blob,
+            cpu_heavy_runtime,
             writing_parts: VecDeque::new(),
             finished_parts: Vec::new(),
             batch_metrics: batch_metrics.clone(),
@@ -375,6 +403,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let desc = Description::new(self.lower.clone(), upper, since);
         let metrics = Arc::clone(&self.metrics);
         let blob = Arc::clone(&self.blob);
+        let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
         let batch_metrics = self.batch_metrics.clone();
         let partial_key = PartialBlobKey::new(&self.writer_id, &PartId::new());
         let key = partial_key.complete(&self.shard_id);
@@ -417,20 +446,18 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 };
 
                 let start = Instant::now();
-                let buf = mz_ore::task::spawn_blocking(
-                    || "batch::encode_part",
-                    move || {
+                let buf = cpu_heavy_runtime
+                    .spawn_named(|| "batch::encode_part", async move {
                         let mut buf = Vec::new();
                         batch.encode(&mut buf);
 
                         // Drop batch as soon as we can to reclaim its memory.
                         drop(batch);
                         Bytes::from(buf)
-                    },
-                )
-                .instrument(debug_span!("batch::encode_part"))
-                .await
-                .expect("part encode task failed");
+                    })
+                    .instrument(debug_span!("batch::encode_part"))
+                    .await
+                    .expect("part encode task failed");
                 // Can't use the `CodecMetrics::encode` helper because of async.
                 metrics.codecs.batch.encode_count.inc();
                 metrics
@@ -505,7 +532,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 #[cfg(test)]
 mod tests {
     use crate::cache::PersistClientCache;
-    use crate::r#impl::paths::BlobKey;
+    use crate::internal::paths::BlobKey;
     use crate::tests::all_ok;
     use crate::PersistLocation;
 

@@ -38,7 +38,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row};
 use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
-use mz_storage::types::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
+use mz_storage::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
 use crate::command::{
     ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
@@ -52,6 +52,12 @@ pub mod replicated;
 
 /// An abstraction allowing us to name different compute instances.
 pub type ComputeInstanceId = u64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ComputeSinkId {
+    pub compute_instance: ComputeInstanceId,
+    pub global_id: GlobalId,
+}
 
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
@@ -288,7 +294,9 @@ where
             .collect();
 
         // Add the replica
-        self.compute.replicas.add_replica(id, addrs, persisted_logs);
+        self.compute
+            .replicas
+            .add_replica(id, addrs, persisted_logs, None);
     }
 
     pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
@@ -331,7 +339,7 @@ where
                     .or(Err(ComputeError::IdentifierMissing(*source_id)))?
                     .read_capabilities
                     .frontier();
-                if !(<_ as timely::order::PartialOrder>::less_equal(since, &as_of.borrow())) {
+                if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*source_id))?;
                 }
 
@@ -343,7 +351,7 @@ where
             for index_id in dataflow.index_imports.keys() {
                 let collection = self.as_ref().collection(*index_id)?;
                 let since = collection.read_capabilities.frontier();
-                if !(<_ as timely::order::PartialOrder>::less_equal(&since, &as_of.borrow())) {
+                if !(timely::order::PartialOrder::less_equal(&since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*index_id))?;
                 } else {
                     compute_dependencies.push(*index_id);
@@ -420,7 +428,7 @@ where
             let mut sink_exports = BTreeMap::new();
             for (id, se) in d.sink_exports {
                 let connection = match se.connection {
-                    SinkConnection::Persist(conn) => {
+                    ComputeSinkConnection::Persist(conn) => {
                         let metadata = self
                             .storage_controller
                             .collection(id)?
@@ -430,12 +438,11 @@ where
                             value_desc: conn.value_desc,
                             storage_metadata: metadata,
                         };
-                        SinkConnection::Persist(conn)
+                        ComputeSinkConnection::Persist(conn)
                     }
-                    SinkConnection::Kafka(conn) => SinkConnection::Kafka(conn),
-                    SinkConnection::Tail(conn) => SinkConnection::Tail(conn),
+                    ComputeSinkConnection::Tail(conn) => ComputeSinkConnection::Tail(conn),
                 };
-                let desc = SinkDesc {
+                let desc = ComputeSinkDesc {
                     from: se.from,
                     from_desc: se.from_desc,
                     connection,
@@ -648,7 +655,7 @@ where
             if let Ok(collection) = self.collection_mut(id) {
                 let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
 
-                if <_ as timely::order::PartialOrder>::less_equal(
+                if timely::order::PartialOrder::less_equal(
                     &collection.implied_capability,
                     &new_read_capability,
                 ) {
@@ -780,7 +787,7 @@ where
             let mut new_read_capability = collection
                 .read_policy
                 .frontier(collection.write_frontier.frontier());
-            if <_ as timely::order::PartialOrder>::less_equal(
+            if timely::order::PartialOrder::less_equal(
                 &collection.implied_capability,
                 &new_read_capability,
             ) {

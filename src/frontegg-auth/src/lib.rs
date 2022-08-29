@@ -12,10 +12,12 @@ use std::time::Duration;
 
 use derivative::Derivative;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use reqwest::Client;
 use thiserror::Error;
+use tracing::warn;
 use uuid::Uuid;
 
-use mz_ore::now::NowFn;
+use mz_ore::{now::NowFn, retry::Retry};
 
 pub struct FronteggConfig {
     /// URL for the token endpoint, including full path.
@@ -43,6 +45,9 @@ pub struct FronteggAuthentication {
     validation: Validation,
     refresh_before_secs: i64,
     password_prefix: String,
+
+    // Reqwest HTTP client pool.
+    client: Client,
 }
 
 pub const REFRESH_SUFFIX: &str = "/token/refresh";
@@ -62,7 +67,33 @@ impl FronteggAuthentication {
             validation,
             refresh_before_secs: config.refresh_before_secs,
             password_prefix: config.password_prefix,
+            client: Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .expect("must build Client"),
         }
+    }
+
+    async fn request<T, F, U>(&self, f: F) -> Result<T, FronteggError>
+    where
+        F: Copy + Fn(Client) -> U,
+        U: Future<Output = Result<T, FronteggError>>,
+    {
+        Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .retry_async_canceling(|state| async move {
+                // Return a Result<Result<T, FronteggError>, FronteggError> so we can
+                // differentiate a retryable or not error.
+                match f(self.client.clone()).await {
+                    Err(FronteggError::ReqwestError(err)) if err.is_timeout() => {
+                        warn!("frontegg timeout, attempt {}: {}", state.i, err);
+                        Err(FronteggError::from(err))
+                    }
+                    v @ _ => Ok(v),
+                }
+            })
+            .await?
     }
 
     /// Exchanges a password for a JWT token.
@@ -122,16 +153,18 @@ impl FronteggAuthentication {
         client_id: Uuid,
         secret: Uuid,
     ) -> Result<ApiTokenResponse, FronteggError> {
-        let resp = reqwest::Client::new()
-            .post(&self.admin_api_token_url)
-            .json(&ApiTokenArgs { client_id, secret })
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<ApiTokenResponse>()
-            .await?;
-
-        Ok(resp)
+        self.request(|client| async move {
+            let res: ApiTokenResponse = client
+                .post(&self.admin_api_token_url)
+                .json(&ApiTokenArgs { client_id, secret })
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<ApiTokenResponse>()
+                .await?;
+            Ok(res)
+        })
+        .await
     }
 
     /// Validates an access token and its `tenant_id`.
@@ -182,7 +215,8 @@ impl FronteggAuthentication {
                     };
                     loop {
                         let resp = async {
-                            let token = reqwest::Client::new()
+                            let token = frontegg
+                                .client
                                 .post(&refresh_url)
                                 .json(&refresh)
                                 .send()
@@ -263,11 +297,13 @@ pub enum FronteggError {
     #[error("invalid token format: {0}")]
     InvalidTokenFormat(#[from] jsonwebtoken::errors::Error),
     #[error("authentication token exchange failed: {0}")]
-    TokenExchangeError(#[from] reqwest::Error),
+    ReqwestError(#[from] reqwest::Error),
     #[error("authentication token expired")]
     TokenExpired,
     #[error("unauthorized organization")]
     UnauthorizedTenant,
     #[error("email in access token did not match the expected email")]
     WrongEmail,
+    #[error("request timeout")]
+    Timeout(#[from] tokio::time::error::Elapsed),
 }

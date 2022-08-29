@@ -35,7 +35,7 @@ use uuid::Uuid;
 use crate::func::Func;
 use crate::names::{
     Aug, DatabaseId, FullObjectName, PartialObjectName, QualifiedObjectName, QualifiedSchemaName,
-    ResolvedDatabaseSpecifier, SchemaSpecifier,
+    ResolvedDatabaseSpecifier, RoleId, SchemaSpecifier,
 };
 use crate::plan::statement::StatementDesc;
 
@@ -215,8 +215,6 @@ pub struct CatalogConfig {
     pub build_info: &'static BuildInfo,
     /// Default timestamp frequency for CREATE SOURCE
     pub timestamp_frequency: Duration,
-    /// How often to collect storage metrics (in seconds).
-    pub storage_metrics_collection_interval: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
@@ -255,7 +253,7 @@ pub trait CatalogRole {
     fn name(&self) -> &str;
 
     /// Returns a stable ID for the role.
-    fn id(&self) -> u64;
+    fn id(&self) -> RoleId;
 }
 
 /// A compute instance in a [`SessionCatalog`].
@@ -607,7 +605,6 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     unsafe_mode: true,
     build_info: &DUMMY_BUILD_INFO,
     timestamp_frequency: Duration::from_secs(1),
-    storage_metrics_collection_interval: Duration::from_secs(5),
     now: NOW_ZERO.clone(),
 });
 

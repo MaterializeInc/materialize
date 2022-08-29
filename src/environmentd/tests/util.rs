@@ -162,8 +162,11 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     // Messing with the clock causes persist to expire leases, causing hangs and
     // panics. Is it possible/desirable to put this back somehow?
     let persist_now = SYSTEM_TIME.clone();
-    let persist_clients =
-        PersistClientCache::new(PersistConfig::new_for_test(persist_now), &metrics_registry);
+    let mut persist_cfg = PersistConfig::new(&mz_environmentd::BUILD_INFO, persist_now);
+    // Tune down the number of connections to make this all work a little easier
+    // with local postgres.
+    persist_cfg.consensus_connection_pool_max_size = 1;
+    let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         adapter_stash_url,
@@ -219,6 +222,16 @@ pub struct Server {
 impl Server {
     pub fn pg_config(&self) -> postgres::Config {
         let local_addr = self.inner.sql_local_addr();
+        let mut config = postgres::Config::new();
+        config
+            .host(&Ipv4Addr::LOCALHOST.to_string())
+            .port(local_addr.port())
+            .user("materialize");
+        config
+    }
+
+    pub fn pg_config_internal(&self) -> postgres::Config {
+        let local_addr = self.inner.internal_sql_local_addr();
         let mut config = postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())

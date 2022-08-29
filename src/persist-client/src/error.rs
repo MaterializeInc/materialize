@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use mz_persist::location::{Determinate, ExternalError, Indeterminate};
 use timely::progress::Antichain;
 
-use crate::r#impl::paths::PartialBlobKey;
+use crate::internal::paths::PartialBlobKey;
 use crate::{ShardId, WriterId};
 
 /// An indication of whether the given error type indicates an operation
@@ -93,7 +93,7 @@ pub enum InvalidUsage<T> {
         /// The expected upper of the batch
         expected_upper: Antichain<T>,
     },
-    /// A [crate::batch::Batch] or [crate::read::ReaderEnrichedHollowBatch] was
+    /// A [crate::batch::Batch] or [crate::fetch::LeasedBatch] was
     /// given to a [crate::write::WriteHandle] from a different shard
     BatchNotFromThisShard {
         /// The shard of the batch

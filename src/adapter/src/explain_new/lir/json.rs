@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! JSON format `EXPLAIN` support for `Lir~` structures.
+//! `EXPLAIN ... AS JSON` support for LIR structures.
 
 use std::fmt;
 use std::fmt::Display;

@@ -15,10 +15,10 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use rusqlite::{named_params, params, Connection, OptionalExtension, Transaction};
+use serde_json::Value;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
-use mz_persist_types::Codec;
 use timely::progress::frontier::AntichainRef;
 
 use crate::{
@@ -133,7 +133,7 @@ impl Sqlite {
 
     fn update_many_tx<I>(tx: &Transaction, collection_id: Id, entries: I) -> Result<(), StashError>
     where
-        I: Iterator<Item = ((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
+        I: Iterator<Item = ((Value, Value), Timestamp, Diff)>,
     {
         let upper = Self::upper_tx(&tx, collection_id)?;
         let mut insert_stmt = tx.prepare(
@@ -148,6 +148,8 @@ impl Sqlite {
                     AntichainFormatter(&upper)
                 )));
             }
+            let key = serde_json::to_vec(&key)?;
+            let value = serde_json::to_vec(&value)?;
             insert_stmt.execute(named_params! {
                 "$collection_id": collection_id,
                 "$key": key,
@@ -191,10 +193,7 @@ impl Sqlite {
         Ok(())
     }
 
-    fn consolidate_batch_tx<'a, I>(tx: &Transaction<'a>, collections: I) -> Result<(), StashError>
-    where
-        I: Iterator<Item = Id>,
-    {
+    fn consolidate_batch_tx(tx: &Transaction, collections: &[Id]) -> Result<(), StashError> {
         let mut consolidation_stmt = tx.prepare(
             "DELETE FROM data
              WHERE collection_id = $collection_id AND time <= $since
@@ -207,7 +206,7 @@ impl Sqlite {
         let mut drop_stmt = tx.prepare("DELETE FROM data WHERE collection_id = $collection_id")?;
 
         for collection_id in collections {
-            let since = Self::since_tx(&tx, collection_id)?.into_option();
+            let since = Self::since_tx(&tx, *collection_id)?.into_option();
             match since {
                 Some(since) => {
                     let mut updates = consolidation_stmt
@@ -251,8 +250,8 @@ impl Sqlite {
 impl Stash for Sqlite {
     async fn collection<K, V>(&mut self, name: &str) -> Result<StashCollection<K, V>, StashError>
     where
-        K: Codec + Ord,
-        V: Codec + Ord,
+        K: Data,
+        V: Data,
     {
         let tx = self.conn.transaction()?;
 
@@ -316,8 +315,8 @@ impl Stash for Sqlite {
             .query_and_then(named_params! {"$collection_id": collection.id}, |row| {
                 let key_buf: Vec<_> = row.get("key")?;
                 let value_buf: Vec<_> = row.get("value")?;
-                let key = K::decode(&key_buf)?;
-                let value = V::decode(&value_buf)?;
+                let key: K = serde_json::from_slice(&key_buf)?;
+                let value: V = serde_json::from_slice(&value_buf)?;
                 let time = row.get("time")?;
                 let diff = row.get("diff")?;
                 Ok::<_, StashError>(((key, value), cmp::max(time, since), diff))
@@ -336,8 +335,7 @@ impl Stash for Sqlite {
         K: Data,
         V: Data,
     {
-        let mut key_buf = vec![];
-        key.encode(&mut key_buf);
+        let key = serde_json::to_vec(key).expect("must serialize");
         let tx = self.conn.transaction()?;
         let since = match Self::since_tx(&tx, collection.id)?.into_option() {
             Some(since) => since,
@@ -355,11 +353,11 @@ impl Stash for Sqlite {
             .query_and_then(
                 named_params! {
                     "$collection_id": collection.id,
-                    "$key": key_buf,
+                    "$key": key,
                 },
                 |row| {
                     let value_buf: Vec<_> = row.get("value")?;
-                    let value = V::decode(&value_buf)?;
+                    let value: V = serde_json::from_slice(&value_buf)?;
                     let time = row.get("time")?;
                     let diff = row.get("diff")?;
                     Ok::<_, StashError>((value, cmp::max(time, since), diff))
@@ -370,7 +368,7 @@ impl Stash for Sqlite {
         Ok(rows)
     }
 
-    async fn update_many<K: Codec, V: Codec, I>(
+    async fn update_many<K, V, I>(
         &mut self,
         collection: StashCollection<K, V>,
         entries: I,
@@ -382,11 +380,9 @@ impl Stash for Sqlite {
         I::IntoIter: Send,
     {
         let entries = entries.into_iter().map(|((key, value), time, diff)| {
-            let mut key_buf = vec![];
-            let mut value_buf = vec![];
-            key.encode(&mut key_buf);
-            value.encode(&mut value_buf);
-            ((key_buf, value_buf), time, diff)
+            let key = serde_json::to_value(&key).expect("must serialize");
+            let value = serde_json::to_value(&value).expect("must serialize");
+            ((key, value), time, diff)
         });
         let tx = self.conn.transaction()?;
         Self::update_many_tx(&tx, collection.id, entries)?;
@@ -455,27 +451,13 @@ impl Stash for Sqlite {
         Ok(())
     }
 
-    async fn consolidate<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate(&mut self, collection: Id) -> Result<(), StashError> {
         self.consolidate_batch(&[collection]).await
     }
 
-    async fn consolidate_batch<K, V>(
-        &mut self,
-        collections: &[StashCollection<K, V>],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
         let tx = self.conn.transaction()?;
-        Self::consolidate_batch_tx(&tx, collections.iter().map(|collection| collection.id))?;
+        Self::consolidate_batch_tx(&tx, collections)?;
         tx.commit()?;
         Ok(())
     }
@@ -526,24 +508,17 @@ impl From<rusqlite::Error> for StashError {
 
 #[async_trait]
 impl Append for Sqlite {
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
-    where
-        I: IntoIterator<Item = AppendBatch> + Send,
-        I::IntoIter: Send,
-    {
+    async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
         let tx = self.conn.transaction()?;
-        let mut consolidate = Vec::new();
         for batch in batches {
-            consolidate.push(batch.collection_id);
             let upper = Self::upper_tx(&tx, batch.collection_id)?;
             if upper != batch.lower {
                 return Err("unexpected lower".into());
             }
-            Self::update_many_tx(&tx, batch.collection_id, batch.entries.into_iter())?;
+            Self::update_many_tx(&tx, batch.collection_id, batch.entries.clone().into_iter())?;
             Self::seal_batch_tx(&tx, std::iter::once((batch.collection_id, &batch.upper)))?;
             Self::compact_batch_tx(&tx, std::iter::once((batch.collection_id, &batch.compact)))?;
         }
-        Self::consolidate_batch_tx(&tx, consolidate.iter().map(|id| *id))?;
         tx.commit()?;
         Ok(())
     }

@@ -50,7 +50,7 @@ impl ReduceElision {
             }) {
                 let map_scalars = aggregates
                     .iter()
-                    .map(|a| a.on_unique(&input_type))
+                    .map(|a| a.on_unique(&input_type.column_types))
                     .collect_vec();
 
                 let mut result = input.take_dangerous();

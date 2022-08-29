@@ -5,18 +5,18 @@ version = "0.26.1-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 [dependencies]
 anyhow = "1.0.58"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.56"
-axum = { version = "0.5.13", features = ["headers"] }
+axum = { version = "0.5.15", features = ["headers"] }
 base64 = "0.13.0"
 bytes = "1.2.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.2.14", features = ["wrap_help", "env", "derive"] }
+clap = { version = "3.2.17", features = ["wrap_help", "env", "derive"] }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.21"
 headers = "0.3.7"
@@ -70,7 +70,7 @@ tokio-openssl = "0.6.3"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-stream = { version = "0.1.9", features = ["net"] }
 tower-http = { version = "0.3.4", features = ["cors"] }
-tracing = "0.1.35"
+tracing = "0.1.36"
 tracing-subscriber = "0.3.15"
 url = "2.2.2"
 uuid = "1.1.2"

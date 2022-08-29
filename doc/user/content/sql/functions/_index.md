@@ -20,7 +20,7 @@ Several functions in Materialize are **unmaterializable** because their output
 depends upon state besides their input parameters, like the value of a session
 parameter or the timestamp of the current transaction. You cannot create an
 [index](/sql/create-index) or materialized view that depends on an
-unmaterializable function, but you can use them in unmaterialized views and
+unmaterializable function, but you can use them in non-materialized views and
 one-off [`SELECT`](/sql/select) statements.
 
 Unmaterializable functions are marked as such in the table below.

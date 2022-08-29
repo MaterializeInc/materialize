@@ -56,18 +56,19 @@ use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, Gau
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
-use mz_storage::controller::CollectionMetadata;
-use mz_storage::types::connections::{ConnectionContext, PopulateClientConfig};
-use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{
-    KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
-    SinkEnvelope,
-};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use super::KafkaBaseMetrics;
+use crate::controller::CollectionMetadata;
 use crate::render::sinks::SinkRender;
+use crate::storage_state::StorageState;
+use crate::types::connections::{ConnectionContext, PopulateClientConfig};
+use crate::types::errors::DataflowError;
+use crate::types::sinks::{
+    KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf,
+    SinkEnvelope, StorageSinkDesc,
+};
 
 impl<G> SinkRender<G> for KafkaSinkConnection
 where
@@ -89,8 +90,8 @@ where
 
     fn render_continuous_sink(
         &self,
-        compute_state: &mut crate::compute_state::ComputeState,
-        sink: &SinkDesc<CollectionMetadata>,
+        storage_state: &mut StorageState,
+        sink: &StorageSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         // TODO(benesch): errors should stream out through the sink,
@@ -132,7 +133,7 @@ where
         // sink_write_frontier` below so we properly clear out default frontiers of
         // non-active workers.
         let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
-            Antichain::from_elem(0)
+            Antichain::from_elem(Timestamp::minimum())
         } else {
             Antichain::new()
         }));
@@ -144,11 +145,11 @@ where
             sink.envelope,
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
-            &compute_state.sink_metrics.kafka,
-            &compute_state.connection_context,
+            &storage_state.sink_metrics.kafka,
+            &storage_state.connection_context,
         );
 
-        compute_state
+        storage_state
             .sink_write_frontiers
             .insert(sink_id, shared_frontier);
 

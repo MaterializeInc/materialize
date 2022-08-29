@@ -36,7 +36,7 @@ SHOW CREATE SINK my_view_sink;
 ```nofmt
                Sink              |                                                                                                        Create Sink
 ---------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- materialize.public.my_view_sink | CREATE SINK "materialize"."public"."my_view_sink" FROM "materialize"."public"."my_view" INTO KAFKA BROKER 'localhost:9092' TOPIC 'my_view_sink' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
+ materialize.public.my_view_sink | CREATE SINK "materialize"."public"."my_view_sink" FROM "materialize"."public"."my_view" INTO KAFKA CONNECTION "materialize"."public"."kafka_conn" TOPIC 'my_view_sink' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
 ```
 
 ## Related pages

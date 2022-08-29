@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, BenchmarkId, Criterion};
+use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use tempfile::TempDir;
@@ -102,7 +103,7 @@ async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
     PersistClient::new(
-        PersistConfig::new(SYSTEM_TIME.clone()),
+        PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
         blob,
         consensus,
         metrics,
@@ -126,7 +127,7 @@ async fn create_file_pg_client(
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
     let client = PersistClient::new(
-        PersistConfig::new(SYSTEM_TIME.clone()),
+        PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
         blob,
         consensus,
         metrics,
@@ -153,7 +154,7 @@ async fn create_s3_pg_client(
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
     let client = PersistClient::new(
-        PersistConfig::new(SYSTEM_TIME.clone()),
+        PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
         blob,
         consensus,
         metrics,

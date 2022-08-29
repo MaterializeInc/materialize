@@ -35,11 +35,11 @@ use crate::AdapterError;
 
 /// Timestamps used by writes in an Append command.
 #[derive(Debug)]
-pub struct WriteTimestamp {
+pub struct WriteTimestamp<T = mz_repr::Timestamp> {
     /// Timestamp that the write will take place on.
-    pub(crate) timestamp: Timestamp,
+    pub(crate) timestamp: T,
     /// Timestamp to advance the appended table to.
-    pub(crate) advance_to: Timestamp,
+    pub(crate) advance_to: T,
 }
 
 /// Global state for a single timeline.
@@ -52,24 +52,20 @@ pub(crate) struct TimelineState<T> {
     pub(crate) read_holds: ReadHolds<T>,
 }
 
-/// A timeline is either currently writing or currently reading.
-///
-/// At each time, writes happen and then reads happen, meaning that writes at a time are
-/// visible to exactly reads at that time or greater, and no other times.
-enum TimestampOracleState<T> {
-    /// The timeline is producing collection updates timestamped with the argument.
-    Writing(T),
-    /// The timeline is observing collections aot the time of the argument.
-    Reading(T),
+/// A timeline can perform reads and writes. Reads happen at the read timestamp
+/// and writes happen at the write timestamp. After the write has completed, but before a response
+/// is sent, the read timestamp must be updated to a value greater than or equal to `self.write_ts`.
+struct TimestampOracleState<T> {
+    read_ts: T,
+    write_ts: T,
 }
 
 /// A type that provides write and read timestamps, reads observe exactly their preceding writes..
 ///
-/// Specifically, all read timestamps will be greater or equal to all previously reported write timestamps,
-/// and strictly less than all subsequently emitted write timestamps.
+/// Specifically, all read timestamps will be greater or equal to all previously reported completed
+/// write timestamps, and strictly less than all subsequently emitted write timestamps.
 struct TimestampOracle<T> {
     state: TimestampOracleState<T>,
-    advance_to: Option<T>,
     next: Box<dyn Fn() -> T>,
 }
 
@@ -82,93 +78,59 @@ impl<T: CoordTimestamp> TimestampOracle<T> {
         F: Fn() -> T + 'static,
     {
         Self {
-            state: TimestampOracleState::Writing(initially.clone()),
-            advance_to: Some(initially),
+            state: TimestampOracleState {
+                read_ts: initially.clone(),
+                write_ts: initially,
+            },
             next: Box::new(next),
-        }
-    }
-
-    /// Peek the current value of the timestamp.
-    ///
-    /// No operations should be assigned to the timestamp returned by this function. The
-    /// timestamp returned should only be used to compare the progress of the `TimestampOracle`
-    /// against some external source of time.
-    ///
-    /// Subsequent values of `self.read_ts()` and `self.write_ts()` will be greater or equal to
-    /// this timestamp.
-    ///
-    /// NOTE: This can be removed if DDL is included in group commits.
-    fn peek_ts(&self) -> T {
-        match &self.state {
-            TimestampOracleState::Writing(ts) | TimestampOracleState::Reading(ts) => ts.clone(),
         }
     }
 
     /// Acquire a new timestamp for writing.
     ///
     /// This timestamp will be strictly greater than all prior values of
-    /// `self.read_ts()`, and less than or equal to all subsequent values of
-    /// `self.read_ts()`.
-    fn write_ts(&mut self) -> T {
-        match &self.state {
-            TimestampOracleState::Writing(ts) => ts.clone(),
-            TimestampOracleState::Reading(ts) => {
-                let mut next = (self.next)();
-                if next.less_equal(&ts) {
-                    next = ts.step_forward();
-                }
-                assert!(ts.less_than(&next));
-                self.state = TimestampOracleState::Writing(next.clone());
-                self.advance_to = Some(next.clone());
-                next
-            }
+    /// `self.read_ts()` and `self.write_ts()`.
+    fn write_ts(&mut self) -> WriteTimestamp<T> {
+        let mut next = (self.next)();
+        if next.less_equal(&self.state.write_ts) {
+            next = self.state.write_ts.step_forward();
         }
-    }
-    /// Acquire a new timestamp for reading.
-    ///
-    /// This timestamp will be greater or equal to all prior values of `self.write_ts()`,
-    /// and strictly less than all subsequent values of `self.write_ts()`.
-    fn read_ts(&mut self) -> T {
-        match &self.state {
-            TimestampOracleState::Reading(ts) => ts.clone(),
-            TimestampOracleState::Writing(ts) => {
-                // Avoid rust borrow complaint.
-                let ts = ts.clone();
-                self.state = TimestampOracleState::Reading(ts.clone());
-                self.advance_to = Some(ts.step_forward());
-                ts
-            }
+        assert!(self.state.read_ts.less_than(&next));
+        assert!(self.state.write_ts.less_than(&next));
+        self.state.write_ts = next.clone();
+        assert!(self.state.read_ts.less_equal(&self.state.write_ts));
+        let advance_to = next.step_forward();
+        WriteTimestamp {
+            timestamp: next,
+            advance_to,
         }
     }
 
-    /// Electively advance the tracked times.
+    /// Peek the current write timestamp.
+    fn peek_write_ts(&self) -> T {
+        self.state.write_ts.clone()
+    }
+
+    /// Acquire a new timestamp for reading.
     ///
-    /// If `lower_bound` is strictly greater than the current time (of either state), the
-    /// resulting state will be `Writing(lower_bound)`.
-    fn fast_forward(&mut self, lower_bound: T) {
-        match &self.state {
-            TimestampOracleState::Writing(ts) => {
-                if ts.less_than(&lower_bound) {
-                    self.advance_to = Some(lower_bound.clone());
-                    self.state = TimestampOracleState::Writing(lower_bound);
-                }
-            }
-            TimestampOracleState::Reading(ts) => {
-                if ts.less_than(&lower_bound) {
-                    // This may result in repetition in the case `lower_bound == ts + 1`.
-                    // This is documented as fine, and concerned users can protect themselves.
-                    self.advance_to = Some(lower_bound.clone());
-                    self.state = TimestampOracleState::Writing(lower_bound);
-                }
+    /// This timestamp will be greater or equal to all prior values of `self.apply_write(write_ts)`,
+    /// and strictly less than all subsequent values of `self.write_ts()`.
+    fn read_ts(&mut self) -> T {
+        self.state.read_ts.clone()
+    }
+
+    /// Mark a write at `write_ts` completed.
+    ///
+    /// All subsequent values of `self.read_ts()` will be greater or equal to `write_ts`.
+    fn apply_write(&mut self, write_ts: T) {
+        if self.state.read_ts.less_than(&write_ts) {
+            self.state.read_ts = write_ts;
+
+            if self.state.write_ts.less_than(&self.state.read_ts) {
+                self.state.write_ts = self.state.read_ts.clone();
             }
         }
-    }
-    /// Whether and to what the next value of `self.write_ts() has advanced since this method was last called.
-    ///
-    /// This method may produce the same value multiple times, and should not be used as a test for whether
-    /// a write-to-read transition has occurred, so much as an advisory signal that write capabilities can advance.
-    fn should_advance_to(&mut self) -> Option<T> {
-        self.advance_to.take()
+        assert!(self.state.read_ts.less_equal(&self.state.write_ts));
     }
 }
 
@@ -223,24 +185,23 @@ impl<T: CoordTimestamp> DurableTimestampOracle<T> {
         oracle
     }
 
-    /// Peek the current value of the timestamp.
-    ///
-    /// See [`TimestampOracle::peek_ts`] for more details.
-    fn peek_ts(&self) -> T {
-        self.timestamp_oracle.peek_ts()
-    }
-
     /// Acquire a new timestamp for writing. Optionally returns a timestamp that needs to be
     /// persisted to disk.
     ///
     /// See [`TimestampOracle::write_ts`] for more details.
-    async fn write_ts<Fut>(&mut self, persist_fn: impl FnOnce(T) -> Fut) -> T
+    async fn write_ts<Fut>(&mut self, persist_fn: impl FnOnce(T) -> Fut) -> WriteTimestamp<T>
     where
         Fut: Future<Output = Result<(), crate::catalog::Error>>,
     {
         let ts = self.timestamp_oracle.write_ts();
-        self.maybe_allocate_new_timestamps(&ts, persist_fn).await;
+        self.maybe_allocate_new_timestamps(&ts.timestamp, persist_fn)
+            .await;
         ts
+    }
+
+    /// Peek current write timestamp.
+    fn peek_write_ts(&self) -> T {
+        self.timestamp_oracle.peek_write_ts()
     }
 
     /// Acquire a new timestamp for reading. Optionally returns a timestamp that needs to be
@@ -256,22 +217,16 @@ impl<T: CoordTimestamp> DurableTimestampOracle<T> {
         ts
     }
 
-    /// Electively advance the tracked times. Optionally returns a timestamp that needs to be
-    /// persisted to disk.
+    /// Mark a write at `write_ts` completed.
     ///
-    /// See [`TimestampOracle::fast_forward`] for more details.
-    pub async fn fast_forward<Fut>(&mut self, lower_bound: T, persist_fn: impl FnOnce(T) -> Fut)
+    /// See [`TimestampOracle::apply_write`] for more details.
+    pub async fn apply_write<Fut>(&mut self, lower_bound: T, persist_fn: impl FnOnce(T) -> Fut)
     where
         Fut: Future<Output = Result<(), crate::catalog::Error>>,
     {
-        self.timestamp_oracle.fast_forward(lower_bound.clone());
+        self.timestamp_oracle.apply_write(lower_bound.clone());
         self.maybe_allocate_new_timestamps(&lower_bound, persist_fn)
             .await;
-    }
-
-    /// See [`TimestampOracle::should_advance_to`] for more details.
-    pub fn should_advance_to(&mut self) -> Option<T> {
-        self.timestamp_oracle.should_advance_to()
     }
 
     /// Checks to see if we can serve the timestamp from memory, or if we need to durably store
@@ -344,10 +299,10 @@ impl<S: Append + 'static> Coordinator<S> {
         self.get_local_timestamp_oracle_mut().read_ts()
     }
 
-    /// Assign a timestamp for creating a source. Writes following reads
-    /// must ensure that they are assigned a strictly larger timestamp to ensure
-    /// they are not visible to any real-time earlier reads.
-    pub(crate) async fn get_local_write_ts(&mut self) -> Timestamp {
+    /// Assign a timestamp for a write to a local input and increase the local ts.
+    /// Writes following reads must ensure that they are assigned a strictly larger
+    /// timestamp to ensure they are not visible to any real-time earlier reads.
+    pub(crate) async fn get_local_write_ts(&mut self) -> WriteTimestamp {
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
@@ -359,42 +314,24 @@ impl<S: Append + 'static> Coordinator<S> {
             .await
     }
 
-    /// Assign a timestamp for a write to a local input and increase the local ts.
-    /// Writes following reads must ensure that they are assigned a strictly larger
-    /// timestamp to ensure they are not visible to any real-time earlier reads.
-    pub(crate) async fn get_and_step_local_write_ts(&mut self) -> WriteTimestamp {
-        let timestamp = self
-            .global_timelines
-            .get_mut(&Timeline::EpochMilliseconds)
-            .expect("no realtime timeline")
-            .oracle
-            .write_ts(|ts| {
-                self.catalog
-                    .persist_timestamp(&Timeline::EpochMilliseconds, ts)
-            })
-            .await;
-        /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
-         * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
-         * timestamp will go up for the next write.
-         * The timestamp must be increased for every write because each call to APPEND will close
-         * the provided timestamp, meaning no more writes can happen at that timestamp.
-         * If we add an ADAPTER side durable WAL, then consecutive writes could all happen at the
-         * same timestamp as long as they're written to the WAL first.
-         */
-        let _ = self.get_local_timestamp_oracle_mut().read_ts();
-        let advance_to = timestamp.step_forward();
-        WriteTimestamp {
-            timestamp,
-            advance_to,
-        }
+    /// Peek the current timestamp used for operations on local inputs. Used to determine how much
+    /// to block group commits by.
+    pub(crate) fn peek_local_write_ts(&mut self) -> Timestamp {
+        self.get_local_timestamp_oracle().peek_write_ts()
     }
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
-    ///
-    /// NOTE: This can be removed if DDL is included in group commits.
-    pub(crate) fn peek_local_ts(&self) -> Timestamp {
-        self.get_local_timestamp_oracle().peek_ts()
+    pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
+        self.global_timelines
+            .get_mut(&Timeline::EpochMilliseconds)
+            .expect("no realtime timeline")
+            .oracle
+            .apply_write(timestamp, |ts| {
+                self.catalog
+                    .persist_timestamp(&Timeline::EpochMilliseconds, ts)
+            })
+            .await;
     }
 
     /// Ensures that a global timeline state exists for `timeline`.

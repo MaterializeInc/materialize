@@ -45,7 +45,6 @@ use tracing::{span, Level};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
-use crate::sink::SinkBaseMetrics;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -71,8 +70,6 @@ pub struct ComputeState {
     pub pending_peeks: Vec<PendingPeek>,
     /// Tracks the frontier information that has been sent over `response_tx`.
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    /// Undocumented
-    pub sink_metrics: SinkBaseMetrics,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
     /// Configuration for sink connections.
@@ -573,10 +570,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
             if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&id) {
-                assert!(<_ as PartialOrder>::less_equal(
-                    prev_frontier,
-                    &new_frontier
-                ));
+                assert!(PartialOrder::less_equal(prev_frontier, &new_frontier));
                 if prev_frontier != &new_frontier {
                     add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
                     prev_frontier.clone_from(&new_frontier);

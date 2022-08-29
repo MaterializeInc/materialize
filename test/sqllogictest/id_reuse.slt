@@ -64,12 +64,12 @@ SELECT id, name FROM mz_databases
 statement ok
 CREATE ROLE foo LOGIN SUPERUSER
 
-query IT rowsort
+query TT rowsort
 SELECT id, name FROM mz_roles
 ----
-0 mz_system
-1 materialize
-2 foo
+s1 mz_system
+u1 materialize
+u2 foo
 
 statement ok
 DROP ROLE foo
@@ -77,12 +77,12 @@ DROP ROLE foo
 statement ok
 CREATE ROLE bar LOGIN SUPERUSER
 
-query IT rowsort
+query TT rowsort
 SELECT id, name FROM mz_roles
 ----
-0 mz_system
-1 materialize
-3 bar
+s1 mz_system
+u1 materialize
+u3 bar
 
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (size '1'))

@@ -260,4 +260,4 @@ GROUP BY 1;
 ```
 
 For this case querying and aggregating is relatively effortless;
-if the aggregation query were expensive, creating a Materialized View doing the aggregation would make more sense.
+if the aggregation query were expensive, creating a materialized view doing the aggregation would make more sense.

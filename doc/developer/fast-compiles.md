@@ -18,14 +18,14 @@ it's possible to get a rough sense of Materialize's performance on macOS,
 there have been more than a few occasions where apparent performance defects
 have disappeared when running the workload on Linux.
 
-### Use lld
+## Use lld
 
 Using lld instead of the standard linker will result in an impressive
 linking speedup.
 
-#### Installation
+### Installation
 
-##### Linux
+#### Linux
 
 On Debian-based distros, you can install lld from the standard package
 repository:
@@ -37,7 +37,7 @@ sudo apt install lld
 You'll need to hunt down the equivalent instructions for your distribution if
 you don't use a Debian-based distribution.
 
-##### macOS
+#### macOS
 
 lld is available on Homebrew as part of the `llvm` package.
 
@@ -49,7 +49,7 @@ The `llvm` package is keg-only, so you'll have to add its bin folder to your
 PATH manually. Refer to the "Caveats" section in the output of the above
 `brew install` command for instructions.
 
-#### Configuration
+### Configuration
 
 To tell Rust to use lld, set the following environment variable:
 
@@ -67,7 +67,7 @@ rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
 [cargo-config]: https://doc.rust-lang.org/cargo/reference/config.html#configuration
 
-### Disable debug info
+## Disable debug info
 
 The fastest known way to compile is with lld and disabling debug info:
 

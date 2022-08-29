@@ -14,17 +14,17 @@ use std::error::Error;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::iter;
-use std::iter::once;
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
 use mz_ore::soft_assert;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
 use mz_ore::collections::CollectionExt;
-use mz_persist_types::Codec;
 
 mod memory;
 mod postgres;
@@ -40,9 +40,9 @@ pub type Id = i64;
 
 // A common trait for uses of K and V to express in a single place all of the
 // traits required by async_trait and StashCollection.
-pub trait Data: Codec + Ord + Send + Sync {}
+pub trait Data: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync {}
 
-impl<T: Codec + Ord + Send + Sync> Data for T {}
+impl<T: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync> Data for T {}
 
 /// A durable metadata store.
 ///
@@ -353,26 +353,13 @@ pub trait Stash: std::fmt::Debug + Send {
     /// Intuitively, this method performs physical compaction. Existing
     /// key–value pairs whose time is less than the since frontier are
     /// consolidated together when possible.
-    async fn consolidate<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data;
+    async fn consolidate(&mut self, collection: Id) -> Result<(), StashError>;
 
     /// Performs multiple consolidations at once, potentially in a more performant way than
     /// performing the individual consolidations one by one.
     ///
     /// See [Stash::consolidate]
-    async fn consolidate_batch<K, V>(
-        &mut self,
-        collections: &[StashCollection<K, V>],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
         for collection in collections {
             self.consolidate(*collection).await?;
         }
@@ -408,8 +395,8 @@ pub trait Stash: std::fmt::Debug + Send {
 ///
 /// A `StashCollection` stores `(key, value, timestamp, diff)` entries. The key
 /// and value types are chosen by the caller; they must implement [`Ord`] and
-/// they must be serializable to and deserializable from bytes via the [`Codec`]
-/// trait. The timestamp and diff types are fixed to `i64`.
+/// they must be serializable to and deserializable via serde. The timestamp and
+/// diff types are fixed to `i64`.
 ///
 /// A `StashCollection` maintains a since frontier and an upper frontier, as
 /// described in the [correctness vocabulary document]. To advance the since
@@ -422,7 +409,7 @@ pub trait Stash: std::fmt::Debug + Send {
 /// [correctness vocabulary document]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md
 /// [`Collection`]: differential_dataflow::collection::Collection
 pub struct StashCollection<K, V> {
-    id: Id,
+    pub id: Id,
     _kv: PhantomData<(K, V)>,
 }
 
@@ -508,6 +495,14 @@ impl From<InternalStashError> for StashError {
     }
 }
 
+impl From<serde_json::Error> for StashError {
+    fn from(e: serde_json::Error) -> StashError {
+        StashError {
+            inner: InternalStashError::Other(e.to_string()),
+        }
+    }
+}
+
 impl From<String> for StashError {
     fn from(e: String) -> StashError {
         StashError {
@@ -529,17 +524,24 @@ impl From<&str> for StashError {
 /// Additional methods for Stash implementations that are able to provide atomic operations over multiple collections.
 #[async_trait]
 pub trait Append: Stash {
-    /// Atomically adds entries, seals, and compacts multiple collections.
+    /// Same as `append`, but does not consolidate batches.
+    async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError>;
+
+    /// Atomically adds entries, seals, compacts, and consolidates multiple
+    /// collections.
     ///
     /// The `lower` of each `AppendBatch` is checked to be the existing `upper` of the collection.
     /// The `upper` of the `AppendBatch` will be the new `upper` of the collection.
     /// The `compact` of each `AppendBatch` will be the new `since` of the collection.
     ///
-    /// If this method returns `Ok`, the entries have been made durable and uppers advanced, otherwise no changes were committed.
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
-    where
-        I: IntoIterator<Item = AppendBatch> + Send + 'static,
-        I::IntoIter: Send;
+    /// If this method returns `Ok`, the entries have been made durable and uppers
+    /// advanced, otherwise no changes were committed.
+    async fn append(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+        self.append_batch(batches).await?;
+        let ids: Vec<_> = batches.iter().map(|batch| batch.collection_id).collect();
+        self.consolidate_batch(&ids).await?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -549,7 +551,7 @@ pub struct AppendBatch {
     pub upper: Antichain<Timestamp>,
     pub compact: Antichain<Timestamp>,
     pub timestamp: Timestamp,
-    pub entries: Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
+    pub entries: Vec<((Value, Value), Timestamp, Diff)>,
 }
 
 impl<K, V> StashCollection<K, V>
@@ -580,13 +582,9 @@ where
     }
 
     pub fn append_to_batch(&self, batch: &mut AppendBatch, key: &K, value: &V, diff: Diff) {
-        let mut key_buf = vec![];
-        let mut value_buf = vec![];
-        key.encode(&mut key_buf);
-        value.encode(&mut value_buf);
-        batch
-            .entries
-            .push(((key_buf, value_buf), batch.timestamp, diff));
+        let key = serde_json::to_value(key).expect("must serialize");
+        let value = serde_json::to_value(value).expect("must serialize");
+        batch.entries.push(((key, value), batch.timestamp, diff));
     }
 }
 
@@ -666,7 +664,7 @@ where
                 InternalStashError::PeekSinceUpper(_) => {
                     // If the upper isn't > since, bump the upper and try again to find a sealed
                     // entry. Do this by appending the empty batch which will advance the upper.
-                    stash.append(once(batch)).await?;
+                    stash.append(&[batch]).await?;
                     batch = collection.make_batch(stash).await?;
                     stash.peek_key_one(collection, key).await?
                 }
@@ -677,7 +675,7 @@ where
             Some(prev) => Ok(prev),
             None => {
                 collection.append_to_batch(&mut batch, &key, &value, 1);
-                stash.append(once(batch)).await?;
+                stash.append(&[batch]).await?;
                 Ok(value)
             }
         }
@@ -704,7 +702,7 @@ where
                 InternalStashError::PeekSinceUpper(_) => {
                     // If the upper isn't > since, bump the upper and try again to find a sealed
                     // entry. Do this by appending the empty batch which will advance the upper.
-                    stash.append(once(batch)).await?;
+                    stash.append(&[batch]).await?;
                     batch = collection.make_batch(stash).await?;
                     stash.peek_key_one(collection, key).await?
                 }
@@ -715,7 +713,7 @@ where
             collection.append_to_batch(&mut batch, &key, &prev, -1);
         }
         collection.append_to_batch(&mut batch, &key, &value, 1);
-        stash.append(once(batch)).await?;
+        stash.append(&[batch]).await?;
         Ok(prev)
     }
 
@@ -735,7 +733,7 @@ where
                 InternalStashError::PeekSinceUpper(_) => {
                     // If the upper isn't > since, bump the upper and try again to find a sealed
                     // entry. Do this by appending the empty batch which will advance the upper.
-                    stash.append(once(batch)).await?;
+                    stash.append(&[batch]).await?;
                     batch = collection.make_batch(stash).await?;
                     stash.peek_one(collection).await?
                 }
@@ -748,7 +746,7 @@ where
             }
             collection.append_to_batch(&mut batch, &k, &v, 1);
         }
-        stash.append(once(batch)).await?;
+        stash.append(&[batch]).await?;
         Ok(())
     }
 }
@@ -926,4 +924,46 @@ where
         soft_assert!(self.verify().is_ok());
         deleted
     }
+}
+
+/// Helper function to consolidate `serde_json::Value` updates. `Value` doesn't
+/// implement `Ord` which is required by `consolidate_updates`, so we must
+/// serialize and deserialize through bytes.
+fn consolidate_updates<I>(rows: I) -> impl Iterator<Item = ((Value, Value), Timestamp, Diff)>
+where
+    I: IntoIterator<Item = ((Value, Value), Timestamp, Diff)>,
+{
+    // This assumes the to bytes representation is deterministic. The current
+    // backing of Map is a BTreeMap which is sorted, but this isn't a documented
+    // guarantee.
+    // See: https://github.com/serde-rs/json/blob/44d9c53e2507636c0c2afee0c9c132095dddb7df/src/map.rs#L1-L7
+    let mut rows = rows
+        .into_iter()
+        .map(|((key, value), ts, diff)| {
+            let key = serde_json::to_vec(&key).expect("must serialize");
+            let value = serde_json::to_vec(&value).expect("must serialize");
+            ((key, value), ts, diff)
+        })
+        .collect();
+    differential_dataflow::consolidation::consolidate_updates(&mut rows);
+    rows.into_iter().map(|((key, value), ts, diff)| {
+        let key = serde_json::from_slice(&key).expect("must deserialize");
+        let value = serde_json::from_slice(&value).expect("must deserialize");
+        ((key, value), ts, diff)
+    })
+}
+
+fn consolidate_updates_kv<K, V, I>(rows: I) -> impl Iterator<Item = ((K, V), Timestamp, Diff)>
+where
+    I: IntoIterator<Item = ((Value, Value), Timestamp, Diff)>,
+    K: Data,
+    V: Data,
+{
+    consolidate_updates(rows)
+        .into_iter()
+        .map(|((key, value), ts, diff)| {
+            let key: K = serde_json::from_value(key).expect("must deserialize");
+            let value: V = serde_json::from_value(value).expect("must deserialize");
+            ((key, value), ts, diff)
+        })
 }

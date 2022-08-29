@@ -448,10 +448,11 @@ enum $T {
    <td valign=top>
 <pre>message Proto$T {
   oneof kind {
-    Proto$V1 var_1 = 1;  }
+    Proto$V1 var_1 = 1;
+  }
 }</pre>
    </td>
-   <td valign=top>Use <code>Proto$T1</code> if <code>$T1</code> is a complex type for which <code>Proto$T1</code> already exists.</td>
+   <td valign=top>Use <code>Proto$V1</code> if <code>$Var1</code> is a complex variant for which <code>Proto$V1</code> already exists.</td>
   </tr>
   <tr>
    <td valign=top>
@@ -534,15 +535,15 @@ BTreeMap<$K, $V></pre>
   <tr>
    <td valign=top>
 <pre>struct $T {
-  f1 : vec<$T1>
+  f1 : vec<$V>
 }</pre>
    </td>
    <td valign=top>
-<pre>Message Proto$T {
-  repeated Proto$T1 f1 = 1;
+<pre>message Proto$T {
+  repeated Proto$V f1 = 1;
 }</pre>
    </td>
-   <td valign=top></td>
+   <td valign=top>Represent a 1-dimensional <code>$V</code> vector as a repeated field of the translated item type <code>Proto$V</code>.</td>
   </tr>
   <tr>
    <td valign=top>
@@ -551,15 +552,15 @@ BTreeMap<$K, $V></pre>
 }</pre>
    </td>
    <td valign=top>
-<pre>message Proto$T1 { … }
-message ProtoVec$T1 {
-  repeated Proto$T1 value = 1;
+<pre>message Proto$V { … }
+message Proto${V}Vec {
+  repeated Proto$V value = 1;
 }
-message Proto$T {
-  repeated ProtoF1Vec f1 = 1;
+message Proto$V {
+  repeated Proto${V}Vec f1 = 1;
 }</pre>
    </td>
-   <td valign=top></td>
+   <td valign=top>Represent a 2-dimensional <code>$V</code> vector as a repeated field of type <code>Proto${V}Vec</code>, where the latter is a dedicated struct that represents a 1-dimensional <code>$V</code> vector.</td>
   </tr>
   <tr>
    <td valign=top>

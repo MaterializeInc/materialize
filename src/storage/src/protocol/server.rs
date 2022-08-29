@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
+use mz_build_info::BuildInfo;
 use mz_persist_client::PersistConfig;
 use timely::communication::initialize::WorkerGuards;
 use tokio::sync::mpsc;
@@ -23,6 +24,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_service::local::LocalClient;
 
 use crate::protocol::client::StorageClient;
+use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::storage_state::{StorageState, Worker};
 use crate::types::connections::ConnectionContext;
@@ -30,6 +32,8 @@ use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
 pub struct Config {
+    /// Build information.
+    pub build_info: &'static BuildInfo,
     /// The number of worker threads to spawn.
     pub workers: usize,
     /// The Timely configuration
@@ -57,9 +61,10 @@ pub fn serve(
 
     // Various metrics related things.
     let source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
+    let sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
     let decode_metrics = DecodeMetrics::register_with(&config.metrics_registry);
     // Bundle metrics to conceal complexity.
-    let metrics_bundle = (source_metrics, decode_metrics);
+    let metrics_bundle = (source_metrics, sink_metrics, decode_metrics);
 
     let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| crossbeam_channel::unbounded())
@@ -68,8 +73,10 @@ pub fn serve(
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
-    let persist_clients =
-        PersistClientCache::new(PersistConfig::new(now.clone()), &config.metrics_registry);
+    let persist_clients = PersistClientCache::new(
+        PersistConfig::new(config.build_info, now.clone()),
+        &config.metrics_registry,
+    );
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
 
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
@@ -82,7 +89,7 @@ pub fn serve(
         let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
             .take()
             .unwrap();
-        let (source_metrics, decode_metrics) = metrics_bundle.clone();
+        let (source_metrics, sink_metrics, decode_metrics) = metrics_bundle.clone();
         let persist_clients = Arc::clone(&persist_clients);
         Worker {
             timely_worker,
@@ -96,10 +103,13 @@ pub fn serve(
                 exports: HashMap::new(),
                 now: now.clone(),
                 source_metrics,
+                sink_metrics,
                 timely_worker_index,
                 timely_worker_peers,
                 connection_context: config.connection_context.clone(),
                 persist_clients,
+                sink_tokens: HashMap::new(),
+                sink_write_frontiers: HashMap::new(),
             },
         }
         .run()
