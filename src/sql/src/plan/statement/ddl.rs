@@ -3543,6 +3543,11 @@ fn plan_index_options(
     scx: &StatementContext,
     with_opts: Vec<IndexOption<Aug>>,
 ) -> Result<Vec<crate::plan::IndexOption>, PlanError> {
+    if !with_opts.is_empty() {
+        // Index options are not durable.
+        scx.require_unsafe_mode("INDEX OPTIONS")?;
+    }
+
     let IndexOptionExtracted {
         logical_compaction_window,
         ..
