@@ -31,13 +31,14 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
+use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage::types::sources::{SourceDesc, Timeline};
@@ -76,7 +77,8 @@ pub use query::{QueryContext, QueryLifetime};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
-#[derive(Debug)]
+#[derive(Debug, EnumKind)]
+#[enum_kind(PlanKind)]
 pub enum Plan {
     CreateConnection(CreateConnectionPlan),
     CreateDatabase(CreateDatabasePlan),
