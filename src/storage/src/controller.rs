@@ -423,24 +423,26 @@ impl CollectionMetadata {
         T: timely::progress::Timestamp + Lattice + Codec64,
     {
         println!("before lock");
-        let persist = persist
-            .lock()
-            .await
-            .open(self.persist_location.clone())
-            .await
-            .unwrap();
+        let mut l = persist.lock().await;
         println!("after lock");
+        let persist = l.open(dbg!(self.persist_location.clone())).await.unwrap();
+        drop(l);
+        println!("after open, dropped the lock");
         // Calculate the point at which we can resume ingestion computing the greatest
         // antichain that is less or equal to all state and output shard uppers.
         let mut resume_upper: Antichain<T> = Antichain::new();
-        let mut remap_read = persist
-            .open_reader::<(), PartitionId, T, MzOffset>(dbg!(self.remap_shard))
-            .await
-            .unwrap();
-        dbg!(remap_read
-            .snapshot_and_fetch(Antichain::from_elem(T::minimum()))
-            .await
-            .unwrap());
+        if std::env::var("GUS").is_ok() {
+            let mut remap_read = persist
+                .open_reader::<(), PartitionId, T, MzOffset>(dbg!(self.remap_shard))
+                .await
+                .unwrap();
+            dbg!(remap_read
+                .snapshot_and_fetch(remap_read.since().clone())
+                .await
+                .unwrap());
+        } else {
+            println!("not reading snapshot")
+        }
         let remap_write = persist
             .open_writer::<(), PartitionId, T, MzOffset>(dbg!(self.remap_shard))
             .await

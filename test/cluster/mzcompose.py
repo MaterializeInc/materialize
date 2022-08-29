@@ -264,11 +264,13 @@ def workflow_test_remote_storaged(c: Composition) -> None:
         c.kill("storaged")
         c.run("testdrive", "storaged/03-while-storaged-down.td")
 
-        print("Sleeping for 20 seconds")
-        time.sleep(20)
-
-        c.up("storaged")
-        c.run("testdrive", "storaged/04-after-storaged-restart.td")
+        with c.override(
+            Storaged(
+                environment=["GUS=1"]
+            )
+        ):
+            c.up("storaged")
+            c.run("testdrive", "storaged/04-after-storaged-restart.td")
 
 
 def workflow_test_drop_default_cluster(c: Composition) -> None:

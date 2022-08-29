@@ -189,6 +189,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         ),
                     ));
                     println!("AFTER");
+                    self.timely_worker.step();
+                    self.timely_worker.step();
+                    self.timely_worker.step();
+                    println!("STEPPED");
 
                     crate::render::build_ingestion_dataflow(
                         &mut self.timely_worker,
