@@ -34,17 +34,18 @@ impl CloudProviderRegion {
             _ => panic!("Unknown region."),
         }
     }
-    pub fn parse_region(region: &str) -> &'static str {
-        match region {
-            "aws/us-east-1" => "us-east-1",
-            "aws/eu-west-1" => "eu-west-1",
-            _ => panic!("Unknown region."),
+    /// Return the region name inside a cloud provider.
+    pub fn region_name(&self) -> &'static str {
+        match self {
+            CloudProviderRegion::AwsUsEast1 => "us-east-1",
+            CloudProviderRegion::AwsUsEast1 => "eu-west-1",
         }
     }
-    pub fn parse_enum_region(region: CloudProviderRegion) -> &'static str {
-        match region {
-            CloudProviderRegion::AwsUsEast1 => "us-east-1",
-            CloudProviderRegion::AwsEuWest1 => "eu-west-1",
+
+    /// Return the cloud provider name.
+    pub fn cloud_provider(self) -> &'static str {
+        match self {
+            CloudProviderRegion::AwsUsEast1 |  CloudProviderRegion::AwsEuWest1 => "aws",
         }
     }
     //-----------------
