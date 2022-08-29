@@ -10,10 +10,6 @@ publish = false
 name = "sqlite"
 harness = false
 
-# [[bench]]
-# name = "consolidation"
-# harness = false
-
 [dependencies]
 async-trait = "0.1.57"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
@@ -32,8 +28,6 @@ tracing = "0.1.36"
 
 [dev-dependencies]
 anyhow = "1.0.62"
-# benchmark is currently unused
-# criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = [ "html_reports" ] }
 mz-postgres-util = { path = "../postgres-util" }
 tempfile = "3.2.0"
 tokio = { version = "1.19.2", features = ["macros"] }

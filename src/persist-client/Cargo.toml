@@ -59,7 +59,7 @@ tokio-console = ["mz-ore/tokio-console"]
 async-trait = "0.1.57"
 axum = "0.5.15"
 clap = { version = "3.2.17", features = ["derive", "env"] }
-criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["html_reports"] }
+criterion = { git = "https://github.com/bheisler/criterion.rs.git", branch = "version-0.4", features = ["html_reports"] }
 datadriven = { version = "0.6.0", features = ["async"] }
 futures-task = "0.3.21"
 mz-http-util = { path = "../http-util" }
