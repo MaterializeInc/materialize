@@ -18,7 +18,7 @@ mz-ore = { path = "../ore" }
 mz-pid-file = { path = "../pid-file" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
-serde_json = "1.0.82"
+serde_json = "1.0.85"
 scopeguard = "1.1.0"
 sysinfo = "0.25.3"
 tokio = "1.19.2"

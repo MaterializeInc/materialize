@@ -18,5 +18,5 @@ mz-secrets = { path = "../secrets" }
 mz-repr = { path = "../repr" }
 k8s-openapi = { version = "0.15.0", features = ["v1_22"] }
 kube = { version = "0.74.0", features = ["runtime", "ws"] }
-serde_json = "1.0.82"
+serde_json = "1.0.85"
 sha2 = "0.10.2"

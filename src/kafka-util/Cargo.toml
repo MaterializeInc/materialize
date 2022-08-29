@@ -22,7 +22,7 @@ prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 serde = { version = "1.0.144", features = ["derive"] }
-serde_json = "1.0.82"
+serde_json = "1.0.85"
 tokio = { version = "1.19.2", features = ["macros"] }
 thiserror = "1.0.32"
 tracing = "0.1.36"
