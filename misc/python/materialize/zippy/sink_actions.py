@@ -57,7 +57,7 @@ class CreateSink(Action):
 
                 > CREATE SINK {self.sink.name} FROM {self.source_view.name}
                   INTO KAFKA CONNECTION {self.sink.name}_kafka_conn
-                  TOPIC 'sink-{self.sink.name}' WITH (reuse_topic=true)
+                  TOPIC 'sink-{self.sink.name}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
 
                 # Ingest the sink again in order to be able to validate its contents

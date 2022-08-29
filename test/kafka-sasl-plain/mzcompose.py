@@ -42,6 +42,10 @@ SERVICES = [
             "KAFKA_SSL_CLIENT_AUTH=required",
             "KAFKA_SECURITY_INTER_BROKER_PROTOCOL=SASL_SSL",
             "KAFKA_OPTS=-Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config",
+            # Standard options we don't want to overwrite!
+            "KAFKA_MIN_INSYNC_REPLICAS=1",
+            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
+            "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
         ],
         listener_type="SASL_SSL",
         volumes=[

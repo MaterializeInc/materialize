@@ -408,7 +408,6 @@ impl KafkaSinkStateEnum {
 struct KafkaSinkState {
     name: String,
     topic: String,
-    topic_prefix: String,
     shutdown_flag: Arc<AtomicBool>,
     metrics: Arc<SinkMetrics>,
     producer: KafkaTxProducer,
@@ -487,8 +486,7 @@ impl KafkaSinkState {
 
         KafkaSinkState {
             name: sink_name,
-            topic: connection.topic,
-            topic_prefix: connection.topic_prefix,
+            topic: connection.topic.clone(),
             shutdown_flag,
             metrics,
             producer,
@@ -904,7 +902,7 @@ impl KafkaSinkState {
     ) -> KafkaResult<()> {
         let encoded = avro::encode_debezium_transaction_unchecked(
             consistency.schema_id,
-            &self.topic_prefix,
+            &self.topic,
             transaction_id,
             status,
             message_count,
@@ -912,7 +910,7 @@ impl KafkaSinkState {
 
         let record = BaseRecord::to(&consistency.topic)
             .payload(&encoded)
-            .key(&self.topic_prefix);
+            .key(&self.topic);
 
         self.send(record).await
     }

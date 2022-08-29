@@ -223,7 +223,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 
 > CREATE SINK data_sink FROM data_schema_inline
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-sink-${testdrive.seed}'
-  WITH (reuse_topic=true) FORMAT AVRO
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # Check that repeated Debezium messages are skipped.

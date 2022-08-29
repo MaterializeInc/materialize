@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 $ kafka-create-topic topic=test
 $ kafka-ingest topic=test format=bytes
 jack,jill
@@ -115,16 +117,16 @@ snk2   user
 snk3   user
 
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 $ kafka-verify format=avro sink=materialize.public.snk2 sort-messages=true
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 $ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
-{"before": null, "after": {"row":{"c": "goofusgallant"}}}
-{"before": null, "after": {"row":{"c": "jackjill"}}}
+{"before": null, "after": {"row":{"c": "goofusgallant"}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"c": "jackjill"}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # Test the case where we have non +/- 1 multiplicities
 
@@ -136,8 +138,8 @@ $ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.snk4
-{"before": null, "after": {"row":{"c": true}}}
-{"before": null, "after": {"row":{"c": true}}}
+{"before": null, "after": {"row":{"c": true}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"c": true}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # Test AS OF and WITH/WITHOUT SNAPSHOT.
 #
@@ -160,12 +162,12 @@ $ kafka-ingest topic=test format=bytes
 extra,row
 
 $ kafka-verify format=avro sink=materialize.public.snk5
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 3}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 $ kafka-verify format=avro sink=materialize.public.snk6 sort-messages=true
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 3}}}
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # Test that we are correctly handling WITH/WITHOUT SNAPSHOT on views with
 # empty upper frontier
@@ -182,9 +184,9 @@ $ kafka-verify format=avro sink=materialize.public.snk6 sort-messages=true
   WITH SNAPSHOT
 
 $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
-{"before": null, "after": {"row":{"column1": 1}}}
-{"before": null, "after": {"row":{"column1": 2}}}
-{"before": null, "after": {"row":{"column1": 3}}}
+{"before": null, "after": {"row":{"column1": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"column1": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"column1": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 > SHOW FULL SINKS
 name        type
