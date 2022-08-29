@@ -1323,7 +1323,7 @@ pub struct CollectionState<T> {
     /// The policy to use to downgrade `self.implied_capability`.
     pub read_policy: ReadPolicy<T>,
 
-    /// Reported progress in the write capabilities.
+    /// Reported write frontier.
     pub write_frontier: Antichain<T>,
 
     pub collection_metadata: CollectionMetadata,
@@ -1355,7 +1355,7 @@ pub struct ExportState<T> {
     /// Description with which the export was created
     pub description: ExportDescription<T>,
 
-    /// Reported progress in the write capabilities.
+    /// Reported write frontier.
     pub write_frontier: Antichain<T>,
 }
 impl<T: Timestamp> ExportState<T> {

@@ -920,7 +920,7 @@ pub struct CollectionState<T> {
     /// Compute identifiers on which this collection depends.
     pub compute_dependencies: Vec<GlobalId>,
 
-    /// Reported progress in the write capabilities.
+    /// Reported write frontier.
     pub write_frontier: Antichain<T>,
 }
 
