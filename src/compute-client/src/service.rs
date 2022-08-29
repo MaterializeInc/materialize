@@ -14,6 +14,7 @@
 //! Compute layer client and server.
 
 use std::collections::HashMap;
+use std::iter;
 
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
@@ -101,7 +102,7 @@ pub struct PartitionedComputeState<T> {
     parts: usize,
     /// Upper frontiers for indexes and sinks, both unioned across all partitions and from each
     /// individual partition.
-    uppers: HashMap<GlobalId, (Antichain<T>, Vec<Antichain<T>>)>,
+    uppers: HashMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
     /// Pending responses for a peek; returnable once all are available.
     peek_responses: HashMap<Uuid, HashMap<usize, PeekResponse>>,
     /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
@@ -159,8 +160,9 @@ where
         command.frontier_tracking(&mut start, &mut cease);
         // Apply the determined effects of the command to `self.uppers`.
         for id in start.into_iter() {
-            let frontier = Antichain::from_elem(T::minimum());
-            let part_frontiers = vec![frontier.clone(); self.parts];
+            let mut frontier = MutableAntichain::new();
+            frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+            let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
             let previous = self.uppers.insert(id, (frontier, part_frontiers));
             assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command);
         }
@@ -234,17 +236,16 @@ where
                 let mut new_uppers = Vec::new();
 
                 for (id, new_shard_upper) in list {
-                    if let Some((reported, tracked)) = self.uppers.get_mut(&id) {
-                        // Update the shard upper and compute a new global upper.
-                        tracked[shard_id].join_assign(&new_shard_upper);
-                        let mut new_upper = Antichain::new();
-                        for upper in tracked {
-                            new_upper.extend(upper.iter().cloned());
-                        }
+                    if let Some((frontier, shard_frontiers)) = self.uppers.get_mut(&id) {
+                        let old_upper = frontier.frontier().to_owned();
+                        let shard_upper = &mut shard_frontiers[shard_id];
+                        frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
+                        frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
+                        shard_upper.join_assign(&new_shard_upper);
 
-                        if PartialOrder::less_than(reported, &new_upper) {
-                            reported.clone_from(&new_upper);
-                            new_uppers.push((id, new_upper));
+                        let new_upper = frontier.frontier();
+                        if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
+                            new_uppers.push((id, new_upper.to_owned()));
                         }
                     }
                 }

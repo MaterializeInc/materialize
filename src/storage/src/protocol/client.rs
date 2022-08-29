@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::iter;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
@@ -23,7 +24,7 @@ use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::Antichain;
+use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
@@ -326,7 +327,7 @@ pub struct PartitionedStorageState<T> {
     parts: usize,
     /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
     /// individual partition.
-    uppers: HashMap<GlobalId, (Antichain<T>, Vec<Antichain<T>>)>,
+    uppers: HashMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
 }
 
 impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>
@@ -352,16 +353,18 @@ where
         match command {
             StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
-                    let frontier = Antichain::from_elem(T::minimum());
-                    let part_frontiers = vec![frontier.clone(); self.parts];
+                    let mut frontier = MutableAntichain::new();
+                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                    let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
                     let previous = self.uppers.insert(ingestion.id, (frontier, part_frontiers));
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", ingestion.id, command);
                 }
             }
             StorageCommand::ExportSinks(exports) => {
                 for export in exports {
-                    let frontier = Antichain::from_elem(T::minimum());
-                    let part_frontiers = vec![frontier.clone(); self.parts];
+                    let mut frontier = MutableAntichain::new();
+                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                    let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
                     let previous = self.uppers.insert(export.id, (frontier, part_frontiers));
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
                 }
@@ -394,17 +397,16 @@ where
                 let mut new_uppers = Vec::new();
 
                 for (id, new_shard_upper) in list {
-                    if let Some((reported, tracked)) = self.uppers.get_mut(&id) {
-                        // Update the shard upper and compute a new global upper.
-                        tracked[shard_id].join_assign(&new_shard_upper);
-                        let mut new_upper = Antichain::new();
-                        for upper in tracked {
-                            new_upper.extend(upper.iter().cloned());
-                        }
+                    if let Some((frontier, shard_frontiers)) = self.uppers.get_mut(&id) {
+                        let old_upper = frontier.frontier().to_owned();
+                        let shard_upper = &mut shard_frontiers[shard_id];
+                        frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
+                        frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
+                        shard_upper.join_assign(&new_shard_upper);
 
-                        if PartialOrder::less_than(reported, &new_upper) {
-                            reported.clone_from(&new_upper);
-                            new_uppers.push((id, new_upper));
+                        let new_upper = frontier.frontier();
+                        if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
+                            new_uppers.push((id, new_upper.to_owned()));
                         }
                     }
                 }
