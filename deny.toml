@@ -148,8 +148,8 @@ allow-git = [
     # See: https://github.com/BurntSushi/rust-csv/issues/271
     "https://github.com/BurntSushi/rust-csv.git",
 
-    # Waiting on criterion v0.4, which upgrades to clap v3.
-    "https://github.com/MaterializeInc/criterion.rs.git",
+    # Waiting for an official release of criterion v0.4, which upgrades to clap v3.
+    "https://github.com/bheisler/criterion.rs.git",
 
     # Waiting on v0.18.
     # See: https://github.com/open-telemetry/opentelemetry-rust/pull/779

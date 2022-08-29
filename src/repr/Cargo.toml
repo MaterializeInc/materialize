@@ -45,7 +45,7 @@ proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-fea
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 
 [dev-dependencies]
-criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
+criterion = { git = "https://github.com/bheisler/criterion.rs.git", branch = "version-0.4" }
 rand = "0.8.5"
 
 [build-dependencies]
