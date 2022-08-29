@@ -21,6 +21,8 @@ mod regions;
 mod shell;
 mod utils;
 
+use std::str::FromStr;
+
 use profiles::get_profile;
 use regions::{print_region_enabled, print_region_status};
 use serde::{Deserialize, Serialize};
@@ -210,22 +212,23 @@ async fn main() {
                 } => match validate_profile(profile_name, &client).await {
                     Some(frontegg_auth_machine) => {
                         let loading_spinner = run_loading_spinner("Enabling region...".to_string());
-                        let parsed_cloud_provider_region =
-                            CloudProviderRegion::parse(cloud_provider_region);
+                        if let Ok(parsed_cloud_provider_region) =
+                            CloudProviderRegion::from_str(&cloud_provider_region) {
+                                match enable_region(
+                                    client,
+                                    parsed_cloud_provider_region,
+                                    frontegg_auth_machine,
+                                )
+                                .await
+                                {
+                                    Ok(_) => loading_spinner.finish_with_message("Region enabled."),
+                                    Err(e) => exit_with_fail_message(ExitMessage::String(format!(
+                                        "Error enabling region: {:?}",
+                                        e
+                                    ))),
+                                }
+                            }
 
-                        match enable_region(
-                            client,
-                            parsed_cloud_provider_region,
-                            frontegg_auth_machine,
-                        )
-                        .await
-                        {
-                            Ok(_) => loading_spinner.finish_with_message("Region enabled."),
-                            Err(e) => exit_with_fail_message(ExitMessage::String(format!(
-                                "Error enabling region: {:?}",
-                                e
-                            ))),
-                        }
                     }
                     None => {}
                 },
@@ -260,14 +263,14 @@ async fn main() {
                                 match list_cloud_providers(&client, &frontegg_auth_machine).await {
                                     Ok(cloud_providers) => {
                                         let parsed_cloud_provider_region =
-                                            CloudProviderRegion::parse_region(
+                                            CloudProviderRegion::parse(
                                                 &cloud_provider_region,
                                             );
                                         let filtered_providers: Vec<CloudProvider> =
                                             cloud_providers
                                                 .into_iter()
                                                 .filter(|provider| {
-                                                    provider.region == parsed_cloud_provider_region
+                                                    provider.region == parsed_cloud_provider_region.region_name()
                                                 })
                                                 .collect::<Vec<CloudProvider>>();
 
@@ -341,7 +344,7 @@ async fn main() {
         Commands::Shell {
             cloud_provider_region,
         } => {
-            let parsed_cloud_provider_region = CloudProviderRegion::parse(cloud_provider_region);
+            let parsed_cloud_provider_region = CloudProviderRegion::parse(&cloud_provider_region);
 
             match get_profile(profile_name) {
                 Some(profile) => {

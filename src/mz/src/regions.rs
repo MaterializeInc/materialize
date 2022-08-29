@@ -28,7 +28,7 @@ use reqwest::{Client, Error};
 fn format_region_url(cloud_provider_region: CloudProviderRegion) -> String {
     format!(
         "https://ec.0.{}.aws.cloud.materialize.com/api/environment",
-        CloudProviderRegion::parse_enum_region(cloud_provider_region)
+        cloud_provider_region.region_name()
     )
 }
 

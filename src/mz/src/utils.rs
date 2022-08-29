@@ -7,16 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::process::exit;
+use std::{process::exit, string::ParseError};
+use std::str::FromStr;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::ExitMessage;
 
-use clap::ArgEnum;
-
 /// Cloud providers and regions available.
-#[derive(Debug, Clone, ArgEnum)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum CloudProviderRegion {
     AwsUsEast1,
     AwsEuWest1,
@@ -24,21 +23,22 @@ pub(crate) enum CloudProviderRegion {
 
 /// Implementation to name the possible values and parse every option.
 impl CloudProviderRegion {
+
     pub fn variants() -> [&'static str; 2] {
         ["aws/us-east-1", "aws/eu-west-1"]
     }
-    pub fn parse(region: String) -> CloudProviderRegion {
-        match region.as_str() {
+    pub fn parse(region: &str) -> CloudProviderRegion {
+        match region {
             "aws/us-east-1" => CloudProviderRegion::AwsUsEast1,
             "aws/eu-west-1" => CloudProviderRegion::AwsEuWest1,
             _ => panic!("Unknown region."),
         }
     }
     /// Return the region name inside a cloud provider.
-    pub fn region_name(&self) -> &'static str {
+    pub fn region_name(self) -> &'static str {
         match self {
             CloudProviderRegion::AwsUsEast1 => "us-east-1",
-            CloudProviderRegion::AwsUsEast1 => "eu-west-1",
+            CloudProviderRegion::AwsEuWest1 => "eu-west-1",
         }
     }
 
@@ -48,29 +48,18 @@ impl CloudProviderRegion {
             CloudProviderRegion::AwsUsEast1 |  CloudProviderRegion::AwsEuWest1 => "aws",
         }
     }
-    //-----------------
-    // Unused parsers
-    //-----------------
-    //
-    // pub fn parse_provider(region: &str) -> &'static str {
-    //     match region {
-    //         "aws/us-east-1" => "aws",
-    //         "aws/eu-west-1" => "aws",
-    //         _ => panic!("Unknown provider.")
-    //     }
-    // }
-    // pub fn parse_enum(region: CloudProviderRegion) -> &'static str {
-    //     match region {
-    //         CloudProviderRegion::AwsUsEast1 => "aws/us-east-1",
-    //         CloudProviderRegion::AwsEuWest1 => "aws/eu-west-1",
-    //     }
-    // }
-    // pub fn parse_enum_provider(region: CloudProviderRegion) -> &'static str {
-    //     match region {
-    //         CloudProviderRegion::AwsUsEast1 => "aws",
-    //         CloudProviderRegion::AwsEuWest1 => "aws",
-    //     }
-    // }
+}
+
+impl FromStr for CloudProviderRegion {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "aws/us-east-1" => Ok(CloudProviderRegion::AwsUsEast1),
+            "aws/eu-west-1" => Ok(CloudProviderRegion::AwsEuWest1),
+            _ => panic!("Unknown region."),
+        }
+    }
 }
 
 /// Trim lines. Useful when reading input data.
