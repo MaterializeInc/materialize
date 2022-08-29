@@ -44,8 +44,8 @@ use crate::shell::shell;
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
-    #[clap(short, long)]
-    profile: Option<String>,
+    #[clap(short, long, env="MZ_PROFILE", default_value="default")]
+    profile: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -180,19 +180,12 @@ const ERROR_PARSING_PROFILES_MESSAGE: &str = "Error parsing the profiles";
 const ERROR_AUTHENTICATING_PROFILE_MESSAGE: &str = "Error authenticating profile";
 const PROFILE_NOT_FOUND_MESSAGE: &str =
     "Profile not found. Please, add one or login using `mz login`.";
+const ERROR_UNKNOWN_REGION: &str = "Unknown region";
 
 #[tokio::main]
 async fn main() {
     let args = Cli::parse();
-    let mut profile_name = DEFAULT_PROFILE_NAME.to_string();
-    let preferedined_profile_arg: Option<String> = args.profile;
-    let predefined_profile_env: Option<&str> = option_env!("MZ_PROFILE");
-
-    if let Some(profile_env) = predefined_profile_env {
-        profile_name = profile_env.to_string();
-    } else if let Some(profile_arg) = preferedined_profile_arg {
-        profile_name = profile_arg;
-    }
+    let profile_name = args.profile;
 
     match args.command {
         Commands::Login { interactive } => {
@@ -228,6 +221,8 @@ async fn main() {
                                     e
                                 ))),
                             }
+                        } else {
+                            exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION))
                         }
                     }
                     None => {}
@@ -300,6 +295,10 @@ async fn main() {
                                                     "Error. Missing provider.",
                                                 )),
                                             }
+                                        } else {
+                                            exit_with_fail_message(ExitMessage::Str(
+                                                ERROR_UNKNOWN_REGION,
+                                            ))
                                         }
                                     }
                                     Err(error) => exit_with_fail_message(ExitMessage::String(
@@ -370,6 +369,8 @@ async fn main() {
                     }
                     None => exit_with_fail_message(ExitMessage::Str(PROFILE_NOT_FOUND_MESSAGE)),
                 };
+            } else {
+                exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION))
             }
         }
     }

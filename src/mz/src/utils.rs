@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::process::exit;
 use std::str::FromStr;
-use std::{process::exit, string::ParseError};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -34,14 +34,10 @@ impl CloudProviderRegion {
             CloudProviderRegion::AwsEuWest1 => "eu-west-1",
         }
     }
-
-    // / Return the cloud provider name.
-    // pub fn cloud_provider(self) -> &'static str {
-    //     match self {
-    //         CloudProviderRegion::AwsUsEast1 |  CloudProviderRegion::AwsEuWest1 => "aws",
-    //     }
-    // }
 }
+
+#[derive(Debug, Clone)]
+pub struct ParseError;
 
 impl FromStr for CloudProviderRegion {
     type Err = ParseError;
@@ -50,7 +46,7 @@ impl FromStr for CloudProviderRegion {
         match s {
             "aws/us-east-1" => Ok(CloudProviderRegion::AwsUsEast1),
             "aws/eu-west-1" => Ok(CloudProviderRegion::AwsEuWest1),
-            _ => panic!("Unknown region."),
+            _ => Err(ParseError),
         }
     }
 }
