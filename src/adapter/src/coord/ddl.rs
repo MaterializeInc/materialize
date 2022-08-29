@@ -19,7 +19,6 @@ use tracing::Level;
 use tracing::{event, warn};
 
 use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
-use mz_ore::cast::CastFrom;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
@@ -666,7 +665,7 @@ impl<S: Append + 'static> Coordinator<S> {
     fn validate_resource_limit<F>(
         &self,
         current_amount: usize,
-        new_instances: u32,
+        new_instances: i32,
         resource_limit: F,
         resource_type: &str,
     ) -> Result<(), AdapterError>
@@ -674,11 +673,21 @@ impl<S: Append + 'static> Coordinator<S> {
         F: Fn(&SystemVars) -> u32,
     {
         let limit = resource_limit(self.catalog.state().system_config());
-        if current_amount > usize::cast_from(u32::MAX)
-            || (new_instances > 0
-                && u32::try_from(current_amount).expect("guaranteed to fit") + new_instances
-                    > limit)
-        {
+        let exceeds_limit = match (u32::try_from(current_amount), u32::try_from(new_instances)) {
+            // 0 new instances are always ok.
+            (_, Ok(new_instances)) if new_instances == 0 => false,
+            // negative instances are always ok.
+            (_, Err(_)) => false,
+            // more than u32 for the current amount is too much.
+            (Err(_), _) => true,
+            (Ok(current_amount), Ok(new_instances)) => {
+                match current_amount.checked_add(new_instances) {
+                    Some(new_amount) => new_amount > limit,
+                    None => true,
+                }
+            }
+        };
+        if exceeds_limit {
             Err(AdapterError::ResourceExhaustion {
                 resource_type: resource_type.to_string(),
                 limit,
