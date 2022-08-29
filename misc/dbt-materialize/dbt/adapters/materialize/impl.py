@@ -30,26 +30,10 @@ from dbt.exceptions import RuntimeException
 
 @dataclass
 class MaterializeIndexConfig(dbtClassMixin):
-    columns: List[str]
-    unique: bool = False
-    type: Optional[str] = None
+    columns: Optional[List[str]] = None
+    default: Optional[bool] = False
     name: Optional[str] = None
     cluster: Optional[str] = None
-
-    def render(self, relation):
-        # We append the current timestamp to the index name because otherwise
-        # the index will only be created on every other run. See
-        # https://github.com/dbt-labs/dbt-core/issues/1945#issuecomment-576714925
-        # for an explanation.
-        now = datetime.utcnow().isoformat()
-        inputs = self.columns + [
-            relation.render(),
-            str(self.unique),
-            str(self.type),
-            now,
-        ]
-        string = "_".join(inputs)
-        return dbt.utils.md5(string)
 
     @classmethod
     def parse(cls, raw_index) -> Optional["MaterializeIndexConfig"]:

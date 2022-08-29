@@ -22,7 +22,7 @@ test_materialized_view = """
 test_materialized_view_index = """
 {{ config(
     materialized='materializedview',
-    indexes=[{'columns': ['a']}]
+    indexes=[{'columns': ['a', 'length(a)'], 'name': 'a_idx'}]
 ) }}
 
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
@@ -31,7 +31,7 @@ test_materialized_view_index = """
 test_view_index = """
 {{ config(
     materialized='view',
-    indexes=[{'columns': ['a', 'length(a)']}]
+    indexes=[{'default': True}]
 ) }}
 
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
@@ -107,10 +107,11 @@ test_sink = {
 
 actual_indexes = """
 SELECT
-    o.name,
+    o.name as object_name,
     ic.index_position,
     ic.on_position,
-    ic.on_expression
+    ic.on_expression,
+    i.name as index_name
 FROM mz_indexes i
 JOIN mz_index_columns ic ON i.id = ic.index_id
 JOIN mz_objects o ON i.on_id = o.id
@@ -119,26 +120,29 @@ WHERE i.id LIKE 'u%'
 
 expected_indexes = {
     "materialize_cloud": """
-name,index_position,on_position,on_expression
-test_materialized_view_index,1,1,
-test_source,1,1,
-test_source_index,1,1,
-test_view_index,1,1,
-test_view_index,2,,pg_catalog.length(a)""".lstrip(),
+object_name,index_position,on_position,on_expression,index_name
+test_materialized_view_index,1,1,,a_idx
+test_materialized_view_index,2,,pg_catalog.length(a),a_idx
+test_source,1,1,,test_index
+test_source_index,1,1,,test_source_index_data_idx
+test_view_index,1,1,,test_view_index_primary_idx
+""".lstrip(),
     "materialize_binary": """
-name,index_position,on_position,on_expression
-expected_indexes,1,1,
-expected_indexes,2,2,
-expected_indexes,3,3,
-expected_indexes,4,4,
-test_materialized_view,1,1,
-test_materialized_view_index,1,1,
-test_materialized_view_index,1,1,
-test_source,1,1,
-test_source,2,2,
-test_source_index,1,1,
-test_view_index,1,1,
-test_view_index,2,,pg_catalog.length(a)""".lstrip(),
+object_name,index_position,on_position,on_expression,index_name
+expected_indexes,1,1,,expected_indexes_primary_idx
+expected_indexes,2,2,,expected_indexes_primary_idx
+expected_indexes,3,3,,expected_indexes_primary_idx
+expected_indexes,4,4,,expected_indexes_primary_idx
+expected_indexes,5,5,,expected_indexes_primary_idx
+test_materialized_view,1,1,,test_materialized_view_primary_idx
+test_materialized_view_index,1,1,,a_idx
+test_materialized_view_index,1,1,,test_materialized_view_index_primary_idx
+test_materialized_view_index,2,,pg_catalog.length(a),a_idx
+test_source,1,1,,test_index
+test_source,2,2,,test_index
+test_source_index,1,1,,test_source_index_data_idx
+test_view_index,1,1,,test_view_index_primary_idx
+""".lstrip(),
 }
 
 not_null = """

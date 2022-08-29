@@ -64,21 +64,21 @@
 
 {% macro materialize__get_create_index_sql(relation, index_dict) -%}
   {%- set index_config = adapter.parse_index(index_dict) -%}
-  {%- set comma_separated_columns = ", ".join(index_config.columns) -%}
-  {%- set index_name = index_config.render(relation) -%}
-    create index if not exists
+    create
+    {% if index_config.default -%}
+      default
+    {%- endif %}
+    index
     {% if index_config.name -%}
-        "{{ index_config.name }}"
-    {%- else %}
-        "{{ index_name }}"
+      if not exists "{{ index_config.name }}"
     {%- endif %}
     {% if index_config.cluster -%}
       in cluster {{ index_config.cluster }}
     {%- endif %}
-    {% if index_config.type -%}
-      using {{ index_config.type }}
-    {%- endif %}
-    on {{ relation }} ({{ comma_separated_columns }});
+    on {{ relation }}
+    {% if index_config.columns -%}
+      ({{ ", ".join(index_config.columns) }})
+    {%- endif %};
 {%- endmacro %}
 
 -- In the dbt-adapter we extend the Relation class to include sinks and indexes
