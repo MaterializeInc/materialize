@@ -346,9 +346,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut retain_ids = BTreeSet::default();
 
         // We only have a compute history if we are in an initialized state
-        //
-        // If this is not the case (e.g. before a `CreateInstance` or after a `DropInstance`),
-        // just copy `new_commands` into `todo_commands`.
+        // e.g. before a `CreateInstance` or after a `DropInstance`).
+        // If this is not the case, just copy `new_commands` into `todo_commands`.
         if let Some(compute_state) = &mut self.compute_state {
             // Reduce the installed commands.
             // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
@@ -363,7 +362,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // reasoning, as we cannot be certain that peeks still exist at any other worker.
 
             // Having reduced our installed command history retaining no peeks (above), we should be able
-            // to track down installed dataflows we can use as surrogates for requested dataflows (which
+            // to use track down installed dataflows we can use as surrogates for requested dataflows (which
             // have retained all of their peeks, creating a more demainding `as_of` requirement).
             // NB: installed dataflows may still be allowed to further compact, and we should double check
             // this before being too confident. It should be rare without peeks, but could happen with e.g.
