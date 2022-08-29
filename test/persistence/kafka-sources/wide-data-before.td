@@ -53,7 +53,6 @@ $ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keys
 > CREATE SINK wide_data_sink FROM wide_data_view
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-wide-data-${testdrive.seed}'
   KEY (key) NOT ENFORCED
-  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT;
 

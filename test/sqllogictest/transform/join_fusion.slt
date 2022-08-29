@@ -158,9 +158,7 @@ EXPLAIN SELECT  MIN( o_orderkey  )
 
 %2 = Let l0 =
 | Join %0 %1 (= #0 #8)
-| | implementation = IndexedFilter #0 = 38
-| Project (#0..=#7)
-| Filter (#0 = 38)
+| | implementation = IndexedFilter (#0 = 38)
 
 %3 =
 | Get materialize.public.lineitem (u10)
@@ -236,9 +234,8 @@ EXPLAIN SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col
 
 %3 =
 | Join %1 %2 (= #1 #4)
-| | implementation = IndexedFilter #1 = 134
-| Project (#0..=#3)
-| Filter (#1 = 134), (#2 = (#2 % 5))
+| | implementation = IndexedFilter (#1 = 134)
+| Filter (#2 = (#2 % 5))
 | Project (#2, #3)
 | ArrangeBy (#0, #1)
 
@@ -251,9 +248,7 @@ EXPLAIN SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col
 
 %6 =
 | Join %4 %5 (= #0 #3)
-| | implementation = IndexedFilter #0 = 134
-| Project (#0..=#2)
-| Filter (#0 = 134)
+| | implementation = IndexedFilter (#0 = 134)
 | Project ()
 
 %7 =
@@ -285,9 +280,8 @@ EXPLAIN SELECT *
 
 %3 =
 | Join %1 %2 (= #1 #4)
-| | implementation = IndexedFilter #1 = 229
+| | implementation = IndexedFilter (#1 = 229)
 | Project (#0..=#3)
-| Filter (#1 = 229)
 | ArrangeBy (#2, #3)
 
 %4 =
@@ -299,9 +293,8 @@ EXPLAIN SELECT *
 
 %6 =
 | Join %4 %5 (= #0 #3)
-| | implementation = IndexedFilter #0 = 229
+| | implementation = IndexedFilter (#0 = 229)
 | Project (#0..=#2)
-| Filter (#0 = 229)
 
 %7 =
 | Join %0 %3 %6 (= #4 #10) (= #5 #11)

@@ -233,6 +233,6 @@ $ kafka-create-topic topic=static-csv-pkne-sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 $ kafka-verify format=avro sink=materialize.public.static_csv_pkne_sink sort-messages=true
-{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004"}
-{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618"}
-{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679"}
+{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004", "transaction": {"id": "<>"}}
+{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618", "transaction": {"id": "<>"}}
+{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679", "transaction": {"id": "<>"}}

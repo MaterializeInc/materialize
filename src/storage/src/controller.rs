@@ -1397,7 +1397,7 @@ mod persist_read_handles {
 
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
-    use futures_util::StreamExt;
+    use futures::StreamExt;
     use timely::progress::{Antichain, Timestamp};
     use tokio::sync::mpsc::UnboundedSender;
 
@@ -1838,7 +1838,7 @@ mod persist_write_handles {
                             }
                         }
 
-                        use futures_util::StreamExt;
+                        use futures::StreamExt;
                         // Ensure all futures run to completion, and track status of each of them individually
                         let (change_batches, failed_appends): (Vec<_>, Vec<_>) = futs
                             .collect::<Vec<_>>()

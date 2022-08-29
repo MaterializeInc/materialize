@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 $ set schema={
     "name": "row",
     "type": "record",
@@ -57,12 +59,12 @@ a
 
 > CREATE SINK data_snk
   FROM data
-  INTO KAFKA CONNECTION kafka_sasl TOPIC 'testdrive-data-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_sasl TOPIC 'testdrive-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
 
 $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
-{"before": null, "after": {"row": {"a": 1}}}
-{"before": null, "after": {"row": {"a": 2}}}
+{"before": null, "after": {"row": {"a": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # Old with options do not work
 ! CREATE SOURCE connector_source

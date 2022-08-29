@@ -367,56 +367,56 @@ pub fn plan_create_source(
 
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
-            let (kafka_connection, options, optional_start_offset, group_id_prefix) =
-                match &kafka.connection {
-                    mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
-                        scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
-                        let mut options = BTreeMap::new();
-                        options.insert(
-                            "bootstrap.servers".into(),
-                            KafkaAddrs::from_str(broker)
-                                .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
-                                .to_string()
-                                .into(),
-                        );
-                        let connection = KafkaConnection::try_from(&mut options)?;
-                        (connection, options, None, None)
+            let (kafka_connection, options, optional_start_offset, group_id_prefix) = match &kafka
+                .connection
+            {
+                mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
+                    scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
+                    let mut options = BTreeMap::new();
+                    options.insert(
+                        "bootstrap.servers".into(),
+                        KafkaAddrs::from_str(broker)
+                            .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
+                            .to_string()
+                            .into(),
+                    );
+                    let connection = KafkaConnection::try_from(&mut options)?;
+                    (connection, options, None, None)
+                }
+                mz_sql_parser::ast::KafkaConnection::Reference {
+                    connection,
+                    with_options,
+                } => {
+                    let item = scx.get_item_by_resolved_name(&connection)?;
+                    let connection = match item.connection()? {
+                        Connection::Kafka(connection) => connection.clone(),
+                        _ => sql_bail!("{} is not a kafka connection", item.name()),
+                    };
+
+                    // Starting offsets are allowed out unsafe mode, as they are a simple,
+                    // useful way to specify where to start reading a topic.
+                    if with_options.iter().any(|opt| {
+                        opt.name != KafkaConfigOptionName::StartOffset
+                            && opt.name != KafkaConfigOptionName::StartTimestamp
+                    }) {
+                        scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
                     }
-                    mz_sql_parser::ast::KafkaConnection::Reference {
+
+                    let extracted_options: KafkaConfigOptionExtracted =
+                        with_options.clone().try_into()?;
+                    let optional_start_offset =
+                        Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
+                    let config_options =
+                        kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+                    (
                         connection,
-                        with_options,
-                    } => {
-                        let item = scx.get_item_by_resolved_name(&connection)?;
-                        let connection = match item.connection()? {
-                            Connection::Kafka(connection) => connection.clone(),
-                            _ => sql_bail!("{} is not a kafka connection", item.name()),
-                        };
-
-                        // Starting offsets are allowed out unsafe mode, as they are a simple,
-                        // useful way to specify where to start reading a topic.
-                        if with_options.iter().any(|opt| {
-                            opt.name != KafkaConfigOptionName::StartOffset
-                                && opt.name != KafkaConfigOptionName::StartTimestamp
-                        }) {
-                            scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
-                        }
-
-                        let with_options: KafkaConfigOptionExtracted =
-                            with_options.clone().try_into()?;
-                        let (optional_start_offset, group_id_prefix, with_options): (
-                            _,
-                            _,
-                            BTreeMap<String, StringOrSecret>,
-                        ) = with_options.try_into()?;
-
-                        (
-                            connection,
-                            with_options,
-                            optional_start_offset,
-                            group_id_prefix,
-                        )
-                    }
-                };
+                        config_options,
+                        optional_start_offset,
+                        extracted_options.group_id_prefix,
+                    )
+                }
+            };
 
             let parse_offset = |s: i64| {
                 // we parse an i64 here, because we don't yet support u64's in
@@ -1857,12 +1857,11 @@ fn kafka_sink_builder(
     format: Option<Format<Aug>>,
     consistency: Option<KafkaConsistency<Aug>>,
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
-    topic_prefix: String,
+    topic_name: String,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-    topic_suffix_nonce: String,
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let (connection, config_options) = match connection {
         mz_sql_parser::ast::KafkaConnection::Reference {
@@ -1889,18 +1888,11 @@ fn kafka_sink_builder(
                 scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
             }
 
-            let with_options: KafkaConfigOptionExtracted = with_options.try_into()?;
-            let (_, _, with_options): (_, _, BTreeMap<String, StringOrSecret>) =
-                with_options.try_into()?;
-            (connection, with_options)
+            let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
+            let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+            (connection, config_options)
         }
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
-    };
-
-    let reuse_topic = match with_options.remove("reuse_topic") {
-        Some(SqlValueOrSecret::Value(Value::Boolean(b))) => b,
-        None => false,
-        Some(_) => sql_bail!("reuse_topic must be a boolean"),
     };
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
@@ -1966,7 +1958,6 @@ fn kafka_sink_builder(
 
             normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
-            let include_transaction = reuse_topic || consistency.is_some();
             let schema_generator = AvroSchemaGenerator::new(
                 avro_key_fullname.as_deref(),
                 avro_value_fullname.as_deref(),
@@ -1975,7 +1966,7 @@ fn kafka_sink_builder(
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
                 matches!(envelope, SinkEnvelope::Debezium),
-                include_transaction,
+                true,
             );
             let value_schema = schema_generator.value_writer_schema().to_string();
             let key_schema = schema_generator
@@ -1993,8 +1984,7 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let consistency_config =
-        get_kafka_sink_consistency_config(&topic_prefix, &format, reuse_topic, consistency)?;
+    let consistency_config = get_kafka_sink_consistency_config(&topic_name, &format, consistency)?;
 
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
@@ -2054,17 +2044,15 @@ fn kafka_sink_builder(
             connection,
             options: config_options,
             format,
-            topic_prefix,
-            consistency_topic_prefix: consistency_topic,
+            topic_name,
+            consistency_topic_name: consistency_topic,
             consistency_format,
-            topic_suffix_nonce,
             partition_count,
             replication_factor,
             fuel: 10000,
             relation_key_indices,
             key_desc_and_indices,
             value_desc,
-            reuse_topic,
             retention,
         },
     ))
@@ -2076,9 +2064,8 @@ fn kafka_sink_builder(
 /// This is slightly complicated because of a desire to maintain backwards compatibility with
 /// previous ways of specifying consistency configuration.
 fn get_kafka_sink_consistency_config(
-    topic_prefix: &str,
+    topic_name: &str,
     sink_format: &KafkaSinkFormat,
-    reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
 ) -> Result<Option<(String, KafkaSinkFormat)>, PlanError> {
     let result = match consistency {
@@ -2131,31 +2118,27 @@ fn get_kafka_sink_consistency_config(
             Some(other) => bail_unsupported!(format!("CONSISTENCY FORMAT {}", &other)),
         },
         None => {
-            if reuse_topic {
-                match sink_format {
-                    KafkaSinkFormat::Avro {
-                        csr_connection,
-                        ..
-                    } => {
-                        let default_consistency_topic = format!("{}-consistency", topic_prefix);
-                        debug!(
-                            "Using default consistency topic '{}' for topic '{}'",
-                            default_consistency_topic, topic_prefix
-                        );
-                        Some((
-                            default_consistency_topic,
-                            KafkaSinkFormat::Avro {
-                                key_schema: None,
-                                value_schema: avro::get_debezium_transaction_schema()
-                                    .canonical_form(),
-                                csr_connection: csr_connection.clone(),
-                            },
-                        ))
-                    }
-                    KafkaSinkFormat::Json => sql_bail!("For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY (TOPIC consistency_topic FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url)'. The default of using a JSON consistency topic is not supported."),
+            match sink_format {
+                KafkaSinkFormat::Avro {
+                    csr_connection,
+                    ..
+                } => {
+                    let default_consistency_topic = format!("{}-consistency", topic_name);
+                    debug!(
+                        "Using default consistency topic '{}' for topic '{}'",
+                        default_consistency_topic, topic_name
+                    );
+                    Some((
+                        default_consistency_topic,
+                        KafkaSinkFormat::Avro {
+                            key_schema: None,
+                            value_schema: avro::get_debezium_transaction_schema()
+                                .canonical_form(),
+                            csr_connection: csr_connection.clone(),
+                        },
+                    ))
                 }
-            } else {
-                None
+                KafkaSinkFormat::Json => sql_bail!("For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY (TOPIC consistency_topic FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url)'. The default of using a JSON consistency topic is not supported."),
             }
         }
     };
@@ -2186,7 +2169,6 @@ pub fn plan_create_sink(
         format,
         envelope,
         with_snapshot,
-        as_of,
         if_not_exists,
     } = stmt;
 
@@ -2208,11 +2190,6 @@ pub fn plan_create_sink(
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
     let from = scx.get_item_by_resolved_name(&from)?;
-    let suffix_nonce = format!(
-        "{}-{}",
-        scx.catalog.config().start_time.timestamp(),
-        scx.catalog.config().nonce
-    );
 
     let mut with_options = normalize::options(&with_options)?;
 
@@ -2283,10 +2260,6 @@ pub fn plan_create_sink(
         return Err(PlanError::UpsertSinkWithoutKey);
     }
 
-    if as_of.is_some() {
-        sql_bail!("CREATE SINK ... AS OF is no longer supported");
-    }
-
     let connection_builder = match connection {
         CreateSinkConnection::Kafka {
             connection,
@@ -2304,7 +2277,6 @@ pub fn plan_create_sink(
             key_desc_and_indices,
             desc.into_owned(),
             envelope,
-            suffix_nonce,
         )?,
     };
 

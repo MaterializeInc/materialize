@@ -58,7 +58,7 @@ impl StorageUsageClient {
                 self.blob
                     .list_keys_and_metadata(&BlobKeyPrefix::All.to_string(), &mut |metadata| {
                         match BlobKey::parse_ids(metadata.key) {
-                            Ok((Some((shard, _writer)), _part)) => {
+                            Ok((shard, _)) => {
                                 *shard_sizes.entry(Some(shard)).or_insert(0) +=
                                     metadata.size_in_bytes;
                             }
@@ -158,6 +158,10 @@ mod tests {
             .size(BlobKeyPrefix::Writer(&shard_id_two, &writer_two))
             .await
             .expect("must have shard size");
+        let rollups_size = usage
+            .size(BlobKeyPrefix::Rollups(&shard_id_two))
+            .await
+            .expect("must have shard size");
         let all_size = usage
             .size(BlobKeyPrefix::All)
             .await
@@ -166,7 +170,10 @@ mod tests {
         assert!(shard_one_size > 0);
         assert!(shard_two_size > 0);
         assert!(shard_one_size < shard_two_size);
-        assert_eq!(shard_two_size, writer_one_size + writer_two_size);
+        assert_eq!(
+            shard_two_size,
+            writer_one_size + writer_two_size + rollups_size
+        );
         assert_eq!(all_size, shard_one_size + shard_two_size);
 
         assert_eq!(usage.shard_size(&shard_id_one).await, shard_one_size);

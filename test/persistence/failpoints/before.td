@@ -49,7 +49,6 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 > CREATE SINK failpoint_sink FROM failpoint
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-failpoint-sink-${testdrive.seed}'
   KEY (f1)
-  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000

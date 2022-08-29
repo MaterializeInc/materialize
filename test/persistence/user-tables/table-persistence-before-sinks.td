@@ -20,7 +20,6 @@
 > CREATE SINK sink_sink FROM sink_table
   INTO KAFKA CONNECTION kafka_conn
   TOPIC 'testdrive-exactly-once-sink-${testdrive.seed}'
-  WITH (reuse_topic = true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}';
 
 > INSERT INTO sink_table VALUES (2);

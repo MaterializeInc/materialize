@@ -574,13 +574,10 @@ impl<S: Append + 'static> Coordinator<S> {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connection = sink_connection::build(
-                        builder.clone(),
-                        entry.id(),
-                        self.connection_context.clone(),
-                    )
-                    .await
-                    .with_context(|| format!("recreating sink {}", entry.name()))?;
+                    let connection =
+                        sink_connection::build(builder.clone(), self.connection_context.clone())
+                            .await
+                            .with_context(|| format!("recreating sink {}", entry.name()))?;
                     // `builtin_table_updates` is the desired state of the system tables. However,
                     // it already contains a (cur_sink, +1) entry from [`Catalog::open`]. The line
                     // below this will negate that entry with a (cur_sink, -1) entry. The

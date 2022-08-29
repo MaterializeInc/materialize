@@ -19,11 +19,11 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
+use tracing::{debug, info, trace_span, Instrument};
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
-use mz_persist::location::{Consensus, ExternalError, Indeterminate, SeqNo, VersionedData};
+use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
@@ -32,11 +32,14 @@ use crate::internal::compact::CompactReq;
 use crate::internal::gc::GcReq;
 use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{
-    CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics, ShardMetrics,
+    CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics, ShardMetrics,
 };
+use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     HollowBatch, ReaderState, Since, State, StateCollections, Upper, WriterState,
 };
+use crate::internal::state_diff::StateDiff;
+use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::FueledMergeRes;
 use crate::read::ReaderId;
 use crate::write::WriterId;
@@ -44,11 +47,10 @@ use crate::{PersistConfig, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
-    // TODO: Remove cfg after we remove the read lease expiry hack.
-    cfg: PersistConfig,
-    consensus: Arc<dyn Consensus + Send + Sync>,
-    metrics: Arc<Metrics>,
-    shard_metrics: Arc<ShardMetrics>,
+    pub(crate) cfg: PersistConfig,
+    pub(crate) metrics: Arc<Metrics>,
+    pub(crate) shard_metrics: Arc<ShardMetrics>,
+    pub(crate) state_versions: Arc<StateVersions>,
 
     state: State<K, V, T, D>,
 }
@@ -58,9 +60,9 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
             cfg: self.cfg.clone(),
-            consensus: Arc::clone(&self.consensus),
             metrics: Arc::clone(&self.metrics),
             shard_metrics: Arc::clone(&self.shard_metrics),
+            state_versions: Arc::clone(&self.state_versions),
             state: self.state.clone(self.cfg.build_version.clone()),
         }
     }
@@ -76,8 +78,8 @@ where
     pub async fn new(
         cfg: PersistConfig,
         shard_id: ShardId,
-        consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
+        state_versions: Arc<StateVersions>,
     ) -> Result<Self, CodecMismatch> {
         let shard_metrics = metrics.shards.shard(&shard_id);
         let state = metrics
@@ -86,14 +88,14 @@ where
             .run_cmd(|_cas_mismatch_metric| {
                 // No cas_mismatch retries because we just use the returned
                 // state on a mismatch.
-                Self::maybe_init_state(&cfg, consensus.as_ref(), &metrics.retries, shard_id)
+                state_versions.maybe_init_shard(&shard_metrics)
             })
             .await?;
         Ok(Machine {
             cfg,
-            consensus,
             metrics,
             shard_metrics,
+            state_versions,
             state,
         })
     }
@@ -118,6 +120,46 @@ where
     #[cfg(test)]
     pub fn seqno_since(&self) -> SeqNo {
         self.state.seqno_since()
+    }
+
+    pub async fn add_rollup_for_current_seqno(&mut self) {
+        let rollup_seqno = self.state.seqno;
+        let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
+        let () = self
+            .state_versions
+            .write_rollup_blob(&self.shard_metrics, &self.state, &rollup_key)
+            .await;
+        let applied = self
+            .add_and_remove_rollups((rollup_seqno, &rollup_key), &[])
+            .await;
+        if !applied {
+            // Someone else already wrote a rollup at this seqno, so ours didn't
+            // get added. Delete it.
+            self.state_versions
+                .delete_rollup(&self.state.shard_id, &rollup_key)
+                .await;
+        }
+    }
+
+    pub async fn add_and_remove_rollups(
+        &mut self,
+        add_rollup: (SeqNo, &PartialRollupKey),
+        remove_rollups: &[(SeqNo, PartialRollupKey)],
+    ) -> bool {
+        // See the big SUBTLE comment in [Self::merge_res] for what's going on
+        // here.
+        let mut applied_ever_true = false;
+        let metrics = Arc::clone(&self.metrics);
+        let (_seqno, _applied, _maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, state| {
+                let ret = state.add_and_remove_rollups(add_rollup, remove_rollups);
+                if let Continue(applied) = ret {
+                    applied_ever_true = applied_ever_true || applied;
+                }
+                ret
+            })
+            .await;
+        applied_ever_true
     }
 
     pub async fn register_reader(
@@ -477,7 +519,6 @@ where
     ) -> Result<(SeqNo, Result<R, E>, RoutineMaintenance), Indeterminate> {
         let is_write = cmd.name == self.metrics.cmds.compare_and_append.name;
         cmd.run_cmd(|cas_mismatch_metric| async move {
-            let path = self.shard_id().to_string();
             let mut garbage_collection;
 
             loop {
@@ -490,6 +531,18 @@ where
                         return Ok((self.state.seqno(), Err(err), RoutineMaintenance::default()))
                     }
                 };
+
+                let diff = StateDiff::from_diff(&self.state, &new_state);
+                // Sanity check that our diff logic roundtrips and adds back up
+                // correctly.
+                #[cfg(any(test, debug_assertions))]
+                {
+                    if let Err(err) =
+                        StateDiff::validate_roundtrip(&self.metrics, &self.state, &diff, &new_state)
+                    {
+                        panic!("validate_roundtrips failed: {}", err);
+                    }
+                }
 
                 // Find out if this command has been selected to perform gc, so
                 // that it will fire off a background request to the
@@ -510,55 +563,31 @@ where
                             new_seqno_since,
                         });
 
-                trace!(
-                    "apply_unbatched_cmd {} attempting {}\n  new_state={:?}",
-                    cmd.name,
-                    self.state.seqno(),
-                    new_state
-                );
-                let new = self
-                    .metrics
-                    .codecs
-                    .state
-                    .encode(|| VersionedData::from((new_state.seqno(), &new_state)));
-
                 // SUBTLE! Unlike the other consensus and blob uses, we can't
                 // automatically retry indeterminate ExternalErrors here. However,
                 // if the state change itself is _idempotent_, then we're free to
                 // retry even indeterminate errors. See
                 // [Self::apply_unbatched_idempotent_cmd].
-                let payload_len = new.data.len();
-                let cas_res = retry_determinate(
-                    &self.metrics.retries.determinate.apply_unbatched_cmd_cas,
-                    || async {
-                        self.consensus
-                            .compare_and_set(&path, Some(self.state.seqno()), new.clone())
-                            .await
-                    },
-                )
-                .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
-                .await
-                .map_err(|err| {
-                    debug!("apply_unbatched_cmd {} errored: {}", cmd.name, err);
-                    err
-                })?;
+                let expected = self.state.seqno();
+                let cas_res = self
+                    .state_versions
+                    .try_compare_and_set_current(
+                        &cmd.name,
+                        &self.shard_metrics,
+                        Some(expected),
+                        &new_state,
+                        &diff,
+                    )
+                    .await?;
                 match cas_res {
                     Ok(()) => {
-                        trace!(
-                            "apply_unbatched_cmd {} succeeded {}\n  new_state={:?}",
-                            cmd.name,
-                            new_state.seqno(),
-                            new_state
+                        assert!(
+                            self.state.seqno <= new_state.seqno,
+                            "state seqno regressed: {} vs {}",
+                            self.state.seqno,
+                            new_state.seqno
                         );
                         self.state = new_state;
-
-                        self.shard_metrics.set_since(self.state.since());
-                        self.shard_metrics.set_upper(&self.state.upper());
-                        self.shard_metrics.set_encoded_state_size(payload_len);
-                        self.shard_metrics.set_batch_count(self.state.batch_count());
-                        self.shard_metrics
-                            .set_update_count(self.state.num_updates());
-                        self.shard_metrics.set_seqnos_held(self.state.seqnos_held());
 
                         let (expired_readers, expired_writers) =
                             self.state.handles_needing_expiration((self.cfg.now)());
@@ -574,20 +603,60 @@ where
                         let maintenance = RoutineMaintenance {
                             garbage_collection,
                             lease_expiration,
+                            write_rollup: self.state.need_rollup(),
                         };
 
                         return Ok((self.state.seqno(), Ok(work_ret), maintenance));
                     }
-                    Err(current) => {
-                        debug!(
-                            "apply_unbatched_cmd {} {} lost the CaS race, retrying: {} vs {:?}",
-                            self.shard_id(),
-                            cmd.name,
-                            self.state.seqno(),
-                            current.as_ref().map(|x| x.seqno)
-                        );
+                    Err(diffs_to_current) => {
                         cas_mismatch_metric.0.inc();
-                        self.update_state(current).await;
+
+                        let seqno_before = self.state.seqno;
+                        let diffs_apply = diffs_to_current
+                            .first()
+                            .map_or(true, |x| x.seqno == seqno_before.next());
+                        if diffs_apply {
+                            self.metrics.state.update_state_fast_path.inc();
+                            self.state.apply_encoded_diffs(
+                                &self.cfg,
+                                &self.metrics,
+                                &diffs_to_current,
+                            )
+                        } else {
+                            // Otherwise, we've gc'd the diffs we'd need to
+                            // advance self.state to where diffs_to_current
+                            // starts so we need a new rollup.
+                            self.metrics.state.update_state_slow_path.inc();
+                            debug!(
+                                "update_state didn't hit update_state fast path {} {:?}",
+                                self.state.seqno,
+                                diffs_to_current.first().map(|x| x.seqno),
+                            );
+
+                            // SUBTLE: Consensus::compare_and_set guarantees
+                            // that we get back everything in
+                            // `[max(expected.next(),earliest),current]` on
+                            // expectation mismatch. If `diffs_apply` is false
+                            // (this branch), then we know `earliest >
+                            // expected.next()` and so `diffs_to_current` is
+                            // already the full set of all live diffs. Sanity
+                            // check this deduction with an assert and then use
+                            // it to `fetch_current_state`.
+                            assert!(
+                                diffs_to_current
+                                    .first()
+                                    .map_or(false, |x| x.seqno > expected.next()),
+                                "{:?} vs {}",
+                                diffs_to_current.first(),
+                                expected.next()
+                            );
+                            let all_live_diffs = diffs_to_current;
+                            self.state = self
+                                .state_versions
+                                .fetch_current_state(&self.state.shard_id, all_live_diffs)
+                                .await
+                                .expect("shard codecs should not change");
+                        }
 
                         // Intentionally don't backoff here. It would only make
                         // starvation issues even worse.
@@ -599,98 +668,18 @@ where
         .await
     }
 
-    async fn maybe_init_state(
-        cfg: &PersistConfig,
-        consensus: &(dyn Consensus + Send + Sync),
-        retry_metrics: &RetriesMetrics,
-        shard_id: ShardId,
-    ) -> Result<State<K, V, T, D>, CodecMismatch> {
-        let path = shard_id.to_string();
-        let mut current = retry_external(&retry_metrics.external.maybe_init_state_head, || async {
-            consensus.head(&path).await
-        })
-        .await;
-
-        loop {
-            // First, check if the shard has already been initialized.
-            if let Some(current) = current.as_ref() {
-                let current_state = match State::decode(&cfg.build_version, &current.data) {
-                    Ok(x) => x,
-                    Err(err) => return Err(err),
-                };
-                debug_assert_eq!(current.seqno, current_state.seqno());
-                return Ok(current_state);
-            }
-
-            // It hasn't been initialized, try initializing it.
-            let state = State::new(cfg.build_version.clone(), shard_id);
-            let new = VersionedData::from((state.seqno(), &state));
-            trace!(
-                "maybe_init_state attempting {}\n  state={:?}",
-                new.seqno,
-                state
-            );
-            let cas_res = retry_external(&retry_metrics.external.maybe_init_state_cas, || async {
-                consensus.compare_and_set(&path, None, new.clone()).await
-            })
-            .await;
-            match cas_res {
-                Ok(()) => {
-                    trace!(
-                        "maybe_init_state succeeded {}\n  state={:?}",
-                        state.seqno(),
-                        state
-                    );
-                    return Ok(state);
-                }
-                Err(x) => {
-                    // We lost a CaS race, use the value included in the CaS
-                    // expectation error. Because we used None for expected,
-                    // this should never be None.
-                    debug!(
-                        "maybe_init_state lost the CaS race, using current value: {:?}",
-                        x.as_ref().map(|x| x.seqno)
-                    );
-                    debug_assert!(x.is_some());
-                    current = x
-                }
-            }
-        }
-    }
-
     pub async fn fetch_and_update_state(&mut self) {
-        let shard_id = self.shard_id();
-        let current = retry_external(
-            &self.metrics.retries.external.fetch_and_update_state_head,
-            || async { self.consensus.head(&shard_id.to_string()).await },
-        )
-        .instrument(trace_span!("fetch_and_update_state::head"))
-        .await;
-        self.update_state(current).await;
-    }
-
-    async fn update_state(&mut self, current: Option<VersionedData>) {
-        let current = match current {
-            Some(x) => x,
-            None => {
-                // Machine is only constructed once, we've successfully
-                // retrieved state from durable storage, but now it's gone? In
-                // the future, maybe this means the shard was deleted or
-                // something, but for now it's entirely unexpected.
-                panic!("internal error: missing state {}", self.state.shard_id());
-            }
-        };
-        let current_state = self
-            .metrics
-            .codecs
-            .state
-            .decode(|| State::decode(&self.cfg.build_version, &current.data))
-            // We received a State with different declared codecs than a
-            // previous SeqNo of the same State. Fail loudly.
-            .expect("internal error: new durable state disagreed with old durable state");
-        debug_assert_eq!(current.seqno, current_state.seqno());
-        debug_assert!(self.state.seqno() <= current.seqno);
-        self.state = current_state;
+        let seqno_before = self.state.seqno;
+        self.state_versions
+            .fetch_and_update_to_current(&mut self.state)
+            .await
+            .expect("shard codecs should not change");
+        assert!(
+            seqno_before <= self.state.seqno,
+            "state seqno regressed: {} vs {}",
+            seqno_before,
+            self.state.seqno
+        );
     }
 }
 
@@ -792,8 +781,6 @@ mod tests {
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::fetch::fetch_batch_part;
     use crate::internal::compact::{CompactReq, Compactor};
-    use crate::internal::paths::PartialBlobKey;
-    use crate::internal::state::ProtoStateRollup;
     use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistConfig, ShardId};
@@ -857,43 +844,31 @@ mod tests {
                         "consensus-scan" => {
                             let from =
                                 SeqNo(get_u64(&tc.args, "from_seqno").expect("missing from_seqno"));
-                            let res = client.consensus.scan(&shard_id.to_string(), from).await;
 
                             let mut s = String::new();
-                            let states = match res {
-                                Ok(states) => states,
-                                Err(err) => {
-                                    write!(s, "error: {}\n", err);
-                                    return s;
-                                }
-                            };
-                            for persisted_state in states {
-                                let persisted_state: ProtoStateRollup =
-                                    prost::Message::decode(&*persisted_state.data)
-                                        .expect("internal error: invalid encoded state");
-                                let mut batches = vec![];
-                                if let Some(trace) = persisted_state.trace.as_ref() {
-                                    for batch in trace.spine.iter() {
-                                        let part_keys: Vec<PartialBlobKey> = batch
-                                            .keys
-                                            .iter()
-                                            .map(|k| PartialBlobKey(k.to_owned()))
-                                            .collect();
 
-                                        for (batch_name, original_batch) in &state.batches {
-                                            if original_batch.keys == part_keys {
-                                                batches.push(batch_name.to_owned());
-                                                break;
-                                            }
+                            let mut states = write
+                                .lock()
+                                .await
+                                .machine
+                                .state_versions
+                                .fetch_live_states::<String, (), u64, i64>(&shard_id)
+                                .await
+                                .expect("shard codecs should not change");
+                            while let Some(x) = states.next() {
+                                if x.seqno < from {
+                                    continue;
+                                }
+                                let mut batches = vec![];
+                                x.collections.trace.map_batches(|b| {
+                                    for (batch_name, original_batch) in &state.batches {
+                                        if original_batch.keys == b.keys {
+                                            batches.push(batch_name.to_owned());
+                                            break;
                                         }
                                     }
-                                }
-                                write!(
-                                    s,
-                                    "seqno={} batches={}\n",
-                                    persisted_state.seqno,
-                                    batches.join(",")
-                                );
+                                });
+                                write!(s, "seqno={} batches={}\n", x.seqno, batches.join(","));
                             }
                             s
                         }
@@ -1059,9 +1034,7 @@ mod tests {
                                 SeqNo(get_u64(&tc.args, "to_seqno").expect("missing to_seqno"));
 
                             GarbageCollector::gc_and_truncate(
-                                Arc::clone(&client.consensus),
-                                Arc::clone(&client.blob),
-                                &client.metrics,
+                                &mut write.lock().await.machine,
                                 GcReq {
                                     shard_id,
                                     old_seqno_since,
@@ -1153,7 +1126,6 @@ mod tests {
             .await
             .expect_open::<String, (), u64, i64>(ShardId::new())
             .await;
-        let consensus = Arc::clone(&write.machine.consensus);
 
         // Write a bunch of batches. This should result in a bounded number of
         // live entries in consensus.
@@ -1177,17 +1149,22 @@ mod tests {
                 .perform(&write.machine, &write.gc, write.compact.as_ref())
                 .await;
         }
-        let key = write.machine.shard_id().to_string();
-        let consensus_entries = consensus
-            .scan(&key, SeqNo::minimum())
-            .await
-            .expect("scan failed");
+        let live_diffs = write
+            .machine
+            .state_versions
+            .fetch_live_diffs(&write.machine.shard_id())
+            .await;
         // Make sure we constructed the key correctly.
-        assert!(consensus_entries.len() > 0);
+        assert!(live_diffs.len() > 0);
         // Make sure the number of entries is bounded. (I think we could work
         // out a tighter bound than this, but the point is only that it's
         // bounded).
-        let max_entries = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
-        assert!(consensus_entries.len() < max_entries);
+        let max_live_diffs = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
+        assert!(
+            live_diffs.len() < max_live_diffs,
+            "{} vs {}",
+            live_diffs.len(),
+            max_live_diffs
+        );
     }
 }

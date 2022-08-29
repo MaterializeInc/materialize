@@ -1098,7 +1098,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         tx,
                         id,
                         oid,
-                        result: sink_connection::build(connection_builder, id, connection_context)
+                        result: sink_connection::build(connection_builder, connection_context)
                             .await,
                     }));
                 if let Err(e) = result {

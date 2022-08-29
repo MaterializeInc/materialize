@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::env;
+
 fn main() {
+    env::set_var("PROTOC", protobuf_src::protoc());
+
     prost_build::Config::new()
         .extern_path(".mz_repr.adt.array", "::mz_repr::adt::array")
         .extern_path(".mz_repr.adt.char", "::mz_repr::adt::char")

@@ -81,19 +81,21 @@ contains:unknown catalog item 'UID'
 
 # kafka-verify sort-messages
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE MATERIALIZED VIEW sort_messages (a) AS VALUES (2),(1),(3);
 
 > CREATE SINK sort_messages_sink FROM sort_messages
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'sort-messages-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'sort-messages-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.sort_messages_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1}}}
-{"before": null, "after": {"row": {"a": 2}}}
-{"before": null, "after": {"row": {"a": 3}}}
+{"before": null, "after": {"row": {"a": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # Use $ postgresql-execute and ${testdrive.materialize_addr}
 
@@ -178,8 +180,8 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort-messages=true
-{"before": null, "after": {"row": {"a": "UID"}}}
-{"before": null, "after": {"row": {"a": "UID"}}}
+{"before": null, "after": {"row": {"a": "u123"}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": "u234"}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # $ postgresql-connect
 

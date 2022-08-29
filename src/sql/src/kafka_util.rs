@@ -52,22 +52,11 @@ generate_extracted_config!(
     (StartOffset, Vec<i64>)
 );
 
-/// An enum that represents start offsets for a kafka consumer.
+/// The config options we expect to pass along when connecting to librdkafka
 #[derive(Debug)]
-pub enum KafkaStartOffsetType {
-    /// Fully specified, either by the user or generated.
-    StartOffset(Vec<i64>),
-    /// Specified by the user.
-    StartTimestamp(i64),
-}
+pub struct LibRdKafkaConfig(pub BTreeMap<String, StringOrSecret>);
 
-impl TryFrom<KafkaConfigOptionExtracted>
-    for (
-        Option<KafkaStartOffsetType>,
-        Option<String>,
-        BTreeMap<String, StringOrSecret>,
-    )
-{
+impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
     type Error = PlanError;
     fn try_from(
         KafkaConfigOptionExtracted {
@@ -76,23 +65,13 @@ impl TryFrom<KafkaConfigOptionExtracted>
             enable_auto_commit,
             enable_idempotence,
             fetch_message_max_bytes,
-            group_id_prefix,
             isolation_level,
             statistics_interval_ms,
             topic_metadata_refresh_interval_ms,
             transaction_timeout_ms,
-            start_offset,
-            start_timestamp,
-            seen: _,
-        }: KafkaConfigOptionExtracted,
-    ) -> Result<
-        (
-            Option<KafkaStartOffsetType>,
-            Option<String>,
-            BTreeMap<String, StringOrSecret>,
-        ),
-        Self::Error,
-    > {
+            ..
+        }: &KafkaConfigOptionExtracted,
+    ) -> Result<LibRdKafkaConfig, Self::Error> {
         let mut o = BTreeMap::new();
 
         macro_rules! fill_options {
@@ -117,13 +96,13 @@ impl TryFrom<KafkaConfigOptionExtracted>
         fill_options!(
             Some(statistics_interval_ms),
             "statistics.interval.ms",
-            |i| { 0 <= i && i <= 86_400_000 },
+            |i: &i32| { 0 <= *i && *i <= 86_400_000 },
             "STATISTICS INTERVAL MS must be within [0, 86,400,000]"
         );
         fill_options!(
             topic_metadata_refresh_interval_ms,
             "topic.metadata.refresh.interval.ms",
-            |i| { 0 <= i && i <= 3_600_000 },
+            |i: &i32| { 0 <= *i && *i <= 3_600_000 },
             "TOPIC METADATA REFRESH INTERVAL MS must be within [0, 3,600,000]"
         );
         fill_options!(enable_auto_commit, "enable.auto.commit");
@@ -131,7 +110,7 @@ impl TryFrom<KafkaConfigOptionExtracted>
         fill_options!(
             transaction_timeout_ms,
             "transaction.timeout.ms",
-            |i| 0 <= i,
+            |i: &i32| 0 <= *i,
             "TRANSACTION TIMEOUT MS must be greater than or equval to 0"
         );
         fill_options!(enable_idempotence, "enable.idempotence");
@@ -140,20 +119,40 @@ impl TryFrom<KafkaConfigOptionExtracted>
             "fetch.message.max_bytes",
             // The range of values comes from `fetch.message.max.bytes` in
             // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-            |i| { 0 <= i && i <= 1_000_000_000 },
+            |i: &i32| { 0 <= *i && *i <= 1_000_000_000 },
             "FETCH MESSAGE MAX BYTES must be within [0, 1,000,000,000]"
         );
 
-        let offset = match (start_offset, start_timestamp) {
+        Ok(LibRdKafkaConfig(o))
+    }
+}
+
+/// An enum that represents start offsets for a kafka consumer.
+#[derive(Debug)]
+pub enum KafkaStartOffsetType {
+    /// Fully specified, either by the user or generated.
+    StartOffset(Vec<i64>),
+    /// Specified by the user.
+    StartTimestamp(i64),
+}
+
+impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
+    type Error = PlanError;
+    fn try_from(
+        KafkaConfigOptionExtracted {
+            start_offset,
+            start_timestamp,
+            ..
+        }: &KafkaConfigOptionExtracted,
+    ) -> Result<Option<KafkaStartOffsetType>, Self::Error> {
+        Ok(match (start_offset, start_timestamp) {
             (Some(_), Some(_)) => {
                 sql_bail!("cannot specify START TIMESTAMP and START OFFSET at same time")
             }
-            (Some(so), _) => Some(KafkaStartOffsetType::StartOffset(so)),
-            (_, Some(sto)) => Some(KafkaStartOffsetType::StartTimestamp(sto)),
+            (Some(so), _) => Some(KafkaStartOffsetType::StartOffset(so.clone())),
+            (_, Some(sto)) => Some(KafkaStartOffsetType::StartTimestamp(*sto)),
             _ => None,
-        };
-
-        Ok((offset, group_id_prefix, o))
+        })
     }
 }
 

@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 compile-time-run = "0.2.12"
-semver = { version = "1.0.12", optional = true }
+semver = { version = "1.0.13", optional = true }
 
 [features]
 default = ["semver"]

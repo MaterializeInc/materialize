@@ -41,7 +41,6 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 
 > CREATE SINK exactly_once_sink FROM exactly_once
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-exactly-once-sink-${testdrive.seed}'
-  WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}';
 
 $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=2 start-iteration=10

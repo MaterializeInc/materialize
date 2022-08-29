@@ -77,12 +77,12 @@ message ProtoKafkaSinkConnection {
 
 
     // Fields of previous versions:
+    //  - string topic_prefix = 3;
     //  - repeated mz_repr.global_id.ProtoGlobalId transitive_source_dependencies = 10;
-    reserved 10;
+    reserved 3, 10;
 
     mz_storage.types.connections.ProtoKafkaConnection connection = 1;
     string topic = 2;
-    string topic_prefix = 3;
     optional ProtoKeyDescAndIndices key_desc_and_indices = 4;
     optional ProtoRelationKeyIndicesVec relation_key_indices = 5;
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 6;
