@@ -15,7 +15,7 @@
 //! of spuriously accepted connections that has been observed in Kubernetes with linkerd.
 
 use std::any::Any;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::thread;
@@ -142,7 +142,7 @@ fn start_connections(
     while results.iter().any(|r| r.is_none()) {
         if results[i].is_none() {
             match TcpStream::connect_timeout(&addresses[i], Duration::from_secs(1)) {
-                Ok(s) => {
+                Ok(mut s) => {
                     s.set_nodelay(true).expect("set_nodelay call failed");
 
                     s.write_all(&my_index.to_ne_bytes());
