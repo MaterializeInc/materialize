@@ -109,7 +109,6 @@ pub(crate) async fn shell(
                             match cloud_provider_regions.pop() {
                                 Some(region) => {
                                     // TODO: Replicated code.
-                                    println!("WOHOOO");
                                     match region_environment_details(
                                         &client,
                                         &region,
