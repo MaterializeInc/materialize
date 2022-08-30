@@ -314,7 +314,7 @@ where
                             // skip reading out of persist.
                             None
                         }
-                        Some(&t) => Some(t - 1),
+                        Some(&t) => Some(t.saturating_sub(1)),
                     };
                     let (previous_stream, previous_token) =
                         if let Some(previous_as_of) = previous_as_of {

@@ -1897,8 +1897,8 @@ mod tests {
 
     #[test]
     fn lag_writes_by_zero() {
-        let policy = ReadPolicy::lag_writes_by(0);
-        let write_frontier = Antichain::from_elem(5);
+        let policy = ReadPolicy::lag_writes_by(mz_repr::Timestamp::default());
+        let write_frontier = Antichain::from_elem(mz_repr::Timestamp::from(5));
         assert_eq!(policy.frontier(write_frontier.borrow()), write_frontier);
     }
 }

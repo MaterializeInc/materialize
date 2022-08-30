@@ -34,7 +34,6 @@ use mz_expr::{
 use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::explain_new::{Explain, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
@@ -82,7 +81,7 @@ use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::tail::PendingTail;
-use crate::util::{duration_to_timestamp_millis, send_immediate_rows, ClientTransmitter};
+use crate::util::{send_immediate_rows, ClientTransmitter};
 use crate::{guard_write_critical_section, sink_connection, PeekResponseUnary};
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -2026,7 +2025,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.catalog.state(),
                 plan,
                 ExprPrepStyle::OneShot {
-                    logical_time: Some(timestamp),
+                    logical_time: Some(timestamp.into()),
                     session,
                 },
             )?;
@@ -2925,12 +2924,8 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let ts = self.get_local_read_ts();
-        let ts = MirScalarExpr::literal_ok(
-            Datum::from(Numeric::from(ts)),
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            },
-        );
+        // TODO: Convert to MzTimestamp.
+        let ts = MirScalarExpr::literal_ok(Datum::from(u64::from(ts)), ScalarType::UInt64);
         let peek_response = match self
             .sequence_peek(
                 &mut session,
@@ -3125,7 +3120,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for o in plan.options {
             options.push(match o {
                 IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.map(Duration::from_millis),
+                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.map(|ts| Duration::from_millis(ts.into())),
                 ),
             });
         }
@@ -3150,9 +3145,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         .index()
                         .expect("setting options on index")
                         .compute_instance;
-                    let window = window.map(duration_to_timestamp_millis);
                     let policy = match window {
-                        Some(time) => ReadPolicy::lag_writes_by(time),
+                        Some(time) => ReadPolicy::lag_writes_by(time.try_into()?),
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
                     self.update_compute_base_read_policy(compute_instance, id, policy)
