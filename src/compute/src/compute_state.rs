@@ -22,7 +22,6 @@ use timely::logging::Logger;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::reachability::logging::TrackerEvent;
-use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
@@ -529,65 +528,43 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
     /// Send progress information to the coordinator.
     pub fn report_compute_frontiers(&mut self) {
-        fn add_progress(
-            id: GlobalId,
-            new_frontier: &Antichain<Timestamp>,
-            prev_frontier: &Antichain<Timestamp>,
-            progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
-        ) {
-            let mut changes = ChangeBatch::new();
-            for time in prev_frontier.elements().iter() {
-                changes.update(time.clone(), -1);
+        let mut new_uppers = Vec::new();
+
+        let mut update_frontier = |id, new_frontier: &Antichain<Timestamp>| {
+            let prev_frontier = self.compute_state.reported_frontiers.get_mut(&id);
+            let prev_frontier = prev_frontier
+                .unwrap_or_else(|| panic!("Frontier update for untracked identifier: {id}"));
+
+            assert!(PartialOrder::less_equal(prev_frontier, new_frontier));
+            if prev_frontier == new_frontier {
+                return; // nothing new to report
             }
-            for time in new_frontier.elements().iter() {
-                changes.update(time.clone(), 1);
+
+            if let Some(logger) = self.compute_state.compute_logger.as_mut() {
+                if let Some(time) = prev_frontier.get(0) {
+                    logger.log(ComputeEvent::Frontier(id, *time, -1));
+                }
+                if let Some(time) = new_frontier.get(0) {
+                    logger.log(ComputeEvent::Frontier(id, *time, 1));
+                }
             }
-            changes.compact();
-            if !changes.is_empty() {
-                progress.push((id, changes));
-            }
-        }
+
+            new_uppers.push((id, new_frontier.clone()));
+            prev_frontier.clone_from(&new_frontier);
+        };
 
         let mut new_frontier = Antichain::new();
-        let mut progress = Vec::new();
         for (id, traces) in self.compute_state.traces.traces.iter_mut() {
-            // Read the upper frontier and compare to what we've reported.
             traces.oks_mut().read_upper(&mut new_frontier);
-            if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&id) {
-                assert!(PartialOrder::less_equal(prev_frontier, &new_frontier));
-                if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                    prev_frontier.clone_from(&new_frontier);
-                }
-            } else {
-                panic!("Frontier update for untracked identifier: {:?}", id);
-            }
+            update_frontier(*id, &new_frontier);
         }
-
         for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
-            if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&id) {
-                assert!(PartialOrder::less_equal(prev_frontier, &new_frontier));
-                if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                    prev_frontier.clone_from(&new_frontier);
-                }
-            } else {
-                panic!("Frontier update for untracked identifier: {:?}", id);
-            }
+            update_frontier(*id, &new_frontier);
         }
 
-        // Log index and sink frontier changes
-        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            for (id, changes) in &mut progress {
-                for (time, diff) in changes.iter() {
-                    logger.log(ComputeEvent::Frontier(*id, *time, *diff));
-                }
-            }
-        }
-
-        if !progress.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(progress));
+        if !new_uppers.is_empty() {
+            self.send_compute_response(ComputeResponse::FrontierUppers(new_uppers));
         }
     }
 

@@ -2559,12 +2559,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         sources.push(TimestampSource {
                             name: format!("{name} ({id}, storage)"),
                             read_frontier: state.implied_capability.elements().to_vec(),
-                            write_frontier: state
-                                .write_frontier
-                                .frontier()
-                                .to_owned()
-                                .elements()
-                                .to_vec(),
+                            write_frontier: state.write_frontier.elements().to_vec(),
                         });
                     }
                 }
@@ -2586,12 +2581,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             sources.push(TimestampSource {
                                 name: format!("{name} ({id}, compute)"),
                                 read_frontier: state.implied_capability.elements().to_vec(),
-                                write_frontier: state
-                                    .write_frontier
-                                    .frontier()
-                                    .to_owned()
-                                    .elements()
-                                    .to_vec(),
+                                write_frontier: state.write_frontier.elements().to_vec(),
                             });
                         }
                     }

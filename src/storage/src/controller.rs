@@ -256,7 +256,7 @@ pub trait StorageController: Debug + Send {
     /// Accept write frontier updates from the compute layer.
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, ChangeBatch<Self::Timestamp>)],
+        updates: &[(GlobalId, Antichain<Self::Timestamp>)],
     ) -> Result<(), StorageError>;
 
     /// Applies `updates` and sends any appropriate compaction command.
@@ -985,7 +985,6 @@ where
                 Err(_) => continue,
             };
             let from = export.from();
-            let old_frontier = export.write_frontier.frontier().to_owned();
 
             self.state
                 .exported_collections
@@ -995,9 +994,8 @@ where
                 .retain(|from_export_id| *from_export_id != id);
 
             // Remove sink by removing its write frontier and then deprovisioning.
-            let mut update = ChangeBatch::new();
-            update.extend(old_frontier.iter().map(|time| (time.clone(), -1)));
-            self.update_write_frontiers(&[(id, update)]).await?;
+            self.update_write_frontiers(&[(id, Antichain::new())])
+                .await?;
             self.hosts.deprovision(id).await?;
         }
         Ok(())
@@ -1062,36 +1060,36 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, ChangeBatch<Self::Timestamp>)],
+        updates: &[(GlobalId, Antichain<Self::Timestamp>)],
     ) -> Result<(), StorageError> {
         let mut read_capability_changes = BTreeMap::default();
         let mut collections = BTreeMap::new();
         let mut exports = vec![];
 
-        for (id, changes) in updates.iter() {
+        for (id, new_upper) in updates.iter() {
             if let Ok(_) = self.collection(*id) {
-                collections.insert(*id, Some(changes));
+                collections.insert(*id, Some(new_upper));
             } else if let Ok(_) = self.export(*id) {
-                exports.push((id, changes));
+                exports.push((id, new_upper));
             } else {
                 panic!("Reference to absent collection");
             }
         }
 
         // Exports come first so we can update the collections below based on any new export write frontiers
-        for (id, changes) in exports {
+        for (id, new_upper) in exports {
             let export = self
                 .export_mut(*id)
                 .expect("Export previously validated to exist");
-            export.write_frontier.update_iter(changes.clone().drain());
+            export.write_frontier.join_assign(new_upper);
             collections.entry(export.from()).or_insert(None);
         }
 
-        for (id, changes) in collections {
+        for (id, new_upper) in collections {
             let mut update = self
                 .generate_new_capability_for_collection(id, |c| {
-                    if let Some(changes) = changes {
-                        c.write_frontier.update_iter(changes.clone().drain());
+                    if let Some(new_upper) = new_upper {
+                        c.write_frontier.join_assign(new_upper);
                     }
                 })
                 .expect("Collection previously validated to exist");
@@ -1279,7 +1277,7 @@ where
         // Get read policy sent from the coordinator
         let mut new_read_capability = collection
             .read_policy
-            .frontier(collection.write_frontier.frontier());
+            .frontier(collection.write_frontier.borrow());
 
         // Also consider the write frontier of any exports.  It's worth adding a quick note on write frontiers here.
         //
@@ -1303,9 +1301,7 @@ where
                     .exports
                     .get(&export_id)
                     .expect("Dangling export reference")
-                    .write_frontier
-                    .frontier()
-                    .to_owned(),
+                    .write_frontier,
             );
         }
 
@@ -1336,12 +1332,8 @@ pub struct CollectionState<T> {
     /// The policy to use to downgrade `self.implied_capability`.
     pub read_policy: ReadPolicy<T>,
 
-    /// Reported progress in the write capabilities.
-    ///
-    /// Importantly, this is not a write capability, but what we have heard about the
-    /// write capabilities of others. All future writes will have times greater than or
-    /// equal to `write_frontier.frontier()`.
-    pub write_frontier: MutableAntichain<T>,
+    /// Reported write frontier.
+    pub write_frontier: Antichain<T>,
 
     pub collection_metadata: CollectionMetadata,
 }
@@ -1360,7 +1352,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
-            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
+            write_frontier: Antichain::from_elem(Timestamp::minimum()),
             collection_metadata: metadata,
         }
     }
@@ -1372,18 +1364,14 @@ pub struct ExportState<T> {
     /// Description with which the export was created
     pub description: ExportDescription<T>,
 
-    /// Reported progress in the write capabilities.
-    ///
-    /// Importantly, this is not a write capability, but what we have heard about the
-    /// write capabilities of others. All future writes will have times greater than or
-    /// equal to `write_frontier.frontier()`.
-    pub write_frontier: MutableAntichain<T>,
+    /// Reported write frontier.
+    pub write_frontier: Antichain<T>,
 }
 impl<T: Timestamp> ExportState<T> {
     fn new(description: ExportDescription<T>) -> Self {
         Self {
             description,
-            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
+            write_frontier: Antichain::from_elem(Timestamp::minimum()),
         }
     }
     fn from(&self) -> GlobalId {
@@ -1703,8 +1691,7 @@ mod persist_write_handles {
                     for (span, command) in commands {
                         match command {
                             PersistWorkerCmd::Register(id, write_handle) => {
-                                let previous = write_handles
-                                    .insert(id, (write_handle, Antichain::from_elem(T::minimum())));
+                                let previous = write_handles.insert(id, write_handle);
                                 if previous.is_some() {
                                     panic!(
                                         "already registered a ReadHandle for collection {:?}",
@@ -1750,7 +1737,7 @@ mod persist_write_handles {
                         >,
                         write_handles: &mut BTreeMap<
                             GlobalId,
-                            (WriteHandle<SourceData, (), T2, Diff>, Antichain<T2>),
+                            WriteHandle<SourceData, (), T2, Diff>,
                         >,
                         mut commands: BTreeMap<
                             GlobalId,
@@ -1766,7 +1753,7 @@ mod persist_write_handles {
                         // Instead, we first group the update by ID above and then iterate
                         // through all available write handles and see if there are any updates
                         // for it. If yes, we send them all in one go.
-                        for (id, (write, old_upper)) in write_handles.iter_mut() {
+                        for (id, write) in write_handles.iter_mut() {
                             if let Some((span, updates, new_upper)) = commands.remove(id) {
                                 let persist_upper = write.upper().clone();
                                 let updates = updates
@@ -1828,27 +1815,22 @@ mod persist_write_handles {
                                         .expect("cannot append updates")
                                         .or(Err(*id))?;
 
-                                    let mut change_batch = timely::progress::ChangeBatch::new();
-                                    change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
-                                    change_batch.extend(old_upper.iter().cloned().map(|t| (t, -1)));
-                                    old_upper.clone_from(&new_upper);
-
-                                    Ok::<_, GlobalId>((*id, change_batch))
+                                    Ok::<_, GlobalId>((*id, new_upper))
                                 })
                             }
                         }
 
                         use futures::StreamExt;
                         // Ensure all futures run to completion, and track status of each of them individually
-                        let (change_batches, failed_appends): (Vec<_>, Vec<_>) = futs
+                        let (new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
                             .collect::<Vec<_>>()
                             .await
                             .into_iter()
                             .partition_result();
 
                         // It is not strictly an error for the controller to hang up.
-                        let _ = frontier_responses
-                            .send(StorageResponse::FrontierUppers(change_batches));
+                        let _ =
+                            frontier_responses.send(StorageResponse::FrontierUppers(new_uppers));
 
                         if failed_appends.is_empty() {
                             Ok(())

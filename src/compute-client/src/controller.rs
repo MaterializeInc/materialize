@@ -294,9 +294,7 @@ where
             .collect();
 
         // Add the replica
-        self.compute
-            .replicas
-            .add_replica(id, addrs, persisted_logs, None);
+        self.compute.replicas.add_replica(id, addrs, persisted_logs);
     }
 
     pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
@@ -653,7 +651,7 @@ where
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.collection_mut(id) {
-                let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
+                let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
 
                 if timely::order::PartialOrder::less_equal(
                     &collection.implied_capability,
@@ -704,19 +702,19 @@ where
                     )))
                 }
                 ComputeResponse::TailResponse(global_id, response) => {
-                    let mut changes = timely::progress::ChangeBatch::new();
-                    match &response {
+                    let new_upper = match &response {
                         TailResponse::Batch(TailBatch { lower, upper, .. }) => {
-                            changes.extend(upper.iter().map(|time| (time.clone(), 1)));
-                            changes.extend(lower.iter().map(|time| (time.clone(), -1)));
+                            // Ensure there are no gaps in the tail stream we receive.
+                            assert_eq!(lower, &self.compute.collections[&global_id].write_frontier);
+
+                            upper.clone()
                         }
-                        TailResponse::DroppedAt(frontier) => {
-                            // The tail will not be written to again, but we should not confuse that
-                            // with the source of the TAIL being complete through this time.
-                            changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
-                        }
-                    }
-                    self.update_write_frontiers(&[(global_id, changes)]).await?;
+                        // The tail will not be written to again, but we should not confuse that
+                        // with the source of the TAIL being complete through this time.
+                        TailResponse::DroppedAt(_) => Antichain::new(),
+                    };
+                    self.update_write_frontiers(&[(global_id, new_upper)])
+                        .await?;
                     Ok(Some(ComputeControllerResponse::TailResponse(
                         global_id, response,
                     )))
@@ -772,26 +770,23 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, ChangeBatch<T>)],
+        updates: &[(GlobalId, Antichain<T>)],
     ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
-        for (id, changes) in updates.iter() {
+        for (id, new_upper) in updates.iter() {
             let collection = self
                 .collection_mut(*id)
                 .expect("Reference to absent collection");
 
-            collection
-                .write_frontier
-                .update_iter(changes.clone().drain());
+            collection.write_frontier.join_assign(new_upper);
 
             let mut new_read_capability = collection
                 .read_policy
-                .frontier(collection.write_frontier.frontier());
+                .frontier(collection.write_frontier.borrow());
             if timely::order::PartialOrder::less_equal(
                 &collection.implied_capability,
                 &new_read_capability,
             ) {
-                // TODO: reuse change batch above?
                 let mut update = ChangeBatch::new();
                 update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
                 std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
@@ -925,12 +920,8 @@ pub struct CollectionState<T> {
     /// Compute identifiers on which this collection depends.
     pub compute_dependencies: Vec<GlobalId>,
 
-    /// Reported progress in the write capabilities.
-    ///
-    /// Importantly, this is not a write capability, but what we have heard about the
-    /// write capabilities of others. All future writes will have times greater than or
-    /// equal to `write_frontier.frontier()`.
-    pub write_frontier: MutableAntichain<T>,
+    /// Reported write frontier.
+    pub write_frontier: Antichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -948,7 +939,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
-            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
+            write_frontier: Antichain::from_elem(Timestamp::minimum()),
         }
     }
 

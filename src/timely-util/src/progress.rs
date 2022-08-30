@@ -17,16 +17,13 @@
 
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::Strategy;
-use timely::progress::ChangeBatch;
+use timely::progress::Antichain;
+use timely::PartialOrder;
 
-/// An out-of-crate [`Arbitrary`] implementation for [`ChangeBatch`].
-pub fn any_change_batch<T>() -> impl Strategy<Value = ChangeBatch<T>>
+/// An out-of-crate [`Arbitrary`] implementation for [`Antichain`].
+pub fn any_antichain<T: PartialOrder>() -> impl Strategy<Value = Antichain<T>>
 where
     T: Arbitrary + Ord,
 {
-    proptest::collection::vec((any::<T>(), any::<i64>()), 1..11).prop_map(|changes| {
-        let mut batch = ChangeBatch::new();
-        batch.extend(changes.into_iter());
-        batch
-    })
+    proptest::collection::vec(any::<T>(), 1..11).prop_map(Into::into)
 }
