@@ -20,9 +20,13 @@ INSERT INTO alter_add_column_with_delete VALUES (123),(123),(123),(123);
 
 $ schema-registry-wait-schema schema=postgres.public.alter_add_column_with_delete-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE alter_add_column_with_delete
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_add_column_with_delete'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > SELECT * FROM alter_add_column_with_delete;

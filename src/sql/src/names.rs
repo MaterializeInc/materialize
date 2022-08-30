@@ -9,6 +9,7 @@
 
 //! Structured name types for SQL objects.
 
+use anyhow::anyhow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
@@ -663,6 +664,48 @@ impl FromStr for DatabaseId {
     }
 }
 
+/// The identifier for a role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum RoleId {
+    System(u64),
+    User(u64),
+}
+
+impl RoleId {
+    pub fn is_system(&self) -> bool {
+        matches!(self, Self::System(_))
+    }
+
+    pub fn is_user(&self) -> bool {
+        matches!(self, Self::User(_))
+    }
+}
+
+impl FromStr for RoleId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() < 2 {
+            return Err(anyhow!("couldn't parse role id {}", s));
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next().unwrap() {
+            's' => Ok(Self::System(val)),
+            'u' => Ok(Self::User(val)),
+            _ => Err(anyhow!("couldn't parse role id {}", s)),
+        }
+    }
+}
+
+impl fmt::Display for RoleId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::System(id) => write!(f, "s{}", id),
+            Self::User(id) => write!(f, "u{}", id),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
@@ -1052,6 +1095,17 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     ResolvedObjectName::Error => {}
                 }
                 Secret(object_name)
+            }
+            Object(obj) => {
+                let object_name = self.fold_object_name(obj);
+                match &object_name {
+                    ResolvedObjectName::Object { .. } => {}
+                    ResolvedObjectName::Cte { .. } => {
+                        self.status = Err(PlanError::InvalidObject(object_name.clone()));
+                    }
+                    ResolvedObjectName::Error => {}
+                }
+                Object(object_name)
             }
         }
     }

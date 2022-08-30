@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:jammy-20220531 AS crosstool
+FROM ubuntu:jammy-20220801 AS crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -65,7 +65,7 @@ RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:jammy-20220531
+FROM ubuntu:jammy-20220801
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -239,6 +239,10 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=0
+
+# The kubeconfig file needs to be in the working directory so that it can be shared
+# across invocations of the container
+ENV KUBECONFIG=kubeconfig
 
 # Set a environment variable that tools can check to see if they're in the
 # builder or not.

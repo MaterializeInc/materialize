@@ -22,8 +22,8 @@ use crate::EvalError;
 sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = true]
-    fn neg_int64(a: i64) -> i64 {
-        -a
+    fn neg_int64(a: i64) -> Result<i64, EvalError> {
+        a.checked_neg().ok_or(EvalError::Int64OutOfRange)
     }
 );
 
@@ -37,8 +37,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "abs"]
-    fn abs_int64(a: i64) -> i64 {
-        a.abs()
+    fn abs_int64(a: i64) -> Result<i64, EvalError> {
+        a.checked_abs().ok_or(EvalError::Int64OutOfRange)
     }
 );
 
@@ -72,6 +72,30 @@ sqlfunc!(
         // Unlike casting a 16-bit or 32-bit integers to OID, casting a 64-bit
         // integers to an OID rejects negative values.
         u32::try_from(a).map(Oid).or(Err(EvalError::OidOutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "bigint_to_uint2"]
+    #[preserves_uniqueness = true]
+    fn cast_int64_to_uint16(a: i64) -> Result<u16, EvalError> {
+        u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "bigint_to_uint4"]
+    #[preserves_uniqueness = true]
+    fn cast_int64_to_uint32(a: i64) -> Result<u32, EvalError> {
+        u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "bigint_to_uint8"]
+    #[preserves_uniqueness = true]
+    fn cast_int64_to_uint64(a: i64) -> Result<u64, EvalError> {
+        u64::try_from(a).or(Err(EvalError::UInt64OutOfRange))
     }
 );
 

@@ -1,6 +1,6 @@
 ---
 title: "SHOW INDEX"
-description: "SHOW INDEX provides details about a materialized view's indexes"
+description: "SHOW INDEX provides details about indexes built on a source, view, or materialized view"
 menu:
   main:
     parent: commands
@@ -9,7 +9,7 @@ aliases:
     - /sql/show-keys
 ---
 
-`SHOW INDEX` provides details about a materialized view's indexes.
+`SHOW INDEX` provides details about indexes built on a source, view, or materialized view.
 
 ## Syntax
 
@@ -17,15 +17,16 @@ aliases:
 
 Field | Use
 ------|-----
-_on&lowbar;name_ | The name of the object whose indexes you want to show. This can be the name of a table, source, or view. If omitted, all indexes in the cluster are shown.
+_on&lowbar;name_ | The name of the object whose indexes you want to show. If omitted, all indexes in the cluster are shown.
 _cluster&lowbar;name_ | The cluster to show indexes from. If omitted, indexes from all clusters are shown.
 **EXTENDED** | Returns system indexes as well as user-created indexes. By default, only user-created indexes are returned.
+**FULL** | Returns all materialized views, including their associated cluster and type.
 
 ## Details
 
 ### Output format
 
-`SHOW INDEX`'s output is a table, with this structure:
+`SHOW INDEX`'s output is a table with the following structure:
 
 ```nofmt
 cluster | on_name | key_name | seq_in_index | column_name | expression | nullable | enabled
@@ -43,10 +44,6 @@ Field | Meaning
 **expression** | An expression used to generate the column in the index.
 **null** | Is the column nullable?
 
-### Determine which views have indexes
-
-[`SHOW FULL VIEWS`](../show-views/#show-details-about-views) includes details about which views have indexes, i.e. are materialized.
-
 ## Examples
 
 ```sql
@@ -58,6 +55,7 @@ SHOW FULL VIEWS;
  my_nonmaterialized_view | user | f
  my_materialized_view    | user | t
 ```
+
 ```sql
 SHOW INDEXES FROM my_materialized_view;
 ```
@@ -69,5 +67,5 @@ SHOW INDEXES FROM my_materialized_view;
 
 ## Related pages
 
-- [`SHOW VIEWS`](../show-views)
+- [`SHOW CREATE INDEX`](../show-create-index)
 - [`DROP INDEX`](../drop-index)

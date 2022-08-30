@@ -12,5 +12,5 @@ mode cockroach
 query IT
 SELECT oid, rolname FROM pg_roles ORDER BY oid
 ----
-20007  materialize
-20008  mz_system
+20007  mz_system
+20008  materialize

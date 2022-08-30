@@ -24,6 +24,7 @@ use tracing::error;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
+use mz_secrets::SecretsReader;
 
 use crate::source::metrics::KinesisMetrics;
 use crate::source::{
@@ -63,6 +64,14 @@ pub struct KinesisSourceReader {
     processed_message_count: u64,
     /// Metrics from which per-shard metrics get created.
     base_metrics: KinesisMetrics,
+    // Kinesis sources support single-threaded ingestion only, so only one of
+    // the `KinesisSourceReader`s will actually produce data.
+    active_read_worker: bool,
+    // The non-active reader (see above `active_read_worker`) has to report back
+    // that is is not consuming from the one [`PartitionId:None`] partition.
+    // Before it can return a [`NextMessage::Finished`]. This is keeping track
+    // of that.
+    reported_unconsumed_partitions: bool,
 }
 
 struct ShardMetrics {
@@ -128,8 +137,8 @@ impl SourceReader for KinesisSourceReader {
     fn new(
         _source_name: String,
         source_id: GlobalId,
-        _worker_id: usize,
-        _worker_count: usize,
+        worker_id: usize,
+        worker_count: usize,
         _consumer_activator: SyncActivator,
         connection: SourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
@@ -142,11 +151,17 @@ impl SourceReader for KinesisSourceReader {
             _ => unreachable!(),
         };
 
+        let active_read_worker =
+            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
+
+        // TODO: This creates all the machinery, even for the non-active workers.
+        // We could change that to only spin up Kinesis when needed.
         let state = TokioHandle::current().block_on(create_state(
             &metrics.kinesis,
             kc,
             connection_context.aws_external_id_prefix.as_ref(),
             source_id,
+            &*connection_context.secrets_reader,
         ));
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceReader {
@@ -159,13 +174,26 @@ impl SourceReader for KinesisSourceReader {
                 stream_name,
                 processed_message_count: 0,
                 base_metrics: metrics.kinesis,
+                active_read_worker,
+                reported_unconsumed_partitions: false,
             }),
             Err(e) => Err(anyhow!("{}", e)),
         }
     }
+
     fn get_next_message(
         &mut self,
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+        if !self.active_read_worker {
+            if !self.reported_unconsumed_partitions {
+                self.reported_unconsumed_partitions = true;
+                return Ok(NextMessage::Ready(
+                    SourceMessageType::DropPartitionCapabilities(vec![PartitionId::None]),
+                ));
+            }
+            return Ok(NextMessage::Finished);
+        }
+
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
         //TODO move to timestamper
@@ -281,6 +309,7 @@ async fn create_state(
     c: KinesisSourceConnection,
     aws_external_id_prefix: Option<&AwsExternalIdPrefix>,
     source_id: GlobalId,
+    secrets_reader: &dyn SecretsReader,
 ) -> Result<
     (
         KinesisClient,
@@ -290,7 +319,11 @@ async fn create_state(
     ),
     anyhow::Error,
 > {
-    let config = c.aws.load(aws_external_id_prefix, Some(&source_id)).await;
+    let config = c
+        .aws
+        .load(aws_external_id_prefix, Some(&source_id), secrets_reader)
+        .await;
+
     let kinesis_client = aws_sdk_kinesis::Client::new(&config);
 
     let shard_set = mz_kinesis_util::get_shard_ids(&kinesis_client, &c.stream_name).await?;

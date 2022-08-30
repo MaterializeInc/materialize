@@ -25,7 +25,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOption, WithOptionValue};
+use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -107,7 +107,7 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
                 f.write_str("USING ");
                 schema.fmt(f);
                 if !with_options.is_empty() {
-                    f.write_str(" WITH (");
+                    f.write_str(" (");
                     f.write_node(&display::comma_separated(with_options));
                     f.write_str(")");
                 }
@@ -149,9 +149,8 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CsrConnection<T: AstInfo> {
-    Inline { url: String },
-    Reference { connection: T::ObjectName },
+pub struct CsrConnection<T: AstInfo> {
+    pub connection: T::ObjectName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -173,31 +172,15 @@ pub struct CsrConnectionAvro<T: AstInfo> {
     pub key_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub value_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub seed: Option<CsrSeedAvro>,
-    pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
-        match &self.connection {
-            CsrConnection::Inline { url: uri, .. } => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(uri));
-                f.write_str("'");
-            }
-            CsrConnection::Reference { connection, .. } => {
-                f.write_str("CONNECTION ");
-                f.write_node(connection);
-            }
-        }
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION ");
+        f.write_node(&self.connection.connection);
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
-        }
-        if !&self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
         }
     }
 }
@@ -207,33 +190,16 @@ impl_display_t!(CsrConnectionAvro);
 pub struct CsrConnectionProtobuf<T: AstInfo> {
     pub connection: CsrConnection<T>,
     pub seed: Option<CsrSeedProtobuf>,
-    pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectionProtobuf<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
-        match &self.connection {
-            CsrConnection::Inline { url: uri, .. } => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(uri));
-                f.write_str("'");
-            }
-            CsrConnection::Reference { connection, .. } => {
-                f.write_str("CONNECTION ");
-                f.write_node(connection);
-            }
-        }
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION ");
+        f.write_node(&self.connection.connection);
 
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
-        }
-
-        if !&self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
         }
     }
 }
@@ -689,6 +655,42 @@ impl<T: AstInfo> AstDisplay for PostgresConnectionOption<T> {
 impl_display_t!(PostgresConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AwsConnectionOptionName {
+    AccessKeyId,
+    SecretAccessKey,
+    Token,
+}
+
+impl AstDisplay for AwsConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            AwsConnectionOptionName::AccessKeyId => "ACCESS KEY ID",
+            AwsConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
+            AwsConnectionOptionName::Token => "TOKEN",
+        })
+    }
+}
+impl_display!(AwsConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CONNECTION...AWS`.
+pub struct AwsConnectionOption<T: AstInfo> {
+    pub name: AwsConnectionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for AwsConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(AwsConnectionOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SshConnectionOptionName {
     Host,
     Port,
@@ -726,6 +728,9 @@ impl_display_t!(SshConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateConnection<T: AstInfo> {
+    Aws {
+        with_options: Vec<AwsConnectionOption<T>>,
+    },
     Kafka {
         with_options: Vec<KafkaConnectionOption<T>>,
     },
@@ -755,6 +760,10 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
                 f.write_str("POSTGRES ");
                 f.write_node(&display::comma_separated(&with_options));
             }
+            Self::Aws { with_options } => {
+                f.write_str("AWS ");
+                f.write_node(&display::comma_separated(&with_options));
+            }
             Self::Ssh { with_options } => {
                 f.write_str("SSH TUNNEL ");
                 f.write_node(&display::comma_separated(&with_options));
@@ -765,9 +774,70 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
 impl_display_t!(CreateConnection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KafkaConfigOptionName {
+    Acks,
+    ClientId,
+    EnableAutoCommit,
+    EnableIdempotence,
+    FetchMessageMaxBytes,
+    GroupIdPrefix,
+    IsolationLevel,
+    StatisticsIntervalMs,
+    TopicMetadataRefreshIntervalMs,
+    TransactionTimeoutMs,
+    StartTimestamp,
+    StartOffset,
+}
+
+impl AstDisplay for KafkaConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            KafkaConfigOptionName::Acks => "ACKS",
+            KafkaConfigOptionName::ClientId => "CLIENT ID",
+            KafkaConfigOptionName::EnableAutoCommit => "ENABLE AUTO COMMIT",
+            KafkaConfigOptionName::EnableIdempotence => "ENABLE IDEMPOTENCE",
+            KafkaConfigOptionName::FetchMessageMaxBytes => "FETCH MESSAGE MAX BYTES",
+            KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
+            KafkaConfigOptionName::IsolationLevel => "ISOLATION LEVEL",
+            KafkaConfigOptionName::StatisticsIntervalMs => "STATISTICS INTERVAL MS",
+            KafkaConfigOptionName::TopicMetadataRefreshIntervalMs => {
+                "TOPIC METADATA REFRESH INTERVAL MS"
+            }
+            KafkaConfigOptionName::TransactionTimeoutMs => "TRANSACTION TIMEOUT MS",
+            KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",
+            KafkaConfigOptionName::StartOffset => "START OFFSET",
+        })
+    }
+}
+impl_display!(KafkaConfigOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `{FROM|INTO} CONNECTION ...` statement.
+pub struct KafkaConfigOption<T: AstInfo> {
+    pub name: KafkaConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaConfigOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(KafkaConfigOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaConnection<T: AstInfo> {
-    Inline { broker: String },
-    Reference { connection: T::ObjectName },
+    Inline {
+        broker: String,
+    },
+    Reference {
+        connection: T::ObjectName,
+        with_options: Vec<KafkaConfigOption<T>>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for KafkaConnection<T> {
@@ -778,9 +848,17 @@ impl<T: AstInfo> AstDisplay for KafkaConnection<T> {
                 f.write_node(&display::escape_single_quote_string(broker));
                 f.write_str("'");
             }
-            KafkaConnection::Reference { connection, .. } => {
+            KafkaConnection::Reference {
+                connection,
+                with_options,
+            } => {
                 f.write_str("CONNECTION ");
                 f.write_node(connection);
+                if !with_options.is_empty() {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(with_options));
+                    f.write_str(")");
+                }
             }
         }
     }
@@ -798,9 +876,13 @@ pub struct KafkaSourceConnection<T: AstInfo> {
 pub enum CreateSourceConnection<T: AstInfo> {
     Kafka(KafkaSourceConnection<T>),
     Kinesis {
+        /// The AWS connection.
+        connection: T::ObjectName,
         arn: String,
     },
     S3 {
+        /// The AWS connection.
+        connection: T::ObjectName,
         /// The arguments to `DISCOVER OBJECTS USING`: `BUCKET SCAN` or `SQS NOTIFICATIONS`
         key_sources: Vec<S3KeySource>,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
@@ -840,17 +922,22 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                     f.write_str(")");
                 }
             }
-            CreateSourceConnection::Kinesis { arn } => {
-                f.write_str("KINESIS ARN '");
+            CreateSourceConnection::Kinesis { connection, arn } => {
+                f.write_str("KINESIS CONNECTION ");
+                f.write_node(connection);
+                f.write_str(" ARN '");
                 f.write_node(&display::escape_single_quote_string(arn));
                 f.write_str("'");
             }
             CreateSourceConnection::S3 {
+                connection,
                 key_sources,
                 pattern,
                 compression,
             } => {
-                f.write_str("S3 DISCOVER OBJECTS");
+                f.write_str("S3 CONNECTION ");
+                f.write_node(connection);
+                f.write_str(" DISCOVER OBJECTS");
                 if let Some(pattern) = pattern {
                     f.write_str(" MATCHING '");
                     f.write_str(&display::escape_single_quote_string(pattern));
@@ -940,7 +1027,7 @@ impl_display_t!(LoadGeneratorOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSinkConnection<T: AstInfo> {
     Kafka {
-        broker: String,
+        connection: KafkaConnection<T>,
         topic: String,
         key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
@@ -951,14 +1038,13 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             CreateSinkConnection::Kafka {
-                broker,
+                connection,
                 topic,
                 key,
                 consistency,
             } => {
-                f.write_str("KAFKA BROKER '");
-                f.write_node(&display::escape_single_quote_string(broker));
-                f.write_str("'");
+                f.write_str("KAFKA ");
+                f.write_node(connection);
                 f.write_str(" TOPIC '");
                 f.write_node(&display::escape_single_quote_string(topic));
                 f.write_str("'");
@@ -1158,15 +1244,21 @@ impl_display!(KeyConstraint);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceOptionName {
-    Size,
+    IgnoreKeys,
     Remote,
+    Size,
+    Timeline,
+    TimestampInterval,
 }
 
 impl AstDisplay for CreateSourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            CreateSourceOptionName::Size => "SIZE",
+            CreateSourceOptionName::IgnoreKeys => "IGNORE KEYS",
             CreateSourceOptionName::Remote => "REMOTE",
+            CreateSourceOptionName::Size => "SIZE",
+            CreateSourceOptionName::Timeline => "TIMELINE",
+            CreateSourceOptionName::TimestampInterval => "TIMESTAMP INTERVAL",
         })
     }
 }

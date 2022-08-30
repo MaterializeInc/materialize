@@ -110,13 +110,16 @@ impl Consensus for MaelstromConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
+    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
         let create_if_not_exists = expected.is_none();
 
         let from = match expected {
             Some(expected) => match self.hydrate_seqno(key, expected).await? {
                 Ok(x) => Value::from(&MaelstromVersionedData::from(x)),
-                Err(x) => return Ok(Err(x)),
+                Err(_) => {
+                    let from = expected.next();
+                    return Ok(Err(self.scan(key, from).await?));
+                }
             },
             None => Value::Null,
         };
@@ -143,9 +146,8 @@ impl Consensus for MaelstromConsensus {
                 code: ErrorCode::PreconditionFailed,
                 ..
             }) => {
-                // TODO: Parse the current value out of the error string instead
-                // of another service fetch.
-                let current = self.head(key).await?;
+                let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
+                let current = self.scan(key, from).await?;
                 Ok(Err(current))
             }
             Err(err) => Err(ExternalError::from(anyhow::Error::new(err))),
@@ -153,12 +155,11 @@ impl Consensus for MaelstromConsensus {
     }
 
     async fn scan(&self, _key: &str, _from: SeqNo) -> Result<Vec<VersionedData>, ExternalError> {
-        unimplemented!("not yet used")
+        unimplemented!("TODO")
     }
 
     async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
-        // No-op until we implement `scan`.
-        Ok(0)
+        unimplemented!("TODO")
     }
 }
 

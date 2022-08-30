@@ -16,7 +16,7 @@ use std::iter;
 
 use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
-use mz_repr::{Datum, Diff, RelationType, Row, RowArena};
+use mz_repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena};
 
 use crate::{TransformArgs, TransformError};
 
@@ -42,7 +42,11 @@ impl crate::Transform for FoldConstants {
             let num_inputs = e.num_inputs();
             let input_types = &type_stack[type_stack.len() - num_inputs..];
             let mut relation_type = e.typ_with_input_types(input_types);
-            self.action(e, &mut relation_type, input_types)?;
+            self.action(
+                e,
+                &mut relation_type,
+                input_types.iter().map(|typ| &typ.column_types),
+            )?;
             type_stack.truncate(type_stack.len() - num_inputs);
             type_stack.push(relation_type);
             Ok(())
@@ -56,12 +60,15 @@ impl FoldConstants {
     /// This transform will cease optimization if it encounters constant collections
     /// that are larger than `self.limit`, if that is set. It is not guaranteed that
     /// a constant input within the limit will be reduced to a `Constant` variant.
-    pub fn action(
+    pub fn action<'a, I>(
         &self,
         relation: &mut MirRelationExpr,
         relation_type: &mut RelationType,
-        input_types: &[RelationType],
-    ) -> Result<(), TransformError> {
+        mut input_types: I,
+    ) -> Result<(), TransformError>
+    where
+        I: Iterator<Item = &'a Vec<ColumnType>>,
+    {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
@@ -73,7 +80,7 @@ impl FoldConstants {
                 monotonic: _,
                 expected_group_size: _,
             } => {
-                let input_typ = input_types.first().unwrap();
+                let input_typ = input_types.next().unwrap();
                 // Reduce expressions to their simplest form.
                 for key in group_key.iter_mut() {
                     key.reduce(input_typ);
@@ -150,17 +157,9 @@ impl FoldConstants {
                 // relation type; although we could in principle use `relation_type` here,
                 // we shouldn't rely on `reduce` not looking at its cardinality to assess
                 // the number of columns.
-                let input_arity = input_types.first().unwrap().arity();
+                let input_arity = input_types.next().unwrap().len();
                 for (index, scalar) in scalars.iter_mut().enumerate() {
-                    let mut current_type = mz_repr::RelationType::new(
-                        relation_type.column_types[..(input_arity + index)].to_vec(),
-                    );
-                    for key in relation_type.keys.iter() {
-                        if key.iter().all(|i| *i < input_arity + index) {
-                            current_type = current_type.with_key(key.clone());
-                        }
-                    }
-                    scalar.reduce(&current_type);
+                    scalar.reduce(&relation_type.column_types[..(input_arity + index)]);
                 }
 
                 // Guard against evaluating expression that may contain
@@ -193,7 +192,7 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                let input_typ = input_types.first().unwrap();
+                let input_typ = input_types.next().unwrap();
                 for expr in exprs.iter_mut() {
                     expr.reduce(input_typ);
                 }
@@ -226,9 +225,9 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::Filter { input, predicates } => {
-                let input_typ = input_types.first().unwrap();
+                let input_typ = input_types.next().unwrap();
                 for predicate in predicates.iter_mut() {
-                    predicate.reduce(input_typ);
+                    predicate.reduce(&input_typ);
                 }
                 predicates.retain(|p| !p.is_literal_true());
 

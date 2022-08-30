@@ -36,6 +36,9 @@ use mz_storage::types::connections::ConnectionContext;
 // [0]: https://github.com/jemalloc/jemalloc/issues/26
 // [1]: https://github.com/jemalloc/jemalloc/issues/843
 // [2]: https://github.com/jemalloc/jemalloc/issues/1467
+//
+// Furthermore, as of Aug. 2022, some engineers are using profiling
+// tools, e.g. `heaptrack`, that only work with the system allocator.
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -176,6 +179,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .await
         .context("loading secrets reader")?;
     let config = mz_storage::Config {
+        build_info: &BUILD_INFO,
         workers: args.workers,
         timely_config,
         metrics_registry,
@@ -186,6 +190,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             secrets_reader,
         ),
     };
+
+    // Initialize fail crate for failpoint support
+    let _failpoint_scenario = fail::FailScenario::setup();
 
     let (_server, client) = mz_storage::serve(config)?;
     GrpcServer::serve(

@@ -51,13 +51,13 @@ count
         ON channels.id = counts.channel AND channels.worker = counts.source_worker
   WHERE id IN
         (SELECT id
-         FROM mz_catalog.mz_dataflow_operator_addresses
+         FROM mz_catalog.mz_dataflow_addresses
          WHERE address[1] =
              (SELECT DISTINCT address[1]
-              FROM mz_catalog.mz_dataflow_operator_addresses
+              FROM mz_catalog.mz_dataflow_addresses
               WHERE id =
                   (SELECT DISTINCT id
-                   FROM mz_catalog.mz_dataflow_names
+                   FROM mz_catalog.mz_dataflows
                    WHERE name LIKE '%.delta_join%')))
   GROUP BY id, source_node, target_node, source_port, target_port
   HAVING sum(sent) > 100

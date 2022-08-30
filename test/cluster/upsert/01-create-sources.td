@@ -48,17 +48,32 @@ $ set schema={
 
 $ kafka-create-topic topic=dbzupsert partitions=1
 
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "mudskipper"}}}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "salamander"}}}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "lizard"}}}
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE upsert
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM UPSERT
 
 > SELECT * FROM upsert
 id creature
 -----------
 1  lizard
+
+# Ingest a broken key/value pair
+$ kafka-ingest format=bytes topic=dbzupsert key-format=bytes
+broken-key:bar
+
+# Ingest a broken value with a good key
+$ kafka-ingest format=bytes topic=dbzupsert key-format=avro key-schema=${keyschema} publish=true
+{"id": 2}bar2

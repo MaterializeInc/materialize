@@ -31,6 +31,8 @@
 //!   * `children`: only visit direct children
 //!   * `post`: recursively visit children in post-order
 //!   * `pre`: recursively visit children in pre-order
+//!   * no suffix: recursively visit children in pre- and post-oder
+//!     using a ~Visitor~` that encapsulates the shared context.
 
 use std::marker::PhantomData;
 
@@ -196,7 +198,7 @@ pub trait Visit {
     ///
     /// Optionally, `pre` can return which children, if any, should be visited
     /// (default is to visit all children).
-    #[deprecated = "Use `visit_pre_post` instead."]
+    #[deprecated = "Use `visit` instead."]
     fn visit_pre_post_nolimit<F1, F2>(&self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&Self) -> Option<Vec<&Self>>,
@@ -209,6 +211,7 @@ pub trait Visit {
     ///
     /// Optionally, `pre` can return which children, if any, should be visited
     /// (default is to visit all children).
+    #[deprecated = "Use `visit_mut` instead."]
     fn visit_mut_pre_post<F1, F2>(
         &mut self,
         pre: &mut F1,
@@ -231,6 +234,48 @@ pub trait Visit {
     where
         F1: FnMut(&mut Self) -> Option<Vec<&mut Self>>,
         F2: FnMut(&mut Self);
+
+    fn visit<V>(&self, visitor: &mut V) -> Result<(), RecursionLimitError>
+    where
+        Self: Sized,
+        V: Visitor<Self>;
+
+    fn visit_mut<V>(&mut self, visitor: &mut V) -> Result<(), RecursionLimitError>
+    where
+        Self: Sized,
+        V: VisitorMut<Self>;
+
+    fn try_visit<V, E>(&self, visitor: &mut V) -> Result<(), E>
+    where
+        Self: Sized,
+        V: TryVisitor<Self, E>,
+        E: From<RecursionLimitError>;
+
+    fn try_visit_mut<V, E>(&mut self, visitor: &mut V) -> Result<(), E>
+    where
+        Self: Sized,
+        V: TryVisitorMut<Self, E>,
+        E: From<RecursionLimitError>;
+}
+
+pub trait Visitor<T> {
+    fn pre_visit(&mut self, expr: &T);
+    fn post_visit(&mut self, expr: &T);
+}
+
+pub trait VisitorMut<T> {
+    fn pre_visit(&mut self, expr: &mut T);
+    fn post_visit(&mut self, expr: &mut T);
+}
+
+pub trait TryVisitor<T, E: From<RecursionLimitError>> {
+    fn pre_visit(&mut self, expr: &T) -> Result<(), E>;
+    fn post_visit(&mut self, expr: &T) -> Result<(), E>;
+}
+
+pub trait TryVisitorMut<T, E: From<RecursionLimitError>> {
+    fn pre_visit(&mut self, expr: &mut T) -> Result<(), E>;
+    fn post_visit(&mut self, expr: &mut T) -> Result<(), E>;
 }
 
 impl<T: VisitChildren<T>> Visit for T {
@@ -238,28 +283,28 @@ impl<T: VisitChildren<T>> Visit for T {
     where
         F: FnMut(&Self),
     {
-        Visitor::new().visit_post(self, f)
+        StackSafeVisit::new().visit_post(self, f)
     }
 
     fn visit_post_nolimit<F>(&self, f: &mut F)
     where
         F: FnMut(&Self),
     {
-        Visitor::new().visit_post_nolimit(self, f)
+        StackSafeVisit::new().visit_post_nolimit(self, f)
     }
 
     fn visit_mut_post<F>(&mut self, f: &mut F) -> Result<(), RecursionLimitError>
     where
         F: FnMut(&mut Self),
     {
-        Visitor::new().visit_mut_post(self, f)
+        StackSafeVisit::new().visit_mut_post(self, f)
     }
 
     fn visit_mut_post_nolimit<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
-        Visitor::new().visit_mut_post_nolimit(self, f)
+        StackSafeVisit::new().visit_mut_post_nolimit(self, f)
     }
 
     fn try_visit_post<F, E>(&self, f: &mut F) -> Result<(), E>
@@ -267,7 +312,7 @@ impl<T: VisitChildren<T>> Visit for T {
         F: FnMut(&Self) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        Visitor::new().try_visit_post(self, f)
+        StackSafeVisit::new().try_visit_post(self, f)
     }
 
     fn try_visit_mut_post<F, E>(&mut self, f: &mut F) -> Result<(), E>
@@ -275,35 +320,35 @@ impl<T: VisitChildren<T>> Visit for T {
         F: FnMut(&mut Self) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        Visitor::new().try_visit_mut_post(self, f)
+        StackSafeVisit::new().try_visit_mut_post(self, f)
     }
 
     fn visit_pre<F>(&self, f: &mut F) -> Result<(), RecursionLimitError>
     where
         F: FnMut(&Self),
     {
-        Visitor::new().visit_pre(self, f)
+        StackSafeVisit::new().visit_pre(self, f)
     }
 
     fn visit_pre_nolimit<F>(&self, f: &mut F)
     where
         F: FnMut(&Self),
     {
-        Visitor::new().visit_pre_nolimit(self, f)
+        StackSafeVisit::new().visit_pre_nolimit(self, f)
     }
 
     fn visit_mut_pre<F>(&mut self, f: &mut F) -> Result<(), RecursionLimitError>
     where
         F: FnMut(&mut Self),
     {
-        Visitor::new().visit_mut_pre(self, f)
+        StackSafeVisit::new().visit_mut_pre(self, f)
     }
 
     fn visit_mut_pre_nolimit<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
-        Visitor::new().visit_mut_pre_nolimit(self, f)
+        StackSafeVisit::new().visit_mut_pre_nolimit(self, f)
     }
 
     fn try_visit_pre<F, E>(&self, f: &mut F) -> Result<(), E>
@@ -311,7 +356,7 @@ impl<T: VisitChildren<T>> Visit for T {
         F: FnMut(&Self) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        Visitor::new().try_visit_pre(self, f)
+        StackSafeVisit::new().try_visit_pre(self, f)
     }
 
     fn try_visit_mut_pre<F, E>(&mut self, f: &mut F) -> Result<(), E>
@@ -319,7 +364,7 @@ impl<T: VisitChildren<T>> Visit for T {
         F: FnMut(&mut Self) -> Result<(), E>,
         E: From<RecursionLimitError>,
     {
-        Visitor::new().try_visit_mut_pre(self, f)
+        StackSafeVisit::new().try_visit_mut_pre(self, f)
     }
 
     fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2) -> Result<(), RecursionLimitError>
@@ -327,7 +372,7 @@ impl<T: VisitChildren<T>> Visit for T {
         F1: FnMut(&Self) -> Option<Vec<&Self>>,
         F2: FnMut(&Self),
     {
-        Visitor::new().visit_pre_post(self, pre, post)
+        StackSafeVisit::new().visit_pre_post(self, pre, post)
     }
 
     fn visit_pre_post_nolimit<F1, F2>(&self, pre: &mut F1, post: &mut F2)
@@ -335,7 +380,7 @@ impl<T: VisitChildren<T>> Visit for T {
         F1: FnMut(&Self) -> Option<Vec<&Self>>,
         F2: FnMut(&Self),
     {
-        Visitor::new().visit_pre_post_nolimit(self, pre, post)
+        StackSafeVisit::new().visit_pre_post_nolimit(self, pre, post)
     }
 
     fn visit_mut_pre_post<F1, F2>(
@@ -347,7 +392,7 @@ impl<T: VisitChildren<T>> Visit for T {
         F1: FnMut(&mut Self) -> Option<Vec<&mut Self>>,
         F2: FnMut(&mut Self),
     {
-        Visitor::new().visit_mut_pre_post(self, pre, post)
+        StackSafeVisit::new().visit_mut_pre_post(self, pre, post)
     }
 
     fn visit_mut_pre_post_nolimit<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
@@ -355,22 +400,56 @@ impl<T: VisitChildren<T>> Visit for T {
         F1: FnMut(&mut Self) -> Option<Vec<&mut Self>>,
         F2: FnMut(&mut Self),
     {
-        Visitor::new().visit_mut_pre_post_nolimit(self, pre, post)
+        StackSafeVisit::new().visit_mut_pre_post_nolimit(self, pre, post)
+    }
+
+    fn visit<V>(&self, visitor: &mut V) -> Result<(), RecursionLimitError>
+    where
+        Self: Sized,
+        V: Visitor<Self>,
+    {
+        StackSafeVisit::new().visit(self, visitor)
+    }
+
+    fn visit_mut<V>(&mut self, visitor: &mut V) -> Result<(), RecursionLimitError>
+    where
+        Self: Sized,
+        V: VisitorMut<Self>,
+    {
+        StackSafeVisit::new().visit_mut(self, visitor)
+    }
+
+    fn try_visit<V, E>(&self, visitor: &mut V) -> Result<(), E>
+    where
+        Self: Sized,
+        V: TryVisitor<Self, E>,
+        E: From<RecursionLimitError>,
+    {
+        StackSafeVisit::new().try_visit(self, visitor)
+    }
+
+    fn try_visit_mut<V, E>(&mut self, visitor: &mut V) -> Result<(), E>
+    where
+        Self: Sized,
+        V: TryVisitorMut<Self, E>,
+        E: From<RecursionLimitError>,
+    {
+        StackSafeVisit::new().try_visit_mut(self, visitor)
     }
 }
 
-struct Visitor<T> {
+struct StackSafeVisit<T> {
     recursion_guard: RecursionGuard,
     _type: PhantomData<T>,
 }
 
-impl<T> CheckedRecursion for Visitor<T> {
+impl<T> CheckedRecursion for StackSafeVisit<T> {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }
 }
 
-impl<T: VisitChildren<T>> Visitor<T> {
+impl<T: VisitChildren<T>> StackSafeVisit<T> {
     fn new() -> Self {
         Self {
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
@@ -581,6 +660,60 @@ impl<T: VisitChildren<T>> Visitor<T> {
                 value.visit_mut_children(|child| self.visit_mut_pre_post_nolimit(child, pre, post));
             }
             post(value);
+        })
+    }
+
+    fn visit<V>(&self, value: &T, visitor: &mut V) -> Result<(), RecursionLimitError>
+    where
+        Self: Sized,
+        V: Visitor<T>,
+    {
+        self.checked_recur(move |this| {
+            visitor.pre_visit(value);
+            value.try_visit_children(|child| this.visit(child, visitor))?;
+            visitor.post_visit(value);
+            Ok(())
+        })
+    }
+
+    fn visit_mut<V>(&self, value: &mut T, visitor: &mut V) -> Result<(), RecursionLimitError>
+    where
+        Self: Sized,
+        V: VisitorMut<T>,
+    {
+        self.checked_recur(move |this| {
+            visitor.pre_visit(value);
+            value.try_visit_mut_children(|child| this.visit_mut(child, visitor))?;
+            visitor.post_visit(value);
+            Ok(())
+        })
+    }
+
+    fn try_visit<V, E>(&self, value: &T, visitor: &mut V) -> Result<(), E>
+    where
+        Self: Sized,
+        V: TryVisitor<T, E>,
+        E: From<RecursionLimitError>,
+    {
+        self.checked_recur(move |_| {
+            visitor.pre_visit(value)?;
+            value.try_visit_children(|child| self.try_visit(child, visitor))?;
+            visitor.post_visit(value)?;
+            Ok(())
+        })
+    }
+
+    fn try_visit_mut<V, E>(&self, value: &mut T, visitor: &mut V) -> Result<(), E>
+    where
+        Self: Sized,
+        V: TryVisitorMut<T, E>,
+        E: From<RecursionLimitError>,
+    {
+        self.checked_recur(move |_| {
+            visitor.pre_visit(value)?;
+            value.try_visit_mut_children(|child| self.try_visit_mut(child, visitor))?;
+            visitor.post_visit(value)?;
+            Ok(())
         })
     }
 }

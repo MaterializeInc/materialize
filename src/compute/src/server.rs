@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use crossbeam_channel::{RecvError, TryRecvError};
-use mz_persist_client::PersistConfig;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::execute::execute_from;
@@ -22,20 +21,19 @@ use timely::worker::Worker as TimelyWorker;
 use timely::WorkerConfig;
 use tokio::sync::mpsc;
 
-use mz_compute_client::command::ComputeCommand;
-use mz_compute_client::controller::replicated::ComputeCommandHistory;
+use mz_build_info::BuildInfo;
+use mz_compute_client::command::{ComputeCommand, ComputeCommandHistory};
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::PersistConfig;
 use mz_service::local::LocalClient;
-use mz_storage::types::connections::ConnectionContext;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;
-use crate::SinkBaseMetrics;
 use crate::{TraceManager, TraceMetrics};
 
 /// Configuration of the cluster we will spin up
@@ -50,6 +48,8 @@ pub struct CommunicationConfig {
 
 /// Configures a dataflow server.
 pub struct Config {
+    /// Build information.
+    pub build_info: &'static BuildInfo,
     /// The number of worker threads to spawn.
     pub workers: usize,
     /// Configuration for the communication mesh
@@ -58,9 +58,6 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// Configuration for sink connections.
-    // TODO: remove when sinks move to storage.
-    pub connection_context: ConnectionContext,
 }
 
 /// A handle to a running dataflow server.
@@ -77,10 +74,7 @@ pub fn serve(
     assert!(config.workers > 0);
 
     // Various metrics related things.
-    let sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
-    // Bundle metrics to conceal complexity.
-    let metrics_bundle = (sink_metrics, trace_metrics);
 
     let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| crossbeam_channel::unbounded())
@@ -88,12 +82,13 @@ pub fn serve(
     let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
+    let has_networked_workers = config.comm_config.addresses.len() > 1;
 
     let (builders, other) =
         initialize_networking(config.comm_config).map_err(|e| anyhow!("{e}"))?;
 
     let persist_clients = PersistClientCache::new(
-        PersistConfig::new(config.now.clone()),
+        PersistConfig::new(config.build_info, config.now.clone()),
         &config.metrics_registry,
     );
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
@@ -108,15 +103,15 @@ pub fn serve(
             let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
                 .take()
                 .unwrap();
-            let (_sink_metrics, _trace_metrics) = metrics_bundle.clone();
+            let _trace_metrics = trace_metrics.clone();
             let persist_clients = Arc::clone(&persist_clients);
             Worker {
                 timely_worker,
                 client_rx,
                 compute_state: None,
-                metrics_bundle: metrics_bundle.clone(),
-                connection_context: config.connection_context.clone(),
+                trace_metrics: trace_metrics.clone(),
                 persist_clients,
+                has_networked_workers,
             }
             .run()
         },
@@ -166,14 +161,13 @@ struct Worker<'w, A: Allocate> {
     /// are delivered.
     client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
     compute_state: Option<ComputeState>,
-    /// Metrics bundle.
-    metrics_bundle: (SinkBaseMetrics, TraceMetrics),
-    /// Configuration for sink connections.
-    // TODO: remove when sinks move to storage.
-    pub connection_context: ConnectionContext,
+    /// Trace metrics.
+    trace_metrics: TraceMetrics,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+    /// Indicates if the timely instance has workers connected via network
+    has_networked_workers: bool,
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -264,7 +258,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.compute_state = Some(ComputeState {
                     replica_id: config.replica_id,
                     traces: TraceManager::new(
-                        self.metrics_bundle.1.clone(),
+                        self.trace_metrics.clone(),
                         self.timely_worker.index(),
                     ),
                     sink_tokens: HashMap::new(),
@@ -272,9 +266,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     sink_write_frontiers: HashMap::new(),
                     pending_peeks: Vec::new(),
                     reported_frontiers: HashMap::new(),
-                    sink_metrics: self.metrics_bundle.0.clone(),
                     compute_logger: None,
-                    connection_context: self.connection_context.clone(),
                     persist_clients: Arc::clone(&self.persist_clients),
                     command_history: ComputeCommandHistory::default(),
                 });
@@ -341,6 +333,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
         }
 
+        if self.compute_state.is_some() && self.has_networked_workers {
+            panic!("Reconciliation is supported only in process local timely instances");
+        };
+
         // Commands we will need to apply before entering normal service.
         // These commands may include dropping existing dataflows, compacting existing dataflows,
         // and creating new dataflows, in addition to standard peek and compaction commands.
@@ -357,7 +353,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
             compute_state
                 .command_history
-                .reduce(&HashMap::<_, ()>::default());
+                .retain_peeks(&HashMap::<_, ()>::default());
+            compute_state.command_history.reduce();
 
             // At this point, we need to sort out which of the *certainly installed* dataflows are
             // suitable replacements for the requested dataflows. A dataflow is "certainly installed"
@@ -449,6 +446,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     ComputeCommand::CreateInstance(new_config) => {
                         // Cluster creation should not be performed again!
                         assert_eq!(old_config, Some(new_config));
+
+                        // Ensure we retain the logging sink dataflows.
+                        if let Some(logging) = &new_config.logging {
+                            for (id, _) in logging.sink_logs.values() {
+                                retain_ids.insert(*id);
+                            }
+                        }
                     }
                     // All other commands we apply as requested.
                     command => {

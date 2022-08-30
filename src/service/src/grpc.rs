@@ -170,7 +170,8 @@ where
 {
     /// Starts the server, listening for gRPC connections on `listen_addr`.
     ///
-    /// The trait bounds on `f` are intimidating, but it is a function that
+    /// The trait bounds on `S` are intimidating, but it is the return type of
+    /// `service_builder`, which is a function that
     /// turns a `GrpcServer<ProtoCommandType, ProtoResponseType>` into a
     /// [`Service`] that represents a gRPC server. This is always encapsulated
     /// by the tonic-generated `ProtoServer::new` method for a specific Protobuf

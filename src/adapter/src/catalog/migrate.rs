@@ -23,22 +23,15 @@ where
     F: FnMut(&mut mz_sql::ast::Statement<Raw>) -> Result<(), anyhow::Error>,
 {
     let items = tx.loaded_items();
-    for (id, name, def) in items {
-        let SerializedCatalogItem::V1 {
-            create_sql,
-            eval_env,
-        } = serde_json::from_slice(&def)?;
+    for (id, name, SerializedCatalogItem::V1 { create_sql }) in items {
         let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element();
 
         f(&mut stmt)?;
 
         let serialized_item = SerializedCatalogItem::V1 {
             create_sql: stmt.to_ast_string_stable(),
-            eval_env,
         };
 
-        let serialized_item =
-            serde_json::to_vec(&serialized_item).expect("catalog serialization cannot fail");
         tx.update_item(id, &name.item, &serialized_item)?;
     }
     Ok(())

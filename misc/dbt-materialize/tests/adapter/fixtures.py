@@ -75,8 +75,8 @@ test_sink = """
 actual_indexes = """
 SELECT
     o.name,
-    ic.index_position,
-    ic.on_position,
+    ic.index_position::int8,
+    ic.on_position::int8,
     ic.on_expression
 FROM mz_indexes i
 JOIN mz_index_columns ic ON i.id = ic.index_id

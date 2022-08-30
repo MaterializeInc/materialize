@@ -7,27 +7,44 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
+> CREATE MATERIALIZED VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
+
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 > CREATE SINK simple_view_sink FROM simple_view
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unnamed-cols-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'unnamed-cols-sink-${testdrive.seed}'
+  CONSISTENCY (
+    TOPIC 'unnamed-cols-sink-consistency-${testdrive.seed}' FORMAT AVRO
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  )
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.simple_view_sink key=false
-{"before": null, "after": {"a": 1, "b": 2, "c": 3}}
+{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "<TIMESTAMP>"}}
 
 > CREATE SINK simple_view_upsert FROM simple_view
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unnamed-upsert'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'unnamed-upsert'
   KEY (b)
+  CONSISTENCY (
+    TOPIC 'unnamed-upsert-${testdrive.seed}' FORMAT AVRO
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  )
   FORMAT JSON
   ENVELOPE UPSERT
 
 $ kafka-verify format=json sink=materialize.public.simple_view_upsert key=true
-{"b": 2} {"a": 1, "b": 2, "c": 3}
+{"b": 2} {"a": 1, "b": 2, "c": 3, "transaction": {"id": "<TIMESTAMP>"}}
 
 # Standard types
 
-> CREATE VIEW types_view AS
+> CREATE MATERIALIZED VIEW types_view AS
   SELECT TRUE::boolean c1,
   FALSE::boolean c2,
   NULL c3,
@@ -44,38 +61,53 @@ $ kafka-verify format=json sink=materialize.public.simple_view_upsert key=true
   '{"a": 2}'::jsonb c14
 
 > CREATE SINK types_sink FROM types_view
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'types-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'types-sink'
+  CONSISTENCY (
+    TOPIC 'types-sink-${testdrive.seed}' FORMAT AVRO
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  )
   FORMAT JSON
 
 # Due to limitations in $ kafka-verify, the entire expected JSON output needs to be provided on a single line
 $ kafka-verify format=json sink=materialize.public.types_sink key=false
-{"before":null,"after":{"c1":true,"c2":false,"c3":null,"c4":123456789,"c5":1234.5678,"c6":"1234.5678","c7":"1321009871123","c8":"1320966671123","c9":"2011-11-11","c10":"11:11:11.123456","c11":"1 year","c12":"324373a5-7718-46b1-a7ea-4a7c9981fc4e","c13":[209,130,208,181,208,186,209,129,209,130],"c14":{"a":2}}}
+{"before":null,"after":{"c1":true,"c2":false,"c3":null,"c4":123456789,"c5":1234.5678,"c6":"1234.5678","c7":"<TIMESTAMP>","c8":"<TIMESTAMP>","c9":"2011-11-11","c10":"11:11:11.123456","c11":"1 year","c12":"324373a5-7718-46b1-a7ea-4a7c9981fc4e","c13":[209,130,208,181,208,186,209,129,209,130],"c14":{"a":2}},"transaction":{"id":"<TIMESTAMP>"}}
 
 # Special characters
 
-> CREATE VIEW special_characters_view AS
+> CREATE MATERIALIZED VIEW special_characters_view AS
   SELECT 'текст' c1, '"' c2, '''' c3, '\' c4, E'a\n\tb' c5
 
 > CREATE SINK special_characters_sink FROM special_characters_view
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'special-characters-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'special-characters-sink'
+  CONSISTENCY (
+    TOPIC 'special-characters-sink-${testdrive.seed}' FORMAT AVRO
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  )
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.special_characters_sink key=false
-{"before":null,"after":{"c1":"текст","c2":"\"","c3":"'","c4":"\\","c5":"a\n\tb"}}
+{"before":null,"after":{"c1":"текст","c2":"\"","c3":"'","c4":"\\","c5":"a\n\tb"}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # Record
 
-> CREATE VIEW record_view AS SELECT simple_view FROM simple_view;
+> CREATE MATERIALIZED VIEW record_view AS SELECT simple_view FROM simple_view;
 
 > CREATE SINK record_sink FROM record_view
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'record-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'record-sink'
+  CONSISTENCY (
+    TOPIC 'record-sink-${testdrive.seed}' FORMAT AVRO
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  )
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.record_sink key=false
-{"before":null,"after":{"simple_view":{"a":1,"b":2,"c":3}}}
+{"before":null,"after":{"simple_view":{"a":1,"b":2,"c":3}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # Duplicate column names
 ! CREATE VIEW duplicate_cols AS SELECT 'a1' AS a, 'a1' AS a;
+contains:column "a" specified more than once
+
+! CREATE MATERIALIZED VIEW duplicate_cols AS SELECT 'a1' AS a, 'a1' AS a;
 contains:column "a" specified more than once
 
 # Complex types
@@ -88,18 +120,22 @@ contains:column "a" specified more than once
 
 > CREATE TYPE int4_map_map AS MAP (key_type=text, value_type=int4_map);
 
-> CREATE VIEW complex_type_view AS SELECT '{{1,2},{3,4}}'::int4_list_list c1, '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2;
+> CREATE MATERIALIZED VIEW complex_type_view AS SELECT '{{1,2},{3,4}}'::int4_list_list c1, '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2;
 
 > CREATE SINK complex_type_sink FROM complex_type_view
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'complex-type-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'complex-type-sink'
+  CONSISTENCY (
+    TOPIC 'complex-type-sink-${testdrive.seed}' FORMAT AVRO
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  )
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.complex_type_sink key=false
-{"before": null, "after": {"c1": [[1,2],[3,4]], "c2": {"a":{"b":1, "c":2}, "d": {"e":3, "f":4}}}}
+{"before": null, "after": {"c1": [[1,2],[3,4]], "c2": {"a":{"b":1, "c":2}, "d": {"e":3, "f":4}}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 # testdrive will not automatically clean up types, so we need to do that ourselves
 
-> DROP VIEW complex_type_view CASCADE;
+> DROP MATERIALIZED VIEW complex_type_view CASCADE;
 
 > DROP TYPE int4_list_list;
 

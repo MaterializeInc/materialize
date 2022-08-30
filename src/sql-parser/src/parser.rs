@@ -1704,12 +1704,10 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
             let schema = self.parse_schema()?;
-            // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
-            // accept `WITH (...)` here.
-            let with_options = if self.peek_keyword(WITH)
-                && self.peek_nth_token(1) != Some(Token::Keyword(SNAPSHOT))
-            {
-                self.parse_kw_options(Parser::parse_avro_schema_options)?
+            let with_options = if self.consume_token(&Token::LParen) {
+                let with_options = self.parse_comma_separated(Parser::parse_avro_schema_options)?;
+                self.expect_token(&Token::RParen)?;
+                with_options
             } else {
                 vec![]
             };
@@ -1758,15 +1756,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_connection_avro(&mut self) -> Result<CsrConnectionAvro<Raw>, ParserError> {
-        let connection = if self.parse_keyword(CONNECTION) {
-            CsrConnection::Reference {
-                connection: self.parse_raw_name()?,
-            }
-        } else {
-            CsrConnection::Inline {
-                url: self.parse_literal_string()?,
-            }
+        self.expect_keyword(CONNECTION)?;
+        let connection = CsrConnection {
+            connection: self.parse_raw_name()?,
         };
+
         let seed = if self.parse_keyword(SEED) {
             let key_schema = if self.parse_keyword(KEY) {
                 self.expect_keyword(SCHEMA)?;
@@ -1812,31 +1806,19 @@ impl<'a> Parser<'a> {
         let key_strategy = parse_schema_strategy(&[KEY, STRATEGY])?;
         let value_strategy = parse_schema_strategy(&[VALUE, STRATEGY])?;
 
-        // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
-        // accept `WITH (...)` here.
-        let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-            self.parse_opt_with_options()?
-        } else {
-            vec![]
-        };
         Ok(CsrConnectionAvro {
             connection,
             seed,
-            with_options,
             key_strategy,
             value_strategy,
         })
     }
 
     fn parse_csr_connection_proto(&mut self) -> Result<CsrConnectionProtobuf<Raw>, ParserError> {
-        let connection = if self.parse_keyword(CONNECTION) {
-            CsrConnection::Reference {
-                connection: self.parse_raw_name()?,
-            }
-        } else {
-            CsrConnection::Inline {
-                url: self.parse_literal_string()?,
-            }
+        self.expect_keyword(CONNECTION)?;
+
+        let connection = CsrConnection {
+            connection: self.parse_raw_name()?,
         };
 
         let seed = if self.parse_keyword(SEED) {
@@ -1867,19 +1849,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
-        // accept `WITH (...)` here.
-        let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-            self.parse_opt_with_options()?
-        } else {
-            vec![]
-        };
-
-        Ok(CsrConnectionProtobuf {
-            connection,
-            seed,
-            with_options,
-        })
+        Ok(CsrConnectionProtobuf { connection, seed })
     }
 
     fn parse_schema(&mut self) -> Result<Schema, ParserError> {
@@ -1956,31 +1926,37 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
-        let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT, POSTGRES, SSH])? {
-            KAFKA => {
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
-                CreateConnection::Kafka { with_options }
-            }
-            CONFLUENT => {
-                self.expect_keywords(&[SCHEMA, REGISTRY])?;
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_csr_connection_options)?;
-                CreateConnection::Csr { with_options }
-            }
-            POSTGRES => {
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_postgres_connection_options)?;
-                CreateConnection::Postgres { with_options }
-            }
-            SSH => {
-                self.expect_keyword(TUNNEL)?;
-                let with_options =
-                    self.parse_comma_separated(Parser::parse_ssh_connection_options)?;
-                CreateConnection::Ssh { with_options }
-            }
-            _ => unreachable!(),
-        };
+        let connection =
+            match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])? {
+                AWS => {
+                    let with_options =
+                        self.parse_comma_separated(Parser::parse_aws_connection_options)?;
+                    CreateConnection::Aws { with_options }
+                }
+                KAFKA => {
+                    let with_options =
+                        self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
+                    CreateConnection::Kafka { with_options }
+                }
+                CONFLUENT => {
+                    self.expect_keywords(&[SCHEMA, REGISTRY])?;
+                    let with_options =
+                        self.parse_comma_separated(Parser::parse_csr_connection_options)?;
+                    CreateConnection::Csr { with_options }
+                }
+                POSTGRES => {
+                    let with_options =
+                        self.parse_comma_separated(Parser::parse_postgres_connection_options)?;
+                    CreateConnection::Postgres { with_options }
+                }
+                SSH => {
+                    self.expect_keyword(TUNNEL)?;
+                    let with_options =
+                        self.parse_comma_separated(Parser::parse_ssh_connection_options)?;
+                    CreateConnection::Ssh { with_options }
+                }
+                _ => unreachable!(),
+            };
         Ok(Statement::CreateConnection(CreateConnectionStatement {
             name,
             connection,
@@ -2016,6 +1992,87 @@ impl<'a> Parser<'a> {
 
         let _ = self.consume_token(&Token::Eq);
         Ok(KafkaConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
+    fn parse_kafka_connection_reference(&mut self) -> Result<KafkaConnection<Raw>, ParserError> {
+        let connection = self.parse_raw_name()?;
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_kafka_config_options)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
+        Ok(KafkaConnection::Reference {
+            connection,
+            with_options,
+        })
+    }
+
+    fn parse_kafka_config_options(&mut self) -> Result<KafkaConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[
+            ACKS,
+            CLIENT,
+            ENABLE,
+            FETCH,
+            GROUP,
+            ISOLATION,
+            STATISTICS,
+            TOPIC,
+            TRANSACTION,
+            START,
+        ])? {
+            ACKS => KafkaConfigOptionName::Acks,
+            CLIENT => {
+                self.expect_keyword(ID)?;
+                KafkaConfigOptionName::ClientId
+            }
+            ENABLE => match self.expect_one_of_keywords(&[AUTO, IDEMPOTENCE])? {
+                AUTO => {
+                    self.expect_keyword(COMMIT)?;
+                    KafkaConfigOptionName::EnableAutoCommit
+                }
+                IDEMPOTENCE => KafkaConfigOptionName::EnableIdempotence,
+                _ => unreachable!(),
+            },
+            FETCH => {
+                self.expect_keywords(&[MESSAGE, crate::keywords::MAX, BYTES])?;
+                KafkaConfigOptionName::FetchMessageMaxBytes
+            }
+            GROUP => {
+                self.expect_keywords(&[ID, PREFIX])?;
+                KafkaConfigOptionName::GroupIdPrefix
+            }
+            ISOLATION => {
+                self.expect_keyword(LEVEL)?;
+                KafkaConfigOptionName::IsolationLevel
+            }
+            STATISTICS => {
+                self.expect_keywords(&[INTERVAL, MS])?;
+                KafkaConfigOptionName::StatisticsIntervalMs
+            }
+            TOPIC => {
+                self.expect_keywords(&[METADATA, REFRESH, INTERVAL, MS])?;
+                KafkaConfigOptionName::TopicMetadataRefreshIntervalMs
+            }
+            TRANSACTION => {
+                self.expect_keywords(&[TIMEOUT, MS])?;
+                KafkaConfigOptionName::TransactionTimeoutMs
+            }
+            START => match self.expect_one_of_keywords(&[OFFSET, TIMESTAMP])? {
+                OFFSET => KafkaConfigOptionName::StartOffset,
+                TIMESTAMP => KafkaConfigOptionName::StartTimestamp,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        let _ = self.consume_token(&Token::Eq);
+        Ok(KafkaConfigOption {
             name,
             value: self.parse_opt_with_option_value(false)?,
         })
@@ -2078,7 +2135,30 @@ impl<'a> Parser<'a> {
         };
 
         let _ = self.consume_token(&Token::Eq);
-        Ok(PostgresConnectionOption {
+        let value = match &name {
+            // Only objects (in particular, SSH connections) are valid parameters for SSH tunnels
+            PostgresConnectionOptionName::SshTunnel => Some(self.parse_with_option_value_object()?),
+            _ => self.parse_opt_with_option_value(false)?,
+        };
+        Ok(PostgresConnectionOption { name, value })
+    }
+
+    fn parse_aws_connection_options(&mut self) -> Result<AwsConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[ACCESS, SECRET, TOKEN])? {
+            ACCESS => {
+                self.expect_keywords(&[KEY, ID])?;
+                AwsConnectionOptionName::AccessKeyId
+            }
+            SECRET => {
+                self.expect_keywords(&[ACCESS, KEY])?;
+                AwsConnectionOptionName::SecretAccessKey
+            }
+            TOKEN => AwsConnectionOptionName::Token,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(AwsConnectionOption {
             name,
             value: self.parse_opt_with_option_value(false)?,
         })
@@ -2106,7 +2186,7 @@ impl<'a> Parser<'a> {
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
         let connection = self.parse_create_source_connection()?;
-        let legacy_with_options = self.parse_opt_with_options()?;
+        let legacy_with_options = self.parse_legacy_with_options()?;
         let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
             Some(KEY) => {
                 self.expect_keyword(FORMAT)?;
@@ -2130,7 +2210,7 @@ impl<'a> Parser<'a> {
         // New WITH block
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_create_source_option)?;
+            let options = self.parse_comma_separated(Parser::parse_source_option)?;
             self.expect_token(&Token::RParen)?;
             options
         } else {
@@ -2193,14 +2273,28 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses a single valid option in the WITH block of a create source
-    fn parse_create_source_option(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SIZE, REMOTE])? {
-            SIZE => CreateSourceOptionName::Size,
-            REMOTE => CreateSourceOptionName::Remote,
-            _ => unreachable!(),
-        };
+    fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
+        let name =
+            match self.expect_one_of_keywords(&[IGNORE, REMOTE, SIZE, TIMELINE, TIMESTAMP])? {
+                IGNORE => {
+                    self.expect_keyword(KEYS)?;
+                    CreateSourceOptionName::IgnoreKeys
+                }
+                REMOTE => CreateSourceOptionName::Remote,
+                SIZE => CreateSourceOptionName::Size,
+                TIMELINE => CreateSourceOptionName::Timeline,
+                TIMESTAMP => {
+                    self.expect_keyword(INTERVAL)?;
+                    CreateSourceOptionName::TimestampInterval
+                }
+                _ => unreachable!(),
+            };
+        Ok(name)
+    }
 
+    /// Parses a single valid option in the WITH block of a create source
+    fn parse_source_option(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
+        let name = self.parse_source_option_name()?;
         let _ = self.consume_token(&Token::Eq);
         Ok(CreateSourceOption {
             name,
@@ -2212,7 +2306,6 @@ impl<'a> Parser<'a> {
         self.expect_keyword(SINK)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
-        let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
@@ -2246,17 +2339,15 @@ impl<'a> Parser<'a> {
             // default to WITH SNAPSHOT.
             true
         };
-        let as_of = self.parse_optional_as_of()?;
+
         Ok(Statement::CreateSink(CreateSinkStatement {
             name,
-            in_cluster,
             from,
             connection,
             with_options,
             format,
             envelope,
             with_snapshot,
-            as_of,
             if_not_exists,
         }))
     }
@@ -2287,9 +2378,7 @@ impl<'a> Parser<'a> {
                     BROKER => KafkaConnection::Inline {
                         broker: self.parse_literal_string()?,
                     },
-                    CONNECTION => KafkaConnection::Reference {
-                        connection: self.parse_raw_name()?,
-                    },
+                    CONNECTION => self.parse_kafka_connection_reference()?,
                     _ => unreachable!(),
                 };
                 self.expect_keyword(TOPIC)?;
@@ -2312,15 +2401,21 @@ impl<'a> Parser<'a> {
                 }))
             }
             KINESIS => {
+                self.expect_keyword(CONNECTION)?;
+                let connection = self.parse_raw_name()?;
+
                 self.expect_keyword(ARN)?;
                 let arn = self.parse_literal_string()?;
-                Ok(CreateSourceConnection::Kinesis { arn })
+                Ok(CreateSourceConnection::Kinesis { connection, arn })
             }
             S3 => {
-                // FROM S3 DISCOVER OBJECTS
+                // FROM S3 CONNECTION <aws CONNECTION> DISCOVER OBJECTS
                 // (MATCHING '<pattern>')?
                 // USING
                 // (BUCKET SCAN '<bucket>' | SQS NOTIFICATIONS '<channel>')+
+                self.expect_keyword(CONNECTION)?;
+                let connection = self.parse_raw_name()?;
+
                 self.expect_keywords(&[DISCOVER, OBJECTS])?;
                 let pattern = if self.parse_keyword(MATCHING) {
                     Some(self.parse_literal_string()?)
@@ -2356,6 +2451,7 @@ impl<'a> Parser<'a> {
                     Compression::None
                 };
                 Ok(CreateSourceConnection::S3 {
+                    connection,
                     key_sources,
                     pattern,
                     compression,
@@ -2397,8 +2493,10 @@ impl<'a> Parser<'a> {
 
     fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
         self.expect_keyword(KAFKA)?;
-        self.expect_keyword(BROKER)?;
-        let broker = self.parse_literal_string()?;
+        self.expect_keyword(CONNECTION)?;
+
+        let connection = self.parse_kafka_connection_reference()?;
+
         self.expect_keyword(TOPIC)?;
         let topic = self.parse_literal_string()?;
         // one token of lookahead:
@@ -2424,7 +2522,7 @@ impl<'a> Parser<'a> {
             };
         let consistency = self.parse_kafka_consistency()?;
         Ok(CreateSinkConnection::Kafka {
-            broker,
+            connection,
             topic,
             key,
             consistency,
@@ -2433,28 +2531,19 @@ impl<'a> Parser<'a> {
 
     fn parse_kafka_consistency(&mut self) -> Result<Option<KafkaConsistency<Raw>>, ParserError> {
         if self.parse_keyword(CONSISTENCY) {
-            // We would prefer for all consistency parameters to be
-            // parenthesized, but for backwards compatibility we support an
-            // unparenthesized syntax that has some ambiguity issues
-            // (see #8231).
-            //
-            // Bad:
-            //     CONSISTENCY TOPIC 'foo' CONSISTENCY FORMAT 'bar' WITH (format_option = 'blah')
-            // Good:
-            //     CONSISTENCY (TOPIC 'foo' FORMAT 'bar' WITH (format_option = 'blah'))
-            let parenthesized = self.consume_token(&Token::LParen);
+            self.expect_token(&Token::LParen)?;
+
             self.expect_keyword(TOPIC)?;
             let topic = self.parse_literal_string()?;
-            let topic_format = if (parenthesized && self.parse_keyword(FORMAT))
-                || (!parenthesized && self.parse_keywords(&[CONSISTENCY, FORMAT]))
-            {
+
+            let topic_format = if self.parse_keyword(FORMAT) {
                 Some(self.parse_format()?)
             } else {
                 None
             };
-            if parenthesized {
-                self.expect_token(&Token::RParen)?;
-            }
+
+            self.expect_token(&Token::RParen)?;
+
             Ok(Some(KafkaConsistency {
                 topic,
                 topic_format,
@@ -2757,7 +2846,6 @@ impl<'a> Parser<'a> {
             options,
         }))
     }
-
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[AVAILABILITY, REMOTE, SIZE])? {
             AVAILABILITY => {
@@ -2792,16 +2880,16 @@ impl<'a> Parser<'a> {
                 self.expect_token(&Token::RParen)?;
                 Ok(ClusterOption::Replicas(replicas))
             }
-            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
+            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => {
                     let _ = self.consume_token(&Token::Eq);
                     Ok(ClusterOption::IntrospectionDebugging(
                         self.parse_with_option_value()?,
                     ))
                 }
-                GRANULARITY => {
+                INTERVAL => {
                     let _ = self.consume_token(&Token::Eq);
-                    Ok(ClusterOption::IntrospectionGranularity(
+                    Ok(ClusterOption::IntrospectionInterval(
                         self.parse_with_option_value()?,
                     ))
                 }
@@ -3207,6 +3295,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_legacy_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
+        if self.parse_keyword(LEGACYWITH) {
+            self.parse_with_options(true)
+        } else {
+            Ok(vec![])
+        }
+    }
+
     fn parse_with_options(
         &mut self,
         require_equals: bool,
@@ -3254,7 +3350,7 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(SECRET) {
             // HACK(benesch): temporarily allow secret references of the form
             // `KEY = SECRET db.schema.item`. `KEY = SECRET` is still allowed
-            // for backwards copmatibility and parses as the ident `secret`.
+            // for backwards compatibility and parses as the ident `secret`.
             // Once we have connections with explicit fields for secret
             // references, we can remove this hack.
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
@@ -3271,6 +3367,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_with_option_value_object(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        if let Some(obj) = self.maybe_parse(Parser::parse_raw_name) {
+            Ok(WithOptionValue::Object(obj))
+        } else {
+            return self.expected(self.peek_pos(), "object", self.peek_token());
+        }
+    }
+
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
         let object_type = match self.expect_one_of_keywords(&[
             SINK,
@@ -3281,9 +3385,10 @@ impl<'a> Parser<'a> {
             INDEX,
             SECRET,
             SYSTEM,
+            CONNECTION,
         ])? {
             SINK => ObjectType::Sink,
-            SOURCE => ObjectType::Source,
+            SOURCE => return self.parse_alter_source(),
             VIEW => ObjectType::View,
             MATERIALIZED => {
                 self.expect_keyword(VIEW)?;
@@ -3293,6 +3398,7 @@ impl<'a> Parser<'a> {
             INDEX => return self.parse_alter_index(),
             SECRET => return self.parse_alter_secret(),
             SYSTEM => return self.parse_alter_system(),
+            CONNECTION => return self.parse_alter_connection(),
             _ => unreachable!(),
         };
 
@@ -3308,6 +3414,47 @@ impl<'a> Parser<'a> {
             name,
             to_item_name,
         }))
+    }
+
+    fn parse_alter_source(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_object_name()?;
+
+        Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
+            RESET => {
+                self.expect_token(&Token::LParen)?;
+                let reset_options = self.parse_comma_separated(Parser::parse_source_option_name)?;
+                self.expect_token(&Token::RParen)?;
+
+                Statement::AlterSource(AlterSourceStatement {
+                    source_name: name,
+                    if_exists,
+                    action: AlterSourceAction::ResetOptions(reset_options),
+                })
+            }
+            SET => {
+                self.expect_token(&Token::LParen)?;
+                let set_options = self.parse_comma_separated(Parser::parse_source_option)?;
+                self.expect_token(&Token::RParen)?;
+                Statement::AlterSource(AlterSourceStatement {
+                    source_name: name,
+                    if_exists,
+                    action: AlterSourceAction::SetOptions(set_options),
+                })
+            }
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+
+                Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type: ObjectType::Source,
+                    if_exists,
+                    name,
+                    to_item_name,
+                })
+            }
+            _ => unreachable!(),
+        })
     }
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3379,13 +3526,56 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse an ALTER SYSTEM SET statement.
+    /// Parse an ALTER SYSTEM statement.
     fn parse_alter_system(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keyword(SET)?;
-        let name = self.parse_identifier()?;
-        self.expect_keyword_or_token(TO, &Token::Eq)?;
-        let value = self.parse_set_variable_value()?;
-        Ok(Statement::AlterSystem(AlterSystemStatement { name, value }))
+        match self.expect_one_of_keywords(&[SET, RESET])? {
+            SET => {
+                let name = self.parse_identifier()?;
+                self.expect_keyword_or_token(TO, &Token::Eq)?;
+                let value = self.parse_set_variable_value()?;
+                Ok(Statement::AlterSystemSet(AlterSystemSetStatement {
+                    name,
+                    value,
+                }))
+            }
+            RESET => {
+                if self.parse_keyword(ALL) {
+                    Ok(Statement::AlterSystemResetAll(
+                        AlterSystemResetAllStatement {},
+                    ))
+                } else {
+                    let name = self.parse_identifier()?;
+                    Ok(Statement::AlterSystemReset(AlterSystemResetStatement {
+                        name,
+                    }))
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn parse_alter_connection(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_object_name()?;
+
+        Ok(match self.expect_one_of_keywords(&[RENAME, ROTATE])? {
+            RENAME => {
+                self.expect_keyword(TO)?;
+                let to_item_name = self.parse_identifier()?;
+
+                Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type: ObjectType::Secret,
+                    if_exists,
+                    name,
+                    to_item_name,
+                })
+            }
+            ROTATE => {
+                self.expect_keyword(KEYS)?;
+                Statement::AlterConnection(AlterConnectionStatement { name, if_exists })
+            }
+            _ => unreachable!(),
+        })
     }
 
     /// Parse a copy statement
@@ -4469,7 +4659,7 @@ impl<'a> Parser<'a> {
             let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
                 Some(kw) => {
                     if kw == IN && self.peek_keyword(CLUSTER) {
-                        if matches!(object_type, ObjectType::Sink | ObjectType::MaterializedView) {
+                        if matches!(object_type, ObjectType::MaterializedView) {
                             // put `IN` back
                             self.prev_token();
                             (None, self.parse_optional_in_cluster()?)

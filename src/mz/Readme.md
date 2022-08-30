@@ -142,3 +142,5 @@ source ~/.bash_profile
 
 # Windows (TBC)
 ```
+<<<<<<< HEAD
+=======

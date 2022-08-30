@@ -42,8 +42,6 @@ pub(crate) fn persist_sink<G>(
         truncate,
     );
 
-    // We don't allow these dataflows to be dropped, so the tokens could
-    // be stored anywhere.
     compute_state.sink_tokens.insert(
         target_id,
         crate::compute_state::SinkToken {

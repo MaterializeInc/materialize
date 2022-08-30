@@ -78,12 +78,17 @@ class MaterializeApplication(Application):
         self.images = ["environmentd", "computed", "storaged", "testdrive"]
 
         # Label the minicube nodes in a way that mimics Materialize cloud
-        for node in ["kind-control-plane", "kind-worker", "kind-worker2"]:
+        for node in [
+            "kind-control-plane",
+            "kind-worker",
+            "kind-worker2",
+            "kind-worker3",
+        ]:
             self.kubectl(
                 "label",
                 "--overwrite",
                 f"node/{node}",
-                "materialize.cloud/availability-zone=",
+                f"materialize.cloud/availability-zone={node}",
             )
 
         super().__init__()

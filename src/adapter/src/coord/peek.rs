@@ -19,7 +19,7 @@ use std::{collections::HashMap, num::NonZeroUsize};
 use futures::{FutureExt, StreamExt};
 use mz_expr::explain::Indices;
 use mz_ore::str::{bracketed, separated, Indent};
-use mz_repr::explain_new::{fmt_text_constant_rows, DisplayText, ExprHumanizer};
+use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -34,6 +34,7 @@ use mz_repr::{Diff, GlobalId, RelationType, Row};
 use mz_stash::Append;
 
 use crate::client::ConnectionId;
+use crate::explain_new::Displayable;
 use crate::util::send_immediate_rows;
 use crate::AdapterError;
 
@@ -70,7 +71,7 @@ pub enum FastPathPlan<T = mz_repr::Timestamp> {
     /// may be helpful when printing out an explanation.
     Constant(Result<Vec<(Row, T, Diff)>, EvalError>, RelationType),
     /// The view can be read out of an existing arrangement.
-    PeekExisting(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
+    PeekExisting(GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
 }
 
 impl FastPathPlan {
@@ -78,7 +79,7 @@ impl FastPathPlan {
         let mut explanation = String::new();
         use std::fmt::Write;
         match self {
-            FastPathPlan::PeekExisting(index, value, mfp) => {
+            FastPathPlan::PeekExisting(index, literal_constraints, mfp) => {
                 writeln!(
                     &mut explanation,
                     "%0 =\n| ReadExistingIndex {}",
@@ -87,8 +88,23 @@ impl FastPathPlan {
                         .unwrap_or_else(|| index.to_string())
                 )
                 .unwrap();
-                if let Some(value) = value {
-                    writeln!(&mut explanation, "| | Lookup value {}", value).unwrap();
+                if let Some(literal_constraints) = literal_constraints {
+                    write!(&mut explanation, "| | Lookup ").unwrap();
+                    if literal_constraints.len() == 1 {
+                        writeln!(
+                            &mut explanation,
+                            "value {}",
+                            literal_constraints.get(0).unwrap()
+                        )
+                        .unwrap();
+                    } else {
+                        writeln!(
+                            &mut explanation,
+                            "values [{}]",
+                            separated("; ", literal_constraints)
+                        )
+                        .unwrap();
+                    }
                 }
                 if !mfp.is_identity() {
                     let (map, filter, project) = mfp.as_map_filter_project();
@@ -171,55 +187,60 @@ where
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         // TODO: (#13299) print out types?
         match self {
-            FastPathPlan::Constant(Ok(rows), _) => fmt_text_constant_rows(
-                f,
-                rows.iter().map(|(row, _, diff)| (row, diff)),
-                ctx.as_mut(),
-            ),
+            FastPathPlan::Constant(Ok(rows), _) => {
+                writeln!(f, "{}Constant", ctx.as_mut())?;
+                *ctx.as_mut() += 1;
+                fmt_text_constant_rows(
+                    f,
+                    rows.iter().map(|(row, _, diff)| (row, diff)),
+                    ctx.as_mut(),
+                )?;
+                *ctx.as_mut() -= 1;
+                Ok(())
+            }
             FastPathPlan::Constant(Err(err), _) => {
                 writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().quoted())
             }
-            FastPathPlan::PeekExisting(id, lookup, mfp) => {
-                let mut total_indents = 0;
+            FastPathPlan::PeekExisting(id, literal_constraints, mfp) => {
+                ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
                 if project.len() != mfp.input_arity + map.len()
                     || !project.iter().enumerate().all(|(i, o)| i == *o)
                 {
                     let outputs = Indices(&project);
-                    writeln!(f, "{}Project {}", ctx.as_mut(), outputs)?;
+                    writeln!(f, "{}Project ({})", ctx.as_mut(), outputs)?;
                     *ctx.as_mut() += 1;
-                    total_indents += 1;
                 }
                 if !filter.is_empty() {
-                    // TODO (#13299) use separated_text
-                    //let predicates = separated_text(", ", filter.iter().map(Displayable::from));
-                    writeln!(f, "{}Filter {}", ctx.as_mut(), separated(" AND ", filter))?;
+                    let predicates = separated_text(" AND ", filter.iter().map(Displayable::from));
+                    writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;
-                    total_indents += 1;
                 }
                 if !map.is_empty() {
-                    // TODO (#13299) use separated_text
-                    //let scalars = separated_text(", ", map.iter().map(Displayable::from));
-                    writeln!(f, "{}Map {}", ctx.as_mut(), separated(", ", map))?;
+                    let scalars = separated_text(", ", map.iter().map(Displayable::from));
+                    writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
-                    total_indents += 1;
                 }
                 let humanized_index = ctx
                     .as_ref()
                     .humanize_id(*id)
                     .unwrap_or_else(|| id.to_string());
-                if let Some(lookup) = lookup {
-                    writeln!(
+                if let Some(literal_constraints) = literal_constraints {
+                    write!(
                         f,
-                        "{}ReadExistingIndex {} lookup_value={}",
+                        "{}ReadExistingIndex {} lookup ",
                         ctx.as_mut(),
-                        humanized_index,
-                        lookup
+                        humanized_index
                     )?;
+                    if literal_constraints.len() == 1 {
+                        writeln!(f, "value {}", literal_constraints.get(0).unwrap())?;
+                    } else {
+                        writeln!(f, "values [{}]", separated("; ", literal_constraints))?;
+                    }
                 } else {
                     writeln!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
                 }
-                *ctx.as_mut() -= total_indents;
+                ctx.as_mut().reset();
                 Ok(())
             }
         }?;
@@ -303,7 +324,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                     }
                 }
                 mz_expr::MirRelationExpr::Join { implementation, .. } => {
-                    if let mz_expr::JoinImplementation::PredicateIndex(id, key, val) =
+                    if let mz_expr::JoinImplementation::IndexedFilter(id, key, vals) =
                         implementation
                     {
                         // We should only get excited if we can track down an index for `id`.
@@ -312,10 +333,10 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
                             dataflow_plan.index_imports.iter()
                         {
                             if desc.on_id == *id && &desc.key == key {
-                                // Indicate an early exit with a specific index and key_val.
+                                // Indicate an early exit with a specific index and key value.
                                 return Ok(Some(FastPathPlan::PeekExisting(
                                     *index_id,
-                                    Some(val.clone()),
+                                    Some(vals.clone()),
                                     permute_oneshot_mfp_around_index(mfp, key)?,
                                 )));
                             }
@@ -352,8 +373,18 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let peek_plan = fast_path_plan.map_or_else(
             // finalize the dataflow and produce a PeekPlan::SlowPath as a default
             || {
+                let mut desc = self.finalize_dataflow(dataflow, compute_instance);
+                // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
+                // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
+                if let Some(as_of) = desc.as_of.as_ref() {
+                    if !as_of.is_empty() {
+                        if let Some(next) = as_of.elements()[0].checked_add(1) {
+                            desc.until = timely::progress::Antichain::from_elem(next);
+                        }
+                    }
+                }
                 PeekPlan::SlowPath(PeekDataflowPlan {
-                    desc: self.finalize_dataflow(dataflow, compute_instance),
+                    desc,
                     id: index_id,
                     key,
                     permutation,
@@ -421,8 +452,18 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
         // If we must build the view, ship the dataflow.
         let (peek_command, drop_dataflow) = match fast_path {
-            PeekPlan::FastPath(FastPathPlan::PeekExisting(id, key, map_filter_project)) => (
-                (id, key, timestamp, finishing.clone(), map_filter_project),
+            PeekPlan::FastPath(FastPathPlan::PeekExisting(
+                id,
+                literal_constraints,
+                map_filter_project,
+            )) => (
+                (
+                    id,
+                    literal_constraints,
+                    timestamp,
+                    finishing.clone(),
+                    map_filter_project,
+                ),
                 None,
             ),
             PeekPlan::SlowPath(PeekDataflowPlan {
@@ -505,14 +546,14 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .entry(conn_id)
             .or_default()
             .insert(uuid, compute_instance);
-        let (id, key, timestamp, _finishing, map_filter_project) = peek_command;
+        let (id, literal_constraints, timestamp, _finishing, map_filter_project) = peek_command;
 
         self.controller
             .compute_mut(compute_instance)
             .unwrap()
             .peek(
                 id,
-                key,
+                literal_constraints,
                 uuid,
                 timestamp,
                 finishing.clone(),
@@ -651,7 +692,7 @@ mod tests {
         );
         let lookup = FastPathPlan::<mz_repr::Timestamp>::PeekExisting(
             GlobalId::User(11),
-            Some(Row::pack(Some(Datum::Int32(5)))),
+            Some(vec![Row::pack(Some(Datum::Int32(5)))]),
             MapFilterProject::new(3)
                 .filter(Some(
                     MirScalarExpr::column(0).call_unary(UnaryFunc::IsNull(IsNull)),
@@ -666,8 +707,8 @@ mod tests {
         let ctx_gen = || RenderingContext::new(Indent::default(), &humanizer);
 
         let constant_err_exp = "Error \"division by zero\"\n";
-        let no_lookup_exp = "Project #1, #4\n  Map (#0 OR #2)\n    ReadExistingIndex u10\n";
-        let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup_value=(5)\n";
+        let no_lookup_exp = "Project (#1, #4)\n  Map ((#0 OR #2))\n    ReadExistingIndex u10\n";
+        let lookup_exp = "Filter (#0) IS NULL\n  ReadExistingIndex u11 lookup value (5)\n";
 
         assert_eq!(text_string_at(&constant_err, ctx_gen), constant_err_exp);
         assert_eq!(text_string_at(&no_lookup, ctx_gen), no_lookup_exp);

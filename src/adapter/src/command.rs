@@ -320,6 +320,92 @@ pub enum ExecuteResponse {
     },
 }
 
+impl ExecuteResponse {
+    pub fn tag(&self) -> Option<String> {
+        // format!($($arg)*)
+        use ExecuteResponse::*;
+        macro_rules! generic_concat {
+            ($lede:expr, $type:expr) => {{
+                Some(format!("{} {}", $lede, $type.to_uppercase()))
+            }};
+        }
+        macro_rules! created {
+            ($type:expr) => {{
+                generic_concat!("CREATE", $type)
+            }};
+        }
+        macro_rules! dropped {
+            ($type:expr) => {{
+                generic_concat!("DROP", $type)
+            }};
+        }
+
+        match self {
+            TransactionExited { tag, .. } => Some(tag.to_string()),
+            AlteredObject(o) => Some(format!("ALTER {}", o)),
+            AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
+            AlteredSystemConfiguraion => Some("ALTER SYSTEM".into()),
+            Canceled => None,
+            ClosedCursor => Some("CLOSE CURSOR".into()),
+            CopyTo { .. } => None,
+            CopyFrom { .. } => None,
+            CreatedConnection { .. } => created!("connection"),
+            CreatedDatabase { .. } => created!("database"),
+            CreatedSchema { .. } => created!("schema"),
+            CreatedRole => created!("role"),
+            CreatedComputeInstance { .. } => created!("connection"),
+            CreatedComputeInstanceReplica { .. } => created!("cluster replica"),
+            CreatedIndex { .. } => created!("index"),
+            CreatedSecret { .. } => created!("secret"),
+            CreatedSink { .. } => created!("sink"),
+            CreatedSource { .. } => created!("source"),
+            CreatedSources => created!("sources"),
+            CreatedTable { .. } => created!("table"),
+            CreatedView { .. } => created!("view"),
+            CreatedMaterializedView { .. } => created!("materialized view"),
+            CreatedType => created!("type"),
+            Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
+            DeclaredCursor => Some("DECLARE CURSOR".into()),
+            Deleted(n) => Some(format!("DELETE {}", n)),
+            DiscardedTemp => Some("DISCARD TEMP".into()),
+            DiscardedAll => Some("DISCARD ALL".into()),
+            DroppedConnection => dropped!("connection"),
+            DroppedComputeInstance => dropped!("cluster"),
+            DroppedComputeInstanceReplicas => dropped!("cluster replica"),
+            DroppedDatabase => dropped!("database"),
+            DroppedRole => dropped!("role"),
+            DroppedSchema => dropped!("schema"),
+            DroppedSource => dropped!("source"),
+            DroppedTable => dropped!("table"),
+            DroppedView => dropped!("view"),
+            DroppedMaterializedView => dropped!("materialized view"),
+            DroppedIndex => dropped!("index"),
+            DroppedSink => dropped!("sink"),
+            DroppedType => dropped!("type"),
+            DroppedSecret => dropped!("secret"),
+            EmptyQuery => None,
+            Fetch { .. } => None,
+            Inserted(n) => {
+                // "On successful completion, an INSERT command returns a
+                // command tag of the form `INSERT <oid> <count>`."
+                //     -- https://www.postgresql.org/docs/11/sql-insert.html
+                //
+                // OIDs are a PostgreSQL-specific historical quirk, but we
+                // can return a 0 OID to indicate that the table does not
+                // have OIDs.
+                Some(format!("INSERT 0 {}", n))
+            }
+            Prepare => Some("PREPARE".into()),
+            SendingRows { .. } => None,
+            SetVariable { tag, .. } => Some(tag.to_string()),
+            StartedTransaction { .. } => Some("BEGIN".into()),
+            Tailing { .. } => None,
+            Updated(n) => Some(format!("UPDATE {}", n)),
+            Raise { .. } => Some("RAISE".into()),
+        }
+    }
+}
+
 /// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).
 #[derive(Debug, Serialize)]
 pub struct SimpleExecuteResponse {

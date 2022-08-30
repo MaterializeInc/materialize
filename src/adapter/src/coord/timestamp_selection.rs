@@ -14,7 +14,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_repr::explain_new::ExprHumanizer;
-use mz_repr::{RelationType, RowArena, ScalarType, Timestamp};
+use mz_repr::{RowArena, ScalarType, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_stash::Append;
 
@@ -64,7 +64,7 @@ impl<S: Append + 'static> Coordinator<S> {
             if evaled.is_null() {
                 coord_bail!("can't use {} as a timestamp for AS OF", evaled);
             }
-            let ty = timestamp.typ(&RelationType::empty());
+            let ty = timestamp.typ(&[]);
             let ts = match ty.scalar_type {
                 ScalarType::Numeric { .. } => {
                     let n = evaled.unwrap_numeric().0;
@@ -73,6 +73,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
                 ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
                 ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
+                ScalarType::UInt16 => evaled.unwrap_uint16().into(),
+                ScalarType::UInt32 => evaled.unwrap_uint32().into(),
+                ScalarType::UInt64 => evaled.unwrap_uint64(),
                 ScalarType::TimestampTz => {
                     evaled.unwrap_timestamptz().timestamp_millis().try_into()?
                 }
@@ -130,8 +133,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 .unwrap()
                                 .collection(*id)
                                 .unwrap()
-                                .read_capabilities
-                                .frontier()
+                                .read_frontier()
                                 .to_owned();
                             if since.less_equal(&candidate) {
                                 None
@@ -186,7 +188,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for (instance, compute_ids) in &id_bundle.compute_ids {
                 let compute = self.controller.compute(*instance).unwrap();
                 for id in compute_ids.iter() {
-                    since.join_assign(&compute.collection(*id).unwrap().implied_capability)
+                    since.join_assign(&compute.collection(*id).unwrap().read_capability())
                 }
             }
         }
@@ -210,7 +212,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         .collection(*id)
                         .unwrap()
                         .write_frontier
-                        .frontier()
                         .iter()
                         .cloned(),
                 );
@@ -224,8 +225,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         compute
                             .collection(*id)
                             .unwrap()
-                            .write_frontier
-                            .frontier()
+                            .write_frontier()
                             .iter()
                             .cloned(),
                     );

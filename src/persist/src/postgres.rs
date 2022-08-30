@@ -330,7 +330,7 @@ impl Consensus for PostgresConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
+    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -340,23 +340,19 @@ impl Consensus for PostgresConsensus {
         }
 
         let result = if let Some(expected) = expected {
-            // Only insert the new row if:
-            // - sequence number expected is already present
-            // - expected corresponds to the most recent sequence number
-            //   i.e. there is no other sequence number > expected already
-            //   present.
-            //
-            // This query has also been written to execute within a single
-            // network round-trip (instead of a slightly simpler implementation
-            // that would call `BEGIN` and have multiple `SELECT` queries).
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     EXISTS (
-                        SELECT * FROM consensus WHERE shard = $1 AND sequence_number = $4
-                     )
-                     AND NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1 AND sequence_number > $4
-                     )
-                     ON CONFLICT DO NOTHING";
+            // This query has been written to execute within a single
+            // network round-trip. The insert performance has been tuned
+            // against CockroachDB, ensuring it goes through the fast-path
+            // 1-phase commit of CRDB. Any changes to this query should
+            // confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
+            // `auto commit`
+            let q = r#"
+                INSERT INTO consensus (shard, sequence_number, data)
+                SELECT $1, $2, $3
+                WHERE (SELECT sequence_number FROM consensus
+                       WHERE shard = $1
+                       ORDER BY sequence_number DESC LIMIT 1) = $4;
+            "#;
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             client
@@ -382,13 +378,14 @@ impl Consensus for PostgresConsensus {
         if result == 1 {
             Ok(Ok(()))
         } else {
-            // It's safe to call head in a subsequent transaction rather than doing
+            // It's safe to call scan in a subsequent transaction rather than doing
             // so directly in the same transaction because, once a given (seqno, data)
             // pair exists for our shard, we enforce the invariants that
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(key).await?;
+            let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
+            let current = self.scan(key, from).await?;
             Ok(Err(current))
         }
     }
@@ -412,15 +409,7 @@ impl Consensus for PostgresConsensus {
                 data: Bytes::from(data),
             });
         }
-
-        if results.is_empty() {
-            Err(ExternalError::from(anyhow!(
-                "sequence number lower bound too high for scan: {:?}",
-                from
-            )))
-        } else {
-            Ok(results)
-        }
+        Ok(results)
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {

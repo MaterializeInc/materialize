@@ -8,7 +8,6 @@ As part of this process, one also needs to:
 
 This guide currently focuses primarily on (1).
 Details for (2) will be added as we accumulate more knowledge.
-
 ## Overview
 
 This process of adding Protobuf-based serialization support for a new Rust type `$T` consists of the following <a name="implementation-steps"></a>**implementation steps**:
@@ -131,6 +130,7 @@ This step is only needed if `$T` is a complex type ([classes (c) or (d)](#type-c
 
 ```rust
 fn main() {
+    env::set_var("PROTOC", protobuf_src::protoc());
     prost_build::Config::new()
         // list paths to external types used in the compiled files
         .extern_path(".mz_repr.adt.char", "::mz_repr::adt::char")
@@ -261,6 +261,20 @@ Implement [`proptest::Arbitrary`](https://docs.rs/proptest/latest/proptest/arbit
 - For [class (c)](#type-classes) types with relatively simple structure, one can use the `proptest_derive::Arbitrary` derive macro ([example](https://github.com/MaterializeInc/materialize/pull/11812/files#diff-e4bb64025b518e3405a4cb1cbe27910600c750cb32335731c56b59ee6295958fR21)).
 - For [class (c)](#type-classes) types with vectors, recursive, or deeply-nested structure a custom `Arbitrary` implementation is required ([example](https://github.com/MaterializeInc/materialize/pull/12353/files#diff-8cb017eb837d9b1fb8253f9b0d0ddc478858a91a8579a163a8bb11a00577f85eR174-R189)).
 - For [class (d)](#type-classes) types a strategy constructor should be used instead ([example](https://github.com/MaterializeInc/materialize/pull/11801/files#diff-4ecbf4683c5f2c03aa3e4d654c14bb4a246b0f34b16e0da920369f649f7d1dfaR23-R39)).
+
+Note that derived `Arbitrary` implementations occasionally suffer from stack overflow errors, as the `ValueTree` lives entirely on the stack.
+This most often (but not exclusively) affects recursive and unbalanced structures.
+See the relevant issues filed in [AltSysrq/proptest/issues/152](https://github.com/AltSysrq/proptest/issues/152) and [AltSysrq/proptest/issues/249](https://github.com/AltSysrq/proptest/issues/249).
+As a consequence of that limitation, you might see errors like that one:
+
+```text
+thread 'protocol::client::tests::storage_command_protobuf_roundtrip' has overflowed its stack
+fatal runtime error: stack overflow
+```
+
+The current workaround in that case is to implement `Arbitrary` manually and to box the children of the current node using the `.boxed()` method. See [3ab46c5d](https://github.com/MaterializeInc/materialize/pull/14375/commits/3ab46c5d45088941ee6c15834e8c05c24127df8c) for an example.
+We are currently investigating fixing this in a private fork so we don't have to do this.
+This section will be removed if we suceed in this endeavour.
 
 Here are the derive-based `Arbitrary` implementations for `MyStruct` and `MyEnum`.
 
@@ -448,10 +462,11 @@ enum $T {
    <td valign=top>
 <pre>message Proto$T {
   oneof kind {
-    Proto$V1 var_1 = 1;  }
+    Proto$V1 var_1 = 1;
+  }
 }</pre>
    </td>
-   <td valign=top>Use <code>Proto$T1</code> if <code>$T1</code> is a complex type for which <code>Proto$T1</code> already exists.</td>
+   <td valign=top>Use <code>Proto$V1</code> if <code>$Var1</code> is a complex variant for which <code>Proto$V1</code> already exists.</td>
   </tr>
   <tr>
    <td valign=top>
@@ -534,15 +549,15 @@ BTreeMap<$K, $V></pre>
   <tr>
    <td valign=top>
 <pre>struct $T {
-  f1 : vec<$T1>
+  f1 : vec<$V>
 }</pre>
    </td>
    <td valign=top>
-<pre>Message Proto$T {
-  repeated Proto$T1 f1 = 1;
+<pre>message Proto$T {
+  repeated Proto$V f1 = 1;
 }</pre>
    </td>
-   <td valign=top></td>
+   <td valign=top>Represent a 1-dimensional <code>$V</code> vector as a repeated field of the translated item type <code>Proto$V</code>.</td>
   </tr>
   <tr>
    <td valign=top>
@@ -551,15 +566,15 @@ BTreeMap<$K, $V></pre>
 }</pre>
    </td>
    <td valign=top>
-<pre>message Proto$T1 { … }
-message ProtoVec$T1 {
-  repeated Proto$T1 value = 1;
+<pre>message Proto$V { … }
+message Proto${V}Vec {
+  repeated Proto$V value = 1;
 }
-message Proto$T {
-  repeated ProtoF1Vec f1 = 1;
+message Proto$V {
+  repeated Proto${V}Vec f1 = 1;
 }</pre>
    </td>
-   <td valign=top></td>
+   <td valign=top>Represent a 2-dimensional <code>$V</code> vector as a repeated field of type <code>Proto${V}Vec</code>, where the latter is a dedicated struct that represents a 1-dimensional <code>$V</code> vector.</td>
   </tr>
   <tr>
    <td valign=top>

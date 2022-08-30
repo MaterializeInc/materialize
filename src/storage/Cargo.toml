@@ -3,31 +3,29 @@ name = "mz-storage"
 description = "Materialize's storage layer."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 async-compression = { version = "0.3.14", features = ["tokio", "gzip"] }
 async-stream = "0.3.3"
-async-trait = "0.1.56"
-aws-config = { version = "0.46.0", default-features = false, features = ["native-tls"] }
-aws-sdk-kinesis = { version = "0.16.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-s3 = { version = "0.16.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sqs = { version = "0.16.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-smithy-http = "0.46.0"
-aws-types = { version = "0.46.0", features = ["hardcoded-credentials"] }
-bincode = { version = "1.3.3" }
-bytes = "1.2.0"
+async-trait = "0.1.57"
+aws-config = { version = "0.47.0", default-features = false, features = ["native-tls"] }
+aws-sdk-kinesis = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-s3 = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sqs = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-smithy-http = "0.47.0"
+aws-types = { version = "0.47.0", features = ["hardcoded-credentials"] }
+bytes = "1.2.1"
 bytesize = "1.1.0"
-chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+chrono = { version = "0.4.20", default-features = false, features = ["std"] }
 crossbeam-channel = { version = "0.5.6" }
 csv-core = { version = "0.1.10" }
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.21"
-futures-executor = "0.3.21"
-futures-util = "0.3.19"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
 http-serde = "1.1.0"
@@ -54,32 +52,32 @@ mz-stash = { path = "../stash" }
 # TODO(benesch): this crate should not depend on the SQL parser.
 mz-sql-parser = { path = "../sql-parser" }
 mz-timely-util = { path = "../timely-util" }
-once_cell = { version = "1.13.0" }
+once_cell = { version = "1.13.1" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { version = "0.13.1", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
-prost = { version = "0.10.3", features = ["no-recursion-limit"] }
+prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.6.0" }
-serde = { version = "1.0.140", features = ["derive"] }
-serde_json = { version = "1.0.82" }
-tempfile = { version = "3.2.0" }
+serde = { version = "1.0.144", features = ["derive"] }
+serde_json = { version = "1.0.85" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.9"
 tokio-util = { version = "0.7.3", features = ["io"] }
-tonic = "0.7.2"
-tracing = "0.1.35"
+tonic = "0.8.0"
+tracing = "0.1.36"
 tracing-subscriber = "0.3.15"
-thiserror = { version = "1.0.31" }
+thiserror = { version = "1.0.32" }
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
 [build-dependencies]
-tonic-build = "0.7"
+protobuf-src = "1.0.4"
+tonic-build = "0.8.0"
 
 [dev-dependencies]
 itertools = "0.10.3"

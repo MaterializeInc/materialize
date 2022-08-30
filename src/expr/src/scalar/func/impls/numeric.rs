@@ -138,6 +138,21 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    #[sqlname = "truncnumeric"]
+    fn trunc_numeric(mut a: Numeric) -> Numeric {
+        // trunc will be nop if has no fractional digits.
+        if a.exponent() >= 0 {
+            return a;
+        }
+        let mut cx = numeric::cx_datum();
+        cx.set_rounding(Rounding::Down);
+        cx.round(&mut a);
+        numeric::munge_numeric(&mut a).unwrap();
+        a
+    }
+);
+
+sqlfunc!(
     #[sqlname = "sqrtnumeric"]
     fn sqrt_numeric(mut a: Numeric) -> Result<Numeric, EvalError> {
         if a.is_negative() {
@@ -211,6 +226,37 @@ sqlfunc!(
         let mut buf = String::new();
         strconv::format_numeric(&mut buf, &OrderedDecimal(a));
         buf
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "numeric_to_uint2"]
+    fn cast_numeric_to_uint16(mut a: Numeric) -> Result<u16, EvalError> {
+        let mut cx = numeric::cx_datum();
+        cx.round(&mut a);
+        cx.clear_status();
+        let u = cx.try_into_u32(a).or(Err(EvalError::UInt16OutOfRange))?;
+        u16::try_from(u).or(Err(EvalError::UInt16OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "numeric_to_uint4"]
+    fn cast_numeric_to_uint32(mut a: Numeric) -> Result<u32, EvalError> {
+        let mut cx = numeric::cx_datum();
+        cx.round(&mut a);
+        cx.clear_status();
+        cx.try_into_u32(a).or(Err(EvalError::UInt32OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "numeric_to_uint8"]
+    fn cast_numeric_to_uint64(mut a: Numeric) -> Result<u64, EvalError> {
+        let mut cx = numeric::cx_datum();
+        cx.round(&mut a);
+        cx.clear_status();
+        cx.try_into_u64(a).or(Err(EvalError::UInt64OutOfRange))
     }
 );
 

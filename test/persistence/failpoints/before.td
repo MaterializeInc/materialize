@@ -36,18 +36,24 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
 {"f1": "b${kafka-ingest.iteration}"} {"f2": "b${kafka-ingest.iteration}"}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE failpoint
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-failpoint-${testdrive.seed}'
-  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-failpoint-${testdrive.seed}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS f1
   ENVELOPE UPSERT
 
 > CREATE SINK failpoint_sink FROM failpoint
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-failpoint-sink-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-failpoint-sink-${testdrive.seed}'
   KEY (f1)
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
 {"f1": "c${kafka-ingest.iteration}"} {"f2": "c${kafka-ingest.iteration}"}

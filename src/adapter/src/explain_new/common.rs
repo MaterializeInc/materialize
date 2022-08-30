@@ -70,20 +70,6 @@ impl<'a, Formatter, ViewExpr> Explanation<'a, Formatter, ViewExpr>
 where
     Formatter: ViewFormatter<ViewExpr>,
 {
-    pub fn new(
-        expr: &'a ViewExpr,
-        expr_humanizer: &'a dyn ExprHumanizer,
-        formatter: Formatter,
-    ) -> Self {
-        Self {
-            formatter,
-            expr_humanizer,
-            sources: vec![],
-            views: vec![(GlobalId::Explain, expr)],
-            finishing: None,
-        }
-    }
-
     pub fn new_from_dataflow(
         dataflow: &'a DataflowDescription<ViewExpr>,
         expr_humanizer: &'a dyn ExprHumanizer,
@@ -198,15 +184,6 @@ impl<ViewExpr: serde::Serialize> ViewFormatter<ViewExpr> for JsonViewFormatter {
 pub struct DataflowGraphFormatter<'a> {
     expr_humanizer: &'a dyn ExprHumanizer,
     typed: bool,
-}
-
-impl<'a> DataflowGraphFormatter<'a> {
-    pub fn new(expr_humanizer: &'a dyn ExprHumanizer, typed: bool) -> Self {
-        Self {
-            expr_humanizer,
-            typed,
-        }
-    }
 }
 
 impl<'a> ViewFormatter<OptimizedMirRelationExpr> for DataflowGraphFormatter<'a> {

@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 $ set schema={
     "name": "row",
     "type": "record",
@@ -22,19 +24,24 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 
 > CREATE SECRET sasl_password AS 'sekurity'
 
+# Ensure that connectors work with SSL basic_auth
+> CREATE CONNECTION kafka_sasl
+  FOR KAFKA
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = 'PLAIN',
+    SASL USERNAME = 'materialize',
+    SASL PASSWORD = SECRET sasl_password,
+    SSL CERTIFICATE AUTHORITY = '${arg.ca}';
+
+> CREATE CONNECTION csr_sasl
+  FOR CONFLUENT SCHEMA REGISTRY
+    URL '${testdrive.schema-registry-url}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca}'
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = 'materialize',
-      sasl_password = SECRET sasl_password,
-      ssl_ca_pem = '${arg.ca}'
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_pem = '${arg.ca}'
-  )
+  FROM KAFKA CONNECTION kafka_sasl
+  TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
 
 > SELECT * FROM data
 a
@@ -52,82 +59,22 @@ a
 
 > CREATE SINK data_snk
   FROM data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = 'materialize',
-      sasl_password = SECRET sasl_password,
-      ssl_ca_pem = '${arg.ca}'
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_pem = '${arg.ca}'
-  )
+  INTO KAFKA CONNECTION kafka_sasl TOPIC 'testdrive-sink-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
 
 $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
-{"before": null, "after": {"row": {"a": 1}}}
-{"before": null, "after": {"row": {"a": 2}}}
+{"before": null, "after": {"row": {"a": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
 
-# Check environment variables; defined in mzcompose.py
-
-> CREATE SOURCE env_pw_data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = 'materialize',
-      sasl_password = SECRET sasl_password,
-      ssl_ca_pem = '${arg.ca}'
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_pem = '${arg.ca}'
-  )
-
-> SELECT * FROM env_pw_data
-a
----
-1
-2
-
-
-# Ensure that connectors work with SSL basic_auth
-> CREATE CONNECTION kafka_sasl
-  FOR KAFKA
-    BROKER 'kafka:9092',
-    SASL MECHANISMS = 'PLAIN',
-    SASL USERNAME = 'materialize',
-    SASL PASSWORD = SECRET sasl_password,
-    SSL CERTIFICATE AUTHORITY = '${arg.ca}';
-
-> CREATE SOURCE connector_source
-  FROM KAFKA CONNECTION kafka_sasl
-  TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_pem = '${arg.ca}'
-  )
-
-
-> SELECT * FROM connector_source
-a
----
-1
-2
-
+# Old with options do not work
 ! CREATE SOURCE connector_source
   FROM KAFKA CONNECTION kafka_sasl
   TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     security_protocol = 'sasl_ssl'
   )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_pem = '${arg.ca}'
-  )
-contains:cannot set option security.protocol for SOURCE using CONNECTION materialize.public.kafka_sasl
-
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
+contains:unexpected parameters for CREATE SOURCE: security_protocol
 
 # Ensure that connectors do not require the certificate authority
 > CREATE CONNECTION kafka_sasl_no_ca
@@ -142,8 +89,5 @@ contains:cannot set option security.protocol for SOURCE using CONNECTION materia
 ! CREATE SOURCE connector_source
   FROM KAFKA CONNECTION kafka_sasl_no_ca
   TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_pem = '${arg.ca}'
-  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
 contains: broker certificate could not be verified

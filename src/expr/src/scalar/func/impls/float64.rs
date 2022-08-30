@@ -47,6 +47,13 @@ sqlfunc!(
 );
 
 sqlfunc!(
+    #[sqlname = "truncf64"]
+    fn trunc_float64(a: f64) -> f64 {
+        a.trunc()
+    }
+);
+
+sqlfunc!(
     #[sqlname = "ceilf64"]
     fn ceil_float64(a: f64) -> f64 {
         a.ceil()
@@ -124,6 +131,42 @@ sqlfunc!(
         let mut s = String::new();
         strconv::format_float64(&mut s, a);
         s
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "double_to_uint2"]
+    fn cast_float64_to_uint16(a: f64) -> Result<u16, EvalError> {
+        let f = round_float64(a);
+        if (f >= 0.0) && (f <= (u16::MAX as f64)) {
+            Ok(f as u16)
+        } else {
+            Err(EvalError::UInt16OutOfRange)
+        }
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "double_to_uint4"]
+    fn cast_float64_to_uint32(a: f64) -> Result<u32, EvalError> {
+        let f = round_float64(a);
+        if (f >= 0.0) && (f <= (u32::MAX as f64)) {
+            Ok(f as u32)
+        } else {
+            Err(EvalError::UInt32OutOfRange)
+        }
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "double_to_uint8"]
+    fn cast_float64_to_uint64(a: f64) -> Result<u64, EvalError> {
+        let f = round_float64(a);
+        if (f >= 0.0) && (f <= (u64::MAX as f64)) {
+            Ok(f as u64)
+        } else {
+            Err(EvalError::UInt64OutOfRange)
+        }
     }
 );
 

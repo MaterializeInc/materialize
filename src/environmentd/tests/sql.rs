@@ -13,7 +13,6 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
-use anyhow::anyhow;
 use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -21,12 +20,12 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use std::{env, thread};
 
+use anyhow::anyhow;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
-use mz_ore::retry::Retry;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
@@ -36,8 +35,10 @@ use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tracing::info;
 
+use mz_adapter::catalog::SYSTEM_USER;
 use mz_ore::assert_contains;
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
@@ -115,11 +116,20 @@ fn test_no_block() -> Result<(), anyhow::Error> {
             let slow_task = task::spawn(|| "slow_client", async move {
                 info!("test_no_block: in thread; executing create source");
                 let result = client
-                    .batch_execute(&format!(
-                        "CREATE SOURCE foo \
+                .batch_execute(&format!(
+                    "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://{}';",
+                    schema_registry_server.addr,
+                ))
+                .await;
+                info!("test_no_block: in thread; create CSR conn done");
+                let _ = result?;
+
+                let result = client
+                    .batch_execute(&format!("
+                        CREATE SOURCE foo \
                         FROM KAFKA BROKER '{}' TOPIC 'foo' \
-                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://{}'",
-                        &*KAFKA_ADDRS, schema_registry_server.addr,
+                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                        &*KAFKA_ADDRS,
                     ))
                     .await;
                 info!("test_no_block: in thread; create source done");
@@ -1381,6 +1391,114 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     assert!(join_ts >= view_ts);
 
     cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime)?;
+
+    Ok(())
+}
+
+#[test]
+fn test_system_user() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    assert!(server
+        .pg_config()
+        .user(SYSTEM_USER)
+        .connect(postgres::NoTls)
+        .is_err());
+    assert!(server
+        .pg_config_internal()
+        .user(SYSTEM_USER)
+        .connect(postgres::NoTls)
+        .is_ok());
+
+    Ok(())
+}
+
+// Tests that you can have simultaneous connections on the internal and external ports without
+// crashing
+#[test]
+fn test_internal_ports() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    {
+        let mut external_client = server.connect(postgres::NoTls)?;
+        let mut internal_client = server
+            .pg_config_internal()
+            .user(SYSTEM_USER)
+            .connect(postgres::NoTls)?;
+
+        assert_eq!(
+            1,
+            external_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+        assert_eq!(
+            1,
+            internal_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+    }
+
+    {
+        let mut external_client = server.connect(postgres::NoTls)?;
+        let mut internal_client = server
+            .pg_config_internal()
+            .user(SYSTEM_USER)
+            .connect(postgres::NoTls)?;
+
+        assert_eq!(
+            1,
+            external_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+        assert_eq!(
+            1,
+            internal_client
+                .query_one("SELECT 1;", &[])?
+                .get::<_, i32>(0)
+        );
+    }
+
+    Ok(())
+}
+
+// Test that trying to alter an invalid system param returns an error.
+// This really belongs in the resource-limits.td testdrive, but testdrive
+// doesn't allow you to specify a connection and expect a failure which is
+// needed for this test.
+#[test]
+fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(SYSTEM_USER)
+        .connect(postgres::NoTls)?;
+
+    mz_client.batch_execute(&"ALTER SYSTEM SET max_tables TO 2")?;
+    let res = mz_client
+        .batch_execute(&"ALTER SYSTEM SET invalid_param TO 42")
+        .unwrap_err();
+    assert!(res
+        .to_string()
+        .contains("unrecognized configuration parameter \"invalid_param\""));
+    let res = mz_client
+        .batch_execute(&"ALTER SYSTEM RESET invalid_param")
+        .unwrap_err();
+    assert!(res
+        .to_string()
+        .contains("unrecognized configuration parameter \"invalid_param\""));
 
     Ok(())
 }

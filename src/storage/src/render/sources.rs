@@ -22,18 +22,17 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 
-use mz_expr::PartitionId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
 use crate::controller::CollectionMetadata;
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
-use crate::source::persist_source;
+use crate::source::types::DecodeResult;
 use crate::source::{
-    self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
+    self, persist_source, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
     LoadGeneratorSourceReader, PostgresSourceReader, RawSourceCreationConfig, S3SourceReader,
 };
-use crate::types::errors::{DataflowError, DecodeError};
+use crate::types::errors::{DataflowError, DecodeError, EnvelopeError};
 use crate::types::sources::{encoding::*, *};
 use crate::types::transforms::LinearOperator;
 
@@ -103,7 +102,7 @@ where
         encoding,
         envelope,
         metadata_columns,
-        ts_frequency,
+        timestamp_interval,
     } = description.desc;
 
     // All sources should push their various error streams into this vector,
@@ -116,27 +115,13 @@ where
     // is called on each timely worker as part of
     // [`super::build_storage_dataflow`].
 
-    // All workers are responsible for reading in Kafka sources. Other sources
-    // support single-threaded ingestion only. Note that in all cases we want all
-    // readers of the same source or same partition to reside on the same worker,
-    // and only load-balance responsibility across distinct sources.
-    let active_read_worker = if let SourceConnection::Kafka(_) = connection {
-        true
-    } else {
-        // TODO: This feels icky, but getting rid of hardcoding this difference between
-        // Kafka and all other sources seems harder.
-        crate::source::responsible_for(&id, scope.index(), scope.peers(), &PartitionId::None)
-    };
-
     let source_name = format!("{}-{}", connection.name(), id);
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
         upstream_name: connection.upstream_name().map(ToOwned::to_owned),
         id,
         scope,
-        // Distribute read responsibility among workers.
-        active: active_read_worker,
-        timestamp_frequency: ts_frequency,
+        timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
         encoding: encoding.clone(),
@@ -323,41 +308,43 @@ where
 
                     let persist_clients = Arc::clone(&storage_state.persist_clients);
 
+                    // persit requires an `as_of`, and presents all data before that
+                    // `as_of` as if its at that `as_of`. We only care about if
+                    // the data is before the `resume_upper` or not, so we pick
+                    // the biggest `as_of` we can. We could always choose
+                    // 0, but that may have been compacted away.
                     let previous_as_of = match resume_upper.as_option() {
-                        None => Some(Timestamp::MAX),
-                        Some(&0) => None,
+                        None => {
+                            // We are at the end of time, so our `as_of` is everything.
+                            Some(Timestamp::MAX)
+                        }
+                        Some(&0) => {
+                            // We are the beginning of time (no data persisted yet), so we can
+                            // skip reading out of persist.
+                            None
+                        }
                         Some(&t) => Some(t - 1),
                     };
-                    let (previous_ok_stream, previous_err_stream, previous_token) =
+                    let (previous_stream, previous_token) =
                         if let Some(previous_as_of) = previous_as_of {
-                            let (ok, err, tok) = persist_source::persist_source(
+                            let (stream, tok) = persist_source::persist_source_core(
                                 scope,
                                 id,
                                 persist_clients,
                                 description.storage_metadata.clone(),
                                 Antichain::from_elem(previous_as_of),
                             );
-                            (ok, err, Some(tok))
+                            (stream, Some(tok))
                         } else {
-                            (
-                                std::iter::empty().to_stream(scope),
-                                std::iter::empty().to_stream(scope),
-                                None,
-                            )
+                            (std::iter::empty().to_stream(scope), None)
                         };
-                    let (previous_ok, previous_err) = (
-                        previous_ok_stream.as_collection(),
-                        previous_err_stream.as_collection(),
-                    );
-                    error_collections.push(previous_err);
-
                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                         &transformed_results,
                         resume_upper,
                         &mut linear_operators,
                         description.typ.arity(),
                         upsert_envelope.clone(),
-                        previous_ok,
+                        previous_stream,
                         previous_token,
                     );
 
@@ -379,11 +366,11 @@ where
                     // place and re-use. There seem to be enough instances of this
                     // by now.
                     fn split_ok_err(
-                        x: (Result<Row, DecodeError>, u64, Diff),
+                        x: (Result<Row, DataflowError>, u64, Diff),
                     ) -> Result<(Row, u64, Diff), (DataflowError, u64, Diff)> {
                         match x {
                             (Ok(row), ts, diff) => Ok((row, ts, diff)),
-                            (Err(err), ts, diff) => Err((err.into(), ts, diff)),
+                            (Err(err), ts, diff) => Err((err, ts, diff)),
                         }
                     }
 
@@ -426,7 +413,14 @@ where
                 move |(input_row, time, diff)| {
                     let arena = mz_repr::RowArena::new();
                     let mut datums_local = datum_vec.borrow_with(&input_row);
-                    linear_op_mfp.evaluate(&mut datums_local, &arena, time, diff, &mut row_builder)
+                    linear_op_mfp.evaluate(
+                        &mut datums_local,
+                        &arena,
+                        time,
+                        diff,
+                        |_time| true,
+                        &mut row_builder,
+                    )
                 }
             });
 
@@ -524,7 +518,7 @@ where
 fn flatten_results_prepend_keys<G>(
     none_envelope: &NoneEnvelope,
     results: timely::dataflow::Stream<G, KV>,
-) -> timely::dataflow::Stream<G, Result<(Row, Diff), DecodeError>>
+) -> timely::dataflow::Stream<G, Result<(Row, Diff), DataflowError>>
 where
     G: Scope,
 {
@@ -536,7 +530,9 @@ where
     let null_key_columns = Row::pack_slice(&vec![Datum::Null; *key_arity]);
 
     match key_envelope {
-        KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),
+        KeyEnvelope::None => {
+            results.flat_map(|KV { val, .. }| val.map(|result| result.map_err(Into::into)))
+        }
         KeyEnvelope::Flattened => results
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
@@ -574,17 +570,17 @@ where
 /// Handle possibly missing key or value portions of messages
 fn raise_key_value_errors(
     KV { key, val }: KV,
-) -> Option<Result<(Option<Row>, Row, Diff), DecodeError>> {
+) -> Option<Result<(Option<Row>, Row, Diff), DataflowError>> {
     match (key, val) {
         (Some(Ok(key)), Some(Ok((value, diff)))) => Some(Ok((Some(key), value, diff))),
         (None, Some(Ok((value, diff)))) => Some(Ok((None, value, diff))),
         // always prioritize the value error if either or both have an error
-        (_, Some(Err(e))) => Some(Err(e)),
-        (Some(Err(e)), _) => Some(Err(e)),
+        (_, Some(Err(e))) => Some(Err(e.into())),
+        (Some(Err(e)), _) => Some(Err(e.into())),
         (None, None) => None,
         // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
-        _ => Some(Err(DecodeError::Text(
+        _ => Some(Err(DataflowError::EnvelopeError(EnvelopeError::Flat(
             "Value not present for message".to_string(),
-        ))),
+        )))),
     }
 }

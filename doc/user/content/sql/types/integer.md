@@ -72,6 +72,7 @@ To | Required context
 [`oid`](../oid) | Implicit
 [`real`/`double precision`](../float) | Implicit
 [`text`](../text) | Assignment
+[`uint2`/`uint4`/`uint8`](../uint) | Depends on specific cast
 
 #### To `integer` or `bigint`
 
@@ -85,6 +86,7 @@ From | Required context
 [`numeric`](../numeric) | Assignment
 [`real`/`double precision`](../float) | Assignment
 [`text`](../text) | Explicit
+[`uint2`/`uint4`/`uint8`](../uint) | Depends on specific cast
 
 ## Examples
 

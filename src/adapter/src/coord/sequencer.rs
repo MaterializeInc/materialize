@@ -22,7 +22,7 @@ use tracing::{event, warn, Level};
 use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
@@ -31,6 +31,8 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
+use mz_ore::collections::CollectionExt;
+use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
@@ -39,9 +41,11 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Ti
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
+use mz_sql::plan;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSystemPlan, ComputeInstanceReplicaConfig, CreateComputeInstancePlan,
+    AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ComputeInstanceReplicaConfig, CreateComputeInstancePlan,
     CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
@@ -49,19 +53,25 @@ use mz_sql::plan::{
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
+    RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
 };
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{CreateSourceOption, CreateSourceOptionName, Statement, WithOptionValue};
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, ReadPolicy};
-use mz_storage::types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
+use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
+use mz_storage::types::hosts::StorageHostConfig;
+use mz_storage::types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, StorageSinkConnectionBuilder,
+    TailSinkConnection,
+};
 use mz_storage::types::sources::IngestionDescription;
 
 use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection,
-    SerializedComputeInstanceReplicaLocation,
+    SerializedComputeInstanceReplicaLocation, Source, StorageSinkConnectionState, SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse};
-use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
+use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::{
     peek, read_policy, Coordinator, Message, PendingTxn, SendDiffs, SinkConnectionReady, TxnReads,
@@ -279,8 +289,26 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
             }
-            Plan::AlterSystem(plan) => {
-                tx.send(self.sequence_alter_system(&session, plan).await, session);
+            Plan::AlterSource(plan) => {
+                tx.send(self.sequence_alter_source(&session, plan).await, session);
+            }
+            Plan::AlterSystemSet(plan) => {
+                tx.send(
+                    self.sequence_alter_system_set(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::AlterSystemReset(plan) => {
+                tx.send(
+                    self.sequence_alter_system_reset(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::AlterSystemResetAll(plan) => {
+                tx.send(
+                    self.sequence_alter_system_reset_all(&session, plan).await,
+                    session,
+                );
             }
             Plan::DiscardTemp => {
                 self.drop_temp_items(&session).await;
@@ -290,7 +318,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
                     self.drop_temp_items(&session).await;
                     let drop_sinks = session.reset();
-                    self.drop_sinks(drop_sinks).await;
+                    self.drop_compute_sinks(drop_sinks).await;
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(AdapterError::OperationProhibitsTransaction(
@@ -358,7 +386,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 tx: tx.take(),
                                 span: tracing::Span::none(),
                             }))
-                            .expect("sending to internal_cmd_tx cannot fail");
+                            .expect("sending to self.internal_cmd_tx cannot fail");
                     }
                     Err(err) => tx.send(Err(err), session),
                 };
@@ -379,6 +407,9 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::Raise(RaisePlan { severity }) => {
                 tx.send(Ok(ExecuteResponse::Raise { severity }), session);
             }
+            Plan::RotateKeys(RotateKeysPlan { id }) => {
+                tx.send(self.sequence_rotate_keys(&session, id).await, session);
+            }
         }
     }
 
@@ -398,7 +429,6 @@ impl<S: Append + 'static> Coordinator<S> {
             desc: plan.source.desc,
             timeline: plan.timeline,
             depends_on,
-            remote_addr: plan.remote,
             host_config,
         };
         ops.push(catalog::Op::CreateItem {
@@ -429,9 +459,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
 
-                let source_status_collection_id = self.catalog.resolve_builtin_storage_collection(
-                    &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                );
+                // This is disabled for the moment because it has unusual upper
+                // advancement behavior.
+                // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
+                let status_collection_id = if false {
+                    Some(self.catalog.resolve_builtin_storage_collection(
+                        &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                    ))
+                } else {
+                    None
+                };
 
                 self.controller
                     .storage_mut()
@@ -441,7 +478,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             desc: source.desc.clone(),
                             ingestion: Some(ingestion),
                             since: None,
-                            status_collection_id: Some(source_status_collection_id),
+                            status_collection_id,
                             host_config: Some(source.host_config),
                         },
                     )])
@@ -471,22 +508,58 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog.allocate_oid().await?;
         let connection_gid = self.catalog.allocate_user_id().await?;
+        let mut connection = plan.connection.connection.clone();
+
+        if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) = connection {
+            let keyset = SshKeyset::new()?;
+            self.secrets_controller
+                .ensure(connection_gid, &keyset.to_bytes())
+                .await?;
+
+            ssh.public_keys = Some(keyset.public_keys());
+        }
+
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
             oid: connection_oid,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                connection: plan.connection.connection,
+                connection,
                 depends_on,
             }),
         }];
+
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection { existed: false }),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_rotate_keys(
+        &mut self,
+        session: &Session,
+        id: GlobalId,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let secret = self.secrets_controller.reader().read(id).await?;
+        let previous_keyset = SshKeyset::from_bytes(&secret)?;
+        let new_keyset = previous_keyset.rotate()?;
+        self.secrets_controller
+            .ensure(id, &new_keyset.to_bytes())
+            .await?;
+
+        let ops = vec![catalog::Op::UpdateRotatedKeys {
+            id,
+            previous_public_keypair: previous_keyset.public_keys(),
+            new_public_keypair: new_keyset.public_keys(),
+        }];
+
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
             Err(err) => Err(err),
         }
     }
@@ -867,7 +940,7 @@ impl<S: Append + 'static> Coordinator<S> {
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
-                let since_ts = self.get_local_write_ts().await;
+                let since_ts = self.peek_local_write_ts();
 
                 let collection_desc = table.desc.clone().into();
                 self.controller
@@ -882,6 +955,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     .set_read_policy(vec![(table_id, policy)])
                     .await
                     .unwrap();
+
+                // We must advance the timeline to `since_ts` so that the table is not invalid.
+                let timeline = self
+                    .get_timeline(table_id)
+                    .expect("Table not present in a timeline");
+                let old_read_holds = self
+                    .ensure_timeline_state(timeline.clone())
+                    .await
+                    .read_holds
+                    .clone();
+                let new_read_holds = self.update_read_hold(old_read_holds, since_ts).await;
+                self.ensure_timeline_state(timeline).await.read_holds = new_read_holds;
 
                 self.initialize_storage_read_policies(
                     vec![table_id],
@@ -959,10 +1044,6 @@ impl<S: Append + 'static> Coordinator<S> {
             if_not_exists,
         } = plan;
 
-        // The dataflow must (eventually) be built on a specific compute instance.
-        // Use this in `catalog_transact` and stash for eventual sink construction.
-        let compute_instance = sink.compute_instance;
-
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = match self.catalog.allocate_user_id().await {
             Ok(id) => id,
@@ -979,64 +1060,55 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
+        // Knowing that we're only handling kafka sinks here helps us simplify.
+        let StorageSinkConnectionBuilder::Kafka(connection_builder) =
+            sink.connection_builder.clone();
+
         // Then try to create a placeholder catalog item with an unknown
         // connection. If that fails, we're done, though if the client specified
         // `if_not_exists` we'll tell the client we succeeded.
         //
         // This placeholder catalog item reserves the name while we create
         // the sink connection, which could take an arbitrarily long time.
-        let op = catalog::Op::CreateItem {
+
+        let catalog_sink = catalog::Sink {
+            create_sql: sink.create_sql,
+            from: sink.from,
+            connection: StorageSinkConnectionState::Pending(StorageSinkConnectionBuilder::Kafka(
+                connection_builder,
+            )),
+            envelope: sink.envelope,
+            with_snapshot,
+            depends_on,
+        };
+
+        let ops = vec![catalog::Op::CreateItem {
             id,
             oid,
             name,
-            item: CatalogItem::Sink(catalog::Sink {
-                create_sql: sink.create_sql,
-                from: sink.from,
-                connection: catalog::SinkConnectionState::Pending(sink.connection_builder.clone()),
-                envelope: sink.envelope,
-                with_snapshot,
-                depends_on,
-                compute_instance,
-            }),
-        };
+            item: CatalogItem::Sink(catalog_sink.clone()),
+        }];
 
-        let transact_result = self
-            .catalog_transact(
-                Some(&session),
-                vec![op],
-                |txn| -> Result<(), AdapterError> {
-                    let from_entry = txn.catalog.get_entry(&sink.from);
-                    // Insert a dummy dataflow to trigger validation before we try to actually create
-                    // the external sink resources (e.g. Kafka Topics)
-                    txn.dataflow_builder(sink.compute_instance)
-                        .build_sink_dataflow(
-                            "dummy".into(),
-                            id,
-                            mz_storage::types::sinks::SinkDesc {
-                                from: sink.from,
-                                from_desc: from_entry
-                                    .desc(
-                                        &txn.catalog.resolve_full_name(
-                                            from_entry.name(),
-                                            from_entry.conn_id(),
-                                        ),
-                                    )
-                                    .unwrap()
-                                    .into_owned(),
-                                connection: SinkConnection::Tail(TailSinkConnection {}),
-                                envelope: Some(sink.envelope),
-                                as_of: SinkAsOf {
-                                    frontier: Antichain::new(),
-                                    strict: false,
-                                },
-                            },
-                        )
-                        .map(|_ok| ())
-                },
-            )
+        let from = self.catalog.get_entry(&catalog_sink.from);
+        let from_name = from.name().item.clone();
+        let from_type = from.item().typ().to_string();
+        let result = self
+            .catalog_transact(Some(&session), ops, move |txn| {
+                // Validate that the from collection is in fact a persist collection we can export.
+                txn.dataflow_client
+                    .storage()
+                    .collection(sink.from)
+                    .map_err(|e| match e {
+                        StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
+                            "{from_name} is a {from_type}, which cannot be exported as a sink"
+                        )),
+                        e => AdapterError::Storage(e),
+                    })?;
+                Ok(())
+            })
             .await;
 
-        match transact_result {
+        match result {
             Ok(()) => {}
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -1059,17 +1131,19 @@ impl<S: Append + 'static> Coordinator<S> {
         task::spawn(
             || format!("sink_connection_ready:{}", sink.from),
             async move {
-                internal_cmd_tx
-                    .send(Message::SinkConnectionReady(SinkConnectionReady {
+                // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
+                let result =
+                    internal_cmd_tx.send(Message::SinkConnectionReady(SinkConnectionReady {
                         session,
                         tx,
                         id,
                         oid,
-                        result: sink_connection::build(connection_builder, id, connection_context)
+                        result: sink_connection::build(connection_builder, connection_context)
                             .await,
-                        compute_instance,
-                    }))
-                    .expect("sending to internal_cmd_tx cannot fail");
+                    }));
+                if let Err(e) = result {
+                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                }
             },
         );
     }
@@ -1540,7 +1614,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 .catalog
                 .state()
                 .pack_replica_heartbeat_update(replica_id, metadata, -1);
-            self.send_builtin_table_updates(vec![retraction]).await;
+            self.send_builtin_table_updates(vec![retraction], BuiltinTableUpdateSource::Background)
+                .await;
         }
         self.controller
             .drop_replica(instance_id, replica_id, replica_config)
@@ -1580,6 +1655,7 @@ impl<S: Append + 'static> Coordinator<S> {
             session
                 .vars()
                 .iter()
+                .chain(self.catalog.state().system_config().iter())
                 .filter(|v| !v.experimental())
                 .map(|v| {
                     Row::pack_slice(&[
@@ -1597,7 +1673,10 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let variable = session.vars().get(&plan.name)?;
+        let variable = session
+            .vars()
+            .get(&plan.name)
+            .or_else(|_| self.catalog.state().system_config().get(&plan.name))?;
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
@@ -2048,11 +2127,10 @@ impl<S: Append + 'static> Coordinator<S> {
             let timestamp =
                 coord.determine_timestamp(session, &id_bundle, &when, compute_instance)?;
 
-            Ok::<_, AdapterError>(SinkDesc {
+            Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
-                connection: SinkConnection::Tail(TailSinkConnection::default()),
-                envelope: None,
+                connection: ComputeSinkConnection::Tail(TailSinkConnection::default()),
                 as_of: SinkAsOf {
                     frontier: Antichain::from_elem(timestamp),
                     strict: !with_snapshot,
@@ -2091,7 +2169,10 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let (sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
-        session.add_drop_sink(compute_instance, *sink_id);
+        session.add_drop_sink(ComputeSinkId {
+            compute_instance,
+            global_id: *sink_id,
+        });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         self.pending_tails
@@ -2213,9 +2294,8 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             ExplainStageNew::DecorrelatedPlan => {
                 // run partial pipeline
-                let decorrelated_plan = decorrelate(raw_plan)?;
+                let mut decorrelated_plan = decorrelate(raw_plan)?;
                 self.validate_timeline(decorrelated_plan.depends_on())?;
-                let mut dataflow = OptimizedMirRelationExpr::declare_optimized(decorrelated_plan);
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
                 let context = ExplainContext {
@@ -2226,7 +2306,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     fast_path_plan: Default::default(),
                 };
                 // explain plan
-                Explainable::new(&mut dataflow).explain(&format, &config, &context)?
+                Explainable::new(&mut decorrelated_plan).explain(&format, &config, &context)?
             }
             ExplainStageNew::OptimizedPlan => {
                 // run partial pipeline
@@ -2479,12 +2559,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         sources.push(TimestampSource {
                             name: format!("{name} ({id}, storage)"),
                             read_frontier: state.implied_capability.elements().to_vec(),
-                            write_frontier: state
-                                .write_frontier
-                                .frontier()
-                                .to_owned()
-                                .elements()
-                                .to_vec(),
+                            write_frontier: state.write_frontier.elements().to_vec(),
                         });
                     }
                 }
@@ -2505,13 +2580,8 @@ impl<S: Append + 'static> Coordinator<S> {
                                 .unwrap_or_else(|| id.to_string());
                             sources.push(TimestampSource {
                                 name: format!("{name} ({id}, compute)"),
-                                read_frontier: state.implied_capability.elements().to_vec(),
-                                write_frontier: state
-                                    .write_frontier
-                                    .frontier()
-                                    .to_owned()
-                                    .elements()
-                                    .to_vec(),
+                                read_frontier: state.read_capability().elements().to_vec(),
+                                write_frontier: state.write_frontier().to_vec(),
                             });
                         }
                     }
@@ -2947,11 +3017,13 @@ impl<S: Append + 'static> Coordinator<S> {
                             // We timed out, so remove the pending peek. This is
                             // best-effort and doesn't guarantee we won't
                             // receive a response.
-                            internal_cmd_tx
-                                .send(Message::RemovePendingPeeks {
-                                    conn_id: session.conn_id(),
-                                })
-                                .expect("sending to internal_cmd_tx cannot fail");
+                            // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
+                            let result = internal_cmd_tx.send(Message::RemovePendingPeeks {
+                                conn_id: session.conn_id(),
+                            });
+                            if let Err(e) = result {
+                                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                            }
                             Err(AdapterError::StatementTimeout)
                         }
                     }
@@ -2999,16 +3071,18 @@ impl<S: Append + 'static> Coordinator<S> {
             } else {
                 diffs
             };
-            internal_cmd_tx
-                .send(Message::SendDiffs(SendDiffs {
-                    session,
-                    tx,
-                    id,
-                    diffs,
-                    kind,
-                    returning: returning_rows,
-                }))
-                .expect("sending to internal_cmd_tx cannot fail");
+            // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
+            let result = internal_cmd_tx.send(Message::SendDiffs(SendDiffs {
+                session,
+                tx,
+                id,
+                diffs,
+                kind,
+                returning: returning_rows,
+            }));
+            if let Err(e) = result {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
         });
     }
 
@@ -3099,6 +3173,87 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
 
+    async fn sequence_alter_source(
+        &mut self,
+        session: &Session,
+        AlterSourcePlan { id, size, remote }: AlterSourcePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        use mz_sql::ast::Value;
+        use AlterSourceItem::*;
+        use CreateSourceOptionName::*;
+
+        let entry = self.catalog.get_entry(&id);
+        let old_source = match entry.item() {
+            CatalogItem::Source(source) => source.clone(),
+            other => coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ()),
+        };
+
+        // Since the catalog serializes the items using only their creation statement
+        // and context, we need to parse and rewrite the with options in that statement.
+        // (And then make any other changes to the source definition to match.)
+        let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
+            .unwrap()
+            .into_element();
+
+        let create_stmt = match &mut stmt {
+            Statement::CreateSource(s) => s,
+            _ => coord_bail!("source {id} was not created with a CREATE SOURCE statement"),
+        };
+
+        let new_config = match (&old_source.host_config, size, remote) {
+            (_, Set(_), Set(_)) => coord_bail!("Can't set both SIZE and REMOTE on source"),
+            (_, Set(size), _) => Some(plan::StorageHostConfig::Managed { size }),
+            (_, _, Set(addr)) => Some(plan::StorageHostConfig::Remote { addr }),
+            (StorageHostConfig::Remote { .. }, _, Reset)
+            | (StorageHostConfig::Managed { .. }, Reset, _) => {
+                Some(plan::StorageHostConfig::Undefined)
+            }
+            (_, _, _) => None,
+        };
+
+        if let Some(config) = new_config {
+            create_stmt
+                .with_options
+                .retain(|x| ![Size, Remote].contains(&x.name));
+
+            let new_host_option = match &config {
+                plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
+                plan::StorageHostConfig::Remote { addr } => Some((Remote, addr.clone())),
+                plan::StorageHostConfig::Undefined => None,
+            };
+
+            if let Some((name, value)) = new_host_option {
+                create_stmt.with_options.push(CreateSourceOption {
+                    name,
+                    value: Some(WithOptionValue::Value(Value::String(value))),
+                });
+            }
+
+            let host_config = self.catalog.resolve_storage_host_config(config)?;
+            let create_sql = stmt.to_ast_string_stable();
+            let source = Source {
+                create_sql,
+                host_config: host_config.clone(),
+                ..old_source
+            };
+
+            let op = catalog::Op::UpdateItem {
+                id,
+                name: entry.name().clone(),
+                to_item: CatalogItem::Source(source.clone()),
+            };
+            self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+                .await?;
+
+            self.controller
+                .storage_mut()
+                .alter_collections(vec![(id, host_config)])
+                .await?;
+        };
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
+    }
+
     fn extract_secret(
         &mut self,
         session: &Session,
@@ -3129,28 +3284,84 @@ impl<S: Append + 'static> Coordinator<S> {
             coord_bail!("secrets can not be bigger than 512KiB")
         }
 
+        // Enforce that all secrets are valid UTF-8 for now. We expect to lift
+        // this restriction in the future, when we discover a connection type
+        // that requires binary secrets, but for now it is convenient to ensure
+        // here that `SecretsReader::read_string` can never fail due to invalid
+        // UTF-8.
+        //
+        // If you want to remove this line, verify that no caller of
+        // `SecretsReader::read_string` will panic if the secret contains
+        // invalid UTF-8.
+        if std::str::from_utf8(&payload).is_err() {
+            // Intentionally produce a vague error message (rather than
+            // including the invalid bytes, for example), to avoid including
+            // secret material in the error message, which might end up in a log
+            // file somewhere.
+            coord_bail!("secret value must be valid UTF-8");
+        }
+
         return Ok(Vec::from(payload));
     }
 
-    async fn sequence_alter_system(
+    async fn sequence_alter_system_set(
         &mut self,
         session: &Session,
-        AlterSystemPlan { name, value }: AlterSystemPlan,
+        AlterSystemSetPlan { name, value }: AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_sql::ast::SetVariableValue;
-        // TODO(jkosh44) name and value should be validated against some predetermined list of
-        //  system configurations.
-        let value = match value {
-            SetVariableValue::Literal(value) => value,
-            SetVariableValue::Ident(ident) => ident.into(),
-            SetVariableValue::Default => {
-                return Err(AdapterError::Unsupported("default system configurations"))
+        self.is_user_allowed_to_alter_system(session)?;
+        use mz_sql::ast::{SetVariableValue, Value};
+        let op = match value {
+            SetVariableValue::Literal(Value::String(value)) => {
+                catalog::Op::UpdateSystemConfiguration { name, value }
             }
+            SetVariableValue::Literal(value) => catalog::Op::UpdateSystemConfiguration {
+                name,
+                value: value.to_string(),
+            },
+            SetVariableValue::Ident(value) => catalog::Op::UpdateSystemConfiguration {
+                name,
+                value: value.to_string(),
+            },
+            SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
         };
-        let op = catalog::Op::UpdateServerConfiguration { name, value };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
+    }
+
+    async fn sequence_alter_system_reset(
+        &mut self,
+        session: &Session,
+        AlterSystemResetPlan { name }: AlterSystemResetPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.is_user_allowed_to_alter_system(session)?;
+        let op = catalog::Op::ResetSystemConfiguration { name };
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
+        Ok(ExecuteResponse::AlteredSystemConfiguraion)
+    }
+
+    async fn sequence_alter_system_reset_all(
+        &mut self,
+        session: &Session,
+        _: AlterSystemResetAllPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.is_user_allowed_to_alter_system(session)?;
+        let op = catalog::Op::ResetAllSystemConfiguration {};
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
+        Ok(ExecuteResponse::AlteredSystemConfiguraion)
+    }
+
+    fn is_user_allowed_to_alter_system(&self, session: &Session) -> Result<(), AdapterError> {
+        if session.user() == SYSTEM_USER {
+            Ok(())
+        } else {
+            Err(AdapterError::Unauthorized(format!(
+                "only user '{SYSTEM_USER}' is allowed to execute 'ALTER SYSTEM ...'"
+            )))
+        }
     }
 
     // Returns the name of the portal to execute.

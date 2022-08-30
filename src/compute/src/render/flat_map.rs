@@ -31,6 +31,7 @@ where
         mfp: MapFilterProject,
         input_key: Option<Vec<MirScalarExpr>>,
     ) -> CollectionBundle<G, Row> {
+        let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
         let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
@@ -59,6 +60,7 @@ where
 
                 // Declare borrows outside the closure so that appropriately lifetimed
                 // borrows are moved in and used by `mfp.evaluate`.
+                let until = &until;
                 let temp_storage = &temp_storage;
                 let mfp_plan = &mfp_plan;
                 let output_rows_vec: Vec<_> = output_rows.collect();
@@ -76,6 +78,7 @@ where
                                 temp_storage,
                                 event_time,
                                 diff * *r,
+                                |time| !until.less_equal(time),
                                 row_builder,
                             )
                             .collect::<Vec<_>>()

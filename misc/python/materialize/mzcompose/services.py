@@ -20,9 +20,7 @@ DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
 # minor version in the release series, and minor versions have been known to
 # introduce breakage.
-#
-# Do not upgrade past v1.9.2.Final until debezium/debezium#3570 is resolved.
-DEFAULT_DEBEZIUM_VERSION = "1.9.2.Final"
+DEFAULT_DEBEZIUM_VERSION = "1.9.5.Final"
 
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
@@ -70,6 +68,8 @@ class Materialized(Service):
                 "MZ_LOG_FILTER",
                 "STORAGED_LOG_FILTER",
                 "COMPUTED_LOG_FILTER",
+                "INTERNAL_SQL_LISTEN_ADDR=0.0.0.0:6877",
+                "INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
             ]
 
         if forward_aws_credentials:
@@ -88,7 +88,9 @@ class Materialized(Service):
             volumes.extend(volumes_extra)
 
         config_ports: List[Union[str, int]] = (
-            [*ports, *extra_ports] if ports else [6875, 26257, *extra_ports, 6876]
+            [*ports, *extra_ports]
+            if ports
+            else [6875, 26257, *extra_ports, 6876, 6877, 6878]
         )
 
         if isinstance(image, str) and ":v" in image:
@@ -518,6 +520,7 @@ class Debezium(Service):
             "VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter",
             "CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
             "CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
+            "CONNECT_OFFSET_COMMIT_POLICY=AlwaysCommitOffsetPolicy",
         ],
     ) -> None:
         super().__init__(
@@ -591,6 +594,7 @@ class Testdrive(Service):
         name: str = "testdrive",
         mzbuild: str = "testdrive",
         materialize_url: str = "postgres://materialize@materialized:6875",
+        materialize_url_internal: str = "postgres://materialize@materialized:6877",
         materialize_params: Dict[str, str] = {},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
@@ -639,6 +643,7 @@ class Testdrive(Service):
                 f"--kafka-addr={kafka_url}",
                 "--schema-registry-url=http://schema-registry:8081",
                 f"--materialize-url={materialize_url}",
+                f"--materialize-url-internal={materialize_url_internal}",
             ]
 
         if aws_region:

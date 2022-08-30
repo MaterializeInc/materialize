@@ -69,7 +69,9 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::Int16(x) => DatumType::Int16(x.into()),
             Datum::Int32(x) => DatumType::Int32(x),
             Datum::UInt8(x) => DatumType::Uint8(x.into()),
+            Datum::UInt16(x) => DatumType::Uint16(x.into()),
             Datum::UInt32(x) => DatumType::Uint32(x),
+            Datum::UInt64(x) => DatumType::Uint64(x),
             Datum::Int64(x) => DatumType::Int64(x),
             Datum::Float32(x) => DatumType::Float32(x.into_inner()),
             Datum::Float64(x) => DatumType::Float64(x.into_inner()),
@@ -173,7 +175,13 @@ impl RowPacker<'_> {
                     .map_err(|_| format!("uint8 field stored with out of range value: {}", *x))?;
                 self.push(Datum::UInt8(x))
             }
+            Some(DatumType::Uint16(x)) => {
+                let x = u16::try_from(*x)
+                    .map_err(|_| format!("uint16 field stored with out of range value: {}", *x))?;
+                self.push(Datum::UInt16(x))
+            }
             Some(DatumType::Uint32(x)) => self.push(Datum::UInt32(*x)),
+            Some(DatumType::Uint64(x)) => self.push(Datum::UInt64(*x)),
             Some(DatumType::Float32(x)) => self.push(Datum::Float32((*x).into())),
             Some(DatumType::Float64(x)) => self.push(Datum::Float64((*x).into())),
             Some(DatumType::Bytes(x)) => self.push(Datum::Bytes(x)),

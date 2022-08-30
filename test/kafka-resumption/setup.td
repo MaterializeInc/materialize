@@ -19,13 +19,19 @@ $ kafka-ingest topic=input format=bytes
 Rochester,NY,14618
 New York,NY,10004
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 # The source intentionally does not go through toxiproxy.
 > CREATE SOURCE input (city, state, zip)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input-${testdrive.seed}'
   FORMAT CSV WITH 3 COLUMNS
   INCLUDE OFFSET
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SINK output FROM input
-  INTO KAFKA BROKER 'toxiproxy:9093' TOPIC 'output-byo-sink-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output-byo-sink-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

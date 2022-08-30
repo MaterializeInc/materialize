@@ -2,6 +2,7 @@
 title: "CREATE SOURCE"
 description: "`CREATE SOURCE` connects Materialize to an external data source."
 disable_list: true
+pagerank: 10
 menu:
   main:
     parent: reference

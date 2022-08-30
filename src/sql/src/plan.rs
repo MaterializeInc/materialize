@@ -39,7 +39,7 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_storage::types::sinks::{SinkConnectionBuilder, SinkEnvelope};
+use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
@@ -119,9 +119,12 @@ pub enum Plan {
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
+    AlterSource(AlterSourcePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
-    AlterSystem(AlterSystemPlan),
+    AlterSystemSet(AlterSystemSetPlan),
+    AlterSystemReset(AlterSystemResetPlan),
+    AlterSystemResetAll(AlterSystemResetAllPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -130,6 +133,7 @@ pub enum Plan {
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
+    RotateKeys(RotateKeysPlan),
 }
 
 #[derive(Debug)]
@@ -171,12 +175,12 @@ pub struct CreateComputeInstanceReplicaPlan {
 }
 
 /// Configuration of introspection for a compute instance.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
 pub struct ComputeInstanceIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
     /// The interval at which to introspect.
-    pub granularity: Duration,
+    pub interval: Duration,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -208,7 +212,6 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub timeline: Timeline,
-    pub remote: Option<String>,
     pub host_config: StorageHostConfig,
 }
 
@@ -455,6 +458,20 @@ pub struct AlterIndexResetOptionsPlan {
 }
 
 #[derive(Debug)]
+pub enum AlterSourceItem {
+    Set(String),
+    Reset,
+    Unchanged,
+}
+
+#[derive(Debug)]
+pub struct AlterSourcePlan {
+    pub id: GlobalId,
+    pub size: AlterSourceItem,
+    pub remote: AlterSourceItem,
+}
+
+#[derive(Debug)]
 pub struct AlterItemRenamePlan {
     pub id: GlobalId,
     pub current_full_name: FullObjectName,
@@ -469,9 +486,22 @@ pub struct AlterSecretPlan {
 }
 
 #[derive(Debug)]
-pub struct AlterSystemPlan {
+pub struct AlterSystemSetPlan {
     pub name: String,
     pub value: SetVariableValue,
+}
+
+#[derive(Debug)]
+pub struct AlterSystemResetPlan {
+    pub name: String,
+}
+
+#[derive(Debug)]
+pub struct AlterSystemResetAllPlan {}
+
+#[derive(Debug)]
+pub struct RotateKeysPlan {
+    pub id: GlobalId,
 }
 
 #[derive(Debug)]
@@ -546,9 +576,8 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: SinkConnectionBuilder,
+    pub connection_builder: StorageSinkConnectionBuilder,
     pub envelope: SinkEnvelope,
-    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]

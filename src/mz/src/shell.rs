@@ -79,16 +79,16 @@ pub(crate) async fn shell(
     client: Client,
     profile: Profile,
     frontegg_auth_machine: FronteggAuthMachine,
-    cloud_provider_region: CloudProviderRegionEnum,
+    cloud_provider_region: CloudProviderRegion,
 ) {
     match list_cloud_providers(&client, &frontegg_auth_machine).await {
         Ok(cloud_providers) => {
-            let region = CloudProviderRegionEnum::parse_enum_region(cloud_provider_region);
+            let region = cloud_provider_region;
 
             // TODO: A map would be more efficient.
-            let selected_cloud_provider_filtered = cloud_providers.clone()
+            let selected_cloud_provider_filtered = cloud_providers
                 .into_iter()
-                .find(|cloud_provider| cloud_provider.region.as_str() == region);
+                .find(|cloud_provider| cloud_provider.region == region.region_name());
 
             match selected_cloud_provider_filtered {
                 Some(cloud_provider) => {

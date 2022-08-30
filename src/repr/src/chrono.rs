@@ -138,9 +138,8 @@ pub fn any_naive_date() -> impl Strategy<Value = NaiveDate> {
 }
 
 pub fn any_naive_datetime() -> impl Strategy<Value = NaiveDateTime> {
-    use ::chrono::naive::{MAX_DATETIME, MIN_DATETIME};
-    (0..(MAX_DATETIME.nanosecond() - MIN_DATETIME.nanosecond()))
-        .prop_map(|x| MIN_DATETIME + Duration::nanoseconds(x as i64))
+    (0..(NaiveDateTime::MAX.nanosecond() - NaiveDateTime::MIN.nanosecond()))
+        .prop_map(|x| NaiveDateTime::MIN + Duration::nanoseconds(x as i64))
 }
 
 pub fn any_datetime() -> impl Strategy<Value = DateTime<Utc>> {

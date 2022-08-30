@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 
@@ -81,6 +82,9 @@ impl TypeCategory {
             | ScalarType::Int16
             | ScalarType::Int32
             | ScalarType::Int64
+            | ScalarType::UInt16
+            | ScalarType::UInt32
+            | ScalarType::UInt64
             | ScalarType::Oid
             | ScalarType::RegClass
             | ScalarType::RegProc
@@ -141,6 +145,9 @@ impl TypeCategory {
             | CatalogType::Int16
             | CatalogType::Int32
             | CatalogType::Int64
+            | CatalogType::UInt16
+            | CatalogType::UInt32
+            | CatalogType::UInt64
             | CatalogType::Oid
             | CatalogType::RegClass
             | CatalogType::RegProc
@@ -814,6 +821,9 @@ impl From<ScalarBaseType> for ParamType {
             Int16 => ScalarType::Int16,
             Int32 => ScalarType::Int32,
             Int64 => ScalarType::Int64,
+            UInt16 => ScalarType::UInt16,
+            UInt32 => ScalarType::UInt32,
+            UInt64 => ScalarType::UInt64,
             Float32 => ScalarType::Float32,
             Float64 => ScalarType::Float64,
             Numeric => ScalarType::Numeric { max_scale: None },
@@ -1620,7 +1630,7 @@ macro_rules! impl_def {
     // Return type can be automatically determined as a function of the
     // parameters.
     ($params:expr, $op:expr, $oid:expr) => {{
-        let pcx = crate::plan::PlanContext::new(chrono::MIN_DATETIME, false);
+        let pcx = crate::plan::PlanContext::new(DateTime::<Utc>::MIN_UTC, false);
         let scx = StatementContext::new(None, &crate::catalog::DummyCatalog);
         // This lifetime is compatible with more functions.
         let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(&pcx));
@@ -2333,6 +2343,11 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "to_timestamp" => Scalar {
             params!(Float64) => UnaryFunc::ToTimestamp(func::ToTimestamp), 1158;
+        },
+        "trunc" => Scalar {
+            params!(Float32) => UnaryFunc::TruncFloat32(func::TruncFloat32), oid::FUNC_TRUNC_F32_OID;
+            params!(Float64) => UnaryFunc::TruncFloat64(func::TruncFloat64), 1343;
+            params!(Numeric) => UnaryFunc::TruncNumeric(func::TruncNumeric), 1710;
         },
         "upper" => Scalar {
             params!(String) => UnaryFunc::Upper(func::Upper), 871;
@@ -3047,6 +3062,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => AddInt16, 550;
             params!(Int32, Int32) => AddInt32, 551;
             params!(Int64, Int64) => AddInt64, 684;
+            params!(UInt16, UInt16) => AddUInt16, oid::FUNC_ADD_UINT16;
+            params!(UInt32, UInt32) => AddUInt32, oid::FUNC_ADD_UINT32;
+            params!(UInt64, UInt64) => AddUInt64, oid::FUNC_ADD_UINT64;
             params!(Float32, Float32) => AddFloat32, 586;
             params!(Float64, Float64) => AddFloat64, 591;
             params!(Interval, Interval) => AddInterval, 1337;
@@ -3082,6 +3100,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Interval) => UnaryFunc::NegInterval(func::NegInterval), 1336;
             params!(Int32, Int32) => SubInt32, 555;
             params!(Int64, Int64) => SubInt64, 685;
+            params!(UInt16, UInt16) => SubUInt16, oid::FUNC_SUB_UINT16;
+            params!(UInt32, UInt32) => SubUInt32, oid::FUNC_SUB_UINT32;
+            params!(UInt64, UInt64) => SubUInt64, oid::FUNC_SUB_UINT64;
             params!(Float32, Float32) => SubFloat32, 587;
             params!(Float64, Float64) => SubFloat64, 592;
             params!(Numeric, Numeric) => SubNumeric, 17590;
@@ -3103,6 +3124,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => MulInt16, 526;
             params!(Int32, Int32) => MulInt32, 514;
             params!(Int64, Int64) => MulInt64, 686;
+            params!(UInt16, UInt16) => MulUInt16, oid::FUNC_MUL_UINT16;
+            params!(UInt32, UInt32) => MulUInt32, oid::FUNC_MUL_UINT32;
+            params!(UInt64, UInt64) => MulUInt64, oid::FUNC_MUL_UINT64;
             params!(Float32, Float32) => MulFloat32, 589;
             params!(Float64, Float64) => MulFloat64, 594;
             params!(Interval, Float64) => MulInterval, 1583;
@@ -3115,6 +3139,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => DivInt16, 527;
             params!(Int32, Int32) => DivInt32, 528;
             params!(Int64, Int64) => DivInt64, 687;
+            params!(UInt16, UInt16) => DivUInt16, oid::FUNC_DIV_UINT16;
+            params!(UInt32, UInt32) => DivUInt32, oid::FUNC_DIV_UINT32;
+            params!(UInt64, UInt64) => DivUInt64, oid::FUNC_DIV_UINT64;
             params!(Float32, Float32) => DivFloat32, 588;
             params!(Float64, Float64) => DivFloat64, 593;
             params!(Interval, Float64) => DivInterval, 1585;
@@ -3124,6 +3151,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => ModInt16, 529;
             params!(Int32, Int32) => ModInt32, 530;
             params!(Int64, Int64) => ModInt64, 439;
+            params!(UInt16, UInt16) => ModUInt16, oid::FUNC_MOD_UINT16;
+            params!(UInt32, UInt32) => ModUInt32, oid::FUNC_MOD_UINT32;
+            params!(UInt64, UInt64) => ModUInt64, oid::FUNC_MOD_UINT64;
             params!(Float32, Float32) => ModFloat32, oid::OP_MOD_F32_OID;
             params!(Float64, Float64) => ModFloat64, oid::OP_MOD_F64_OID;
             params!(Numeric, Numeric) => ModNumeric, 1762;
@@ -3132,26 +3162,41 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BitAndInt16, 1874;
             params!(Int32, Int32) => BitAndInt32, 1880;
             params!(Int64, Int64) => BitAndInt64, 1886;
+            params!(UInt16, UInt16) => BitAndUInt16, oid::FUNC_AND_UINT16;
+            params!(UInt32, UInt32) => BitAndUInt32, oid::FUNC_AND_UINT32;
+            params!(UInt64, UInt64) => BitAndUInt64, oid::FUNC_AND_UINT64;
         },
         "|" => Scalar {
             params!(Int16, Int16) => BitOrInt16, 1875;
             params!(Int32, Int32) => BitOrInt32, 1881;
             params!(Int64, Int64) => BitOrInt64, 1887;
+            params!(UInt16, UInt16) => BitOrUInt16, oid::FUNC_OR_UINT16;
+            params!(UInt32, UInt32) => BitOrUInt32, oid::FUNC_OR_UINT32;
+            params!(UInt64, UInt64) => BitOrUInt64, oid::FUNC_OR_UINT64;
         },
         "#" => Scalar {
             params!(Int16, Int16) => BitXorInt16, 1876;
             params!(Int32, Int32) => BitXorInt32, 1882;
             params!(Int64, Int64) => BitXorInt64, 1888;
+            params!(UInt16, UInt16) => BitXorUInt16, oid::FUNC_XOR_UINT16;
+            params!(UInt32, UInt32) => BitXorUInt32, oid::FUNC_XOR_UINT32;
+            params!(UInt64, UInt64) => BitXorUInt64, oid::FUNC_XOR_UINT64;
         },
         "<<" => Scalar {
             params!(Int16, Int32) => BitShiftLeftInt16, 1878;
             params!(Int32, Int32) => BitShiftLeftInt32, 1884;
             params!(Int64, Int32) => BitShiftLeftInt64, 1890;
+            params!(UInt16, UInt32) => BitShiftLeftUInt16, oid::FUNC_SHIFT_LEFT_UINT16;
+            params!(UInt32, UInt32) => BitShiftLeftUInt32, oid::FUNC_SHIFT_LEFT_UINT32;
+            params!(UInt64, UInt32) => BitShiftLeftUInt64, oid::FUNC_SHIFT_LEFT_UINT64;
         },
         ">>" => Scalar {
             params!(Int16, Int32) => BitShiftRightInt16, 1879;
             params!(Int32, Int32) => BitShiftRightInt32, 1885;
             params!(Int64, Int32) => BitShiftRightInt64, 1891;
+            params!(UInt16, UInt32) => BitShiftRightUInt16, oid::FUNC_SHIFT_RIGHT_UINT16;
+            params!(UInt32, UInt32) => BitShiftRightUInt32, oid::FUNC_SHIFT_RIGHT_UINT32;
+            params!(UInt64, UInt32) => BitShiftRightUInt64, oid::FUNC_SHIFT_RIGHT_UINT64;
         },
 
         // ILIKE

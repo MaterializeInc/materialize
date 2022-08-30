@@ -116,8 +116,8 @@ async fn generate_api_token(
 
 async fn authenticate_user(
     client: &Client,
-    email: &String,
-    password: &String,
+    email: &str,
+    password: &str,
 ) -> Result<FronteggAuthUser, reqwest::Error> {
     let mut access_token_request_body = HashMap::new();
     access_token_request_body.insert("email", email);

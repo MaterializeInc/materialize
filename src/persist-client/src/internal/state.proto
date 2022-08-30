@@ -1,0 +1,135 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_persist_client.internal.state;
+
+message ProtoU64Antichain {
+    repeated int64 elements = 1;
+}
+
+message ProtoU64Description {
+    ProtoU64Antichain lower = 1;
+    ProtoU64Antichain upper = 2;
+    ProtoU64Antichain since = 3;
+}
+
+message ProtoHollowBatchPart {
+    ProtoU64Description desc = 1;
+    string key = 2;
+}
+
+message ProtoHollowBatch {
+    ProtoU64Description desc = 1;
+    repeated string keys = 2;
+    uint64 len = 3;
+}
+
+message ProtoTrace {
+    ProtoU64Antichain since = 1;
+    repeated ProtoHollowBatch spine = 2;
+}
+
+message ProtoReaderState {
+    ProtoU64Antichain since = 1;
+    uint64 seqno = 2;
+    uint64 last_heartbeat_timestamp_ms = 3;
+}
+
+message ProtoWriterState {
+    uint64 last_heartbeat_timestamp_ms = 1;
+    uint64 lease_duration_ms = 2;
+}
+
+message ProtoStateRollup {
+    string applier_version = 11;
+
+    string shard_id = 1;
+    string key_codec = 2;
+    string val_codec = 3;
+    string ts_codec = 4;
+    string diff_codec = 5;
+    uint64 seqno = 6;
+    uint64 last_gc_req = 10;
+    map<uint64, string> rollups = 12;
+
+    ProtoTrace trace = 7;
+    map<string, ProtoReaderState> readers = 8;
+    map<string, ProtoWriterState> writers = 9;
+}
+
+enum ProtoStateField {
+    ROLLUPS = 0;
+    LAST_GC_REQ = 1;
+    READERS = 2;
+    WRITERS = 3;
+    SINCE = 4;
+    SPINE = 5;
+}
+
+enum ProtoStateFieldDiffType {
+    INSERT = 0;
+    UPDATE = 1;
+    DELETE = 2;
+}
+
+// A columnar encoding of Vec<StateFieldDiff<K, V>> with heterogeneous K and V.
+//
+// - The number of diffs (len) == fields.len() == diff_types.len()
+// - Each diff is encoded into 1 data slice for the key and 1 (Insert, Delete)
+//   or 2 (Update) data slices for the val
+// - These data slices are concatenated together in data_bytes and the
+//   corresponding lengths of each slice in data_lens. (So number of data slices
+//   == data_lens.len().)
+// - We store the length of each data_slice, not e.g. an offset into data_bytes.
+//   This makes random access slower, but we only ever iterate (random access by
+//   diff idx would be tricky anyway because each diff gets a variable number of
+//   data slices based on it's type.) Storing the lengths, OTOH, compresses much
+//   better with protobuf varints.
+message ProtoStateFieldDiffs {
+    repeated ProtoStateField fields = 1;
+    repeated ProtoStateFieldDiffType diff_types = 2;
+    repeated uint64 data_lens = 3;
+    bytes data_bytes = 4;
+}
+
+message ProtoStateDiff {
+    string applier_version = 1;
+
+    uint64 seqno_from = 2;
+    uint64 seqno_to = 3;
+    string latest_rollup_key = 4;
+
+    ProtoStateFieldDiffs field_diffs = 5;
+}
+
+message ProtoLeasedBatchMetadata {
+    message ProtoLeasedBatchMetadataSnapshot {
+        ProtoU64Antichain as_of = 1;
+    }
+
+    message ProtoLeasedBatchMetadataListen {
+        ProtoU64Antichain as_of = 1;
+        ProtoU64Antichain until = 2;
+    }
+
+    oneof kind {
+        ProtoLeasedBatchMetadataSnapshot snapshot = 1;
+        ProtoLeasedBatchMetadataListen listen = 2;
+    }
+}
+
+message ProtoLeasedBatch {
+    string shard_id = 1;
+    ProtoLeasedBatchMetadata reader_metadata = 2;
+    ProtoHollowBatch batch = 3;
+    optional uint64 leased_seqno = 4;
+    string reader_id = 5;
+}

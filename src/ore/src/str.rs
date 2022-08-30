@@ -111,6 +111,27 @@ where
     }
 }
 
+/// Give na closure, it creates a Display that simply calls the given closure when fmt'd.
+pub fn closure_to_display<F>(fun: F) -> impl fmt::Display
+where
+    F: Fn(&mut fmt::Formatter) -> fmt::Result,
+{
+    struct Mapped<F> {
+        fun: F,
+    }
+
+    impl<F> fmt::Display for Mapped<F>
+    where
+        F: Fn(&mut fmt::Formatter) -> fmt::Result,
+    {
+        fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            (self.fun)(formatter)
+        }
+    }
+
+    Mapped { fun }
+}
+
 /// Creates a type whose [`fmt::Display`] implementation outputs each item in
 /// `iter` separated by `separator`.
 pub fn separated<'a, I>(separator: &'a str, iter: I) -> impl fmt::Display + 'a
@@ -150,10 +171,11 @@ where
 ///
 /// This will be most often used as part of the rendering context
 /// type for various `Display$Format` implementation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Indent {
     unit: String,
     buff: String,
+    mark: Vec<usize>,
 }
 
 impl Indent {
@@ -163,6 +185,7 @@ impl Indent {
         Indent {
             unit: std::iter::repeat(unit).take(step).collect::<String>(),
             buff: String::with_capacity(unit.len_utf8()),
+            mark: vec![],
         }
     }
 
@@ -176,6 +199,21 @@ impl Indent {
         let tail = rhs.saturating_mul(self.unit.len());
         let head = self.buff.len().saturating_sub(tail);
         self.buff.truncate(head);
+    }
+
+    /// Remember the current state.
+    pub fn set(&mut self) {
+        self.mark.push(self.buff.len());
+    }
+
+    /// Reset `buff` to the last marked state.
+    pub fn reset(&mut self) {
+        if let Some(len) = self.mark.pop() {
+            while self.buff.len() < len {
+                self.buff += &self.unit;
+            }
+            self.buff.truncate(len);
+        }
     }
 }
 

@@ -23,9 +23,9 @@ use std::fmt;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, Envelope, Expr, Format, Ident, KeyConstraint, Query,
-    SelectItem, SourceIncludeMetadata, TableAlias, TableConstraint, TableWithJoins,
-    UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, Envelope, Expr, Format, Ident,
+    KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias, TableConstraint,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -55,7 +55,11 @@ pub enum Statement<T: AstInfo> {
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
-    AlterSystem(AlterSystemStatement),
+    AlterSource(AlterSourceStatement<T>),
+    AlterSystemSet(AlterSystemSetStatement),
+    AlterSystemReset(AlterSystemResetStatement),
+    AlterSystemResetAll(AlterSystemResetAllStatement),
+    AlterConnection(AlterConnectionStatement),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropSchema(DropSchemaStatement),
@@ -119,7 +123,11 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
-            Statement::AlterSystem(stmt) => f.write_node(stmt),
+            Statement::AlterSource(stmt) => f.write_node(stmt),
+            Statement::AlterSystemSet(stmt) => f.write_node(stmt),
+            Statement::AlterSystemReset(stmt) => f.write_node(stmt),
+            Statement::AlterSystemResetAll(stmt) => f.write_node(stmt),
+            Statement::AlterConnection(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
@@ -496,7 +504,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         f.write_str("FROM ");
         f.write_node(&self.connection);
         if !self.legacy_with_options.is_empty() {
-            f.write_str(" WITH (");
+            f.write_str(" LEGACYWITH (");
             f.write_node(&display::comma_separated(&self.legacy_with_options));
             f.write_str(")");
         }
@@ -527,15 +535,13 @@ impl_display_t!(CreateSourceStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
-    pub in_cluster: Option<T::ClusterName>,
+    pub if_not_exists: bool,
     pub from: T::ObjectName,
     pub connection: CreateSinkConnection<T>,
     pub with_options: Vec<WithOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope<T>>,
     pub with_snapshot: bool,
-    pub as_of: Option<AsOf<T>>,
-    pub if_not_exists: bool,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
@@ -545,10 +551,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(&self.name);
-        if let Some(cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(cluster);
-        }
         f.write_str(" FROM ");
         f.write_node(&self.from);
         f.write_str(" INTO ");
@@ -570,11 +572,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
             f.write_str(" WITH SNAPSHOT");
         } else {
             f.write_str(" WITHOUT SNAPSHOT");
-        }
-
-        if let Some(as_of) = &self.as_of {
-            f.write_str(" ");
-            f.write_node(as_of);
         }
     }
 }
@@ -987,8 +984,8 @@ impl_display_t!(CreateClusterStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClusterOption<T: AstInfo> {
-    /// The `INTROSPECTION GRANULARITY [[=] <interval>] option.
-    IntrospectionGranularity(WithOptionValue<T>),
+    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
+    IntrospectionInterval(WithOptionValue<T>),
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
     IntrospectionDebugging(WithOptionValue<T>),
     /// The `REPLICAS` option.
@@ -998,9 +995,9 @@ pub enum ClusterOption<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterOption::IntrospectionGranularity(granularity) => {
-                f.write_str("INTROSPECTION GRANULARITY ");
-                f.write_node(granularity);
+            ClusterOption::IntrospectionInterval(interval) => {
+                f.write_str("INTROSPECTION INTERVAL ");
+                f.write_node(interval);
             }
             ClusterOption::IntrospectionDebugging(debugging) => {
                 f.write_str("INTROSPECTION DEBUGGING ");
@@ -1176,6 +1173,45 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
 
 impl_display_t!(AlterIndexStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AlterSourceAction<T: AstInfo> {
+    SetOptions(Vec<CreateSourceOption<T>>),
+    ResetOptions(Vec<CreateSourceOptionName>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSourceStatement<T: AstInfo> {
+    pub source_name: UnresolvedObjectName,
+    pub if_exists: bool,
+    pub action: AlterSourceAction<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SOURCE ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.source_name);
+        f.write_str(" ");
+
+        match &self.action {
+            AlterSourceAction::SetOptions(options) => {
+                f.write_str("SET (");
+                f.write_node(&display::comma_separated(&options));
+                f.write_str(")");
+            }
+            AlterSourceAction::ResetOptions(options) => {
+                f.write_str("RESET (");
+                f.write_node(&display::comma_separated(&options));
+                f.write_str(")");
+            }
+        }
+    }
+}
+
+impl_display_t!(AlterSourceStatement);
+
 /// `ALTER SECRET ... AS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterSecretStatement<T: AstInfo> {
@@ -1197,6 +1233,26 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
 }
 
 impl_display_t!(AlterSecretStatement);
+
+/// `ALTER CONNECTION ... ROTATE KEYS`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterConnectionStatement {
+    pub name: UnresolvedObjectName,
+    pub if_exists: bool,
+}
+
+impl AstDisplay for AlterConnectionStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER CONNECTION ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" ROTATE KEYS");
+    }
+}
+
+impl_display!(AlterConnectionStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
@@ -2022,6 +2078,7 @@ pub enum WithOptionValue<T: AstInfo> {
     // Temporary variant until we have support for connections, which will use
     // explicit fields for each secret reference.
     Secret(T::ObjectName),
+    Object(T::ObjectName),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -2034,6 +2091,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str("SECRET ");
                 f.write_node(name)
             }
+            WithOptionValue::Object(obj) => f.write_node(obj),
         }
     }
 }
@@ -2449,14 +2507,14 @@ impl AstDisplay for NoticeSeverity {
 }
 impl_display!(NoticeSeverity);
 
-/// `ALTER SYSTEM ...`
+/// `ALTER SYSTEM SET ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterSystemStatement {
+pub struct AlterSystemSetStatement {
     pub name: Ident,
     pub value: SetVariableValue,
 }
 
-impl AstDisplay for AlterSystemStatement {
+impl AstDisplay for AlterSystemSetStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER SYSTEM SET ");
         f.write_node(&self.name);
@@ -2464,8 +2522,32 @@ impl AstDisplay for AlterSystemStatement {
         f.write_node(&self.value);
     }
 }
+impl_display!(AlterSystemSetStatement);
 
-impl_display!(AlterSystemStatement);
+/// `ALTER SYSTEM RESET ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSystemResetStatement {
+    pub name: Ident,
+}
+
+impl AstDisplay for AlterSystemResetStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SYSTEM RESET ");
+        f.write_node(&self.name);
+    }
+}
+impl_display!(AlterSystemResetStatement);
+
+/// `ALTER SYSTEM RESET ALL`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterSystemResetAllStatement {}
+
+impl AstDisplay for AlterSystemResetAllStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER SYSTEM RESET ALL");
+    }
+}
+impl_display!(AlterSystemResetAllStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AsOf<T: AstInfo> {

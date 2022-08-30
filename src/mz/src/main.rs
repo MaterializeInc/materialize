@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 
 use clap::{Args, Parser, Subcommand};
 use reqwest::Client;
-use shell::check_environment_health;
-use utils::{exit_with_fail_message, run_loading_spinner, CloudProviderRegionEnum};
+use shell::check_region_health;
+use utils::{exit_with_fail_message, run_loading_spinner, CloudProviderRegion};
 
 use crate::login::{login_with_browser, login_with_console};
 use crate::profiles::{authenticate_profile, validate_profile};
@@ -42,9 +42,8 @@ use crate::shell::shell;
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
-    /// Specify a particular configuration profile
-    #[clap(short, long)]
-    profile: Option<String>,
+    #[clap(short, long, env = "MZ_PROFILE", default_value = "default")]
+    profile: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -76,14 +75,14 @@ struct Regions {
 enum RegionsCommands {
     /// Enable a region.
     Enable {
-        #[clap(possible_values = CloudProviderRegionEnum::variants())]
+        #[clap(possible_values = CloudProviderRegion::variants())]
         cloud_provider_region: String,
     },
     /// List all enabled regions.
     List,
     /// Display a region's status.
     Status {
-        #[clap(possible_values = CloudProviderRegionEnum::variants())]
+        #[clap(possible_values = CloudProviderRegion::variants())]
         cloud_provider_region: String,
     },
 }
@@ -177,19 +176,12 @@ const ERROR_PARSING_PROFILES_MESSAGE: &str = "Error parsing the profiles";
 const ERROR_AUTHENTICATING_PROFILE_MESSAGE: &str = "Error authenticating profile";
 const PROFILE_NOT_FOUND_MESSAGE: &str =
     "Profile not found. Please, add one or login using `mz login`.";
+const ERROR_UNKNOWN_REGION: &str = "Unknown region";
 
 #[tokio::main]
 async fn main() {
     let args = Cli::parse();
-    let mut profile_name = DEFAULT_PROFILE_NAME.to_string();
-    let preferedined_profile_arg: Option<String> = args.profile;
-    let predefined_profile_env: Option<&str> = option_env!("MZ_PROFILE");
-
-    if let Some(profile_env) = predefined_profile_env {
-        profile_name = profile_env.to_string();
-    } else if let Some(profile_arg) = preferedined_profile_arg {
-        profile_name = profile_arg;
-    }
+    let profile_name = args.profile;
 
     match args.command {
         Commands::Docs => {
@@ -218,21 +210,24 @@ async fn main() {
                 } => match validate_profile(profile_name, &client).await {
                     Some(frontegg_auth_machine) => {
                         let loading_spinner = run_loading_spinner("Enabling region...".to_string());
-                        let parsed_cloud_provider_region =
-                        CloudProviderRegionEnum::parse(cloud_provider_region);
-
-                        match enable_region(
-                            client,
-                            parsed_cloud_provider_region,
-                            frontegg_auth_machine,
-                        )
-                        .await
+                        if let Ok(parsed_cloud_provider_region) =
+                            CloudProviderRegion::from_str(&cloud_provider_region)
                         {
-                            Ok(_) => loading_spinner.finish_with_message("Region enabled."),
-                            Err(e) => exit_with_fail_message(ExitMessage::String(format!(
-                                "Error enabling region: {:?}",
-                                e
-                            ))),
+                            match enable_region(
+                                client,
+                                parsed_cloud_provider_region,
+                                frontegg_auth_machine,
+                            )
+                            .await
+                            {
+                                Ok(_) => loading_spinner.finish_with_message("Region enabled."),
+                                Err(e) => exit_with_fail_message(ExitMessage::String(format!(
+                                    "Error enabling region: {:?}",
+                                    e
+                                ))),
+                            }
+                        } else {
+                            exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION))
                         }
                     }
                     None => {}
@@ -268,17 +263,18 @@ async fn main() {
                             Ok(frontegg_auth_machine) => {
                                 match list_cloud_providers(&client, &frontegg_auth_machine).await {
                                     Ok(cloud_providers) => {
-                                        let parsed_cloud_provider_region =
-                                        CloudProviderRegionEnum::parse_region(
-                                                cloud_provider_region,
-                                            );
-                                        let filtered_providers: Vec<CloudProvider> =
-                                            cloud_providers
-                                                .into_iter()
-                                                .filter(|provider| {
-                                                    provider.region == parsed_cloud_provider_region
-                                                })
-                                                .collect::<Vec<CloudProvider>>();
+                                        if let Ok(parsed_cloud_provider_region) =
+                                            CloudProviderRegion::from_str(&cloud_provider_region)
+                                        {
+                                            let filtered_providers: Vec<CloudProvider> =
+                                                cloud_providers
+                                                    .into_iter()
+                                                    .filter(|provider| {
+                                                        provider.region
+                                                            == parsed_cloud_provider_region
+                                                                .region_name()
+                                                    })
+                                                    .collect::<Vec<CloudProvider>>();
 
                                         let mut cloud_provider_regions = list_regions(
                                             &filtered_providers,
@@ -345,29 +341,33 @@ async fn main() {
         Commands::Shell {
             cloud_provider_region,
         } => {
-            let parsed_cloud_provider_region = CloudProviderRegionEnum::parse(cloud_provider_region);
-
-            match get_profile(profile_name) {
-                Some(profile) => {
-                    let client = Client::new();
-                    match authenticate_profile(&client, &profile).await {
-                        Ok(frontegg_auth_machine) => {
-                            shell(
-                                client,
-                                profile,
-                                frontegg_auth_machine,
-                                parsed_cloud_provider_region,
-                            )
-                            .await
+            if let Ok(parsed_cloud_provider_region) =
+                CloudProviderRegion::from_str(&cloud_provider_region)
+            {
+                match get_profile(profile_name) {
+                    Some(profile) => {
+                        let client = Client::new();
+                        match authenticate_profile(&client, &profile).await {
+                            Ok(frontegg_auth_machine) => {
+                                shell(
+                                    client,
+                                    profile,
+                                    frontegg_auth_machine,
+                                    parsed_cloud_provider_region,
+                                )
+                                .await
+                            }
+                            Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+                                "{}: {:}",
+                                ERROR_AUTHENTICATING_PROFILE_MESSAGE, error
+                            ))),
                         }
-                        Err(error) => exit_with_fail_message(ExitMessage::String(format!(
-                            "{}: {:}",
-                            ERROR_AUTHENTICATING_PROFILE_MESSAGE, error
-                        ))),
                     }
-                }
-                None => exit_with_fail_message(ExitMessage::Str(PROFILE_NOT_FOUND_MESSAGE)),
-            };
+                    None => exit_with_fail_message(ExitMessage::Str(PROFILE_NOT_FOUND_MESSAGE)),
+                };
+            } else {
+                exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION))
+            }
         }
     }
 }

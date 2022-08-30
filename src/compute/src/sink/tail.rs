@@ -24,7 +24,7 @@ use mz_compute_client::response::{TailBatch, TailResponse};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{SinkAsOf, SinkDesc, TailSinkConnection};
+use mz_storage::types::sinks::{ComputeSinkDesc, SinkAsOf, TailSinkConnection};
 
 use crate::render::sinks::SinkRender;
 
@@ -32,24 +32,12 @@ impl<G> SinkRender<G> for TailSinkConnection
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn uses_keys(&self) -> bool {
-        false
-    }
-
-    fn get_key_indices(&self) -> Option<&[usize]> {
-        None
-    }
-
-    fn get_relation_key_indices(&self) -> Option<&[usize]> {
-        None
-    }
-
     fn render_continuous_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
-        sink: &SinkDesc<CollectionMetadata>,
+        sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
-        sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        sinked_collection: Collection<G, Row, Diff>,
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: Collection<G, DataflowError, Diff>,
@@ -86,7 +74,7 @@ where
 }
 
 fn tail<G>(
-    sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+    sinked_collection: Collection<G, Row, Diff>,
     sink_id: GlobalId,
     as_of: SinkAsOf,
     tail_protocol_handle: Rc<RefCell<Option<TailProtocol>>>,
@@ -98,9 +86,7 @@ fn tail<G>(
         .inner
         .sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
             input.for_each(|_, rows| {
-                for ((k, v), time, diff) in rows.iter() {
-                    assert!(k.is_none(), "tail does not support keys");
-                    let row = v.as_ref().expect("tail must have values");
+                for (row, time, diff) in rows.iter() {
                     let should_emit = if as_of.strict {
                         as_of.frontier.less_than(time)
                     } else {

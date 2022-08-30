@@ -104,10 +104,14 @@ pub fn describe(
 
     let desc = match stmt {
         // DDL statements.
+        Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
-        Statement::AlterSystem(stmt) => ddl::describe_alter_system(&scx, stmt)?,
+        Statement::AlterSource(stmt) => ddl::describe_alter_source(&scx, stmt)?,
+        Statement::AlterSystemSet(stmt) => ddl::describe_alter_system_set(&scx, stmt)?,
+        Statement::AlterSystemReset(stmt) => ddl::describe_alter_system_reset(&scx, stmt)?,
+        Statement::AlterSystemResetAll(stmt) => ddl::describe_alter_system_reset_all(&scx, stmt)?,
         Statement::CreateCluster(stmt) => ddl::describe_create_cluster(&scx, stmt)?,
         Statement::CreateClusterReplica(stmt) => ddl::describe_create_cluster_replica(&scx, stmt)?,
         Statement::CreateConnection(stmt) => ddl::describe_create_connection(&scx, stmt)?,
@@ -214,10 +218,14 @@ pub fn plan(
 
     match stmt {
         // DDL statements.
+        Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
-        Statement::AlterSystem(stmt) => ddl::plan_alter_system(scx, stmt),
+        Statement::AlterSource(stmt) => ddl::plan_alter_source(scx, stmt),
+        Statement::AlterSystemSet(stmt) => ddl::plan_alter_system_set(scx, stmt),
+        Statement::AlterSystemReset(stmt) => ddl::plan_alter_system_reset(scx, stmt),
+        Statement::AlterSystemResetAll(stmt) => ddl::plan_alter_system_reset_all(scx, stmt),
         Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
         Statement::CreateClusterReplica(stmt) => ddl::plan_create_cluster_replica(scx, stmt),
         Statement::CreateConnection(stmt) => ddl::plan_create_connection(scx, stmt),

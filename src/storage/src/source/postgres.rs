@@ -136,12 +136,22 @@ enum InternalMessage {
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
     receiver_stream: Receiver<InternalMessage>,
+
+    // Postgres sources support single-threaded ingestion only, so only one of
+    // the `PostgresSourceReader`s will actually produce data.
+    active_read_worker: bool,
+
+    // The non-active reader (see above `active_read_worker`) has to report back
+    // that is is not consuming from the one [`PartitionId:None`] partition.
+    // Before it can return a [`NextMessage::Finished`]. This is keeping track
+    // of that.
+    reported_unconsumed_partitions: bool,
 }
 
 /// An internal struct held by the spawned tokio task
 struct PostgresTaskInfo {
     source_id: GlobalId,
-    connection_config: tokio_postgres::Config,
+    connection_config: mz_postgres_util::Config,
     publication: String,
     slot: String,
     /// Our cursor into the WAL
@@ -161,8 +171,8 @@ impl SourceReader for PostgresSourceReader {
     fn new(
         _source_name: String,
         source_id: GlobalId,
-        _worker_id: usize,
-        _worker_count: usize,
+        worker_id: usize,
+        worker_count: usize,
         consumer_activator: SyncActivator,
         connection: SourceConnection,
         start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
@@ -176,6 +186,9 @@ impl SourceReader for PostgresSourceReader {
                 panic!("Postgres is the only legitimate SourceConnection for PostgresSourceReader")
             }
         };
+
+        let active_read_worker =
+            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
         // TODO: figure out the best default here; currently this is optimized
         // for the speed to pass pg-cdc-resumption tests on a local machine.
@@ -203,27 +216,32 @@ impl SourceReader for PostgresSourceReader {
             )
             .expect("Postgres connection unexpectedly missing secrets");
 
-        let task_info = PostgresTaskInfo {
-            source_id: source_id.clone(),
-            connection_config,
-            publication: connection.publication,
-            slot: connection.details.slot,
-            /// Our cursor into the WAL
-            lsn: start_offset.offset.into(),
-            metrics: PgSourceMetrics::new(&metrics, source_id),
-            source_tables: HashMap::from_iter(
-                connection.details.tables.iter().map(|t| (t.oid, t.clone())),
-            ),
-            row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
-            sender: dataflow_tx,
-        };
+        if active_read_worker {
+            let task_info = PostgresTaskInfo {
+                source_id: source_id.clone(),
+                connection_config,
+                publication: connection.publication,
+                slot: connection.details.slot,
+                /// Our cursor into the WAL
+                lsn: start_offset.offset.into(),
+                metrics: PgSourceMetrics::new(&metrics, source_id),
+                source_tables: HashMap::from_iter(
+                    connection.details.tables.iter().map(|t| (t.oid, t.clone())),
+                ),
+                row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
+                sender: dataflow_tx,
+            };
 
-        task::spawn(
-            || format!("postgres_source:{}", source_id),
-            postgres_replication_loop(task_info),
-        );
+            task::spawn(
+                || format!("postgres_source:{}", source_id),
+                postgres_replication_loop(task_info),
+            );
+        }
+
         Ok(Self {
             receiver_stream: dataflow_rx,
+            active_read_worker,
+            reported_unconsumed_partitions: false,
         })
     }
 
@@ -231,6 +249,16 @@ impl SourceReader for PostgresSourceReader {
     fn get_next_message(
         &mut self,
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+        if !self.active_read_worker {
+            if !self.reported_unconsumed_partitions {
+                self.reported_unconsumed_partitions = true;
+                return Ok(NextMessage::Ready(
+                    SourceMessageType::DropPartitionCapabilities(vec![PartitionId::None]),
+                ));
+            }
+            return Ok(NextMessage::Finished);
+        }
+
         // TODO(guswynn): consider if `try_recv` is better or the same as `now_or_never`
         let ret = match self.receiver_stream.recv().now_or_never() {
             Some(Some(InternalMessage::Value {
@@ -465,11 +493,9 @@ impl PostgresTaskInfo {
     /// After the initial snapshot has been produced it returns the name of the created slot and
     /// the LSN at which we should start the replication stream at.
     async fn produce_snapshot(&mut self) -> Result<(), ReplicationError> {
-        let client = try_recoverable!(
-            mz_postgres_util::connect_replication(self.connection_config.clone()).await
-        );
+        let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
 
-        // We're initialising this source so any previously existing slot must be removed and
+        // We're initializing this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
         let _ = client
             .simple_query(&format!("DROP_REPLICATION_SLOT {:?}", &self.slot))
@@ -553,6 +579,13 @@ impl PostgresTaskInfo {
                 }));
 
                 self.row_sender.insert(mz_row.clone(), self.lsn).await;
+                // Failure scenario after we have produced at least one row, but before a
+                // successful `COMMIT`
+                fail::fail_point!("pg_snapshot_failure", |_| {
+                    Err(ReplicationError::Recoverable(anyhow::anyhow!(
+                        "recoverable errors should crash the process"
+                    )))
+                });
             }
 
             self.metrics.tables.inc();
@@ -560,8 +593,8 @@ impl PostgresTaskInfo {
         self.metrics.lsn.set(self.lsn.into());
         client.simple_query("COMMIT;").await?;
 
-        // close the current `row_sender` context after we are sure we are not erroring out.
-        // Otherwise, `revert_snapshot` will close it
+        // close the current `row_sender` context after we are sure we have not errored
+        // out (in the commit).
         self.row_sender.close_lsn(self.lsn).await;
         Ok(())
     }
@@ -603,9 +636,7 @@ impl PostgresTaskInfo {
     async fn produce_replication(&mut self) -> Result<(), ReplicationError> {
         use ReplicationError::*;
 
-        let client = try_recoverable!(
-            mz_postgres_util::connect_replication(self.connection_config.clone()).await
-        );
+        let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
 
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
@@ -820,7 +851,8 @@ impl PostgresTaskInfo {
                                     }
                                     // The enum is marked as non_exhaustive. Better to be conservative here in
                                     // case a new message is relevant to the semantics of our source
-                                    _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
+                                    _ => return Err(Fatal(anyhow!("unexpected logical replication message"))
+                                                    ),
                                 }
                             }
                             // Handled above

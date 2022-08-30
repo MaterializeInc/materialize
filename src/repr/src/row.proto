@@ -58,6 +58,8 @@ message ProtoDatum {
         bytes uuid = 25;
         uint32 uint32 = 26;
         uint32 uint8 = 27;
+        uint32 uint16 = 28;
+        uint64 uint64 = 29;
     }
 }
 

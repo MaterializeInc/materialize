@@ -15,16 +15,21 @@ $ kafka-ingest format=bytes topic=zstd timestamp=1
 hello
 world
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE zstd
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-zstd-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn
+  TOPIC 'testdrive-zstd-${testdrive.seed}'
   FORMAT TEXT
 > SELECT text FROM zstd
 hello
 world
 
 > CREATE SOURCE zstd_fast_forwarded
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-zstd-${testdrive.seed}'
-  WITH (start_offset=1)
+  FROM KAFKA CONNECTION kafka_conn
+  WITH (START OFFSET=[1])
+  TOPIC 'testdrive-zstd-${testdrive.seed}'
   FORMAT TEXT
 > SELECT text FROM zstd_fast_forwarded
 world

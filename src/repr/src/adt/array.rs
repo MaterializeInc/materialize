@@ -15,7 +15,8 @@ use std::fmt;
 use std::mem;
 
 use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Serialize, Serializer};
 
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
@@ -45,6 +46,43 @@ impl<'a> Array<'a> {
     /// Returns the elements of the array.
     pub fn elements(&self) -> DatumList<'a> {
         self.elements
+    }
+}
+
+impl<'a> Serialize for Array<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut dim_iter = self.dims().into_iter();
+        if let Some(dim1) = dim_iter.next() {
+            let mut seq = serializer.serialize_seq(Some(dim1.length))?;
+            let other_dims = dim_iter.collect::<Vec<_>>();
+            if other_dims.is_empty() {
+                let mut iter = self.elements.iter();
+                while let Some(datum) = iter.next() {
+                    seq.serialize_element(&datum)?;
+                }
+            } else {
+                let subarray_len = other_dims.iter().map(|dim| dim.length).product();
+                for i in 0..dim1.length {
+                    let mut row = crate::Row::with_capacity(subarray_len);
+                    row.packer()
+                        .push_array(
+                            &other_dims,
+                            self.elements
+                                .iter()
+                                .skip(i * subarray_len)
+                                .take(subarray_len),
+                        )
+                        .unwrap();
+                    seq.serialize_element(&row.unpack_first().unwrap_array())?;
+                }
+            }
+            seq.end()
+        } else {
+            serializer.serialize_unit()
+        }
     }
 }
 

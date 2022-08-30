@@ -66,6 +66,9 @@ mod sys;
 // [0]: https://github.com/jemalloc/jemalloc/issues/26
 // [1]: https://github.com/jemalloc/jemalloc/issues/843
 // [2]: https://github.com/jemalloc/jemalloc/issues/1467
+//
+// Furthermore, as of Aug. 2022, some engineers are using profiling
+// tools, e.g. `heaptrack`, that only work with the system allocator.
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -548,8 +551,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
-    let persist_clients =
-        PersistClientCache::new(PersistConfig::new(now.clone()), &metrics_registry);
+    let persist_clients = PersistClientCache::new(
+        PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
+        &metrics_registry,
+    );
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let orchestrator = Arc::new(TracingOrchestrator::new(
         orchestrator,

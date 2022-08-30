@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}
+
 # Without EXTENDED, SHOW TYPES shouldn't have anything to return.
 > SHOW TYPES
 
@@ -26,6 +28,9 @@ _int2
 _int2vector
 _int4
 _int8
+_uint2
+_uint4
+_uint8
 _interval
 _jsonb
 _numeric
@@ -60,6 +65,9 @@ int2
 int2vector
 int4
 int8
+uint2
+uint4
+uint8
 interval
 jsonb
 list
@@ -91,6 +99,9 @@ _int2                       system
 _int2vector                 system
 _int4                       system
 _int8                       system
+_uint2                      system
+_uint4                      system
+_uint8                      system
 _interval                   system
 _jsonb                      system
 _numeric                    system
@@ -125,6 +136,9 @@ int2                        system
 int2vector                  system
 int4                        system
 int8                        system
+uint2                       system
+uint4                       system
+uint8                       system
 interval                    system
 jsonb                       system
 list                        system
@@ -141,6 +155,9 @@ timestamp                   system
 timestamptz                 system
 uuid                        system
 varchar                     system
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_tables = 10000
 
 # Support creating tables with catalog types and their aliases
 > CREATE TABLE bool_t (a bool);
@@ -168,6 +185,12 @@ varchar                     system
 
 > CREATE TABLE int8_t (a int8);
 > CREATE TABLE bigint_t (a bigint);
+
+> CREATE TABLE uint2_t (a uint2);
+
+> CREATE TABLE uint4_t (a uint4);
+
+> CREATE TABLE uint8_t (a uint8);
 
 > CREATE TABLE interval_t (a interval);
 
@@ -333,3 +356,6 @@ true
 # Ensure we don't allow unknown options
 ! CREATE TYPE whatever AS LIST (element_type=int4, gus=int4);
 contains:unexpected parameters for CREATE TYPE: gus
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET ALL

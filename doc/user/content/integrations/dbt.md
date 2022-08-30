@@ -41,7 +41,7 @@ Setting up a dbt project with Materialize is similar to setting it up with any o
 
     `materialize` should be listed under "Plugins". If this is not the case, double-check that the virtual environment is activated!
 
-1. To get started, make sure you have Materialize [installed and running](/install/).
+1. To get started, make sure you have a Materialize account.
 
 ## Create and configure a dbt project
 
@@ -78,26 +78,12 @@ dbt manages all your connection configurations (or, profiles) in a file called [
         dev:
           type: materialize
           threads: 1
-          host: localhost
+          host: <host>
           port: 6875
-          user: materialize
-          pass: password
+          user: <user>
+          pass: <password>
           dbname: materialize
           schema: public
-
-        prod:
-          type: materialize
-          threads: 1
-          host: instance.materialize.cloud
-          port: 6875
-          user: materialize
-          pass: password
-          dbname: materialize
-          schema: analytics
-          sslmode: verify-ca
-          sslcert: materialize.crt
-          sslkey: materialize.key
-          sslrootcert: ca.crt
 
       target: dev
     ```
@@ -119,6 +105,8 @@ In dbt, a [model](https://docs.getdbt.com/docs/building-a-dbt-project/building-m
 ### dbt models
 
 When you use dbt with Materialize, **your models stay up-to-date** without manual or configured refreshes. This allows you to efficiently transform streaming data using the same thought process you'd use for batch transformations on top of any other database.
+
+[//]: # "TODO(morsapaes) Adapt once new get started guide is merged"
 
 1. Create a model for each SQL statement you're planning to deploy. Each individual model should be stored as a `.sql` file under the directory defined by `source-paths` in `dbt_project.yml`.
 

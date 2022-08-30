@@ -3,7 +3,7 @@ name = "mz-transform"
 description = "Transformations of Materialize expressions."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.62.0"
+rust-version = "1.63.0"
 publish = false
 
 [dependencies]
@@ -14,13 +14,13 @@ mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-storage = { path = "../storage" }
-tracing = "0.1.34"
+tracing = "0.1.36"
 
 [dev-dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
-proc-macro2 = "1.0.40"
-serde_json = "1.0.82"
+proc-macro2 = "1.0.43"
+serde_json = "1.0.85"

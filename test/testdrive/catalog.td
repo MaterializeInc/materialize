@@ -240,8 +240,68 @@ contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or MATERIALI
 > SHOW FULL OBJECTS
 name            type
 --------------------------
+bool            user
+int_list        user
 v1              user
 v2              user
+
+# Create one of every mz_object type
+$ set schema={
+    "name": "row",
+    "type": "record",
+    "fields": [
+      {"name": "a", "type": "long"}
+    ]
+  }
+$ kafka-create-topic topic=data
+$ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
+{"a": 1}
+
+> CREATE TABLE tbl (a int, b text);
+> CREATE SECRET pass_secret AS 'pass';
+
+> CREATE CONNECTION kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
+> CREATE MATERIALIZED VIEW mv AS SELECT (1);
+> CREATE SOURCE source_data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+> CREATE SINK snk FROM source_data
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-catalog-sink-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+
+> SHOW FULL OBJECTS
+name            type
+--------------------------
+bool            user
+csr_conn        user
+int_list        user
+v1              user
+v2              user
+tbl             user
+pass_secret     user
+kafka_conn      user
+mv              user
+source_data     user
+snk             user
+
+> SELECT DISTINCT(TYPE) FROM mz_objects
+type
+----
+table
+source
+view
+"materialized view"
+sink
+index
+connection
+type
+function
+secret
 
 # DROP DATABASE does not support both RESTRICT and CASCADE.
 ! DROP DATABASE d RESTRICT CASCADE
@@ -356,8 +416,8 @@ mz_arrangement_sharing_internal
 mz_arrangement_sharing_internal_1
 mz_dataflow_channels
 mz_dataflow_channels_1
-mz_dataflow_operator_addresses
-mz_dataflow_operator_addresses_1
+mz_dataflow_addresses
+mz_dataflow_addresses_1
 mz_dataflow_operator_reachability_internal
 mz_dataflow_operator_reachability_internal_1
 mz_dataflow_operators
@@ -380,7 +440,6 @@ mz_scheduling_histogram_internal
 mz_scheduling_histogram_internal_1
 mz_scheduling_parks_internal
 mz_scheduling_parks_internal_1
-mz_source_status_history
 mz_worker_materialization_delays
 mz_worker_materialization_delays_1
 mz_worker_materialization_frontiers
@@ -399,8 +458,8 @@ mz_arrangement_sharing_internal               system log
 mz_arrangement_sharing_internal_1             system log
 mz_dataflow_channels                          system log
 mz_dataflow_channels_1                        system log
-mz_dataflow_operator_addresses                system log
-mz_dataflow_operator_addresses_1              system log
+mz_dataflow_addresses                         system log
+mz_dataflow_addresses_1                       system log
 mz_dataflow_operator_reachability_internal    system log
 mz_dataflow_operator_reachability_internal_1  system log
 mz_dataflow_operators                         system log
@@ -423,7 +482,6 @@ mz_scheduling_histogram_internal              system log
 mz_scheduling_histogram_internal_1            system log
 mz_scheduling_parks_internal                  system log
 mz_scheduling_parks_internal_1                system log
-mz_source_status_history                      system "storage collection"
 mz_worker_materialization_delays              system log
 mz_worker_materialization_delays_1            system log
 mz_worker_materialization_frontiers           system log
@@ -586,8 +644,8 @@ mz_arrangement_sizes
 mz_arrangement_sizes_1
 mz_catalog_names
 mz_cluster_replicas
-mz_dataflow_names
-mz_dataflow_names_1
+mz_dataflows
+mz_dataflows_1
 mz_dataflow_operator_dataflows
 mz_dataflow_operator_dataflows_1
 mz_dataflow_operator_reachability
@@ -598,14 +656,6 @@ mz_materialization_source_frontiers
 mz_message_counts
 mz_message_counts_1
 mz_objects
-mz_perf_arrangement_records
-mz_perf_arrangement_records_1
-mz_perf_peek_durations_aggregates
-mz_perf_peek_durations_aggregates_1
-mz_perf_peek_durations_bucket
-mz_perf_peek_durations_bucket_1
-mz_perf_peek_durations_core
-mz_perf_peek_durations_core_1
 mz_records_per_dataflow
 mz_records_per_dataflow_1
 mz_records_per_dataflow_global
@@ -629,8 +679,8 @@ mz_arrangement_sizes                 system
 mz_arrangement_sizes_1               system
 mz_catalog_names                     system
 mz_cluster_replicas                  system
-mz_dataflow_names                    system
-mz_dataflow_names_1                  system
+mz_dataflows                         system
+mz_dataflows_1                       system
 mz_dataflow_operator_dataflows       system
 mz_dataflow_operator_dataflows_1     system
 mz_dataflow_operator_reachability    system
@@ -641,14 +691,6 @@ mz_materialization_source_frontiers  system
 mz_message_counts                    system
 mz_message_counts_1                  system
 mz_objects                           system
-mz_perf_arrangement_records          system
-mz_perf_arrangement_records_1        system
-mz_perf_peek_durations_aggregates    system
-mz_perf_peek_durations_aggregates_1  system
-mz_perf_peek_durations_bucket        system
-mz_perf_peek_durations_bucket_1      system
-mz_perf_peek_durations_core          system
-mz_perf_peek_durations_core_1        system
 mz_records_per_dataflow              system
 mz_records_per_dataflow_1            system
 mz_records_per_dataflow_global       system
@@ -668,14 +710,6 @@ mz_peek_active
 mz_peek_active_1
 mz_peek_durations
 mz_peek_durations_1
-
-> SHOW VIEWS FROM mz_catalog LIKE '%peek%';
-mz_perf_peek_durations_aggregates
-mz_perf_peek_durations_aggregates_1
-mz_perf_peek_durations_bucket
-mz_perf_peek_durations_bucket_1
-mz_perf_peek_durations_core
-mz_perf_peek_durations_core_1
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

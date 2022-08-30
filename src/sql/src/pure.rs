@@ -14,15 +14,14 @@
 use std::error::Error as StdError;
 use std::iter;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ResourceName as AmazonResourceName;
-use mz_kafka_util::KafkaAddrs;
+use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{
-    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, KafkaConnection,
-    KafkaSourceConnection, ReaderSchemaSelectionStrategy,
+    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, KafkaConfigOption,
+    KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, ReaderSchemaSelectionStrategy,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -40,11 +39,12 @@ use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, DbzMode, Envelope, Format, Ident,
-    ProtobufSchema, Value, WithOption, WithOptionValue,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, DbzMode, Envelope, Format,
+    ProtobufSchema, Value, WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
+use crate::kafka_util::KafkaConfigOptionExtracted;
 use crate::names::Aug;
 use crate::normalize;
 use crate::plan::StatementContext;
@@ -81,89 +81,116 @@ pub async fn purify_create_source(
         CreateSourceConnection::Kafka(KafkaSourceConnection {
             connection, topic, ..
         }) => {
-            // Extract any/all configuration options
-            let mut connection_options = kafka_util::extract_config(&mut with_options_map)?;
-
-            let connection = match connection {
-                KafkaConnection::Reference { connection } => {
+            match connection {
+                KafkaConnection::Reference {
+                    connection,
+                    with_options: base_with_options,
+                } => {
                     let scx = StatementContext::new(None, &*catalog);
-                    let item = scx.get_item_by_resolved_name(&connection)?;
-                    // Get Kafka connection
-                    match item.connection()? {
-                        Connection::Kafka(connection) => connection.clone(),
-                        _ => bail!("{} is not a kafka connection", item.name()),
+                    let connection = {
+                        let item = scx.get_item_by_resolved_name(&connection)?;
+                        // Get Kafka connection
+                        match item.connection()? {
+                            Connection::Kafka(connection) => connection.clone(),
+                            _ => bail!("{} is not a kafka connection", item.name()),
+                        }
+                    };
+
+                    let extracted_options: KafkaConfigOptionExtracted =
+                        base_with_options.clone().try_into()?;
+
+                    let offset_type =
+                        Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
+                    let config_options =
+                        kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+                    let consumer = kafka_util::create_consumer(
+                        &topic,
+                        &connection,
+                        &config_options,
+                        connection_context.librdkafka_log_level,
+                        &*connection_context.secrets_reader,
+                    )
+                    .await
+                    .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+
+                    if let Some(offset_type) = offset_type {
+                        // Translate `START TIMESTAMP` to a start offset
+                        match kafka_util::lookup_start_offsets(
+                            Arc::clone(&consumer),
+                            &topic,
+                            offset_type,
+                            now,
+                        )
+                        .await?
+                        {
+                            Some(start_offsets) => {
+                                // Drop the value we are purifying
+                                base_with_options.retain(|val| match val {
+                                    KafkaConfigOption {
+                                        name: KafkaConfigOptionName::StartTimestamp,
+                                        ..
+                                    } => false,
+                                    _ => true,
+                                });
+                                info!("add start_offset {:?}", start_offsets);
+                                base_with_options.push(KafkaConfigOption {
+                                    name: KafkaConfigOptionName::StartOffset,
+                                    value: Some(WithOptionValue::Value(Value::Array(
+                                        start_offsets
+                                            .iter()
+                                            .map(|offset| Value::Number(offset.to_string()))
+                                            .collect(),
+                                    ))),
+                                });
+                            }
+                            None => {}
+                        }
                     }
                 }
-                KafkaConnection::Inline { broker } => {
-                    // Add broker option
-                    connection_options.insert(
-                        "bootstrap.servers".into(),
-                        KafkaAddrs::from_str(&broker)?.to_string().into(),
-                    );
-
-                    mz_storage::types::connections::KafkaConnection::try_from(
-                        &mut connection_options,
-                    )?
-                }
-            };
-            let consumer = kafka_util::create_consumer(
-                &topic,
-                &connection,
-                &connection_options,
-                connection_context.librdkafka_log_level,
-                &*connection_context.secrets_reader,
-            )
-            .await
-            .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
-
-            // Translate `kafka_time_offset` to `start_offset`.
-            match kafka_util::lookup_start_offsets(
-                Arc::clone(&consumer),
-                &topic,
-                &with_options_map,
-                now,
-            )
-            .await?
-            {
-                Some(start_offsets) => {
-                    // Drop `kafka_time_offset`
-                    with_options.retain(|val| match val {
-                        WithOption { key, .. } => key.as_str() != "kafka_time_offset",
-                    });
-                    info!("add start_offset {:?}", start_offsets);
-                    // Add `start_offset`
-                    with_options.push(WithOption {
-                        key: Ident::new("start_offset"),
-                        value: Some(WithOptionValue::Value(Value::Array(
-                            start_offsets
-                                .iter()
-                                .map(|offset| Value::Number(offset.to_string()))
-                                .collect(),
-                        ))),
-                    });
-                }
-                None => {}
+                _ => {}
             }
         }
-        CreateSourceConnection::S3 { .. } => {
-            let aws_config = normalize::aws_config(&mut with_options_map, None)?;
+        CreateSourceConnection::S3 { connection, .. } => {
+            let scx = StatementContext::new(None, &*catalog);
+            let connection = {
+                let item = scx.get_item_by_resolved_name(&connection)?;
+                match item.connection()? {
+                    Connection::Aws(connection) => connection.clone(),
+                    _ => bail!("{} is not an AWS connection", item.name()),
+                }
+            };
+
+            let aws_config = normalize::aws_config(&mut with_options_map, None, connection)?;
             validate_aws_credentials(
                 &aws_config,
                 connection_context.aws_external_id_prefix.as_ref(),
+                &*connection_context.secrets_reader,
             )
             .await?;
         }
-        CreateSourceConnection::Kinesis { arn } => {
+        CreateSourceConnection::Kinesis { connection, arn } => {
             let region = arn
                 .parse::<AmazonResourceName>()
                 .context("Unable to parse provided ARN")?
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-            let aws_config = normalize::aws_config(&mut with_options_map, Some(region.into()))?;
+            let scx = StatementContext::new(None, &*catalog);
+            let connection = {
+                let item = scx.get_item_by_resolved_name(&connection)?;
+                match item.connection()? {
+                    Connection::Aws(connection) => connection.clone(),
+                    _ => bail!("{} is not an AWS connection", item.name()),
+                }
+            };
+
+            let aws_config =
+                normalize::aws_config(&mut with_options_map, Some(region.into()), connection)?;
             validate_aws_credentials(
                 &aws_config,
                 connection_context.aws_external_id_prefix.as_ref(),
+                &*connection_context.secrets_reader,
             )
             .await?;
         }
@@ -330,25 +357,16 @@ async fn purify_csr_connection_proto(
         };
 
     let CsrConnectionProtobuf {
-        connection,
         seed,
-        with_options: ccsr_options,
+        connection: CsrConnection { connection },
     } = csr_connection;
     match seed {
         None => {
-            let ccsr_connection = match connection {
-                CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                    url.parse()?,
-                    &mut normalize::options(&ccsr_options)?,
-                )?,
-                CsrConnection::Reference { connection } => {
-                    let scx = StatementContext::new(None, &*catalog);
-                    let item = scx.get_item_by_resolved_name(&connection)?;
-                    match item.connection()? {
-                        Connection::Csr(connection) => connection.clone(),
-                        _ => bail!("{} is not a schema registry connection", item.name()),
-                    }
-                }
+            let scx = StatementContext::new(None, &*catalog);
+
+            let ccsr_connection = match scx.get_item_by_resolved_name(&connection)?.connection()? {
+                Connection::Csr(connection) => connection.clone(),
+                _ => bail!("{} is not a schema registry connection", connection),
             };
 
             let ccsr_client = ccsr_connection
@@ -387,28 +405,18 @@ async fn purify_csr_connection_avro(
         };
 
     let CsrConnectionAvro {
-        connection,
+        connection: CsrConnection { connection },
         seed,
         key_strategy,
         value_strategy,
-        with_options: ccsr_options,
     } = csr_connection;
     if seed.is_none() {
-        let ccsr_connection = match connection {
-            CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                url.parse()?,
-                &mut normalize::options(&ccsr_options)?,
-            )?,
-            CsrConnection::Reference { connection } => {
-                let scx = StatementContext::new(None, &*catalog);
-                let item = scx.get_item_by_resolved_name(&connection)?;
-                match item.connection()? {
-                    Connection::Csr(connection) => connection.clone(),
-                    _ => bail!("{} is not a schema registry connection", item.name()),
-                }
-            }
+        let scx = StatementContext::new(None, &*catalog);
+        let csr_connection = match scx.get_item_by_resolved_name(&connection)?.connection()? {
+            Connection::Csr(connection) => connection.clone(),
+            _ => bail!("{} is not a schema registry connection", connection),
         };
-        let ccsr_client = ccsr_connection
+        let ccsr_client = csr_connection
             .connect(&*connection_context.secrets_reader)
             .await?;
         let Schema {
@@ -566,8 +574,9 @@ async fn compile_proto(
 async fn validate_aws_credentials(
     config: &AwsConfig,
     external_id_prefix: Option<&AwsExternalIdPrefix>,
+    secrets_reader: &dyn SecretsReader,
 ) -> Result<(), anyhow::Error> {
-    let config = config.load(external_id_prefix, None).await;
+    let config = config.load(external_id_prefix, None, secrets_reader).await;
     let sts_client = aws_sdk_sts::Client::new(&config);
     let _ = sts_client
         .get_caller_identity()

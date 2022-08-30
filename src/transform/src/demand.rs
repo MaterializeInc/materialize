@@ -241,7 +241,7 @@ impl Demand {
                     let input_type = input.typ();
                     for index in (0..aggregates.len()).rev() {
                         if !columns.contains(&(group_key.len() + index)) {
-                            let typ = aggregates[index].typ(&input_type);
+                            let typ = aggregates[index].typ(&input_type.column_types);
                             aggregates[index] = AggregateExpr {
                                 func: AggregateFunc::Dummy,
                                 expr: MirScalarExpr::literal_ok(Datum::Dummy, typ.scalar_type),

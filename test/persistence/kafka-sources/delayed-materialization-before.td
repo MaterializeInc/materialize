@@ -35,24 +35,28 @@ $ kafka-create-topic topic=delayed-materialization
 $ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=1
 {"f1": "a${kafka-ingest.iteration}"} {"f2": "a${kafka-ingest.iteration}"}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE materialized_via_create_index_before_restart
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-delayed-materialization-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE SOURCE materialized_via_create_materialized_view_before_restart
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-delayed-materialization-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE SOURCE materialized_via_create_index_after_restart
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-delayed-materialization-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE SOURCE materialized_via_create_materialized_view_after_restart
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-delayed-materialization-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 $ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count}

@@ -39,6 +39,8 @@ pub struct VerifyAction {
     sort_messages: bool,
     expected_messages: Vec<String>,
     partial_search: Option<usize>,
+    // If true, print partial_search.unwrap_or(expected_messages.len()) number of messages in sink topic
+    debug_print_only: bool,
 }
 
 pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Error> {
@@ -64,6 +66,7 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Err
         bail!("kafka-verify requires a non-empty list of expected messages");
     }
     let partial_search = cmd.args.opt_parse("partial-search")?;
+    let debug_print_only = cmd.args.opt_bool("debug-print-only")?.unwrap_or(false);
     cmd.args.done()?;
     Ok(VerifyAction {
         sink,
@@ -72,6 +75,7 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Err
         sort_messages,
         expected_messages,
         partial_search,
+        debug_print_only,
     })
 }
 
@@ -224,6 +228,17 @@ impl Action for VerifyAction {
                     actual_messages.sort_by_key(|k| format!("{:?}", k.1));
                 }
 
+                if self.debug_print_only {
+                    bail!(
+                        "records in sink:\n{}",
+                        actual_messages
+                            .into_iter()
+                            .map(|a| format!("{:#?}", a))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                }
+
                 avro::validate_sink_with_partial_search(
                     key_schema.as_ref(),
                     value_schema,
@@ -238,6 +253,10 @@ impl Action for VerifyAction {
                 assert!(
                     self.partial_search.is_none(),
                     "partial search not yet implemented for json formatted sinks"
+                );
+                assert!(
+                    !self.debug_print_only,
+                    "print only not yet implemented for json formatted sinks"
                 );
                 let mut actual_messages = vec![];
                 for (key, value) in actual_bytes {

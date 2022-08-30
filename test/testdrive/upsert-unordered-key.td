@@ -57,9 +57,13 @@ $ kafka-create-topic topic=dbzupsert partitions=1
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
 {"b": "bdata", "a": 1} {"before": {"row": {"a": 1, "data": "fish", "b": "bdata"}}, "after": {"row": {"a": 1, "data": "fish2", "b": "bdata"}}}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE doin_upsert
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM UPSERT
 
 > SELECT * FROM doin_upsert

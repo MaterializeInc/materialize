@@ -21,8 +21,8 @@ use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "-"]
-    fn neg_int32(a: i32) -> i32 {
-        -a
+    fn neg_int32(a: i32) -> Result<i32, EvalError> {
+        a.checked_neg().ok_or(EvalError::Int32OutOfRange)
     }
 );
 
@@ -35,8 +35,8 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "abs"]
-    fn abs_int32(a: i32) -> i32 {
-        a.abs()
+    fn abs_int32(a: i32) -> Result<i32, EvalError> {
+        a.checked_abs().ok_or(EvalError::Int32OutOfRange)
     }
 );
 
@@ -85,6 +85,30 @@ sqlfunc!(
         let mut buf = String::new();
         strconv::format_int32(&mut buf, a);
         buf
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "integer_to_uint2"]
+    #[preserves_uniqueness = true]
+    fn cast_int32_to_uint16(a: i32) -> Result<u16, EvalError> {
+        u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "integer_to_uint4"]
+    #[preserves_uniqueness = true]
+    fn cast_int32_to_uint32(a: i32) -> Result<u32, EvalError> {
+        u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "integer_to_uint8"]
+    #[preserves_uniqueness = true]
+    fn cast_int32_to_uint64(a: i32) -> Result<u64, EvalError> {
+        u64::try_from(a).or(Err(EvalError::UInt64OutOfRange))
     }
 );
 

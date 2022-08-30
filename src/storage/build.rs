@@ -7,8 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::env;
+
 fn main() {
+    env::set_var("PROTOC", protobuf_src::protoc());
+
     tonic_build::configure()
+        // Enabling `emit_rerun_if_changed` will rerun the build script when
+        // anything in the include directory (..) changes. This causes quite a
+        // bit of spurious recompilation, so we disable it. The default behavior
+        // is to re-run if any file in the crate changes; that's still a bit too
+        // broad, but it's better.
+        .emit_rerun_if_changed(false)
         .extern_path(".mz_ccsr.config", "::mz_ccsr")
         .extern_path(".mz_expr.id", "::mz_expr")
         .extern_path(".mz_expr.linear", "::mz_expr")

@@ -16,41 +16,42 @@ New York,NY,10004
 "bad,
 place""",CA,92679
 
-# We should refuse to create a source with invalid WITH options
+> CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
+
+> CREATE CONNECTION s3_conn FOR AWS
+  ACCESS KEY ID = '${testdrive.aws-access-key-id}',
+  SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
+  TOKEN = '${testdrive.aws-token}';
+
+# We should refuse to create a source with invalid LEGACYWITH options
 ! CREATE SOURCE invalid_with_option
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}',
     badoption = true
   )
   FORMAT CSV WITH 3 COLUMNS
 contains:unexpected parameters for CREATE SOURCE: badoption
 
 > CREATE SOURCE mismatched_column_count
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH 2 COLUMNS
 ! SELECT * FROM mismatched_column_count
 contains:CSV error at record number 1: expected 2 columns, got 3.
 
 > CREATE SOURCE matching_column_names
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (city, state, zip)
 
@@ -60,13 +61,11 @@ city state zip
 Rochester NY 14618
 
 > CREATE SOURCE matching_column_names_alias (a, b, c)
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (city, state, zip)
 
@@ -76,26 +75,22 @@ a b c
 Rochester NY 14618
 
 > CREATE SOURCE mismatched_column_names
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (cities, country, zip)
 ! SELECT * FROM mismatched_column_names
 contains:first mismatched column at index 1 expected=cities actual="city"
 
 > CREATE SOURCE mismatched_column_names_count
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (cities, state)
 ! SELECT * FROM mismatched_column_names_count
@@ -103,13 +98,11 @@ contains:CSV error at record number 1: expected 2 columns, got 3
 
 # Static CSV without headers.
 > CREATE SOURCE static_csv
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH 3 COLUMNS
 
@@ -122,13 +115,11 @@ Rochester      NY        14618
 "bad,\nplace\""  CA      92679
 
 ! CREATE SOURCE static_csv_nothing_demanded_src
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER
 contains:Expected a list of columns in parentheses, found EOF
@@ -141,13 +132,11 @@ $ set-regex match=(\d{13}|u\d{1,3}) replacement=<>
 
 # Static CSV with manual headers.
 > CREATE SOURCE static_csv_manual_header (city_man, state_man, zip_man)
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (city, state, zip)
 
@@ -162,8 +151,11 @@ Rochester      NY         14618
 
 $ kafka-create-topic topic=dynamic
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE dynamic_csv (city, state, zip)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dynamic-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-dynamic-${testdrive.seed}'
   FORMAT CSV WITH 3 COLUMNS
 
 > SELECT * FROM dynamic_csv
@@ -194,13 +186,11 @@ dollars,category
 badint,
 
 > CREATE SOURCE malformed_csv
-  FROM S3 DISCOVER OBJECTS MATCHING 'malformed.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'malformed.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (dollars, category)
 
@@ -213,13 +203,11 @@ dollars,category
 5161669,\x80
 
 > CREATE SOURCE bad_text_csv
-  FROM S3 DISCOVER OBJECTS MATCHING 'bad-text.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'bad-text.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (dollars, category)
 
@@ -231,22 +219,24 @@ contains:Decode error: Text: CSV error at record number 2: invalid UTF-8
 $ kafka-create-topic topic=static-csv-pkne-sink
 
 > CREATE SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
-  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  FROM S3 CONNECTION s3_conn
+  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
+    endpoint = '${testdrive.aws-endpoint}'
   )
   FORMAT CSV WITH HEADER (city, state, zip)
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SINK static_csv_pkne_sink FROM static_csv_pkne
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'static-csv-pkne-sink'
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'static-csv-pkne-sink'
   KEY (zip)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 $ kafka-verify format=avro sink=materialize.public.static_csv_pkne_sink sort-messages=true
-{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004"}
-{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618"}
-{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679"}
+{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004", "transaction": {"id": "<>"}}
+{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618", "transaction": {"id": "<>"}}
+{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679", "transaction": {"id": "<>"}}

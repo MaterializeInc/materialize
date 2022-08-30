@@ -94,13 +94,13 @@ pub fn construct<A: Allocate>(
     compute: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, ComputeEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
+    let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow_named("Dataflow: compute logging", move |scope| {
         let (compute_logs, token) = Some(compute).mz_replay(
             scope,
             "compute logs",
-            Duration::from_nanos(config.granularity_ns as u64),
+            Duration::from_nanos(config.interval_ns as u64),
             activator.clone(),
         );
 
@@ -144,8 +144,8 @@ pub fn construct<A: Allocate>(
                     let mut peek_duration_session = peek_duration.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
-                        let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
-                            * granularity_ms) as Timestamp;
+                        let time_ms = (((time.as_millis() as Timestamp / interval_ms) + 1)
+                            * interval_ms) as Timestamp;
 
                         match datum {
                             ComputeEvent::Dataflow(id, is_create) => {

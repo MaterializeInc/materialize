@@ -22,7 +22,8 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Strategy};
-use serde::{Deserialize, Serialize};
+use serde::ser::{SerializeMap, SerializeSeq};
+use serde::{Deserialize, Serialize, Serializer};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
@@ -233,6 +234,20 @@ impl PartialOrd for DatumList<'_> {
     }
 }
 
+impl<'a> Serialize for DatumList<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(None)?;
+        let mut iter = self.iter();
+        while let Some(datum) = iter.next() {
+            seq.serialize_element(&datum)?;
+        }
+        seq.end()
+    }
+}
+
 /// A mapping from string keys to Datums
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct DatumMap<'a> {
@@ -240,6 +255,21 @@ pub struct DatumMap<'a> {
     data: &'a [u8],
 }
 
+impl<'a> Serialize for DatumMap<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(None)?;
+        let mut iter = self.iter();
+        while let Some((key, val)) = iter.next() {
+            map.serialize_entry(&key, &val)?;
+        }
+        map.end()
+    }
+}
+
+// All new tags MUST be added to the end of the enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 enum Tag {
@@ -273,6 +303,8 @@ enum Tag {
     JsonNull,
     Dummy,
     Numeric,
+    UInt16,
+    UInt64,
 }
 
 // --------------------------------------------------------------------------------
@@ -377,9 +409,17 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let i = u8::from_le_bytes(read_byte_array(data, offset));
             Datum::UInt8(i)
         }
+        Tag::UInt16 => {
+            let i = u16::from_le_bytes(read_byte_array(data, offset));
+            Datum::UInt16(i)
+        }
         Tag::UInt32 => {
             let i = u32::from_le_bytes(read_byte_array(data, offset));
             Datum::UInt32(i)
+        }
+        Tag::UInt64 => {
+            let i = u64::from_le_bytes(read_byte_array(data, offset));
+            Datum::UInt64(i)
         }
         Tag::Float32 => {
             let f = f32::from_bits(u32::from_le_bytes(read_byte_array(data, offset)));
@@ -545,8 +585,16 @@ where
             data.push(Tag::UInt8.into());
             data.extend_from_slice(&i.to_le_bytes());
         }
+        Datum::UInt16(i) => {
+            data.push(Tag::UInt16.into());
+            data.extend_from_slice(&i.to_le_bytes());
+        }
         Datum::UInt32(i) => {
             data.push(Tag::UInt32.into());
+            data.extend_from_slice(&i.to_le_bytes());
+        }
+        Datum::UInt64(i) => {
+            data.push(Tag::UInt64.into());
             data.extend_from_slice(&i.to_le_bytes());
         }
         Datum::Float32(f) => {
@@ -698,7 +746,9 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Int32(_) => 1 + size_of::<i32>(),
         Datum::Int64(_) => 1 + size_of::<i64>(),
         Datum::UInt8(_) => 1 + size_of::<u8>(),
+        Datum::UInt16(_) => 1 + size_of::<u16>(),
         Datum::UInt32(_) => 1 + size_of::<u32>(),
+        Datum::UInt64(_) => 1 + size_of::<u64>(),
         Datum::Float32(_) => 1 + size_of::<f32>(),
         Datum::Float64(_) => 1 + size_of::<f64>(),
         Datum::Date(_) => 1 + 8,

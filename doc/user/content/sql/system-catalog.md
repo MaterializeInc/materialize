@@ -141,9 +141,9 @@ Field         | Type       | Meaning
 `target_node` | [`bigint`] | The ID of the target operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
 `target_port` | [`bigint`] | The target operator's input port.
 
-### `mz_dataflow_names`
+### `mz_dataflows`
 
-The `mz_dataflow_names` view describes the [dataflows][dataflow] in the system.
+The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
 
 Field      | Type       | Meaning
 -----------|------------|--------
@@ -152,9 +152,9 @@ Field      | Type       | Meaning
 `local_id` | [`bigint`] | The scope-local index of the dataflow.
 `name`     | [`text`]   | The internal name of the dataflow.
 
-### `mz_dataflow_operator_addresses`
+### `mz_dataflow_addresses`
 
-The `mz_dataflow_operator_addresses` source describes how the dataflow channels
+The `mz_dataflow_addresses` source describes how the dataflow channels
 and operators in the system are nested into scopes.
 
 Field     | Type            | Meaning
@@ -339,8 +339,8 @@ Field          | Type       | Meaning
 
 ### `mz_objects`
 
-The `mz_objects` view contains a row for each table, source, view, sink, and
-index in the system.
+The `mz_objects` view contains a row for each table, source, view, materialized view, sink,
+index, connection, secret, type, and function in the system.
 
 Field       | Type       | Meaning
 ------------|------------|--------
@@ -348,7 +348,7 @@ Field       | Type       | Meaning
 `oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the object.
 `schema_id` | [`bigint`] | The ID of the schema to which the object belongs.
 `name`      | [`text`]   | The name of the object.
-`type`      | [`text`]   | The type of the object: either `table`, `source`, `view`, `sink`, or `index`.
+`type`      | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
 
 ### `mz_peek_active`
 
@@ -391,7 +391,7 @@ For the same information aggregated across all workers, see
 
 Field     | Type        | Meaning
 ----------|-------------|--------
-`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflow_names.id`](#mz_dataflow_names).
+`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
 `name`    | [`text`]    | The internal name of the dataflow.
 `worker`  | [`bigint`]  | The ID of the worker thread hosting the dataflow.
 `records` | [`numeric`] | The number of records in the dataflow.
@@ -406,7 +406,7 @@ For the same information broken down across workers, see
 
 Field     | Type        | Meaning
 ----------|-------------|--------
-`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflow_names.id`](#mz_dataflow_names).
+`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
 `name`    | [`text`]    | The internal name of the dataflow.
 `records` | [`numeric`] | The number of records in the dataflow.
 
@@ -420,13 +420,13 @@ Field         | Type        | Meaning
 `id`          | [`bigint`]  | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
 `name`        | [`text`]    | The internal name of the dataflow.
 `worker`      | [`bigint`]  | The ID of the worker thread hosting the dataflow.
-`dataflow_id` | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflow_names.id`](#mz_dataflow_names).
+`dataflow_id` | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
 `records`     | [`numeric`] | The number of records in the dataflow.
 
 ### `mz_relations`
 
-The `mz_relations` view contains a row for each table, source, and view in the
-system.
+The `mz_relations` view contains a row for each table, source, view, and
+materialized view in the system.
 
 Field       | Type       | Meaning
 ------------|------------|--------
@@ -434,7 +434,7 @@ Field       | Type       | Meaning
 `oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the relation.
 `schema_id` | [`bigint`] | The ID of the schema to which the relation belongs.
 `name`      | [`text`]   | The name of the relation.
-`type`      | [`text`]   | The type of the relation: either `table`, `source`, or `view`.
+`type`      | [`text`]   | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
 
 ### `mz_roles`
 

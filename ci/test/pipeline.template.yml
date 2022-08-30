@@ -409,6 +409,17 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: ssh-connection
+    label: SSH connection tests
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/ssh-connection]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: ssh-connection
+    agents:
+      queue: linux-x86_64
+
   - id: kafka-resumption
     label: Kafka resumption tests
     depends_on: build-x86_64
@@ -456,6 +467,7 @@ steps:
 
   - id: checks-drop-create-default-replica
     label: "Checks + DROP/CREATE replica"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -466,6 +478,7 @@ steps:
 
   - id: checks-restart-computed
     label: "Checks + restart computed"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -476,6 +489,7 @@ steps:
 
   - id: checks-restart-entire-mz
     label: "Checks + restart of the entire Mz"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -486,6 +500,7 @@ steps:
 
   - id: checks-restart-environmentd-storaged
     label: "Checks + restart of environmentd & storaged"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -496,6 +511,7 @@ steps:
 
   - id: checks-kill-storaged
     label: "Checks + kill storaged"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -503,6 +519,38 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=KillStoraged]
+
+  - id: checks-restart-postgres-backend
+    label: "Checks + restart Postgres backend"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartPostgresBackend]
+
+  - id: checks-restart-source-postgres
+    label: "Checks + restart source Postgres"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres]
+
+  - id: cloudtest
+    label: Cloudtest
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_cloudtest_*.xml
+    inputs: [test/cloudtest]
+    plugins:
+      - ./ci/plugins/cloudtest:
+          args: [test/cloudtest/]
 
   - id: lang-csharp
     label: ":csharp: tests"

@@ -16,6 +16,8 @@ CREATE TABLE nation (
     n_comment    varchar(152)
 );
 
+CREATE INDEX pk_nation_nationkey ON nation (n_nationkey ASC);
+
 CREATE INDEX fk_nation_regionkey ON nation (n_regionkey ASC);
 
 CREATE TABLE region  (
@@ -23,6 +25,8 @@ CREATE TABLE region  (
     r_name       char(25) NOT NULL,
     r_comment    varchar(152)
 );
+
+CREATE INDEX pk_region_regionkey ON region (r_regionkey ASC);
 
 CREATE TABLE part (
     p_partkey     integer ,
@@ -36,6 +40,8 @@ CREATE TABLE part (
     p_comment     varchar(23) NOT NULL
 );
 
+CREATE INDEX pk_part_partkey ON part (p_partkey ASC);
+
 CREATE TABLE supplier (
     s_suppkey     integer ,
     s_name        char(25) NOT NULL,
@@ -46,6 +52,8 @@ CREATE TABLE supplier (
     s_comment     varchar(101) NOT NULL
 );
 
+CREATE INDEX pk_supplier_suppkey ON supplier (s_suppkey ASC);
+
 CREATE INDEX fk_supplier_nationkey ON supplier (s_nationkey ASC);
 
 CREATE TABLE partsupp (
@@ -55,6 +63,8 @@ CREATE TABLE partsupp (
     ps_supplycost  decimal(15, 2) NOT NULL,
     ps_comment     varchar(199) NOT NULL
 );
+
+CREATE INDEX pk_partsupp_partkey_suppkey ON partsupp (ps_partkey ASC, ps_suppkey ASC);
 
 CREATE INDEX fk_partsupp_partkey ON partsupp (ps_partkey ASC);
 
@@ -71,6 +81,8 @@ CREATE TABLE customer (
     c_comment     varchar(117) NOT NULL
 );
 
+CREATE INDEX pk_customer_custkey ON customer (c_custkey ASC);
+
 CREATE INDEX fk_customer_nationkey ON customer (c_nationkey ASC);
 
 CREATE TABLE orders (
@@ -84,6 +96,8 @@ CREATE TABLE orders (
     o_shippriority   integer NOT NULL,
     o_comment        varchar(79) NOT NULL
 );
+
+CREATE INDEX pk_orders_orderkey ON orders (o_orderkey ASC);
 
 CREATE INDEX fk_orders_custkey ON orders (o_custkey ASC);
 
@@ -105,6 +119,8 @@ CREATE TABLE lineitem (
     l_shipmode       char(10) NOT NULL,
     l_comment        varchar(44) NOT NULL
 );
+
+CREATE INDEX pk_lineitem_orderkey_linenumber ON lineitem (l_orderkey ASC, l_linenumber ASC);
 
 CREATE INDEX fk_lineitem_orderkey ON lineitem (l_orderkey ASC);
 

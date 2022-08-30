@@ -145,7 +145,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
     ) -> TransactionStatus<mz_repr::Timestamp> {
         let (drop_sinks, txn) = session.clear_transaction();
-        self.drop_sinks(drop_sinks).await;
+        self.drop_compute_sinks(drop_sinks).await;
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {

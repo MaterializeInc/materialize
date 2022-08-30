@@ -19,9 +19,13 @@ INSERT INTO alter_change_decimal VALUES (0),(NULL),(12.345);
 
 $ schema-registry-wait-schema schema=postgres.public.alter_change_decimal-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE alter_change_decimal
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_change_decimal'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > SELECT * FROM alter_change_decimal;

@@ -91,7 +91,6 @@ create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   'PUBLICATION' publication_name
-  ('WITH timestamp_frequency_ms =' int)?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -256,7 +255,7 @@ jsonb_agg ::=
 jsonb_object_agg ::=
   'jsonb_object_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 sink_kafka_connector ::=
-    'KAFKA BROKER' host 'TOPIC' topic-prefix
+    'KAFKA' 'CONNECTION' conn 'TOPIC' topic-prefix
     ('KEY' '(' key_column ( ',' key_column )* ')')?
     ('CONSISTENCY' '(' 'TOPIC' consistency_topic ('FORMAT' consistency_format_spec)? ')' )?
 list_agg ::=
@@ -281,8 +280,8 @@ select_stmt ::=
   ( 'OPTION' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
   ( 'HAVING' expr )?
   ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )?
-  ( 'LIMIT' expr )?
-  ( 'OFFSET' expr )?
+  ( 'LIMIT' integer )?
+  ( 'OFFSET' integer )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)

@@ -157,6 +157,12 @@ pub fn options(
             Some(WithOptionValue::Secret(_)) => {
                 panic!("SECRET option {} must be Object", option.key)
             }
+            Some(WithOptionValue::Object(ResolvedObjectName::Object { id, .. })) => {
+                SqlValueOrSecret::Secret(*id)
+            }
+            Some(WithOptionValue::Object(_)) => {
+                panic!("Object option {} must be Object", option.key)
+            }
             None => {
                 sql_bail!("option {} requires a value", option.key);
             }
@@ -390,11 +396,9 @@ pub fn create_statement(
             name,
             connection: _,
             with_options: _,
-            in_cluster: _,
             format: _,
             envelope: _,
             with_snapshot: _,
-            as_of: _,
             if_not_exists,
             ..
         }) => {
@@ -560,7 +564,7 @@ macro_rules! generate_extracted_config {
             pub struct [<$option_ty Extracted>] {
                 seen: HashSet::<[<$option_ty Name>]>,
                 $(
-                    [<$option_name:snake>]: $t,
+                    pub(crate) [<$option_name:snake>]: $t,
                 )*
             }
 
@@ -604,6 +608,8 @@ macro_rules! generate_extracted_config {
     };
 }
 
+pub(crate) use generate_extracted_config;
+
 /// Ensures that the given set of options are empty, useful for validating that
 /// `WITH` options are all real, used options
 pub(crate) fn ensure_empty_options<V>(
@@ -624,6 +630,7 @@ pub(crate) fn ensure_empty_options<V>(
 pub fn aws_config(
     options: &mut BTreeMap<String, SqlValueOrSecret>,
     region: Option<String>,
+    credentials: AwsCredentials,
 ) -> Result<AwsConfig, PlanError> {
     let mut extract = |key| match options.remove(key) {
         // TODO: support secrets in S3
@@ -636,48 +643,6 @@ pub fn aws_config(
         }
         Some(_) => sql_bail!("{} must be a string", key),
         _ => Ok(None),
-    };
-
-    let credentials = match extract("profile")? {
-        Some(profile_name) => {
-            for name in &["access_key_id", "secret_access_key", "token"] {
-                let extracted = extract(name);
-                if matches!(extracted, Ok(Some(_)) | Err(_)) {
-                    sql_bail!(
-                        "AWS profile cannot be set in combination with '{0}', \
-                         configure '{0}' inside the profile file",
-                        name
-                    );
-                }
-            }
-            AwsCredentials::Profile { profile_name }
-        }
-        None => {
-            let access_key_id = extract("access_key_id")?;
-            let secret_access_key = extract("secret_access_key")?;
-            let session_token = extract("token")?;
-            let credentials = match (access_key_id, secret_access_key, session_token) {
-                (None, None, None) => AwsCredentials::Default,
-                (Some(access_key_id), Some(secret_access_key), session_token) => {
-                    AwsCredentials::Static {
-                        access_key_id,
-                        secret_access_key,
-                        session_token,
-                    }
-                }
-                (Some(_), None, _) => {
-                    sql_bail!("secret_access_key must be specified if access_key_id is specified")
-                }
-                (None, Some(_), _) => {
-                    sql_bail!("secret_access_key cannot be specified without access_key_id")
-                }
-                (None, None, Some(_)) => {
-                    sql_bail!("token cannot be specified without access_key_id")
-                }
-            };
-
-            credentials
-        }
     };
 
     let region = match region {

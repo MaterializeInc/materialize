@@ -15,12 +15,13 @@
 //! The Subset(X) notation means that the collection is a multiset subset of X:
 //! multiplicities of each record in Subset(X) are at most that of X.
 
-use std::collections::HashSet;
-
+use crate::attribute::non_negative::NonNegative;
+use crate::attribute::subtree_size::SubtreeSize;
+use crate::attribute::Attribute;
 use crate::TransformArgs;
-use mz_expr::visit::Visit;
+
+use mz_expr::visit::{Visit, VisitorMut};
 use mz_expr::MirRelationExpr;
-use mz_expr::{Id, LocalId};
 
 /// Remove Threshold operators that have no effect.
 #[derive(Debug)]
@@ -32,84 +33,79 @@ impl crate::Transform for ThresholdElision {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.try_visit_mut_post(&mut |e| self.action(e))
+        let mut visitor = ThresholdElisionAction::default();
+        relation.visit_mut(&mut visitor).map_err(From::from)
     }
 }
 
-impl ThresholdElision {
+#[derive(Default)]
+struct ThresholdElisionAction {
+    non_negative: NonNegative,
+    subtree_size: SubtreeSize,
+}
+
+impl VisitorMut<MirRelationExpr> for ThresholdElisionAction {
+    fn pre_visit(&mut self, expr: &mut MirRelationExpr) {
+        self.subtree_size.schedule_env_tasks(expr);
+        self.non_negative.schedule_env_tasks(expr);
+    }
+
+    fn post_visit(&mut self, expr: &mut MirRelationExpr) {
+        // Derive attributes in reverse dependency order before
+        // attempting the transform.
+        // as the latter depens on the former.
+        self.subtree_size.derive(expr, &());
+        self.non_negative.derive(expr, &self.subtree_size);
+        // Handle environment maintenance tasks for all attributes.
+        self.subtree_size.handle_env_tasks();
+        self.non_negative.handle_env_tasks();
+        self.action(expr);
+    }
+}
+
+impl ThresholdElisionAction {
     /// Remove Threshold operators with no effect.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-        if let MirRelationExpr::Threshold { input } = relation {
+    pub fn action(&mut self, expr: &mut MirRelationExpr) {
+        // The results vectors or all attributes should be equal after each step.
+        debug_assert_eq!(
+            self.non_negative.results.len(),
+            self.subtree_size.results.len()
+        );
+
+        if let MirRelationExpr::Threshold { input } = expr {
             // We look for the pattern `Union { base, Negate(Subset(base)) }`.
             let mut should_replace = false;
             if let MirRelationExpr::Union { base, inputs } = &mut **input {
                 if inputs.len() == 1 {
                     if let MirRelationExpr::Negate { input } = &inputs[0] {
-                        let mut safe_lets = HashSet::default();
-                        if non_negative(base, &mut safe_lets) && lhs_superset_of_rhs(base, &*input)
-                        {
+                        // This is somewhat convoluted way to access the non_negative result for the base:
+                        // - the Threshold is at position n - 1,
+                        // - the Union (i.e., the Threshold input) is n - 2,
+                        // - the Union input[0] is at position n - 3 and its subtree size is m,
+                        // - the Union base therefore is at position n - m - 3
+                        let n = self.non_negative.results.len();
+                        let m = self.subtree_size.results[n - 3];
+                        if self.non_negative.results[n - m - 3] && is_superset_of(base, &*input) {
                             should_replace = true;
                         }
                     }
                 }
             }
             if should_replace {
-                *relation = input.take_dangerous();
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Return true if `relation` is believed to contain no negative multiplicities.
-///
-/// This method is a conservative approximation and is known to miss not-hard cases.
-///
-/// This assumes that all `Get` bindings correspond to collections without negative
-/// multiplicities. Local let bindings present in `safe_lets` are relied on to have
-/// no non-negative multiplicities.
-pub fn non_negative(relation: &MirRelationExpr, safe_lets: &mut HashSet<LocalId>) -> bool {
-    // This implementation is iterative.
-    // Before converting this implementation to recursive (e.g. to improve its accuracy)
-    // make sure to use the `CheckedRecursion` struct to avoid blowing the stack.
-    let mut to_check = vec![relation];
-    while let Some(expr) = to_check.pop() {
-        match expr {
-            MirRelationExpr::Constant { rows, .. } => {
-                if let Ok(rows) = rows {
-                    if rows.iter().any(|(_data, diff)| diff < &0) {
-                        return false;
-                    }
+                // Replace the root Threshold with its input.
+                *expr = input.take_dangerous();
+                // Trim the attribute result vectors inferred so far to adjust for the above change.
+                self.subtree_size.results.pop();
+                self.non_negative.results.pop();
+                // We can be a bit smarter when adjusting the NonNegative result. Since the Threshold
+                // at the root can only be safely elided iff its input is non-negative, we can overwrite
+                // the new last value to be `true`.
+                if let Some(result) = self.non_negative.results.last_mut() {
+                    *result = true;
                 }
-            }
-            MirRelationExpr::Negate { .. } => {
-                return false;
-            }
-            MirRelationExpr::Get { id, .. } => {
-                if let Id::Local(local_id) = id {
-                    if !safe_lets.contains(local_id) {
-                        return false;
-                    }
-                }
-            }
-            MirRelationExpr::Let { id, value, body } => {
-                // We will check both `value` and `body`, with the latter
-                // under the assumption that `value` works out. Of course,
-                // if `value` doesn't work out we'll return `false`.
-                if !safe_lets.insert(id.clone()) {
-                    // Return false conservatively if we detect identifier re-use.
-                    // Ideally this would be unreachable code.
-                    return false;
-                }
-                to_check.push(value);
-                to_check.push(body);
-            }
-            x => {
-                to_check.extend(x.children());
             }
         }
     }
-    return true;
 }
 
 /// Returns true iff `rhs` is always a subset of `lhs`.
@@ -117,7 +113,9 @@ pub fn non_negative(relation: &MirRelationExpr, safe_lets: &mut HashSet<LocalId>
 /// This method is a conservative approximation and is known to miss not-hard cases.
 ///
 /// We iteratively descend `rhs` through a few operators, looking for `lhs`.
-pub fn lhs_superset_of_rhs(mut lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> bool {
+/// In addition, we descend simultaneously through `lhs` and `rhs` if the root node
+/// on both sides is identical.
+pub fn is_superset_of(mut lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> bool {
     // This implementation is iterative.
     // Before converting this implementation to recursive (e.g. to improve its accuracy)
     // make sure to use the `CheckedRecursion` struct to avoid blowing the stack.

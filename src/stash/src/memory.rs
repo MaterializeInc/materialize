@@ -40,21 +40,18 @@ impl<S: Stash> Memory<S> {
         }
     }
 
-    async fn consolidate_collection<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let since = self.since(collection).await?;
-        self.consolidate_id(&collection.id, since);
-        Ok(())
-    }
-
-    fn consolidate_id(&mut self, collection_id: &Id, since: Antichain<Timestamp>) {
-        if let Some(entry) = self.entries.get_mut(collection_id) {
+    fn consolidate_id(&mut self, collection_id: Id) {
+        if let Some(entry) = self.entries.get_mut(&collection_id) {
+            let since = match self.sinces.get(&collection_id) {
+                Some(since) => since,
+                // If we don't know the since for this collection, remove the entries. We can't
+                // merely fetch the since because the API requires a full StashCollection, and
+                // we only have the Id here.
+                None => {
+                    self.entries.remove(&collection_id);
+                    return;
+                }
+            };
             match since.as_option() {
                 Some(since) => {
                     for ((_k, _v), ts, _diff) in entry.iter_mut() {
@@ -68,7 +65,7 @@ impl<S: Stash> Memory<S> {
                     // This will cause all calls to iter over this collection to always pass
                     // through to the underlying stash, making those calls not cached. This isn't
                     // currently a performance problem because the empty since is not used.
-                    self.entries.remove(collection_id);
+                    self.entries.remove(&collection_id);
                 }
             }
         }
@@ -108,8 +105,8 @@ impl<S: Stash> Stash for Memory<S> {
                 .get()
                 .iter()
                 .map(|((k, v), ts, diff)| {
-                    let k: K = K::decode(k)?;
-                    let v: V = V::decode(v)?;
+                    let k: K = serde_json::from_slice(k)?;
+                    let v: V = serde_json::from_slice(v)?;
                     Ok(((k, v), *ts, *diff))
                 })
                 .collect::<Result<Vec<_>, StashError>>()?,
@@ -119,11 +116,9 @@ impl<S: Stash> Stash for Memory<S> {
                     entries
                         .iter()
                         .map(|((k, v), ts, diff)| {
-                            let mut k_buf = Vec::new();
-                            let mut v_buf = Vec::new();
-                            k.encode(&mut k_buf);
-                            v.encode(&mut v_buf);
-                            ((k_buf, v_buf), *ts, *diff)
+                            let key = serde_json::to_vec(k).expect("must serialize");
+                            let value = serde_json::to_vec(v).expect("must serialize");
+                            ((key, value), *ts, *diff)
                         })
                         .collect(),
                 );
@@ -159,18 +154,16 @@ impl<S: Stash> Stash for Memory<S> {
         let local_entries: Vec<_> = entries
             .iter()
             .map(|((k, v), ts, diff)| {
-                let mut k_buf = Vec::new();
-                let mut v_buf = Vec::new();
-                k.encode(&mut k_buf);
-                v.encode(&mut v_buf);
-                ((k_buf, v_buf), *ts, *diff)
+                let key = serde_json::to_vec(k).expect("must serialize");
+                let value = serde_json::to_vec(v).expect("must serialize");
+                ((key, value), *ts, *diff)
             })
             .collect();
         self.stash.update_many(collection, entries).await?;
         // Only update the memory cache if it's already present.
         if let Some(entry) = self.entries.get_mut(&collection.id) {
             entry.extend(local_entries);
-            self.consolidate_collection(collection).await?;
+            self.consolidate_id(collection.id);
         }
         Ok(())
     }
@@ -226,33 +219,19 @@ impl<S: Stash> Stash for Memory<S> {
         self.stash.compact_batch(compactions).await?;
         for (collection, since) in compactions {
             self.sinces.insert(collection.id, since.clone());
-            self.consolidate_collection(*collection).await?;
+            self.consolidate_id(collection.id);
         }
         Ok(())
     }
 
-    async fn consolidate<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate(&mut self, collection: Id) -> Result<(), StashError> {
         self.consolidate_batch(&[collection]).await
     }
 
-    async fn consolidate_batch<K, V>(
-        &mut self,
-        collections: &[StashCollection<K, V>],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
+    async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
         self.stash.consolidate_batch(collections).await?;
         for collection in collections {
-            self.consolidate_collection(*collection).await?;
+            self.consolidate_id(*collection);
         }
         Ok(())
     }
@@ -300,21 +279,19 @@ impl<S: Stash> Stash for Memory<S> {
 
 #[async_trait]
 impl<S: Append> Append for Memory<S> {
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
-    where
-        I: IntoIterator<Item = AppendBatch> + Send + 'static,
-        I::IntoIter: Send,
-    {
-        let batches: Vec<_> = batches.into_iter().collect();
-        self.stash.append(batches.clone()).await?;
+    async fn append_batch(&mut self, batches: &[AppendBatch]) -> Result<(), StashError> {
+        self.stash.append(&batches).await?;
         for batch in batches {
-            self.uppers.insert(batch.collection_id, batch.upper);
+            self.uppers.insert(batch.collection_id, batch.upper.clone());
             self.sinces
                 .insert(batch.collection_id, batch.compact.clone());
             // Only update the memory cache if it's already present.
             if let Some(entry) = self.entries.get_mut(&batch.collection_id) {
-                entry.extend(batch.entries);
-                self.consolidate_id(&batch.collection_id, batch.compact);
+                entry.extend(batch.entries.iter().map(|((key, value), ts, diff)| {
+                    let key = serde_json::to_vec(key).expect("must serialise");
+                    let value = serde_json::to_vec(value).expect("must serialize");
+                    ((key, value), *ts, *diff)
+                }));
             }
         }
         Ok(())
