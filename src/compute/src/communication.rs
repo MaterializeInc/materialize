@@ -25,7 +25,7 @@ use std::time::Duration;
 use mz_ore::collections::CollectionExt;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
-use tracing::{info, warn, trace};
+use tracing::{info, trace, warn};
 
 use crate::server::CommunicationConfig;
 
