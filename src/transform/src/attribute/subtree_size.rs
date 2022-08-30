@@ -10,9 +10,8 @@
 //! Definition and helper structs for the [`SubtreeSize`] attribute.
 
 use mz_expr::MirRelationExpr;
-use typemap_rev::{TypeMap, TypeMapKey};
 
-use super::{Attribute, AttributeBuilder};
+use super::{Attribute, DerivedAttributes, RequiredAttributes};
 
 /// Compute the number of MirRelationExpr in each subtree in a bottom-up manner.
 #[derive(Default)]
@@ -23,14 +22,10 @@ pub struct SubtreeSize {
     pub results: Vec<usize>,
 }
 
-impl TypeMapKey for SubtreeSize {
-    type Value = SubtreeSize;
-}
-
 impl Attribute for SubtreeSize {
     type Value = usize;
 
-    fn derive(&mut self, expr: &MirRelationExpr, _deps: &TypeMap) {
+    fn derive(&mut self, expr: &MirRelationExpr, _deps: &DerivedAttributes) {
         use MirRelationExpr::*;
         let n = self.results.len();
         match expr {
@@ -101,7 +96,7 @@ impl Attribute for SubtreeSize {
         }
     }
 
-    fn add_dependencies(_builder: &mut AttributeBuilder)
+    fn add_dependencies(_builder: &mut RequiredAttributes)
     where
         Self: Sized,
     {

@@ -10,9 +10,11 @@
 //! Definition and helper structs for the [`UniqueKeys`] attribute.
 
 use mz_expr::MirRelationExpr;
-use typemap_rev::{TypeMap, TypeMapKey};
 
-use super::{arity::Arity, subtree_size::SubtreeSize, Attribute, AttributeBuilder};
+use super::{
+    arity::Arity, subtree_size::SubtreeSize, AsKey, Attribute, DerivedAttributes,
+    RequiredAttributes,
+};
 
 /// Compute the unique keys of each subtree of a [MirRelationExpr] from the
 /// bottom-up.
@@ -24,40 +26,36 @@ pub struct UniqueKeys {
     pub results: Vec<Vec<Vec<usize>>>,
 }
 
-impl TypeMapKey for UniqueKeys {
-    type Value = UniqueKeys;
-}
-
 impl Attribute for UniqueKeys {
     type Value = Vec<Vec<usize>>;
 
-    fn derive(&mut self, expr: &MirRelationExpr, deps: &TypeMap) {
+    fn derive(&mut self, expr: &MirRelationExpr, deps: &DerivedAttributes) {
         let n = self.results.len();
 
         let mut offsets = Vec::new();
         let mut offset = 1;
         for _ in 0..expr.num_inputs() {
             offsets.push(n - offset);
-            offset += &deps.get::<SubtreeSize>().unwrap().results[n - offset];
+            offset += &deps.get_results::<AsKey<SubtreeSize>>()[n - offset];
         }
 
         let subtree_keys = expr.keys_with_input_keys(
             offsets
                 .iter()
                 .rev()
-                .map(|o| deps.get::<Arity>().unwrap().results[*o]),
+                .map(|o| deps.get_results::<AsKey<Arity>>()[*o]),
             offsets.iter().rev().map(|o| &self.results[*o]),
         );
 
         self.results.push(subtree_keys);
     }
 
-    fn add_dependencies(builder: &mut AttributeBuilder)
+    fn add_dependencies(builder: &mut RequiredAttributes)
     where
         Self: Sized,
     {
-        builder.add_attribute::<Arity>();
-        builder.add_attribute::<SubtreeSize>();
+        builder.require::<AsKey<Arity>>();
+        builder.require::<AsKey<SubtreeSize>>();
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {

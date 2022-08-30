@@ -15,15 +15,12 @@ use std::collections::HashMap;
 use std::iter::once;
 
 use mz_compute_client::command::DataflowDescription;
-use mz_expr::{
-    visit::{Visit, Visitor},
-    MirRelationExpr, OptimizedMirRelationExpr,
-};
+use mz_expr::{visit::Visit, MirRelationExpr, OptimizedMirRelationExpr};
 use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::{
-    arity::Arity, non_negative::NonNegative, relation_type::RelationType,
-    subtree_size::SubtreeSize, unique_keys::UniqueKeys, AttributeBuilder, AttributeDeriver,
+    Arity, AsKey, DerivedAttributes, NonNegative, RelationType, RequiredAttributes, SubtreeSize,
+    UniqueKeys,
 };
 
 use super::{
@@ -115,26 +112,26 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
     }
 }
 struct ExplainAttributes {
-    deriver: AttributeDeriver,
+    deriver: DerivedAttributes,
 }
 
 impl From<&ExplainConfig> for ExplainAttributes {
     fn from(config: &ExplainConfig) -> ExplainAttributes {
-        let mut builder = AttributeBuilder::default();
+        let mut builder = RequiredAttributes::default();
         if config.subtree_size {
-            builder.add_attribute::<SubtreeSize>();
+            builder.require::<AsKey<SubtreeSize>>();
         }
         if config.non_negative {
-            builder.add_attribute::<NonNegative>();
+            builder.require::<AsKey<NonNegative>>();
         }
         if config.types {
-            builder.add_attribute::<RelationType>();
+            builder.require::<AsKey<RelationType>>();
         }
         if config.arity {
-            builder.add_attribute::<Arity>();
+            builder.require::<AsKey<Arity>>();
         }
         if config.keys {
-            builder.add_attribute::<UniqueKeys>();
+            builder.require::<AsKey<UniqueKeys>>();
         }
         ExplainAttributes {
             deriver: builder.finish(),
@@ -155,14 +152,14 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             let subtree_refs = plan.post_order_vec();
             // get the annotation values
             let mut explain_attrs = ExplainAttributes::from(config);
-            plan.visit(&mut explain_attrs)?;
+            plan.visit(&mut explain_attrs.deriver)?;
             let mut attribute_map = explain_attrs.deriver.take();
 
             if config.subtree_size {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
                     attribute_map
-                        .remove::<SubtreeSize>()
+                        .remove::<AsKey<SubtreeSize>>()
                         .unwrap()
                         .results
                         .into_iter(),
@@ -175,7 +172,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
                     attribute_map
-                        .remove::<NonNegative>()
+                        .remove::<AsKey<NonNegative>>()
                         .unwrap()
                         .results
                         .into_iter(),
@@ -188,7 +185,11 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.arity {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map.remove::<Arity>().unwrap().results.into_iter(),
+                    attribute_map
+                        .remove::<AsKey<Arity>>()
+                        .unwrap()
+                        .results
+                        .into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.arity = Some(attr);
@@ -199,7 +200,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
                     attribute_map
-                        .remove::<RelationType>()
+                        .remove::<AsKey<RelationType>>()
                         .unwrap()
                         .results
                         .into_iter(),
@@ -218,7 +219,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
                 for (expr, keys) in std::iter::zip(
                     subtree_refs.iter(),
                     attribute_map
-                        .remove::<UniqueKeys>()
+                        .remove::<AsKey<UniqueKeys>>()
                         .unwrap()
                         .results
                         .into_iter(),
@@ -234,17 +235,6 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
         }
 
         Ok(AnnotatedPlan { plan, annotations })
-    }
-}
-
-// TODO: Model dependencies as part of the core attributes framework.
-impl Visitor<MirRelationExpr> for ExplainAttributes {
-    fn pre_visit(&mut self, expr: &MirRelationExpr) {
-        self.deriver.pre_visit(expr);
-    }
-
-    fn post_visit(&mut self, expr: &MirRelationExpr) {
-        self.deriver.post_visit(expr);
     }
 }
 

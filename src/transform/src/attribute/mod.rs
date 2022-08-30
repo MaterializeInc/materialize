@@ -9,31 +9,32 @@
 
 //! Derived attributes framework and definitions.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, marker::PhantomData};
 
 use num_traits::FromPrimitive;
 use typemap_rev::{TypeMap, TypeMapKey};
 
-use mz_expr::{LocalId, MirRelationExpr};
+use mz_expr::{visit::Visitor, LocalId, MirRelationExpr};
 
-use self::{
-    arity::Arity, non_negative::NonNegative, relation_type::RelationType,
-    subtree_size::SubtreeSize, unique_keys::UniqueKeys,
-};
-
-pub mod arity;
-pub mod non_negative;
-pub mod relation_type;
-pub mod subtree_size;
-pub mod unique_keys;
+// Attributes should have shortened paths when exported.
+mod arity;
+pub use arity::Arity;
+mod non_negative;
+pub use non_negative::NonNegative;
+mod relation_type;
+pub use relation_type::RelationType;
+mod subtree_size;
+pub use subtree_size::SubtreeSize;
+mod unique_keys;
+pub use unique_keys::UniqueKeys;
 
 /// A common interface to be implemented by all derived attributes.
-pub trait Attribute {
+pub trait Attribute: Send + Sync {
     /// The domain of the attribute values.
     type Value: Clone + Eq + PartialEq;
 
     /// Derive an attribute.
-    fn derive(&mut self, expr: &MirRelationExpr, deps: &TypeMap);
+    fn derive(&mut self, expr: &MirRelationExpr, deps: &DerivedAttributes);
 
     /// Schedule environment maintenance tasks.
     ///
@@ -46,7 +47,7 @@ pub trait Attribute {
     fn handle_env_tasks(&mut self) {}
 
     /// The attribute ids of all other attributes that this attribute depends on.
-    fn add_dependencies(builder: &mut AttributeBuilder)
+    fn add_dependencies(builder: &mut RequiredAttributes)
     where
         Self: Sized;
 
@@ -55,6 +56,14 @@ pub trait Attribute {
 
     /// Mutable attributes for each subexpression, visited in post-order
     fn get_results_mut(&mut self) -> &mut Vec<Self::Value>;
+}
+
+#[allow(missing_debug_implementations)]
+/// Converts an Attribute into a Key that can be looked up in [DerivedAttributes]
+pub struct AsKey<A: Attribute>(PhantomData<A>);
+
+impl<A: Attribute + 'static> TypeMapKey for AsKey<A> {
+    type Value = A;
 }
 
 /// A map that keeps the computed `A` values for all `LocalId`
@@ -175,14 +184,14 @@ enum EnvTask<T> {
 
 #[allow(missing_debug_implementations)]
 #[derive(Default)]
-/// Builds an [AttributeDeriver]
-pub struct AttributeBuilder {
+/// Builds an [DerivedAttributes]
+pub struct RequiredAttributes {
     attributes: TypeMap,
 }
 
-impl AttributeBuilder {
-    /// Add an attribute that [AttributeDeriver] should derive
-    pub fn add_attribute<T: TypeMapKey>(&mut self)
+impl RequiredAttributes {
+    /// Add an attribute that [DerivedAttributes] should derive
+    pub fn require<T: TypeMapKey>(&mut self)
     where
         T::Value: Attribute + Default,
     {
@@ -192,10 +201,11 @@ impl AttributeBuilder {
         }
     }
 
-    /// Consume `self`, producing an [AttributeDeriver]
-    pub fn finish(self) -> AttributeDeriver {
-        AttributeDeriver {
-            attributes: self.attributes,
+    /// Consume `self`, producing an [DerivedAttributes]
+    pub fn finish(self) -> DerivedAttributes {
+        DerivedAttributes {
+            attributes: Box::new(self.attributes),
+            to_be_derived: Box::new(TypeMap::default()),
         }
     }
 }
@@ -203,9 +213,12 @@ impl AttributeBuilder {
 #[allow(missing_debug_implementations)]
 /// Derives an attribute and any attribute it depends on.
 ///
-/// Can only be constructed from a [AttributeBuilder].
-pub struct AttributeDeriver {
-    attributes: TypeMap,
+/// Can only be constructed from a [RequiredAttributes].
+pub struct DerivedAttributes {
+    attributes: Box<TypeMap>,
+    /// Holds attributes that have not yet been derived for a given
+    /// subexpression.
+    to_be_derived: Box<TypeMap>,
 }
 
 /// A topological sort of extant attributes.
@@ -225,73 +238,75 @@ enum AttributeId {
 /// Should always be equal to the number of attributes
 const TOTAL_ATTRIBUTES: usize = 5;
 
-impl AttributeDeriver {
+impl DerivedAttributes {
+    fn pre_visit_attr<T: TypeMapKey>(&mut self, expr: &MirRelationExpr)
+    where
+        T::Value: Attribute,
+    {
+        if let Some(attr) = self.attributes.get_mut::<T>() {
+            attr.schedule_env_tasks(expr)
+        }
+    }
+
     /// Does derivation work required upon entering a subexpression
     pub fn pre_visit(&mut self, expr: &MirRelationExpr) {
-        fn schedule_env_tasks<T: TypeMapKey>(attributes: &mut TypeMap, expr: &MirRelationExpr)
-        where
-            T::Value: Attribute,
-        {
-            if let Some(attr) = attributes.get_mut::<T>() {
-                attr.schedule_env_tasks(expr)
-            }
-        }
         for i in 0..TOTAL_ATTRIBUTES {
             match FromPrimitive::from_usize(i) {
                 Some(AttributeId::SubtreeSize) => {
-                    schedule_env_tasks::<SubtreeSize>(&mut self.attributes, expr);
+                    self.pre_visit_attr::<AsKey<SubtreeSize>>(expr);
                 }
                 Some(AttributeId::NonNegative) => {
-                    schedule_env_tasks::<NonNegative>(&mut self.attributes, expr);
+                    self.pre_visit_attr::<AsKey<NonNegative>>(expr);
                 }
                 Some(AttributeId::RelationType) => {
-                    schedule_env_tasks::<RelationType>(&mut self.attributes, expr);
+                    self.pre_visit_attr::<AsKey<RelationType>>(expr);
                 }
                 Some(AttributeId::Arity) => {
-                    schedule_env_tasks::<Arity>(&mut self.attributes, expr);
+                    self.pre_visit_attr::<AsKey<Arity>>(expr);
                 }
                 Some(AttributeId::UniqueKeys) => {
-                    schedule_env_tasks::<UniqueKeys>(&mut self.attributes, expr);
+                    self.pre_visit_attr::<AsKey<UniqueKeys>>(expr);
                 }
                 None => {}
             }
         }
     }
 
+    fn post_visit_attr<T: TypeMapKey>(&mut self, expr: &MirRelationExpr)
+    where
+        T::Value: Attribute,
+    {
+        if let Some(mut attr) = self.to_be_derived.remove::<T>() {
+            attr.derive(expr, self);
+            attr.handle_env_tasks();
+            self.attributes.insert::<T>(attr);
+        }
+    }
+
     /// Does derivation work required upon exiting a subexpression
     pub fn post_visit(&mut self, expr: &MirRelationExpr) {
-        let mut deps = TypeMap::default();
-        fn post<T: TypeMapKey>(attributes: &mut TypeMap, expr: &MirRelationExpr, deps: &mut TypeMap)
-        where
-            T::Value: Attribute,
-        {
-            if let Some(mut attr) = attributes.remove::<T>() {
-                attr.derive(expr, &deps);
-                attr.handle_env_tasks();
-                deps.insert::<T>(attr);
-            }
-        }
+        // TODO
+        std::mem::swap(&mut self.attributes, &mut self.to_be_derived);
         for i in 0..TOTAL_ATTRIBUTES {
             match FromPrimitive::from_usize(i) {
                 Some(AttributeId::SubtreeSize) => {
-                    post::<SubtreeSize>(&mut self.attributes, expr, &mut deps);
+                    self.post_visit_attr::<AsKey<SubtreeSize>>(expr);
                 }
                 Some(AttributeId::NonNegative) => {
-                    post::<NonNegative>(&mut self.attributes, expr, &mut deps);
+                    self.post_visit_attr::<AsKey<NonNegative>>(expr);
                 }
                 Some(AttributeId::RelationType) => {
-                    post::<RelationType>(&mut self.attributes, expr, &mut deps);
+                    self.post_visit_attr::<AsKey<RelationType>>(expr);
                 }
                 Some(AttributeId::Arity) => {
-                    post::<Arity>(&mut self.attributes, expr, &mut deps);
+                    self.post_visit_attr::<AsKey<Arity>>(expr);
                 }
                 Some(AttributeId::UniqueKeys) => {
-                    post::<UniqueKeys>(&mut self.attributes, expr, &mut deps);
+                    self.post_visit_attr::<AsKey<UniqueKeys>>(expr);
                 }
                 None => {}
             }
         }
-        self.attributes = deps;
     }
 
     /// Get a reference to the attributes derived so far.
@@ -315,6 +330,14 @@ impl AttributeDeriver {
         self.attributes.get_mut::<T>().unwrap().get_results_mut()
     }
 
+    fn trim_attr<T: TypeMapKey>(&mut self)
+    where
+        T::Value: Attribute,
+    {
+        self.attributes.get_mut::<T>().iter_mut().for_each(|a| {
+            a.get_results_mut().pop();
+        });
+    }
     /// Call when the most recently exited node of the [MirRelationExpr]
     /// has been deleted.
     ///
@@ -322,43 +345,11 @@ impl AttributeDeriver {
     pub fn trim(&mut self) {
         for i in 0..TOTAL_ATTRIBUTES {
             match FromPrimitive::from_usize(i) {
-                Some(AttributeId::SubtreeSize) => {
-                    self.attributes
-                        .get_mut::<SubtreeSize>()
-                        .iter_mut()
-                        .for_each(|r| {
-                            r.results.pop();
-                        });
-                }
-                Some(AttributeId::NonNegative) => {
-                    self.attributes
-                        .get_mut::<NonNegative>()
-                        .iter_mut()
-                        .for_each(|r| {
-                            r.results.pop();
-                        });
-                }
-                Some(AttributeId::RelationType) => {
-                    self.attributes
-                        .get_mut::<RelationType>()
-                        .iter_mut()
-                        .for_each(|r| {
-                            r.results.pop();
-                        });
-                }
-                Some(AttributeId::Arity) => {
-                    self.attributes.get_mut::<Arity>().iter_mut().for_each(|r| {
-                        r.results.pop();
-                    });
-                }
-                Some(AttributeId::UniqueKeys) => {
-                    self.attributes
-                        .get_mut::<UniqueKeys>()
-                        .iter_mut()
-                        .for_each(|r| {
-                            r.results.pop();
-                        });
-                }
+                Some(AttributeId::SubtreeSize) => self.trim_attr::<AsKey<SubtreeSize>>(),
+                Some(AttributeId::NonNegative) => self.trim_attr::<AsKey<NonNegative>>(),
+                Some(AttributeId::RelationType) => self.trim_attr::<AsKey<RelationType>>(),
+                Some(AttributeId::Arity) => self.trim_attr::<AsKey<Arity>>(),
+                Some(AttributeId::UniqueKeys) => self.trim_attr::<AsKey<UniqueKeys>>(),
                 None => {}
             }
         }
@@ -366,6 +357,16 @@ impl AttributeDeriver {
 
     /// Consumes `self`, returning the inner map of attributes.
     pub fn take(self) -> TypeMap {
-        self.attributes
+        *self.attributes
+    }
+}
+
+impl Visitor<MirRelationExpr> for DerivedAttributes {
+    fn pre_visit(&mut self, expr: &MirRelationExpr) {
+        self.pre_visit(expr);
+    }
+
+    fn post_visit(&mut self, expr: &MirRelationExpr) {
+        self.post_visit(expr);
     }
 }

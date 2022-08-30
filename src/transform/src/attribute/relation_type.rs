@@ -11,10 +11,9 @@
 
 use mz_expr::MirRelationExpr;
 use mz_repr::ColumnType;
-use typemap_rev::{TypeMap, TypeMapKey};
 
 use super::subtree_size::SubtreeSize;
-use super::{Attribute, AttributeBuilder};
+use super::{AsKey, Attribute, DerivedAttributes, RequiredAttributes};
 
 /// Compute the column types of each subtree of a [MirRelationExpr] from the
 /// bottom-up.
@@ -26,31 +25,27 @@ pub struct RelationType {
     pub results: Vec<Vec<ColumnType>>,
 }
 
-impl TypeMapKey for RelationType {
-    type Value = RelationType;
-}
-
 impl Attribute for RelationType {
     type Value = Vec<ColumnType>;
 
-    fn derive(&mut self, expr: &MirRelationExpr, deps: &TypeMap) {
+    fn derive(&mut self, expr: &MirRelationExpr, deps: &DerivedAttributes) {
         let n = self.results.len();
         let mut offsets = Vec::new();
         let mut offset = 1;
         for _ in 0..expr.num_inputs() {
             offsets.push(n - offset);
-            offset += &deps.get::<SubtreeSize>().unwrap().results[n - offset];
+            offset += &deps.get_results::<AsKey<SubtreeSize>>()[n - offset];
         }
         let subtree_column_types =
             expr.col_with_input_cols(offsets.into_iter().rev().map(|o| &self.results[o]));
         self.results.push(subtree_column_types);
     }
 
-    fn add_dependencies(builder: &mut AttributeBuilder)
+    fn add_dependencies(builder: &mut RequiredAttributes)
     where
         Self: Sized,
     {
-        builder.add_attribute::<SubtreeSize>();
+        builder.require::<AsKey<SubtreeSize>>();
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {

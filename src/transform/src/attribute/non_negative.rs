@@ -11,11 +11,11 @@
 
 use mz_expr::Id;
 use mz_expr::MirRelationExpr;
-use typemap_rev::TypeMap;
-use typemap_rev::TypeMapKey;
 
 use super::subtree_size::SubtreeSize;
-use super::AttributeBuilder;
+use super::AsKey;
+use super::DerivedAttributes;
+use super::RequiredAttributes;
 use super::{Attribute, Env};
 
 /// Traverses a [`MirRelationExpr`] tree and figures out whether for subtree
@@ -41,14 +41,10 @@ pub struct NonNegative {
     pub results: Vec<bool>,
 }
 
-impl TypeMapKey for NonNegative {
-    type Value = NonNegative;
-}
-
 impl Attribute for NonNegative {
     type Value = bool;
 
-    fn derive(&mut self, expr: &MirRelationExpr, deps: &TypeMap) {
+    fn derive(&mut self, expr: &MirRelationExpr, deps: &DerivedAttributes) {
         use MirRelationExpr::*;
         let n = self.results.len();
         match expr {
@@ -96,7 +92,7 @@ impl Attribute for NonNegative {
                 let mut offset = 1;
                 for _ in 0..inputs.len() {
                     result &= &self.results[n - offset];
-                    offset += &deps.get::<SubtreeSize>().unwrap().results[n - offset];
+                    offset += &deps.get_results::<AsKey<SubtreeSize>>()[n - offset];
                 }
                 self.results.push(result); // can be refined
             }
@@ -119,7 +115,7 @@ impl Attribute for NonNegative {
                 let mut offset = 1;
                 for _ in 0..inputs.len() {
                     result &= &self.results[n - offset];
-                    offset += &deps.get::<SubtreeSize>().unwrap().results[n - offset];
+                    offset += &deps.get_results::<AsKey<SubtreeSize>>()[n - offset];
                 }
                 result &= &self.results[n - offset]; // include the base result
                 self.results.push(result); // can be refined
@@ -139,11 +135,11 @@ impl Attribute for NonNegative {
         self.env.handle_tasks(&self.results);
     }
 
-    fn add_dependencies(builder: &mut AttributeBuilder)
+    fn add_dependencies(builder: &mut RequiredAttributes)
     where
         Self: Sized,
     {
-        builder.add_attribute::<SubtreeSize>();
+        builder.require::<AsKey<SubtreeSize>>();
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {
