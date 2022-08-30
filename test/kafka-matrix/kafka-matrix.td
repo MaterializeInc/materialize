@@ -89,7 +89,7 @@ $ set schema={
 
 $ kafka-create-topic topic=input_avro
 
-$ kafka-ingest format=avro topic=input_avro schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=input_avro schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 123}}, "op": "c", "source": {"snapshot": false, "lsn": null, "sequence": null}}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn

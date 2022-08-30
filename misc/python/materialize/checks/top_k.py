@@ -85,7 +85,7 @@ class MonotonicTopK(Check):
                 """
                 $ kafka-create-topic topic=monotonic-topk
 
-                $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} publish=true repeat=1
+                $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=1
                 {"f1": "A"}
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
@@ -108,17 +108,17 @@ class MonotonicTopK(Check):
             Testdrive(schema() + dedent(s))
             for s in [
                 """
-                $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} publish=true repeat=2
+                $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=2
                 {"f1": "B"}
                 > CREATE MATERIALIZED VIEW monotonic_topk_view1 AS SELECT f1, COUNT(f1) FROM monotonic_topk_source GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 2;
-                $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} publish=true repeat=3
+                $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=3
                 {"f1": "C"}
                 """,
                 """
-                $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} publish=true repeat=4
+                $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=4
                 {"f1": "D"}
                 > CREATE MATERIALIZED VIEW monotonic_topk_view2 AS SELECT f1, COUNT(f1) FROM monotonic_topk_source GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 2;
-                $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} publish=true repeat=5
+                $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=5
                 {"f1": "E"}
                 """,
             ]
@@ -154,7 +154,7 @@ class MonotonicTop1(Check):
                 """
                 $ kafka-create-topic topic=monotonic-top1
 
-                $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} publish=true repeat=1
+                $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=1
                 {"f1": "A"}
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
@@ -173,17 +173,17 @@ class MonotonicTop1(Check):
             Testdrive(schema() + dedent(s))
             for s in [
                 """
-                $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} publish=true repeat=2
+                $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=2
                 {"f1": "B"}
                 > CREATE MATERIALIZED VIEW monotonic_top1_view1 AS SELECT f1, COUNT(f1) FROM monotonic_top1_source GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 1;
-                $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} publish=true repeat=3
+                $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=3
                 {"f1": "C"}
                 """,
                 """
-                $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} publish=true repeat=4
+                $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=4
                 {"f1": "C"}
                 > CREATE MATERIALIZED VIEW monotonic_top1_view2 AS SELECT f1, COUNT(f1) FROM monotonic_top1_source GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 1;
-                $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} publish=true repeat=5
+                $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=5
                 {"f1": "D"}
                 """,
             ]

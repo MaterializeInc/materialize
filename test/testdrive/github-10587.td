@@ -24,52 +24,52 @@ $ set count=100000
 
 $ kafka-create-topic topic=multi-topic-0
 
-$ kafka-ingest format=avro topic=multi-topic-0 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-0 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-1
 
-$ kafka-ingest format=avro topic=multi-topic-1 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-1 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-2
 
-$ kafka-ingest format=avro topic=multi-topic-2 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-2 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-3
 
-$ kafka-ingest format=avro topic=multi-topic-3 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-3 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-4
 
-$ kafka-ingest format=avro topic=multi-topic-4 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-4 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-5
 
-$ kafka-ingest format=avro topic=multi-topic-5 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-5 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-6
 
-$ kafka-ingest format=avro topic=multi-topic-6 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-6 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-7
 
-$ kafka-ingest format=avro topic=multi-topic-7 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-7 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-8
 
-$ kafka-ingest format=avro topic=multi-topic-8 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-8 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-9
 
-$ kafka-ingest format=avro topic=multi-topic-9 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-9 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn

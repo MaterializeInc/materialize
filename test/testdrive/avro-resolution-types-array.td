@@ -16,7 +16,7 @@ $ set array-int={"type": "record", "name": "schema_array", "fields": [ {"name": 
 
 $ kafka-create-topic topic=resolution-arrays
 
-$ kafka-ingest format=avro topic=resolution-arrays schema=${array-int} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-arrays schema=${array-int} timestamp=1
 {"f1": [ 123 ] }
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -28,7 +28,7 @@ $ kafka-ingest format=avro topic=resolution-arrays schema=${array-int} publish=t
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=resolution-arrays schema=${array-double} publish=true timestamp=2
+$ kafka-ingest format=avro topic=resolution-arrays schema=${array-double} timestamp=2
 {"f1": [ 234.345 ] }
 
 ! SELECT f1[0] FROM resolution_arrays
