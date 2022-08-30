@@ -89,6 +89,8 @@ class SinkUpsert(Check):
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
+
                 > CREATE SINK sink_sink2 FROM sink_source_view
                   INTO KAFKA CONNECTION kafka_conn
                   TOPIC 'sink-sink2'
@@ -121,6 +123,8 @@ class SinkUpsert(Check):
                 # We check the contents of the sink topics by re-ingesting them.
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE sink_view1
                   FROM KAFKA CONNECTION kafka_conn
@@ -204,10 +208,12 @@ class SinkTables(Check):
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
+
                 > CREATE SINK sink_large_transaction_sink1 FROM sink_large_transaction_view
                   INTO KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}'
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
                 """
             )
         )
@@ -231,6 +237,8 @@ class SinkTables(Check):
                 """
                 # We check the contents of the sink topics by re-ingesting them.
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE sink_large_transaction_source
                   FROM KAFKA CONNECTION kafka_conn

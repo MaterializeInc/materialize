@@ -189,7 +189,7 @@ class KafkaSourcesSameTopic(Generator):
         print('"123" {"f1": "123"}')
 
         print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
