@@ -20,6 +20,8 @@
 
 use std::fmt;
 
+use enum_kinds::EnumKind;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
@@ -30,7 +32,8 @@ use crate::ast::{
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
+#[enum_kind(StatementKind)]
 pub enum Statement<T: AstInfo> {
     Select(SelectStatement<T>),
     Insert(InsertStatement<T>),
