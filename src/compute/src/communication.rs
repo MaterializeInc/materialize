@@ -120,6 +120,7 @@ fn start_connections(
 ) -> Result<Vec<Option<TcpStream>>, io::Error> {
     let addresses: Vec<_> = addresses
         .iter()
+        .take(my_index)
         .map(|address| {
             address
                 .as_str()
@@ -128,7 +129,7 @@ fn start_connections(
                 .into_element()
         })
         .collect();
-    let mut results: Vec<_> = (0..(addresses.len() - my_index - 1))
+    let mut results: Vec<_> = (0..my_index)
         .map(|_| None)
         .collect();
 
