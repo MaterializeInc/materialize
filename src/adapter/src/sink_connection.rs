@@ -241,13 +241,15 @@ async fn build_kafka(
         mz_storage::types::sinks::KafkaSinkFormat::Json => None,
     };
 
-    let consistency = match builder.consistency_format {
-        Some(mz_storage::types::sinks::KafkaSinkFormat::Avro {
-            value_schema,
-            csr_connection,
-            ..
-        }) => {
-            let consistency_topic = builder.consistency_topic_name.expect("known to exist");
+    let consistency = match builder.consistency_config {
+        Some((
+            consistency_topic,
+            mz_storage::types::sinks::KafkaSinkFormat::Avro {
+                value_schema,
+                csr_connection,
+                ..
+            },
+        )) => {
             // create consistency topic/schema and retrieve schema id
             register_kafka_topic(
                 &client,

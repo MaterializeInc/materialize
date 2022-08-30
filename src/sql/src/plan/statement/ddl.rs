@@ -1987,9 +1987,6 @@ fn kafka_sink_builder(
         bytes: retention_bytes,
     };
 
-    let consistency_topic = consistency_config.clone().map(|config| config.0);
-    let consistency_format = consistency_config.map(|config| config.1);
-
     Ok(StorageSinkConnectionBuilder::Kafka(
         KafkaSinkConnectionBuilder {
             connection_id,
@@ -1997,8 +1994,7 @@ fn kafka_sink_builder(
             options: config_options,
             format,
             topic_name,
-            consistency_topic_name: consistency_topic,
-            consistency_format,
+            consistency_config,
             partition_count,
             replication_factor,
             fuel: 10000,
