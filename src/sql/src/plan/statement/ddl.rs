@@ -1827,7 +1827,7 @@ fn kafka_sink_builder(
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
-    let (connection, config_options) = match connection {
+    let (connection_id, connection, config_options) = match connection {
         mz_sql_parser::ast::KafkaConnection::Reference {
             connection,
             with_options,
@@ -1854,7 +1854,7 @@ fn kafka_sink_builder(
 
             let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
             let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
-            (connection, config_options)
+            (item.id(), connection, config_options)
         }
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
     };
@@ -1992,6 +1992,7 @@ fn kafka_sink_builder(
 
     Ok(StorageSinkConnectionBuilder::Kafka(
         KafkaSinkConnectionBuilder {
+            connection_id,
             connection,
             options: config_options,
             format,

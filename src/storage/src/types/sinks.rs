@@ -525,6 +525,7 @@ pub enum StorageSinkConnectionBuilder {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectionBuilder {
+    pub connection_id: GlobalId,
     pub connection: KafkaConnection,
     pub options: BTreeMap<String, StringOrSecret>,
     pub format: KafkaSinkFormat,
