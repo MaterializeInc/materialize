@@ -95,6 +95,7 @@ where
 {
     let mut buf = [0];
     for (i, maybe_conn) in conns.into_iter().enumerate() {
+        info!("peeking... {}", first_idx + i);
         if let Some(conn) = maybe_conn {
             let closed = match conn.peek(&mut buf) {
                 Ok(0) => true, // EOF
@@ -145,6 +146,7 @@ fn start_connections(
                 Ok(s) => {
                     s.set_nonblocking(true)
                         .expect("set_nonblocking(true) call failed");
+                    info!(worker = my_index, "Connected to process {i}");
                     results[i] = Some(s);
                 }
                 Err(err) => {
@@ -156,7 +158,7 @@ fn start_connections(
                     } else {
                         info!(
                             worker = my_index,
-                            "error connection to worker {i}: {err}; will retry"
+                            "error connection to process {i}: {err}; will retry"
                         );
                         sleep(Duration::from_secs(1));
                     }
@@ -198,12 +200,11 @@ fn await_connections(
             .expect("set_nonblocking(true) call failed");
         assert!(identifier >= (my_index + 1));
         assert!(identifier < addresses.len());
-        let new_peer = results[identifier - my_index - 1].is_none();
-        results[identifier - my_index - 1] = Some(stream);
-        if !new_peer {
-            warn!("New incarnation of peer {identifier}");
+        if results[identifier - my_index - 1].is_some() {
+            warn!(worker = my_index, "New incarnation of peer {identifier}");
         }
-        info!(worker = my_index, "connection from worker {}", identifier);
+        results[identifier - my_index - 1] = Some(stream);
+        info!(worker = my_index, "connection from process {}", identifier);
 
         // If a peer failed, it's better that we detect it now than spin up Timely
         // and immediately crash.
