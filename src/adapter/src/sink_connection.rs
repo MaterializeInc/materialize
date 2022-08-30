@@ -32,7 +32,7 @@ pub async fn build(
     }
 }
 
-async fn register_kafka_topic(
+async fn ensure_kafka_topic(
     client: &AdminClient<MzClientContext>,
     topic: &str,
     mut partition_count: i32,
@@ -203,7 +203,7 @@ async fn build_kafka(
         .create_with_context(MzClientContext)
         .context("creating admin client failed")?;
 
-    register_kafka_topic(
+    ensure_kafka_topic(
         &client,
         &builder.topic_name,
         builder.partition_count,
@@ -251,7 +251,7 @@ async fn build_kafka(
             },
         )) => {
             // create consistency topic/schema and retrieve schema id
-            register_kafka_topic(
+            ensure_kafka_topic(
                 &client,
                 &consistency_topic,
                 1,
