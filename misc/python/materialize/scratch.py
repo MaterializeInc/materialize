@@ -20,6 +20,7 @@ from subprocess import CalledProcessError
 from typing import Dict, List, NamedTuple, Optional, cast
 
 import boto3
+from botocore.exceptions import ClientError
 from mypy_boto3_ec2.literals import InstanceTypeType
 from mypy_boto3_ec2.service_resource import Instance
 from mypy_boto3_ec2.type_defs import (
@@ -231,10 +232,13 @@ async def setup(
     done = False
     async for remaining in ui.async_timeout_loop(60, 5):
         say(f"Waiting for instance to become ready: {remaining}s remaining")
-        i.reload()
-        if is_ready(i):
-            done = True
-            break
+        try:
+            i.reload()
+            if is_ready(i):
+                done = True
+                break
+        except ClientError:
+            pass
     if not done:
         raise RuntimeError(
             f"Instance {i} did not become ready in a reasonable amount of time"
