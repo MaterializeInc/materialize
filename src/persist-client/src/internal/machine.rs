@@ -941,19 +941,19 @@ mod tests {
                                         continue;
                                     }
                                 };
-                                fetch_batch_part(
+                                let mut part = fetch_batch_part(
                                     &shard_id,
                                     client.blob.as_ref(),
                                     client.metrics.as_ref(),
                                     &part.key,
                                     &batch.desc,
-                                    |k, _v, t, d| {
-                                        let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
-                                        write!(s, "{k} {t} {d}\n");
-                                    },
                                 )
                                 .await
                                 .expect("invalid batch part");
+                                while let Some((k, _v, t, d)) = part.next() {
+                                    let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
+                                    write!(s, "{k} {t} {d}\n");
+                                }
                             }
                             if s.is_empty() {
                                 s.push_str("<empty>\n");

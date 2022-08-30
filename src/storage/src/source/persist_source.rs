@@ -302,14 +302,18 @@ where
                         consumed_part_output_handle.session(&consumed_part_cap);
 
                     for (_idx, part) in buffer.drain(..) {
-                        let (consumed_part, updates) = fetcher.fetch_leased_part(part.into()).await;
-
-                        let updates = updates
+                        let (consumed_part, fetched_part) =
+                            fetcher.fetch_leased_part(part.into()).await;
+                        let fetched_part = fetched_part
                             .expect("shard_id generated for sources must match across all workers");
 
                         // Apply as much logic to `updates` as we can, before we emit anything.
-                        let mut update_outputs = Vec::with_capacity(updates.len());
-                        for ((key, val), time, diff) in updates {
+                        let (updates_size_hint_min, updates_size_hint_max) =
+                            fetched_part.size_hint();
+                        let mut updates = Vec::with_capacity(
+                            updates_size_hint_max.unwrap_or(updates_size_hint_min),
+                        );
+                        for ((key, val), time, diff) in fetched_part {
                             if !until.less_equal(&time) {
                                 match (key, val) {
                                     (Ok(SourceData(Ok(row))), Ok(())) => {
@@ -328,42 +332,37 @@ where
                                                     Ok((row, time, diff)) => {
                                                         // Additional `until` filtering due to temporal filters.
                                                         if !until.less_equal(&time) {
-                                                            update_outputs.push((
-                                                                Ok(row),
-                                                                time,
-                                                                diff,
-                                                            ));
+                                                            updates.push((Ok(row), time, diff));
                                                         }
                                                     }
                                                     Err((err, time, diff)) => {
                                                         // Additional `until` filtering due to temporal filters.
                                                         if !until.less_equal(&time) {
-                                                            update_outputs.push((
-                                                                Err(err),
-                                                                time,
-                                                                diff,
-                                                            ));
+                                                            updates.push((Err(err), time, diff));
                                                         }
                                                     }
                                                 }
                                             }
                                         } else {
-                                            update_outputs.push((Ok(row), time, diff));
+                                            updates.push((Ok(row), time, diff));
                                         }
                                     }
                                     (Ok(SourceData(Err(err))), Ok(())) => {
-                                        update_outputs.push((Err(err), time, diff));
+                                        updates.push((Err(err), time, diff));
                                     }
                                     // TODO(petrosagg): error handling
-                                    _ => panic!("decoding failed"),
+                                    (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
+                                        panic!("decoding failed")
+                                    }
                                 }
                             }
+                            // TODO: Figure out how to actually make the operator
+                            // yield here if this invocation has spent "too much"
+                            // time running.
                         }
-                        differential_dataflow::consolidation::consolidate_updates(
-                            &mut update_outputs,
-                        );
+                        differential_dataflow::consolidation::consolidate_updates(&mut updates);
 
-                        update_session.give_vec(&mut update_outputs);
+                        update_session.give_vec(&mut updates);
                         consumed_part_session.give(consumed_part.into_exchangeable_part());
                     }
                 }
