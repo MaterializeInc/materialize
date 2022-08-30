@@ -9,11 +9,14 @@
 
 import os
 import random
+from argparse import Namespace
 from typing import Dict, List, Optional, Tuple, Union
 
 from packaging import version
 
-from materialize.mzcompose import Service, ServiceConfig
+from materialize import ui
+from materialize.mzcompose import Service, ServiceConfig, WorkflowArgumentParser
+from materialize.xcompile import Arch
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
 
@@ -381,6 +384,35 @@ class Redpanda(Service):
         }
 
         super().__init__(name=name, config=config)
+
+    @staticmethod
+    def add_argument(parser: WorkflowArgumentParser) -> None:
+        parser.add_argument(
+            "--redpanda",
+            action="store_true",
+            help="run against Redpanda instead of the Confluent Platform",
+        )
+
+    @staticmethod
+    def add_kafka_dependencies(args: Namespace, deps: List[str]) -> None:
+        if not args.redpanda and Arch.host() == Arch.AARCH64:
+            ui.warn(
+                "Running the Confluent Platform in Docker on ARM-based machines is "
+                "nearly unusably slow (or doesn't work at all). "
+                "Consider using Redpanda instead (--redpanda) or running tests "
+                "without mzcompose."
+            )
+
+        if args.redpanda:
+            deps.extend(["redpanda"])
+        else:
+            deps.extend(
+                [
+                    "zookeeper",
+                    "kafka",
+                    "schema-registry",
+                ]
+            )
 
 
 class SchemaRegistry(Service):

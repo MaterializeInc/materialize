@@ -67,6 +67,13 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    # parser.args are the args that are specific to workflows, with the
+    # docker compose subcommand args removed. We use `parse_known_args`
+    # to get the remaining args that are specific to the sub-workflows
+    # `parse_known_args` uses `None` to specify `sys.argv`, so we have to
+    # convert the None case into `[]`
+    (_, unknown_args) = parser.parse_known_args(parser.args if parser.args else [])
+
     for name in [
         "test-cluster",
         "test-github-12251",
@@ -80,7 +87,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "pg-snapshot-resumption",
     ]:
         with c.test_case(name):
-            c.workflow(name)
+            c.workflow(name, *unknown_args)
 
 
 def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -92,12 +99,13 @@ def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> Non
         default=["smoke/*.td"],
         help="run against the specified files",
     )
+    Redpanda.add_argument(parser)
     args = parser.parse_args()
 
     c.down(destroy_volumes=True)
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "localstack"]
-    )
+    dependencies = ["localstack"]
+    Redpanda.add_kafka_dependencies(args, dependencies)
+    c.start_and_wait_for_tcp(services=dependencies)
     c.up("materialized")
     c.wait_for_materialized()
 
@@ -128,7 +136,7 @@ def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> Non
     c.run("testdrive", *args.glob)
 
 
-def workflow_test_github_12251(c: Composition) -> None:
+def workflow_test_github_12251(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test that clients do not wait indefinitely for a crashed resource."""
 
     c.down(destroy_volumes=True)
@@ -168,18 +176,20 @@ def workflow_test_github_12251(c: Composition) -> None:
     c.sql("SELECT * FROM log_table;")
 
 
-def workflow_test_upsert(c: Composition) -> None:
+def workflow_test_upsert(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
+
+    Redpanda.add_argument(parser)
+    args = parser.parse_args()
+
     with c.override(
         Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
     ):
         c.down(destroy_volumes=True)
         dependencies = [
             "materialized",
-            "zookeeper",
-            "kafka",
-            "schema-registry",
         ]
+        Redpanda.add_kafka_dependencies(args, dependencies)
         c.start_and_wait_for_tcp(
             services=dependencies,
         )
@@ -197,8 +207,13 @@ def workflow_test_upsert(c: Composition) -> None:
         c.run("testdrive", "upsert/02-after-storaged-restart.td")
 
 
-def workflow_test_remote_storaged(c: Composition) -> None:
+def workflow_test_remote_storaged(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
     """Test creating sources in a remote storaged process."""
+
+    Redpanda.add_argument(parser)
+    args = parser.parse_args()
 
     c.down(destroy_volumes=True)
 
@@ -216,10 +231,8 @@ def workflow_test_remote_storaged(c: Composition) -> None:
             "materialized",
             "postgres",
             "storaged",
-            "zookeeper",
-            "kafka",
-            "schema-registry",
         ]
+        Redpanda.add_kafka_dependencies(args, dependencies)
         c.start_and_wait_for_tcp(
             services=dependencies,
         )
@@ -237,7 +250,9 @@ def workflow_test_remote_storaged(c: Composition) -> None:
         c.run("testdrive", "storaged/04-after-storaged-restart.td")
 
 
-def workflow_test_drop_default_cluster(c: Composition) -> None:
+def workflow_test_drop_default_cluster(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
     """Test that the default cluster can be dropped"""
 
     c.down(destroy_volumes=True)
@@ -248,7 +263,9 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
     c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
 
 
-def workflow_test_resource_limits(c: Composition) -> None:
+def workflow_test_resource_limits(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
     """Test resource limits in Materialize."""
 
     c.down(destroy_volumes=True)
@@ -266,7 +283,9 @@ def workflow_test_resource_limits(c: Composition) -> None:
 # TODO: Would be nice to update this test to use a builtin table that can be materialized.
 #  pg_roles, and most postgres catalog views, cannot be materialized because they use
 #  pg_catalog.current_database(). So we can't test making indexes and materialized views.
-def workflow_test_builtin_migration(c: Composition) -> None:
+def workflow_test_builtin_migration(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
     """Exercise the builtin object migration code by upgrading between two versions
     that will have a migration triggered between them. Create a materialized view
     over the affected builtin object to confirm that the migration was successful
@@ -320,7 +339,9 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         )
 
 
-def workflow_pg_snapshot_resumption(c: Composition) -> None:
+def workflow_pg_snapshot_resumption(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
     """Test creating sources in a remote storaged process."""
 
     c.down(destroy_volumes=True)
