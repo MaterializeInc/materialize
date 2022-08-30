@@ -129,9 +129,7 @@ fn start_connections(
                 .into_element()
         })
         .collect();
-    let mut results: Vec<_> = (0..my_index)
-        .map(|_| None)
-        .collect();
+    let mut results: Vec<_> = (0..my_index).map(|_| None).collect();
 
     // We do not want to provide opportunities for the startup
     // sequence to hang waiting for one of its peers, not noticing that another has gone down;
