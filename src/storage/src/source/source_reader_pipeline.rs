@@ -158,7 +158,8 @@ where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
 {
-    let (resume_stream, resume_token) = super::resumption::resumption_operator(config.clone());
+    let (resume_stream, downgrade_resume_token, shutdown_resume_token) =
+        super::resumption::resumption_operator(config.clone());
     let resume_stream = resume_stream.broadcast();
 
     let ((batches, source_upper_summaries), source_reader_token) = source_reader_operator::<G, S>(
@@ -166,6 +167,7 @@ where
         source_connection,
         connection_context,
         resume_stream,
+        downgrade_resume_token,
     );
 
     let (remap_stream, remap_token) =
@@ -174,7 +176,7 @@ where
     let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
         reclock_operator::<G, S>(config, batches, remap_stream);
 
-    let token = Rc::new((source_reader_token, remap_token, resume_token));
+    let token = Rc::new((source_reader_token, remap_token, shutdown_resume_token));
 
     ((reclocked_stream, reclocked_err_stream), Some(token))
 }
@@ -189,6 +191,7 @@ fn source_reader_operator<G, S: 'static>(
     source_connection: &SourceConnection,
     connection_context: ConnectionContext,
     resume_stream: timely::dataflow::Stream<G, ()>,
+    downgrade_resume_token: Rc<dyn Any>,
 ) -> (
     (
         timely::dataflow::Stream<
@@ -232,6 +235,7 @@ where
         // The maximal resume_upper we have seen from the resumption operator, starting at the
         // _initial_ resume_upper
         let mut resumption_frontier = resume_upper.clone();
+        let mut downgrade_resume_token = Some(downgrade_resume_token);
 
         let sync_activator = scope.sync_activator_for(&info.address[..]);
         let base_metrics = base_metrics.clone();
@@ -427,12 +431,12 @@ where
             // operators?
             source_metrics.operator_scheduled_counter.inc();
 
-            // manage new resumption frontiers first
+            // Check for new resumption frontiers first.
             if !PartialOrder::less_equal(
                 &input_resumption_frontier.unwrap().frontier(),
                 &resumption_frontier.borrow(),
             ) {
-                tracing::info!(
+                tracing::trace!(
                     resumption_frontier = ?input_resumption_frontier.unwrap().frontier(),
                     "received new resumption frontier"
                 );
@@ -447,7 +451,17 @@ where
             // about what this actually is, downstream.
             let mut batch_counter = timely::progress::Timestamp::minimum();
 
-            while let Poll::Ready(Some(update)) = source_reader.as_mut().poll_next(&mut context) {
+            while let Poll::Ready(res) = source_reader.as_mut().poll_next(&mut context) {
+                let update = match res {
+                    Some(update) => update,
+                    None => {
+                        // If the source gave us `None`, it means its finished, forever, and we
+                        // need to signal the upstream operator to give up, so our
+                        // frontiers can go to `[]`
+                        downgrade_resume_token.take();
+                        return;
+                    }
+                };
                 let (messages, non_definite_errors, unconsumed_partitions, source_upper) =
                     match update {
                         Some(update) => update,

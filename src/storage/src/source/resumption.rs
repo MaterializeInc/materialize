@@ -15,7 +15,7 @@
 use std::any::Any;
 use std::rc::Rc;
 
-use differential_dataflow::Hashable;
+use mz_expr::PartitionId;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
@@ -30,14 +30,19 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 /// Generates a timely `Stream` with no inputs that periodically
 /// downgrades its output `Capability` _to the "resumption frontier"
 /// of the source_. It does not produce meaningful data.
+///
+/// This source returns two tokens, dropping either of which signal
+/// shutdown. The first is called the "downgrade" token, and is used
+/// when a source needs to downgrade the operator, but full shutdown
+/// is not occurring.
 pub fn resumption_operator<G>(
     config: RawSourceCreationConfig<G>,
-) -> (timely::dataflow::Stream<G, ()>, Rc<dyn Any>)
+) -> (timely::dataflow::Stream<G, ()>, Rc<dyn Any>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
     let RawSourceCreationConfig {
-        id,
+        id: source_id,
         scope,
         worker_count,
         worker_id,
@@ -47,16 +52,21 @@ where
         ..
     } = config;
 
-    let chosen_worker = (id.hashed() % worker_count as u64) as usize;
-    let active_worker = chosen_worker == worker_id;
+    // This is the same as the calculation for single-instance workers, so that
+    // the "downgrade token" can dropped on the same worker as the active worker
+    let active_worker =
+        crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
-    let operator_name = format!("resumption({})", id);
+    let operator_name = format!("resumption({})", source_id);
     let mut resume_op = OperatorBuilder::new(operator_name, scope.clone());
     // we just downgrade the capability
     let (_resume_output, resume_stream) = resume_op.new_output();
 
-    let token = Rc::new(());
-    let token_weak = Rc::downgrade(&token);
+    let downgrade_token = Rc::new(());
+    let downgrade_token_weak = Rc::downgrade(&downgrade_token);
+
+    let shutdown_token = Rc::new(());
+    let shutdown_token_weak = Rc::downgrade(&shutdown_token);
 
     let mut upper = Antichain::from_elem(Timestamp::minimum());
 
@@ -75,7 +85,9 @@ where
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
 
             while scheduler.notified().await {
-                if token_weak.upgrade().is_none() {
+                if shutdown_token_weak.upgrade().is_none()
+                    || downgrade_token_weak.upgrade().is_none()
+                {
                     return;
                 }
                 if !active_worker {
@@ -92,7 +104,7 @@ where
                 }
 
                 tracing::trace!(
-                    %id,
+                    %source_id,
                     ?new_upper,
                     "read new resumption frontier from persist",
                 );
@@ -103,5 +115,5 @@ where
         },
     );
 
-    (resume_stream, token)
+    (resume_stream, downgrade_token, shutdown_token)
 }
