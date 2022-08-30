@@ -1445,9 +1445,9 @@ pub const MZ_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_materialization_source_frontiers",
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_materialization_source_frontiers AS SELECT
-    global_id, source, pg_catalog.min(time) AS time
+    global_id, source_id, pg_catalog.min(time) AS time
 FROM mz_catalog.mz_worker_materialization_source_frontiers
-GROUP BY global_id, source",
+GROUP BY global_id, source_id",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
