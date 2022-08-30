@@ -64,7 +64,7 @@ function Dataflows() {
                 FROM
                     mz_catalog.mz_dataflow_channels AS channels
                     LEFT JOIN mz_catalog.mz_message_counts AS counts
-                        ON channels.id = counts.channel AND channels.worker = counts.source_worker
+                        ON channels.id = counts.channel_id AND channels.worker = counts.source_worker
                 GROUP BY id, source_node, target_node, source_port, target_port;
 
                 SELECT

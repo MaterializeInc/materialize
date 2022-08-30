@@ -48,7 +48,7 @@ count
   FROM
     mz_catalog.mz_dataflow_channels AS channels
     LEFT JOIN mz_catalog.mz_message_counts AS counts
-        ON channels.id = counts.channel AND channels.worker_id = counts.source_worker_id
+        ON channels.id = counts.channel_id AND channels.worker_id = counts.source_worker_id
   WHERE id IN
         (SELECT id
          FROM mz_catalog.mz_dataflow_addresses

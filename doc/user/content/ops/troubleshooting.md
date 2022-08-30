@@ -113,7 +113,7 @@ select mdo.id, mdo.name, mdo.worker_id, mas.records, mas.batches
 from mz_arrangement_sizes as mas,
      mz_dataflow_operators as mdo
 where
-    mas.operator = mdo.id and
+    mas.operator_id = mdo.id and
     mas.worker_id = mdo.worker_id
 order by mas.records desc;
 ```
@@ -124,7 +124,7 @@ select mdo.id, mdo.name, sum(mas.records) as records, sum(mas.batches) as batche
 from mz_arrangement_sizes as mas,
      mz_dataflow_operators as mdo
 where
-    mas.operator = mdo.id and
+    mas.operator_id = mdo.id and
     mas.worker_id = mdo.worker_id
 group by mdo.id, mdo.name
 order by sum(mas.records) desc;

@@ -107,7 +107,7 @@ SID   count       4           bigint
   ORDER BY position
 id      name              position    type
 --------------------------------------------
-SID   channel           1           bigint
+SID   channel_id        1           bigint
 SID   source_worker_id  2           bigint
 SID   target_worker_id  3           bigint
 SID   sent              4           bigint

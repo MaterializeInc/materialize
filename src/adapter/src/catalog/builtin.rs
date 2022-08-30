@@ -1456,13 +1456,13 @@ pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_catalog.mz_records_per_dataflow_operator AS
 WITH records_cte AS (
     SELECT
-        operator,
+        operator_id,
         worker_id,
         pg_catalog.count(*) AS records
     FROM
         mz_catalog.mz_arrangement_records_internal
     GROUP BY
-        operator, worker_id
+        operator_id, worker_id
 )
 SELECT
     mz_dataflow_operator_dataflows.id,
@@ -1474,7 +1474,7 @@ FROM
     records_cte,
     mz_catalog.mz_dataflow_operator_dataflows
 WHERE
-    mz_dataflow_operator_dataflows.id = records_cte.operator AND
+    mz_dataflow_operator_dataflows.id = records_cte.operator_id AND
     mz_dataflow_operator_dataflows.worker_id = records_cte.worker_id",
 };
 
@@ -1844,33 +1844,33 @@ pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_catalog.mz_message_counts AS
 WITH sent_cte AS (
     SELECT
-        channel,
+        channel_id,
         source_worker_id,
         target_worker_id,
         pg_catalog.count(*) AS sent
     FROM
         mz_catalog.mz_message_counts_sent_internal
     GROUP BY
-        channel, source_worker_id, target_worker_id
+        channel_id, source_worker_id, target_worker_id
 ),
 received_cte AS (
     SELECT
-        channel,
+        channel_id,
         source_worker_id,
         target_worker_id,
         pg_catalog.count(*) AS received
     FROM
         mz_catalog.mz_message_counts_received_internal
     GROUP BY
-        channel, source_worker_id, target_worker_id
+        channel_id, source_worker_id, target_worker_id
 )
 SELECT
-    sent_cte.channel,
+    sent_cte.channel_id,
     sent_cte.source_worker_id,
     sent_cte.target_worker_id,
     sent_cte.sent,
     received_cte.received
-FROM sent_cte JOIN received_cte USING (channel, source_worker_id, target_worker_id)",
+FROM sent_cte JOIN received_cte USING (channel_id, source_worker_id, target_worker_id)",
 };
 
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
@@ -1894,30 +1894,30 @@ pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_catalog.mz_arrangement_sizes AS
 WITH batches_cte AS (
     SELECT
-        operator,
+        operator_id,
         worker_id,
         pg_catalog.count(*) AS batches
     FROM
         mz_catalog.mz_arrangement_batches_internal
     GROUP BY
-        operator, worker_id
+        operator_id, worker_id
 ),
 records_cte AS (
     SELECT
-        operator,
+        operator_id,
         worker_id,
         pg_catalog.count(*) AS records
     FROM
         mz_catalog.mz_arrangement_records_internal
     GROUP BY
-        operator, worker_id
+        operator_id, worker_id
 )
 SELECT
-    batches_cte.operator,
+    batches_cte.operator_id,
     batches_cte.worker_id,
     records_cte.records,
     batches_cte.batches
-FROM batches_cte JOIN records_cte USING (operator, worker_id)",
+FROM batches_cte JOIN records_cte USING (operator_id, worker_id)",
 };
 
 pub const MZ_ARRANGEMENT_SHARING: BuiltinView = BuiltinView {
@@ -1925,11 +1925,11 @@ pub const MZ_ARRANGEMENT_SHARING: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_arrangement_sharing AS
 SELECT
-    operator,
+    operator_id,
     worker_id,
     pg_catalog.count(*) AS count
 FROM mz_catalog.mz_arrangement_sharing_internal
-GROUP BY operator, worker_id",
+GROUP BY operator_id, worker_id",
 };
 
 // NOTE: If you add real data to this implementation, then please update
