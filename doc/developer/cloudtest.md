@@ -15,7 +15,7 @@ python library to control the K8s cluster.
 
 ```
 curl -LO "https://dl.k8s.io/release/v1.24.3/bin/linux/amd64/kubectl"
-chmod+x kubectl
+chmod +x kubectl
 sudo mv kubectl /usr/local/bin
 ```
 
