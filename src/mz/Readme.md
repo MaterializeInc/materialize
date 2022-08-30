@@ -28,7 +28,7 @@ Clone the repository and run:
 cargo build --package mz --release
 ```
 
-After a successful build:
+After a successful build, the binary is available at:
 
 ```bash
 cd ./target/release
@@ -142,5 +142,3 @@ source ~/.bash_profile
 
 # Windows (TBC)
 ```
-<<<<<<< HEAD
-=======

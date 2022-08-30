@@ -9,8 +9,8 @@
 
 use crate::utils::{exit_with_fail_message, CloudProviderRegion};
 use crate::{
-    CloudProvider, ExitMessage, FronteggAuthMachine,
-    Region, CLOUD_PROVIDERS_URL, Environment, CloudProviderAndRegion,
+    CloudProvider, CloudProviderAndRegion, Environment, ExitMessage, FronteggAuthMachine, Region,
+    CLOUD_PROVIDERS_URL,
 };
 
 use std::collections::HashMap;
@@ -18,14 +18,8 @@ use std::collections::HashMap;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, Error};
 
-/// ----------------------------
-///  Regions commands
-/// ----------------------------
-
-/**
- * Format cloud provider region url to interact with.
- * TODO: ec.0 is dynamic.
- */
+/// Format cloud provider region url to interact with.
+/// TODO: ec.0 is dynamic.
 fn format_region_url(cloud_provider_region: CloudProviderRegion) -> String {
     format!(
         "https://ec.0.{}.aws.cloud.materialize.com/api/environment",
@@ -54,7 +48,10 @@ pub(crate) async fn enable_region(
 
     let headers = build_region_request_headers(&authorization);
     let mut body = HashMap::new();
-    body.insert("environmentd_image_ref", &"materialize/environmentd:v0.27.0-alpha.15");
+    body.insert(
+        "environmentd_image_ref",
+        &"materialize/environmentd:v0.27.0-alpha.15",
+    );
 
     client
         .post(region_url)
@@ -99,7 +96,9 @@ pub(crate) async fn region_environment_details(
 ) -> Result<Option<Vec<Environment>>, Error> {
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
     let headers = build_region_request_headers(authorization.as_str());
-    let mut region_api_url = region.environment_controller_url[0..region.environment_controller_url.len() - 4].to_string();
+    let mut region_api_url = region.environment_controller_url
+        [0..region.environment_controller_url.len() - 4]
+        .to_string();
     region_api_url.push_str("/api/environment");
 
     let response = client.get(region_api_url).headers(headers).send().await?;
@@ -200,10 +199,15 @@ pub(crate) fn print_environment_status(environment: Environment, health: bool) {
     } else {
         println!("Healthy:\tno");
     }
-    println!("SQL address: \t{}", &environment.environmentd_pgwire_address[0..environment.environmentd_pgwire_address.len() - 5]);
+    println!(
+        "SQL address: \t{}",
+        &environment.environmentd_pgwire_address
+            [0..environment.environmentd_pgwire_address.len() - 5]
+    );
     // Remove port from url
     println!(
         "HTTPS address: \thttps://{}",
-        &environment.environmentd_https_address[0..environment.environmentd_https_address.len() - 4]
+        &environment.environmentd_https_address
+            [0..environment.environmentd_https_address.len() - 4]
     );
 }

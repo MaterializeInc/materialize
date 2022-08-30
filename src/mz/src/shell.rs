@@ -7,9 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::regions::{cloud_provider_region_details, list_cloud_providers, region_environment_details};
+use crate::regions::{
+    cloud_provider_region_details, list_cloud_providers, region_environment_details,
+};
 use crate::utils::{exit_with_fail_message, CloudProviderRegion};
-use crate::{ExitMessage, FronteggAuthMachine, Profile, Environment};
+use crate::{Environment, ExitMessage, FronteggAuthMachine, Profile};
 use reqwest::Client;
 use std::process::exit;
 use subprocess::Exec;
@@ -20,9 +22,11 @@ use subprocess::Exec;
 
 /// Parse host and port from the pgwire URL
 pub(crate) fn parse_pgwire(envrionment: &Environment) -> (&str, &str) {
-    let host = &envrionment.environmentd_pgwire_address[..envrionment.environmentd_pgwire_address.len() - 5];
-    let port = &envrionment.environmentd_pgwire_address
-        [envrionment.environmentd_pgwire_address.len() - 4..envrionment.environmentd_pgwire_address.len()];
+    let host = &envrionment.environmentd_pgwire_address
+        [..envrionment.environmentd_pgwire_address.len() - 5];
+    let port =
+        &envrionment.environmentd_pgwire_address[envrionment.environmentd_pgwire_address.len() - 4
+            ..envrionment.environmentd_pgwire_address.len()];
 
     (host, port)
 }
@@ -105,27 +109,39 @@ pub(crate) async fn shell(
                             match cloud_provider_regions.pop() {
                                 Some(region) => {
                                     // TODO: Replicated code.
-                                                        println!("WOHOOO");
-                                    match region_environment_details(&client, &region, &frontegg_auth_machine).await {
+                                    println!("WOHOOO");
+                                    match region_environment_details(
+                                        &client,
+                                        &region,
+                                        &frontegg_auth_machine,
+                                    )
+                                    .await
+                                    {
                                         Ok(environment_details) => {
-                                            if let Some(mut environment_list) = environment_details {
+                                            if let Some(mut environment_list) = environment_details
+                                            {
                                                 match environment_list.pop() {
                                                     Some(environment) => {
                                                         run_psql_shell(profile, &environment)
-                                                    },
-                                                    None => exit_with_fail_message(ExitMessage::Str(
-                                                        "Error. Missing environment.",
-                                                    )),
+                                                    }
+                                                    None => {
+                                                        exit_with_fail_message(ExitMessage::Str(
+                                                            "Error. Missing environment.",
+                                                        ))
+                                                    }
                                                 }
                                             } else {
                                                 exit_with_fail_message(ExitMessage::Str(
                                                     "Environment unavailable.",
                                                 ));
                                             }
-                                        },
-                                        Err(error) => exit_with_fail_message(ExitMessage::String(
-                                            format!("Error getting environment details: {:}", error),
-                                        )),
+                                        }
+                                        Err(error) => {
+                                            exit_with_fail_message(ExitMessage::String(format!(
+                                                "Error getting environment details: {:}",
+                                                error
+                                            )))
+                                        }
                                     }
                                 }
                                 None => {
@@ -138,7 +154,9 @@ pub(crate) async fn shell(
                             "Error retrieving region details: {:?}",
                             error
                         ))),
-                        Ok(None) => {println!("No region found.")}
+                        Ok(None) => {
+                            println!("No region found.")
+                        }
                     }
                 }
                 None => exit_with_fail_message(ExitMessage::Str("Unknown region.")),

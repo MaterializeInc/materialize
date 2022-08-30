@@ -70,8 +70,8 @@ pub(crate) fn run_loading_spinner(message: String) -> ProgressBar {
         ProgressStyle::default_spinner()
             .template("{spinner} {msg}")
             .expect("template known to be valid")
-            // For more spinners check out the cli-spinners project:
-            // https://github.com/sindresorhus/cli-spinners/blob/master/spinners.json
+             // For more spinners check out the cli-spinners project:
+             // https://github.com/sindresorhus/cli-spinners/blob/master/spinners.json
             .tick_strings(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", ""]),
     );
 

@@ -24,7 +24,7 @@ mod utils;
 use std::str::FromStr;
 
 use profiles::get_profile;
-use regions::{print_region_enabled, print_environment_status, region_environment_details};
+use regions::{print_environment_status, print_region_enabled, region_environment_details};
 use serde::{Deserialize, Serialize};
 
 use clap::{Args, Parser, Subcommand};
@@ -44,6 +44,7 @@ use crate::shell::shell;
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
+    /// Specify a particular profile
     #[clap(short, long, env = "MZ_PROFILE", default_value = "default")]
     profile: String,
 }
@@ -60,7 +61,7 @@ enum Commands {
     },
     /// Show commands for interaction with the region
     Regions(Regions),
-    /// Open a SQL shell over a region
+    /// Connect to a region using a SQL shell
     Shell {
         #[clap(possible_values = CloudProviderRegion::variants())]
         cloud_provider_region: String,
@@ -93,7 +94,7 @@ enum RegionsCommands {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Region {
-    environment_controller_url: String
+    environment_controller_url: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -187,12 +188,13 @@ async fn main() {
 
     match args.command {
         Commands::Docs => {
-                // Open the browser docs
-                if let Err(err) = open::that(WEB_DOCS_URL) {
-                    exit_with_fail_message(ExitMessage::String(format!(
-                        "Error opening the browser: {}", err
-                    )))
-                }
+            // Open the browser docs
+            if let Err(err) = open::that(WEB_DOCS_URL) {
+                exit_with_fail_message(ExitMessage::String(format!(
+                    "Error opening the browser: {}",
+                    err
+                )))
+            }
         }
 
         Commands::Login { interactive } => {
@@ -242,11 +244,11 @@ async fn main() {
                                     list_regions(&cloud_providers, &client, &frontegg_auth_machine)
                                         .await;
 
-                                cloud_providers_regions.iter().for_each(
-                                    |cloud_provider_region| {
+                                cloud_providers_regions
+                                    .iter()
+                                    .for_each(|cloud_provider_region| {
                                         print_region_enabled(cloud_provider_region);
-                                    },
-                                );
+                                    });
                             }
                             Err(error) => exit_with_fail_message(ExitMessage::String(format!(
                                 "Error retrieving cloud providers: {:?}",
@@ -285,12 +287,12 @@ async fn main() {
                                             )
                                             .await;
 
-                                        match cloud_provider_regions.pop() {
-                                            Some(cloud_provider_region) => {
-                                                if let Some(region) =
-                                                    cloud_provider_region.region
-                                                {
-                                                    match region_environment_details(&client, &region, &frontegg_auth_machine).await {
+                                            match cloud_provider_regions.pop() {
+                                                Some(cloud_provider_region) => {
+                                                    if let Some(region) =
+                                                        cloud_provider_region.region
+                                                    {
+                                                        match region_environment_details(&client, &region, &frontegg_auth_machine).await {
                                                         Ok(environment_details) => {
                                                             if let Some(mut environment_list) = environment_details {
                                                                 match environment_list.pop() {
@@ -313,16 +315,16 @@ async fn main() {
                                                             format!("Error listing environment: {:}", error),
                                                         )),
                                                     }
-                                                } else {
-                                                    exit_with_fail_message(ExitMessage::Str(
-                                                        "Region unavailable.",
-                                                    ));
+                                                    } else {
+                                                        exit_with_fail_message(ExitMessage::Str(
+                                                            "Region unavailable.",
+                                                        ));
+                                                    }
                                                 }
+                                                None => exit_with_fail_message(ExitMessage::Str(
+                                                    "Error. Missing provider.",
+                                                )),
                                             }
-                                            None => exit_with_fail_message(ExitMessage::Str(
-                                                "Error. Missing provider.",
-                                            )),
-                                        }
                                         }
                                     }
                                     Err(error) => exit_with_fail_message(ExitMessage::String(
@@ -337,7 +339,7 @@ async fn main() {
                         }
                     }
                     None => exit_with_fail_message(ExitMessage::Str(PROFILE_NOT_FOUND_MESSAGE)),
-                }
+                },
             }
         }
 
