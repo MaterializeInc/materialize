@@ -278,7 +278,7 @@ async fn build_kafka(
 
             Some(KafkaSinkConsistencyConnection {
                 topic: consistency_topic,
-                schema_id: consistency_schema_id,
+                schema_id: Some(consistency_schema_id),
             })
         }
         KafkaConsistencyConfig::Classic { topic: other, .. } => {

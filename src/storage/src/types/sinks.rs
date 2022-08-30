@@ -293,21 +293,21 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConsistencyConnection {
     pub topic: String,
-    pub schema_id: i32,
+    pub schema_id: Option<i32>,
 }
 
 impl RustType<ProtoKafkaSinkConsistencyConnection> for KafkaSinkConsistencyConnection {
     fn into_proto(&self) -> ProtoKafkaSinkConsistencyConnection {
         ProtoKafkaSinkConsistencyConnection {
             topic: self.topic.clone(),
-            schema_id: self.schema_id,
+            schema_id: self.schema_id.unwrap_or(-1),
         }
     }
 
     fn from_proto(proto: ProtoKafkaSinkConsistencyConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaSinkConsistencyConnection {
             topic: proto.topic,
-            schema_id: proto.schema_id,
+            schema_id: Some(proto.schema_id).filter(|i| *i != -1),
         })
     }
 }

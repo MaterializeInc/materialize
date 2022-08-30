@@ -355,7 +355,7 @@ impl KafkaTxProducer {
 #[derive(Debug, Clone)]
 struct KafkaConsistencyInitState {
     topic: String,
-    schema_id: i32,
+    schema_id: Option<i32>,
     consistency_client_config: rdkafka::ClientConfig,
 }
 
@@ -372,7 +372,7 @@ impl KafkaConsistencyInitState {
 #[derive(Debug, Clone)]
 struct KafkaConsistencyRunningState {
     topic: String,
-    schema_id: i32,
+    schema_id: Option<i32>,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
 }
 
@@ -896,19 +896,23 @@ impl KafkaSinkState {
         message_count: Option<i64>,
         consistency: &KafkaConsistencyRunningState,
     ) -> KafkaResult<()> {
-        let encoded = avro::encode_debezium_transaction_unchecked(
-            consistency.schema_id,
-            &self.topic,
-            transaction_id,
-            status,
-            message_count,
-        );
+        if let Some(schema_id) = consistency.schema_id {
+            let encoded = avro::encode_debezium_transaction_unchecked(
+                schema_id,
+                &self.topic,
+                transaction_id,
+                status,
+                message_count,
+            );
 
-        let record = BaseRecord::to(&consistency.topic)
-            .payload(&encoded)
-            .key(&self.topic);
+            let record = BaseRecord::to(&consistency.topic)
+                .payload(&encoded)
+                .key(&self.topic);
 
-        self.send(record).await
+            self.send(record).await
+        } else {
+            Ok(())
+        }
     }
 
     /// Asserts that the write frontier has not yet advanced beyond `t`.
