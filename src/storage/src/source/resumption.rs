@@ -84,6 +84,9 @@ where
             // TODO: determine what interval we want here.
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
 
+            let (mut remap_write, mut data_write) =
+                storage_metadata.get_write_handles(&persist_clients).await;
+
             while scheduler.notified().await {
                 if shutdown_token_weak.upgrade().is_none()
                     || downgrade_token_weak.upgrade().is_none()
@@ -94,10 +97,19 @@ where
                     continue;
                 }
 
+                // Wait for the set period
                 interval.tick().await;
-                let new_upper = storage_metadata
-                    .get_resume_upper(&persist_clients, &envelope)
-                    .await;
+
+                // Refresh the data
+                // TODO: add an `upper` field on `PersistClient` so we don't need to create
+                // different typed `WriteHandle`s for each shard.
+                remap_write.fetch_recent_upper().await;
+                data_write.fetch_recent_upper().await;
+                let new_upper = storage_metadata.get_resume_upper_from_handles(
+                    &remap_write,
+                    &data_write,
+                    &envelope,
+                );
 
                 if PartialOrder::less_equal(&new_upper, &upper) {
                     continue;

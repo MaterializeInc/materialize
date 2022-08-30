@@ -48,7 +48,7 @@ use mz_build_info::BuildInfo;
 use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistLocation, ShardId};
+use mz_persist_client::{write::WriteHandle, PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -414,34 +414,24 @@ impl Codec for CollectionMetadata {
 }
 
 impl CollectionMetadata {
-    pub async fn get_resume_upper<T>(
+    /// Calculate the point at which we can resume ingestion computing the greatest
+    /// antichain that is less or equal to all state and output shard uppers,
+    /// using pre-existing `WriteHandle`s
+    pub fn get_resume_upper_from_handles<T>(
         &self,
-        persist: &Mutex<PersistClientCache>,
+        remap_write: &WriteHandle<(), PartitionId, T, MzOffset>,
+        data_write: &WriteHandle<SourceData, (), T, Diff>,
         envelope: &SourceEnvelope,
     ) -> Antichain<T>
     where
         T: timely::progress::Timestamp + Lattice + Codec64,
     {
-        let persist = persist
-            .lock()
-            .await
-            .open(self.persist_location.clone())
-            .await
-            .unwrap();
         // Calculate the point at which we can resume ingestion computing the greatest
         // antichain that is less or equal to all state and output shard uppers.
         let mut resume_upper: Antichain<T> = Antichain::new();
-        let remap_write = persist
-            .open_writer::<(), PartitionId, T, MzOffset>(self.remap_shard)
-            .await
-            .unwrap();
         for t in remap_write.upper().elements() {
             resume_upper.insert(t.clone());
         }
-        let data_write = persist
-            .open_writer::<SourceData, (), T, Diff>(self.data_shard)
-            .await
-            .unwrap();
         for t in data_write.upper().elements() {
             resume_upper.insert(t.clone());
         }
@@ -459,6 +449,51 @@ impl CollectionMetadata {
             _ => Antichain::from_elem(T::minimum()),
         };
         resume_upper
+    }
+
+    /// returns the `WriteHandle` for the remap shard and the data shard
+    pub async fn get_write_handles<T>(
+        &self,
+        persist: &Mutex<PersistClientCache>,
+    ) -> (
+        WriteHandle<(), PartitionId, T, MzOffset>,
+        WriteHandle<SourceData, (), T, Diff>,
+    )
+    where
+        T: timely::progress::Timestamp + Lattice + Codec64,
+    {
+        let persist = persist
+            .lock()
+            .await
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+        // Calculate the point at which we can resume ingestion computing the greatest
+        // antichain that is less or equal to all state and output shard uppers.
+        let remap_write = persist
+            .open_writer::<(), PartitionId, T, MzOffset>(self.remap_shard)
+            .await
+            .unwrap();
+        let data_write = persist
+            .open_writer::<SourceData, (), T, Diff>(self.data_shard)
+            .await
+            .unwrap();
+
+        (remap_write, data_write)
+    }
+
+    /// Calculate the point at which we can resume ingestion computing the greatest
+    /// antichain that is less or equal to all state and output shard uppers.
+    pub async fn get_resume_upper<T>(
+        &self,
+        persist: &Mutex<PersistClientCache>,
+        envelope: &SourceEnvelope,
+    ) -> Antichain<T>
+    where
+        T: timely::progress::Timestamp + Lattice + Codec64,
+    {
+        let (remap_write, data_write) = self.get_write_handles(persist).await;
+        self.get_resume_upper_from_handles(&remap_write, &data_write, envelope)
     }
 }
 
