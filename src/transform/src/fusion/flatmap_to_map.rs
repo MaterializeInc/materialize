@@ -33,9 +33,13 @@ impl FlatMapToMap {
         if let MirRelationExpr::FlatMap { func, exprs, .. } = relation {
             if let TableFunc::Wrap { width, .. } = func {
                 if *width >= exprs.len() {
-                    if let MirRelationExpr::FlatMap { exprs, input, .. } = relation.take_dangerous()
+                    if let MirRelationExpr::FlatMap {
+                        ref mut exprs,
+                        ref mut input,
+                        ..
+                    } = relation.take_dangerous()
                     {
-                        *relation = input.map(exprs);
+                        *relation = input.take_dangerous().map(std::mem::take(exprs));
                     }
                 }
             }

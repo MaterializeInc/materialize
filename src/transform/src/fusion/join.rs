@@ -25,6 +25,7 @@ use crate::{TransformArgs, TransformError};
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_repr::RelationType;
+use std::mem::take;
 
 /// Fuses multiple `Join` operators into one `Join` operator.
 ///
@@ -56,28 +57,35 @@ impl Join {
 
             // We scan through each input, digesting any joins that we find and updating their equivalence classes.
             // We retain any existing equivalence classes, as they are already with respect to the cross product.
-            for input in inputs.drain(..) {
+            for mut input in inputs.drain(..) {
                 match input {
                     MirRelationExpr::Join {
-                        inputs,
-                        equivalences,
+                        ref mut inputs,
+                        ref mut equivalences,
                         ..
                     } => {
                         // Merge the inputs into the new join being built.
-                        join_builder.add_subjoin(inputs, equivalences, None)?;
+                        join_builder.add_subjoin(take(inputs), take(equivalences), None)?;
                     }
-                    MirRelationExpr::Filter { input, predicates } => {
+                    MirRelationExpr::Filter {
+                        ref mut input,
+                        ref mut predicates,
+                    } => {
                         if let MirRelationExpr::Join {
-                            inputs,
-                            equivalences,
+                            ref mut inputs,
+                            ref mut equivalences,
                             ..
-                        } = *input
+                        } = **input
                         {
                             // Merge the inputs and the predicates into the new join being built.
-                            join_builder.add_subjoin(inputs, equivalences, Some(predicates))?;
+                            join_builder.add_subjoin(
+                                take(inputs),
+                                take(equivalences),
+                                Some(take(predicates)),
+                            )?;
                         } else {
                             // Retain the input.
-                            let input = input.filter(predicates);
+                            let input = input.take_dangerous().filter(take(predicates));
                             join_builder.add_input(input);
                         }
                     }

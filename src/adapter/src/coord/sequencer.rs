@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
+use std::mem::take;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::{Duration, Instant};
 
@@ -2780,7 +2781,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         id: GlobalId,
-        constants: MirRelationExpr,
+        mut constants: MirRelationExpr,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Insert can be queued, so we need to re-verify the id exists.
         let desc = match self.catalog.try_get_entry(&id) {
@@ -2797,8 +2798,11 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         match constants {
-            MirRelationExpr::Constant { rows, typ: _ } => {
-                let rows = rows?;
+            MirRelationExpr::Constant {
+                ref mut rows,
+                typ: _,
+            } => {
+                let rows = rows.as_mut().map(take).map_err(|err| err.clone())?;
                 for (row, _) in &rows {
                     for (i, datum) in row.iter().enumerate() {
                         desc.constraints_met(i, &datum)?;

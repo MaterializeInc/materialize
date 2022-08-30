@@ -10,7 +10,7 @@
 #![warn(missing_docs)]
 
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet, LinkedList};
 use std::fmt;
 use std::num::NonZeroUsize;
 
@@ -1488,6 +1488,44 @@ impl MirRelationExpr {
         }
         result.reverse();
         result
+    }
+}
+
+impl Drop for MirRelationExpr {
+    fn drop(&mut self) {
+        fn any_expr() -> MirRelationExpr {
+            MirRelationExpr::Constant {
+                rows: Ok(Default::default()),
+                typ: RelationType::empty(),
+            }
+        }
+        let mut to_drop = LinkedList::new();
+        to_drop.push_back(std::mem::replace(self, any_expr()));
+        while let Some(mut expr) = to_drop.pop_front() {
+            match expr {
+                MirRelationExpr::Constant { .. } => {}
+                MirRelationExpr::Get { .. } => {}
+                MirRelationExpr::Let {
+                    ref mut body,
+                    ref mut value,
+                    ..
+                } => {
+                    to_drop.push_back(std::mem::replace(body, any_expr()));
+                    to_drop.push_back(std::mem::replace(value, any_expr()));
+                }
+                MirRelationExpr::Project { .. } => {}
+                MirRelationExpr::Map { .. } => {}
+                MirRelationExpr::FlatMap { .. } => {}
+                MirRelationExpr::Filter { .. } => {}
+                MirRelationExpr::Join { .. } => {}
+                MirRelationExpr::Reduce { .. } => {}
+                MirRelationExpr::TopK { .. } => {}
+                MirRelationExpr::Negate { .. } => {}
+                MirRelationExpr::Threshold { .. } => {}
+                MirRelationExpr::Union { .. } => {}
+                MirRelationExpr::ArrangeBy { .. } => {}
+            }
+        }
     }
 }
 

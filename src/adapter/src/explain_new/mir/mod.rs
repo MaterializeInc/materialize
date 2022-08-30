@@ -406,9 +406,14 @@ fn normalize_lets_at_root(expr: &mut MirRelationExpr) {
                 .drain(..)
                 .map(|input| {
                     let mut residual = input;
-                    while let Let { id, value, body } = residual {
-                        bindings.push((id, value));
-                        residual = *body;
+                    while let Let {
+                        id,
+                        ref mut value,
+                        ref mut body,
+                    } = residual
+                    {
+                        bindings.push((id, (value.take_dangerous().into())));
+                        residual = body.take_dangerous();
                     }
                     residual
                 })
@@ -507,9 +512,14 @@ fn normalize_lets_at_root(expr: &mut MirRelationExpr) {
                 .into_iter()
                 .map(|input| {
                     let mut residual = input;
-                    while let Let { id, value, body } = residual {
-                        bindings.push((id, value));
-                        residual = *body;
+                    while let Let {
+                        id,
+                        ref mut value,
+                        ref mut body,
+                    } = residual
+                    {
+                        bindings.push((id, value.take_dangerous().into()));
+                        residual = body.take_dangerous();
                     }
                     residual
                 })

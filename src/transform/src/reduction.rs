@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
 use std::iter;
+use std::mem::take;
 
 use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
@@ -373,9 +374,9 @@ impl FoldConstants {
                     for input in iter::once(&mut **base).chain(&mut *inputs) {
                         match input.take_dangerous() {
                             MirRelationExpr::Constant {
-                                rows: Ok(rs),
+                                rows: Ok(ref mut rs),
                                 typ: _,
-                            } => rows.extend(rs),
+                            } => rows.extend(take(rs)),
                             input => new_inputs.push(input),
                         }
                     }

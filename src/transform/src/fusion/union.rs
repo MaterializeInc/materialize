@@ -13,6 +13,7 @@
 //! the Negate to all their branches.
 
 use std::iter;
+use std::mem::take;
 
 use crate::TransformArgs;
 use mz_expr::visit::Visit;
@@ -55,11 +56,14 @@ impl Union {
             if can_fuse {
                 let mut new_inputs: Vec<MirRelationExpr> = vec![];
                 for input in iter::once(&mut **base).chain(inputs) {
-                    let outer_input = input.take_dangerous();
+                    let mut outer_input = input.take_dangerous();
                     match outer_input {
-                        MirRelationExpr::Union { base, inputs } => {
-                            new_inputs.push(*base);
-                            new_inputs.extend(inputs);
+                        MirRelationExpr::Union {
+                            ref mut base,
+                            ref mut inputs,
+                        } => {
+                            new_inputs.push(base.take_dangerous());
+                            new_inputs.extend(take(inputs));
                         }
                         MirRelationExpr::Negate {
                             input: ref inner_input,

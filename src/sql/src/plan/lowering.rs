@@ -261,14 +261,14 @@ impl HirRelationExpr {
                     body,
                 } => {
                     let value = value.applied_to(id_gen, get_outer.clone(), col_map, cte_map);
-                    value.let_in(id_gen, |id_gen, get_value| {
+                    value.let_in(id_gen, |id_gen, mut get_value| {
                         let (new_id, typ) = if let mz_expr::MirRelationExpr::Get {
-                            id: mz_expr::Id::Local(id),
-                            typ,
+                            id: mz_expr::Id::Local(ref mut id),
+                            ref mut typ,
                             ..
                         } = get_value
                         {
-                            (id, typ)
+                            (id, std::mem::replace(typ, RelationType::empty()))
                         } else {
                             panic!(
                                 "get_value: expected a MirRelationExpr::Get with local Id, found {:?}",
@@ -280,7 +280,7 @@ impl HirRelationExpr {
                         let old_value = cte_map.insert(
                             id.clone(),
                             CteDesc {
-                                new_id,
+                                new_id: *new_id,
                                 relation_type: typ,
                                 outer_relation: get_outer.clone(),
                             },
