@@ -64,7 +64,6 @@ pub fn validate_options_for_context<T: AstInfo>(
             ReplicationFactor => Some(Sink),
             RetentionBytes => Some(Sink),
             RetentionMs => Some(Sink),
-            ReuseTopic => Some(Sink),
         };
         if limited_to_context.is_some() && limited_to_context != Some(context) {
             bail!(
@@ -104,8 +103,7 @@ generate_extracted_config!(
     (PartitionCount, i32, Default(-1)),
     (ReplicationFactor, i32, Default(-1)),
     (RetentionBytes, i64),
-    (RetentionMs, i64),
-    (ReuseTopic, bool, Default(false))
+    (RetentionMs, i64)
 );
 
 /// The config options we expect to pass along when connecting to librdkafka

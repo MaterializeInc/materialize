@@ -787,7 +787,6 @@ pub enum KafkaConfigOptionName {
     TransactionTimeoutMs,
     StartTimestamp,
     StartOffset,
-    ReuseTopic,
     AvroKeyFullName,
     AvroValueFullName,
     PartitionCount,
@@ -819,7 +818,6 @@ impl AstDisplay for KafkaConfigOptionName {
             KafkaConfigOptionName::ReplicationFactor => "REPLICATION FACTOR",
             KafkaConfigOptionName::RetentionBytes => "RETENTION BYTES",
             KafkaConfigOptionName::RetentionMs => "RETENTION MS",
-            KafkaConfigOptionName::ReuseTopic => "REUSE TOPIC",
         })
     }
 }

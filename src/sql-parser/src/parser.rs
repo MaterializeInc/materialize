@@ -2026,7 +2026,6 @@ impl<'a> Parser<'a> {
             PARTITION,
             REPLICATION,
             RETENTION,
-            REUSE,
             SNAPSHOT,
             START,
             STATISTICS,

@@ -2120,7 +2120,6 @@ fn kafka_sink_builder(
         connection,
         config_options,
         KafkaConfigOptionExtracted {
-            reuse_topic,
             avro_key_full_name,
             avro_value_full_name,
             partition_count,
