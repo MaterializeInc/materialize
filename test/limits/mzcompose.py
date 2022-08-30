@@ -151,7 +151,7 @@ class KafkaTopics(Generator):
             topic = f"kafka-sources-{i}"
             print(f"$ kafka-create-topic topic={topic}")
             print(
-                f"$ kafka-ingest format=avro topic={topic} key-format=avro key-schema=${{key-schema}} schema=${{value-schema}} publish=true"
+                f"$ kafka-ingest format=avro topic={topic} key-format=avro key-schema=${{key-schema}} schema=${{value-schema}}"
             )
             print(f'"{i}" {{"f1": "{i}"}}')
 
@@ -184,7 +184,7 @@ class KafkaSourcesSameTopic(Generator):
         )
         print("$ kafka-create-topic topic=topic")
         print(
-            "$ kafka-ingest format=avro topic=topic key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true"
+            "$ kafka-ingest format=avro topic=topic key-format=avro key-schema=${key-schema} schema=${value-schema}"
         )
         print('"123" {"f1": "123"}')
 
@@ -229,7 +229,7 @@ class KafkaPartitions(Generator):
             f"$ kafka-create-topic topic=kafka-partitions partitions={round(cls.COUNT/2)}"
         )
         print(
-            "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true partition=-1"
+            "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} partition=-1"
         )
         for i in cls.all():
             print(f'"{i}" {{"f1": "{i}"}}')
@@ -256,7 +256,7 @@ class KafkaPartitions(Generator):
         )
 
         print(
-            "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true partition=-1"
+            "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} partition=-1"
         )
         for i in cls.all():
             print(f'"{i}" {{"f1": "{i}"}}')
@@ -280,7 +280,7 @@ class KafkaRecordsEnvelopeNone(Generator):
         )
         print("$ kafka-create-topic topic=kafka-records-envelope-none")
         print(
-            f"$ kafka-ingest format=avro topic=kafka-records-envelope-none schema=${{kafka-records-envelope-none}} publish=true repeat={cls.COUNT}"
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-none schema=${{kafka-records-envelope-none}} repeat={cls.COUNT}"
         )
         print('{"f1": "123"}')
 
@@ -323,7 +323,7 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         )
         print("$ kafka-create-topic topic=kafka-records-envelope-upsert-same")
         print(
-            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-same key-format=avro key-schema=${{kafka-records-envelope-upsert-same-key}} schema=${{kafka-records-envelope-upsert-same-value}} publish=true repeat={cls.COUNT}"
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-same key-format=avro key-schema=${{kafka-records-envelope-upsert-same-key}} schema=${{kafka-records-envelope-upsert-same-value}} repeat={cls.COUNT}"
         )
         print('{"key": "fish"} {"f1": "fish"}')
 
@@ -367,7 +367,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         )
         print("$ kafka-create-topic topic=kafka-records-envelope-upsert-distinct")
         print(
-            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} publish=true repeat={cls.COUNT}"
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} repeat={cls.COUNT}"
         )
         print(
             '{"key": "${kafka-ingest.iteration}"} {"f1": "${kafka-ingest.iteration}"}'
@@ -393,7 +393,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         )
 
         print(
-            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} publish=true repeat={cls.COUNT}"
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} repeat={cls.COUNT}"
         )
         print('{"key": "${kafka-ingest.iteration}"}')
 
@@ -1358,7 +1358,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
                     $ kafka-create-topic topic=instance-size
 
-                    $ kafka-ingest format=avro topic=instance-size schema=${schema} publish=true repeat=10000
+                    $ kafka-ingest format=avro topic=instance-size schema=${schema} repeat=10000
                     {"f1": "fish"}
                     """
                 )

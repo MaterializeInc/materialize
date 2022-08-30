@@ -145,7 +145,7 @@ class DecodeError(Check):
                 """
                 $ kafka-create-topic topic=decode-error
 
-                $ kafka-ingest format=avro topic=decode-error schema=${schema-f1} publish=true repeat=1
+                $ kafka-ingest format=avro topic=decode-error schema=${schema-f1} repeat=1
                 {"f1": "A"}
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';

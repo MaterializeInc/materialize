@@ -47,7 +47,7 @@ class AlterIndex(Check):
 
                 $ kafka-create-topic topic=alter-index
 
-                $ kafka-ingest format=avro topic=alter-index schema=${schema} publish=true repeat=10000
+                $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "A${kafka-ingest.iteration}"}
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
@@ -71,26 +71,26 @@ class AlterIndex(Check):
             for s in [
                 """
                 > INSERT INTO alter_index_table SELECT 'B' || generate_series FROM generate_series(1,10000);
-                $ kafka-ingest format=avro topic=alter-index schema=${schema} publish=true repeat=10000
+                $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "B${kafka-ingest.iteration}"}
 
                 > ALTER INDEX alter_index_table_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms');
                 > ALTER INDEX alter_index_source_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms');
 
                 > INSERT INTO alter_index_table SELECT 'C' || generate_series FROM generate_series(1,10000);
-                $ kafka-ingest format=avro topic=alter-index schema=${schema} publish=true repeat=10000
+                $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "C${kafka-ingest.iteration}"}
                 """,
                 """
                 > INSERT INTO alter_index_table SELECT 'D' || generate_series FROM generate_series(1,10000);
-                $ kafka-ingest format=avro topic=alter-index schema=${schema} publish=true repeat=10000
+                $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "D${kafka-ingest.iteration}"}
 
                 > ALTER INDEX alter_index_table_primary_idx SET (LOGICAL COMPACTION WINDOW = '1h');
                 > ALTER INDEX alter_index_source_primary_idx SET (LOGICAL COMPACTION WINDOW = '1h');
 
                 > INSERT INTO alter_index_table SELECT 'E' || generate_series FROM generate_series(1,10000);
-                $ kafka-ingest format=avro topic=alter-index schema=${schema} publish=true repeat=10000
+                $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "E${kafka-ingest.iteration}"}
                 """,
             ]
