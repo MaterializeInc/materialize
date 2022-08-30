@@ -159,7 +159,7 @@ name
 -----
 renamed_sink
 
-# Clean up temp view 
+# Clean up temp view
 > DROP VIEW public_objects;
 
 # Source was successfully renamed
