@@ -2157,13 +2157,13 @@ fn kafka_sink_builder(
     };
 
     if key_desc_and_indices.is_none() && avro_key_full_name.is_some() {
-        sql_bail!("Cannot specify avro_key_fullname without a corresponding KEY field");
+        sql_bail!("Cannot specify AVRO KEY FULL NAME without a corresponding KEY field");
     }
 
     if key_desc_and_indices.is_some()
         && (avro_key_full_name.is_some() ^ avro_value_full_name.is_some())
     {
-        sql_bail!("Must specify both avro_key_full_name and avro_value_full_name when specifying generated schema names");
+        sql_bail!("Must specify both AVRO KEY FULL NAME and AVRO VALUE FULL NAME when specifying generated schema names");
     }
 
     let format = match format {

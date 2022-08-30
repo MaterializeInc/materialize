@@ -2074,7 +2074,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(FACTOR)?;
                 KafkaConfigOptionName::ReplicationFactor
             }
-            RETENTION => match self.expect_one_of_keywords(&[BYTES, DURATION])? {
+            RETENTION => match self.expect_one_of_keywords(&[BYTES, MS])? {
                 BYTES => KafkaConfigOptionName::RetentionBytes,
                 MS => KafkaConfigOptionName::RetentionMs,
                 _ => unreachable!(),

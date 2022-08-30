@@ -102,8 +102,8 @@ name
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK snk3 FROM v3
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk3'
-  WITH (retention_bytes=1000000000000)
+  INTO KAFKA CONNECTION kafka_conn WITH (RETENTION BYTES = 1000000000000)
+  TOPIC 'snk3'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > SHOW SINKS
@@ -207,19 +207,19 @@ snk8        user
 # test explicit partition count
 > CREATE SINK snk9 FROM foo
   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk9'
-  WITH (partition_count=1)
+  WITH (PARTITION COUNT=1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # test explicit replication factor
 > CREATE SINK snk10 FROM foo
   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk10'
-  WITH (replication_factor=1)
+  WITH (REPLICATION FACTOR=1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # test explicit partition count and replication factor
 > CREATE SINK snk11 FROM foo
   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk11'
-  WITH (partition_count=1, replication_factor=1)
+  WITH (PARTITION COUNT=1, REPLICATION FACTOR=1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # test broker defaulted partition count and replication factor
@@ -230,5 +230,5 @@ snk8        user
 # test explicit request for broker defaulted partition count and replication factor
 > CREATE SINK snk13 FROM foo
   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk13'
-  WITH (partition_count=-1, replication_factor=-1)
+  WITH (PARTITION COUNT=-1, REPLICATION FACTOR=-1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

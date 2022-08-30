@@ -110,7 +110,6 @@ Distinct
 Dot
 Double
 Drop
-Duration
 Else
 Enable
 End
