@@ -421,7 +421,7 @@ $ set schema={
 A variable can be referenced in both the arguments and the body of a command.
 
 ```
-$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${schema} publish=true repeat=2
+$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${schema} repeat=2
 {"f1": "${schema}"}
 ```
 
@@ -686,10 +686,6 @@ The schema to use
 ##### `key-schema`
 
 For data that contains a key, the schema of the key
-
-##### `publish=true`
-
-Publish the schema and key schema provided to the schema registry.
 
 ##### `key-terminator=str`
 
