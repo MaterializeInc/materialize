@@ -318,7 +318,7 @@ where
                             // We are at the end of time, so our `as_of` is everything.
                             Some(Timestamp::MAX)
                         }
-                        Some(&0) => {
+                        Some(&Timestamp::MIN) => {
                             // We are the beginning of time (no data persisted yet), so we can
                             // skip reading out of persist.
                             None
@@ -366,8 +366,11 @@ where
                     // place and re-use. There seem to be enough instances of this
                     // by now.
                     fn split_ok_err(
-                        x: (Result<Row, DataflowError>, u64, Diff),
-                    ) -> Result<(Row, u64, Diff), (DataflowError, u64, Diff)> {
+                        x: (Result<Row, DataflowError>, mz_repr::Timestamp, Diff),
+                    ) -> Result<
+                        (Row, mz_repr::Timestamp, Diff),
+                        (DataflowError, mz_repr::Timestamp, Diff),
+                    > {
                         match x {
                             (Ok(row), ts, diff) => Ok((row, ts, diff)),
                             (Err(err), ts, diff) => Err((err, ts, diff)),

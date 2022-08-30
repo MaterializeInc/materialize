@@ -195,7 +195,10 @@ impl Arbitrary for SinkAsOf<mz_repr::Timestamp> {
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (proptest::collection::vec(any::<u64>(), 1..4), any::<bool>())
+        (
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
+            any::<bool>(),
+        )
             .prop_map(|(frontier, strict)| SinkAsOf {
                 frontier: Antichain::from(frontier),
                 strict,

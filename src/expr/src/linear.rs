@@ -1703,7 +1703,7 @@ pub mod plan {
                                 // An `Ok` conversion is a valid upper bound, and an `Err` error
                                 // indicates a value above `u64::MAX`. The `ok()` method does the
                                 // conversion we want to an `Option<u64>`.
-                                let v = u64::try_from(d.0).ok();
+                                let v = u64::try_from(d.0).ok().map(mz_repr::Timestamp::from);
                                 // Update `lower_bound` to be the maximum with `v`, where a `None`
                                 // value is treated as larger than `Some(_)` values.
                                 lower_bound = match (lower_bound, v) {
@@ -1755,7 +1755,7 @@ pub mod plan {
                                 // An `Ok` conversion is a valid upper bound, and an `Err` error
                                 // indicates a value above `u64::MAX`. The `ok()` method does the
                                 // conversion we want to an `Option<u64>`.
-                                let v = u64::try_from(d.0).ok();
+                                let v = u64::try_from(d.0).ok().map(mz_repr::Timestamp::from);
                                 // Update `upper_bound` to be the minimum with `v`, where a `None`
                                 // value is treated as larger than `Some(_)` values.
                                 upper_bound = match (upper_bound, v) {

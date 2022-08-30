@@ -321,7 +321,7 @@ impl ReadPolicy<mz_repr::Timestamp> {
             } else {
                 // Subtract the lag from the time, and then round down to a multiple thereof to cut chatter.
                 let mut time = upper[0];
-                if lag != 0 {
+                if lag != mz_repr::Timestamp::default() {
                     time = time.saturating_sub(lag);
                     time = time.saturating_sub(time % lag);
                 }

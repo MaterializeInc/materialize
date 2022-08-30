@@ -164,7 +164,7 @@ where
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures::task::waker(waker_activator);
 
-            let mut current_ts = 0;
+            let mut current_ts = timely::progress::Timestamp::minimum();
 
             move |cap_set, output| {
                 let mut context = Context::from_waker(&waker);
