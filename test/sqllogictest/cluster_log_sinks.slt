@@ -658,7 +658,7 @@ SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_dataflow_addresses_3) EXC
 ----
 
 query T
-SELECT port,worke_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal_3));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal_3));
 ----
 
 query T
