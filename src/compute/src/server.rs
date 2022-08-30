@@ -82,7 +82,6 @@ pub fn serve(
     let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
-    let has_networked_workers = config.comm_config.addresses.len() > 1;
 
     let (builders, other) =
         initialize_networking(config.comm_config).map_err(|e| anyhow!("{e}"))?;
@@ -111,7 +110,6 @@ pub fn serve(
                 compute_state: None,
                 trace_metrics: trace_metrics.clone(),
                 persist_clients,
-                has_networked_workers,
             }
             .run()
         },
@@ -166,8 +164,6 @@ struct Worker<'w, A: Allocate> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
-    /// Indicates if the timely instance has workers connected via network
-    has_networked_workers: bool,
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -332,10 +328,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 command => new_commands.push(command),
             }
         }
-
-        if self.compute_state.is_some() && self.has_networked_workers {
-            panic!("Reconciliation is supported only in process local timely instances");
-        };
 
         // Commands we will need to apply before entering normal service.
         // These commands may include dropping existing dataflows, compacting existing dataflows,

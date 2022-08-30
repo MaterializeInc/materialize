@@ -70,7 +70,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
         "test-cluster",
         "test-github-12251",
-        "test-github-13603",
         "test-remote-storaged",
         "test-drop-default-cluster",
         "test-upsert",
@@ -127,29 +126,6 @@ def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> Non
     # Leave only replica 2 up and verify that tests still pass.
     c.sql("DROP CLUSTER REPLICA cluster1.replica1")
     c.run("testdrive", *args.glob)
-
-
-def workflow_test_github_13603(c: Composition) -> None:
-    """Test that multi woker replicas terminate eagerly upon rehydration"""
-    c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.wait_for_materialized()
-
-    c.up("computed_1")
-    c.up("computed_2")
-    c.sql(
-        "CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100', 'computed_2:2100']));"
-    )
-
-    c.kill("materialized")
-    c.up("materialized")
-    c.wait_for_materialized()
-
-    # Ensure the computeds have crashed
-    c1 = c.invoke("logs", "computed_1", capture=True)
-    assert "panicked" in c1.stdout
-    c2 = c.invoke("logs", "computed_2", capture=True)
-    assert "panicked" in c2.stdout
 
 
 def workflow_test_github_12251(c: Composition) -> None:
