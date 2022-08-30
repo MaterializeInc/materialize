@@ -145,7 +145,8 @@ fn start_connections(
                 Ok(mut s) => {
                     s.set_nodelay(true).expect("set_nodelay call failed");
 
-                    s.write_all(&my_index.to_ne_bytes());
+                    s.write_all(&my_index.to_ne_bytes())
+                        .expect("failed to send worker index");
 
                     s.set_nonblocking(true)
                         .expect("set_nonblocking(true) call failed");
