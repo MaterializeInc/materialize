@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,6 +30,7 @@ use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
 use crate::fetch::fetch_batch_part;
 use crate::internal::machine::{retry_external, Machine};
+use crate::internal::paths::PartialBatchKey;
 use crate::internal::state::HollowBatch;
 use crate::internal::trace::FueledMergeRes;
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
@@ -130,15 +133,18 @@ impl Compactor {
             async move {
                 metrics.compaction.started.inc();
                 let start = Instant::now();
-                let res = Self::compact::<T, D>(
-                    cfg,
+
+                let bounded = BoundedCompactor::new(
+                    cfg.clone(),
                     Arc::clone(&blob),
                     Arc::clone(&metrics),
                     Arc::clone(&cpu_heavy_runtime),
-                    req,
-                    writer_id,
-                )
-                .await;
+                    req.shard_id,
+                    writer_id.clone(),
+                );
+
+                let res = bounded.compact::<T, D>(&req, usize::MAX).await;
+
                 metrics
                     .compaction
                     .seconds
@@ -247,6 +253,7 @@ impl Compactor {
                     desc: req.desc,
                     parts,
                     len,
+                    runs: vec![],
                 },
             })
         };
@@ -289,6 +296,333 @@ impl Compactor {
             ));
         }
         Ok(())
+    }
+}
+
+/// WIP
+pub struct BoundedCompactor {
+    cfg: PersistConfig,
+    blob: Arc<dyn Blob + Send + Sync>,
+    metrics: Arc<Metrics>,
+    cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    shard_id: ShardId,
+    writer_id: WriterId,
+}
+
+impl BoundedCompactor {
+    pub fn new(
+        cfg: PersistConfig,
+        blob: Arc<dyn Blob + Send + Sync>,
+        metrics: Arc<Metrics>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        shard_id: ShardId,
+        writer_id: WriterId,
+    ) -> Self {
+        Self {
+            cfg,
+            blob,
+            metrics,
+            cpu_heavy_runtime,
+            shard_id,
+            writer_id,
+        }
+    }
+
+    /// WIP
+    pub async fn compact<T, D>(
+        &self,
+        req: &CompactReq<T>,
+        memory_budget_bytes: usize,
+    ) -> Result<CompactRes<T>, anyhow::Error>
+    where
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        Compactor::validate_req(req)?;
+        // compaction needs memory enough for at least 2 fetched parts + 1 in-progress part
+        assert!(memory_budget_bytes >= 3 * self.cfg.blob_target_size);
+
+        let mut ordered_runs = BoundedCompactor::order_runs::<T, D>(&req);
+
+        let fetched_batch_memory_budget = memory_budget_bytes - self.cfg.blob_target_size;
+
+        // for now: assume each part is always blob_target_size. Given `memory_budget_bytes`
+        // this means we can carve off `memory_budget_bytes - blob_target_size` for pulling
+        // down parts from runs, leaving room for an in-progress part.
+        let runs_per_batch = fetched_batch_memory_budget / usize::max(self.cfg.blob_target_size, 1);
+
+        let mut all_parts = vec![];
+        let mut all_runs = vec![];
+        let mut len = 0;
+
+        let mut batch_parts = BatchParts::new(
+            self.cfg.batch_builder_max_outstanding_parts,
+            Arc::clone(&self.metrics),
+            self.shard_id,
+            self.writer_id.clone(),
+            req.desc.lower().clone(),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.cpu_heavy_runtime),
+            &self.metrics.compaction.batch,
+        );
+
+        for runs in ordered_runs.chunks_mut(runs_per_batch) {
+            let (parts, runs, updates) = self
+                .compact_runs::<T, D>(&req.desc, runs, &mut batch_parts)
+                .await?;
+            assert!((updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0));
+
+            if updates == 0 {
+                continue;
+            }
+
+            // merge together parts and runs from each compaction round.
+            // parts are appended onto our existing vec, and then we shift
+            // the latest run offsets to account for prior parts.
+            //
+            // e.g. if we currently have 3 parts and 2 runs (including the implicit one from 0):
+            //         parts: [k0, k1, k2]
+            //         runs:  [    1     ]
+            //
+            // and we merge in another result with 2 parts and 2 runs:
+            //         parts: [k3, k4]
+            //         runs:  [    1]
+            //
+            // we our result will contain 5 parts and 4 runs:
+            //         parts: [k0, k1, k2, k3, k4]
+            //         runs:  [    1       3   4 ]
+            let run_offset = all_parts.len();
+            if all_parts.len() > 0 {
+                all_runs.push(run_offset);
+            }
+            all_runs.extend(runs.iter().map(|run_start| run_start + run_offset));
+            all_parts.extend(parts);
+            len += updates;
+        }
+
+        Ok(CompactRes {
+            output: HollowBatch {
+                desc: req.desc.clone(),
+                keys: all_parts,
+                runs: all_runs,
+                len,
+            },
+        })
+    }
+
+    /// WIP: grab the first run from each batch, then the second, etc.
+    fn order_runs<T, D>(req: &CompactReq<T>) -> Vec<(&HollowBatch<T>, &[PartialBatchKey])>
+    where
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let mut all_runs = vec![];
+        for batch in &req.inputs {
+            all_runs.push((batch, batch.runs()));
+        }
+
+        // map our (Batch, [Runs]) to [(Batch, Run), ...]
+        let mut finished_iterators = 0;
+        let mut ordered_runs = vec![];
+        loop {
+            for (batch, runs) in &mut all_runs {
+                match runs.next() {
+                    Some(run) => ordered_runs.push((*batch, run)),
+                    None => finished_iterators += 1,
+                }
+            }
+
+            if finished_iterators >= all_runs.len() {
+                break;
+            }
+        }
+
+        ordered_runs
+    }
+
+    // WIP: Compacts runs together, pulling down one part at a time from each. If the runs are
+    //      already sorted, the result should be a single run. Memory is bounded by the # of
+    //      runs passed into this function, consuming at most (runs + 1) * blob_target_size
+    async fn compact_runs<T, D>(
+        &self,
+        desc: &Description<T>,
+        runs: &mut [(&HollowBatch<T>, &[PartialBatchKey])],
+        batch_parts: &mut BatchParts<T>,
+    ) -> Result<(Vec<PartialBatchKey>, Vec<usize>, usize), anyhow::Error>
+    where
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let mut compaction_runs = vec![];
+        let mut compaction_parts = vec![];
+        let mut total_updates = 0;
+
+        let mut heap = BinaryHeap::new();
+        let mut update_buffer: Vec<((Vec<u8>, Vec<u8>), T, D)> = Vec::new();
+        let mut update_buffer_size_bytes = 0;
+        let mut greatest_kv: Option<(Vec<u8>, Vec<u8>)> = None;
+
+        // we'll reference our runs by their index order in the original `runs` vec
+        let mut remaining_updates_by_run = vec![0; runs.len()];
+        let mut runs: Vec<_> = runs
+            .iter()
+            .map(|(batch, parts)| (batch, parts.into_iter()))
+            .collect();
+
+        // populate our heap with the updates from the first part of each run
+        for (index, (batch, parts)) in runs.iter_mut().enumerate() {
+            if let Some(key) = parts.next() {
+                fetch_batch_part(
+                    &self.shard_id,
+                    self.blob.as_ref(),
+                    &self.metrics,
+                    key,
+                    &batch.desc,
+                    |k, v, mut t, d| {
+                        t.advance_by(desc.since().borrow());
+                        let d = D::decode(d);
+                        let k = k.to_vec();
+                        let v = v.to_vec();
+                        // default heap ordering is descending
+                        heap.push(Reverse((((k, v), t, d), index)));
+                        remaining_updates_by_run[index] += 1;
+                    },
+                )
+                .await?;
+            }
+        }
+
+        // repeatedly pull off the least element from our heap, refilling from the originating run
+        // if needed. the heap will be exhausted only when all parts from all input runs have been
+        // consumed.
+        while let Some(Reverse((((k, v), t, d), index))) = heap.pop() {
+            remaining_updates_by_run[index] -= 1;
+            // if we've pulled off all the updates from a particular part,
+            // fetch the next part from its originating run
+            if remaining_updates_by_run[index] == 0 {
+                let (batch, parts) = &mut runs[index];
+                if let Some(key) = parts.next() {
+                    fetch_batch_part(
+                        &self.shard_id,
+                        self.blob.as_ref(),
+                        &self.metrics,
+                        key,
+                        &batch.desc,
+                        |k, v, mut t, d| {
+                            t.advance_by(desc.since().borrow());
+                            let d = D::decode(d);
+                            let k = k.to_vec();
+                            let v = v.to_vec();
+                            heap.push(Reverse((((k, v), t, d), index)));
+                            remaining_updates_by_run[index] += 1;
+                        },
+                    )
+                    .await?;
+                }
+            }
+
+            // both T and D are Codec64, ergo 8 bytes a piece
+            update_buffer_size_bytes += k.len() + v.len() + 16;
+            update_buffer.push(((k, v), t, d));
+
+            // if we're more than 90% into our target size, write out our part. this is an
+            // attempt to avoid writing blobs that are just at the threshold of `blob_target_size`
+            // where they could potentially spill over into two parts, a full one and a very
+            // small overflow
+            if update_buffer_size_bytes >= self.cfg.blob_target_size * 9 / 10 {
+                self.consolidate_run(
+                    &mut update_buffer,
+                    &mut compaction_runs,
+                    &mut compaction_parts,
+                    &mut greatest_kv,
+                    &mut total_updates,
+                );
+                self.write_run(
+                    batch_parts,
+                    &mut update_buffer,
+                    &mut compaction_parts,
+                    desc.clone(),
+                )
+                .await;
+                update_buffer_size_bytes = 0;
+            }
+        }
+
+        if update_buffer.len() > 0 {
+            self.consolidate_run(
+                &mut update_buffer,
+                &mut compaction_runs,
+                &mut compaction_parts,
+                &mut greatest_kv,
+                &mut total_updates,
+            );
+            self.write_run(
+                batch_parts,
+                &mut update_buffer,
+                &mut compaction_parts,
+                desc.clone(),
+            )
+            .await;
+        }
+
+        Ok((compaction_parts, compaction_runs, total_updates))
+    }
+
+    fn consolidate_run<T, D>(
+        &self,
+        updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
+        compaction_runs: &mut Vec<usize>,
+        compaction_keys: &mut Vec<PartialBatchKey>,
+        greatest_kv: &mut Option<(Vec<u8>, Vec<u8>)>,
+        total_updates: &mut usize,
+    ) where
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        consolidate_updates(updates);
+        *total_updates += updates.len();
+
+        match (&greatest_kv, updates.last()) {
+            // if our updates contain a key that exists within the range of a run we've
+            // already created, we should start a new run, as this part is no longer
+            // contiguous with the previous batch part and run
+            (Some(greatest_kv_seen), Some(greatest_kv_in_batch))
+                if *greatest_kv_seen > greatest_kv_in_batch.0 =>
+            {
+                compaction_runs.push(compaction_keys.len());
+            }
+            (_, Some(greatest_kv_in_batch)) => *greatest_kv = Some(greatest_kv_in_batch.0.clone()),
+            (Some(_), None) | (None, None) => {}
+        }
+    }
+
+    async fn write_run<T, D>(
+        &self,
+        batch_parts: &mut BatchParts<T>,
+        updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
+        compaction_keys: &mut Vec<PartialBatchKey>,
+        desc: Description<T>,
+    ) where
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let mut builder = ColumnarRecordsVecBuilder::new_with_len(self.cfg.blob_target_size);
+        for ((k, v), t, d) in updates.drain(..) {
+            builder.push(((&k, &v), T::encode(&t), D::encode(&d)));
+
+            // Flush out filled parts as we go to keep bounded memory use.
+            for chunk in builder.take_filled() {
+                batch_parts
+                    .write(chunk, desc.upper().clone(), desc.since().clone())
+                    .await;
+            }
+        }
+        for chunk in builder.finish() {
+            batch_parts
+                .write(chunk, desc.upper().clone(), desc.since().clone())
+                .await;
+        }
+        compaction_keys.extend_from_slice(&batch_parts.flush().await);
     }
 }
 

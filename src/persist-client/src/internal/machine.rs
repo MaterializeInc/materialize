@@ -784,7 +784,7 @@ mod tests {
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::fetch::fetch_batch_part;
-    use crate::internal::compact::{CompactReq, Compactor};
+    use crate::internal::compact::{BoundedCompactor, CompactReq};
     use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistConfig, ShardId};
@@ -957,7 +957,19 @@ mod tests {
                                     write!(s, "{k} {t} {d}\n");
                                 }
                             }
-                            if s.is_empty() {
+                            if !s.is_empty() {
+                                for (idx, run) in batch.runs().enumerate() {
+                                    write!(s, "<run {idx}>\n");
+                                    for part in run {
+                                        let part_idx = batch
+                                            .keys
+                                            .iter()
+                                            .position(|p| p == part)
+                                            .expect("part should exist");
+                                        write!(s, "part {part_idx}\n");
+                                    }
+                                }
+                            } else {
                                 s.push_str("<empty>\n");
                             }
                             s
@@ -991,6 +1003,8 @@ mod tests {
                             let since = get_u64(&tc.args, "since").expect("missing since");
                             let target_size = get_arg(&tc.args, "target_size")
                                 .map(|x| x.parse::<usize>().expect("invalid target_size"));
+                            let memory_budget = get_arg(&tc.args, "memory_budget")
+                                .map(|x| x.parse::<usize>().expect("invalid memory_budget"));
 
                             let mut inputs = Vec::new();
                             for input in tc.args.get("inputs").expect("missing inputs") {
@@ -1011,15 +1025,17 @@ mod tests {
                                 ),
                                 inputs,
                             };
-                            let res = Compactor::compact::<u64, i64>(
-                                cfg,
+                            let compactor = BoundedCompactor::new(
+                                cfg.clone(),
                                 Arc::clone(&client.blob),
                                 Arc::clone(&client.metrics),
                                 Arc::clone(&cpu_heavy_runtime),
-                                req,
+                                shard_id,
                                 WriterId::new(),
-                            )
-                            .await;
+                            );
+                            let res = compactor
+                                .compact::<u64, i64>(&req, memory_budget.unwrap_or(usize::MAX))
+                                .await;
                             match res {
                                 Ok(res) => {
                                     state.batches.insert(output.to_owned(), res.output.clone());

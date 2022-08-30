@@ -1,0 +1,168 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Compaction with memory bounds
+
+# this test assumes each (k, v, t, d) update is counted as 20 bytes
+#      (4 bytes for k, 0 for v, 8 for t, 8 for d)
+
+write-batch output=b0 lower=0 upper=3 target_size=0
+aaaa 0 1
+bbbb 1 1
+cccc 2 1
+----
+parts=3 len=3
+
+write-batch output=b1 lower=3 upper=6 target_size=0
+aaaa 3 1
+bbbb 4 1
+dddd 5 1
+----
+parts=3 len=3
+
+# compact b0 and b1 with enough memory and a large enough target size to hold all the keys
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=1000 memory_budget=3000
+----
+parts=1 len=4
+
+fetch-batch input=b0_1
+----
+<part 0>
+aaaa 6 2
+bbbb 6 2
+cccc 6 1
+dddd 6 1
+<run 0>
+part 0
+
+# compact b0 and b1 with enough memory for both runs, but a target size that can only hold 2 keys in mem at a time.
+# most importantly, we expect there to be a single run, as each input has a single run of ordered parts
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=40 memory_budget=1000
+----
+parts=3 len=4
+
+fetch-batch input=b0_1
+----
+<part 0>
+aaaa 6 2
+<part 1>
+bbbb 6 2
+<part 2>
+cccc 6 1
+dddd 6 1
+<run 0>
+part 0
+part 1
+part 2
+
+# introduce a new batch, that is *gasp* unordered
+write-batch output=b2 lower=6 upper=9 target_size=0
+ffff 7 1
+eeee 6 1
+aaaa 8 1
+----
+parts=3 len=3
+
+# compact b0, b1, b2 with enough memory for all runs and all keys. we expect a single part with a single run
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=1000 memory_budget=10000
+----
+parts=1 len=6
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+aaaa 8 3
+bbbb 8 2
+cccc 8 1
+dddd 8 1
+eeee 8 1
+ffff 8 1
+<run 0>
+part 0
+
+# compact b0, b1, b2 with enough memory for all keys, but only 2 runs at a time. this means
+# b0 and b1 will be physically compacted together, but b2 will be compacted in isolation.
+# we expect two part and two runs, one for (b0, b1) and (b2)
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=1000 memory_budget=3000
+----
+parts=2 len=7
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+aaaa 8 2
+bbbb 8 2
+cccc 8 1
+dddd 8 1
+<part 1>
+aaaa 8 1
+eeee 8 1
+ffff 8 1
+<run 0>
+part 0
+<run 1>
+part 1
+
+# compact b0, b1, b2 with enough memory for all runs, but a target size that can only hold 2 keys in mem at a time.
+# because b2 is out of order, we expect its entry for `aaaa` to appear in a separate run
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=40 memory_budget=1000
+----
+parts=5 len=7
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+aaaa 8 2
+<part 1>
+bbbb 8 2
+<part 2>
+cccc 8 1
+dddd 8 1
+<part 3>
+eeee 8 1
+ffff 8 1
+<part 4>
+aaaa 8 1
+<run 0>
+part 0
+part 1
+part 2
+part 3
+<run 1>
+part 4
+
+# compact b0, b1, b2 with enough memory for only 2 runs at a time, and a target size that can only hold 2 keys in mem at a time.
+# this means b0 and b1 will be physically compacted together, and then b2 compacted in isolation. evaluating b2 should
+# produce a new run, and then because of its out-of-order `aaaa` key, a third run should be created
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=40 memory_budget=120
+----
+parts=5 len=7
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+aaaa 8 2
+<part 1>
+bbbb 8 2
+<part 2>
+cccc 8 1
+dddd 8 1
+<part 3>
+eeee 8 1
+ffff 8 1
+<part 4>
+aaaa 8 1
+<run 0>
+part 0
+part 1
+part 2
+<run 1>
+part 3
+<run 2>
+part 4
