@@ -47,8 +47,8 @@ use mz_storage::types::connections::{
     StringOrSecret, TlsIdentity,
 };
 use mz_storage::types::sinks::{
-    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope,
-    StorageSinkConnectionBuilder,
+    KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
+    KafkaSinkFormat, SinkEnvelope, StorageSinkConnectionBuilder,
 };
 use mz_storage::types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -1934,8 +1934,13 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let consistency_config =
-        get_kafka_sink_consistency_config(scx, &topic_name, &format, consistency)?;
+    let consistency_config = get_kafka_sink_consistency_config(
+        scx,
+        &topic_name,
+        connection.progress_topic.as_ref().map(|s| s.as_str()),
+        &format,
+        consistency,
+    )?;
 
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
@@ -2014,9 +2019,10 @@ fn kafka_sink_builder(
 fn get_kafka_sink_consistency_config(
     scx: &StatementContext,
     topic_name: &str,
+    progress_topic_name: Option<&str>,
     sink_format: &KafkaSinkFormat,
     consistency: Option<KafkaConsistency<Aug>>,
-) -> Result<Option<(String, KafkaSinkFormat)>, PlanError> {
+) -> Result<KafkaConsistencyConfig, PlanError> {
     let result = match consistency {
         Some(KafkaConsistency {
             topic,
@@ -2049,19 +2055,22 @@ fn get_kafka_sink_consistency_config(
                     }
                 };
 
-                Some((
+                KafkaConsistencyConfig::Classic {
                     topic,
-                    KafkaSinkFormat::Avro {
+                    format: KafkaSinkFormat::Avro {
                         key_schema: None,
                         value_schema: avro::get_debezium_transaction_schema().canonical_form(),
                         csr_connection,
                     },
-                ))
+                }
             }
             None => {
                 // If a CONSISTENCY FORMAT is not provided, default to the FORMAT of the sink.
                 match sink_format {
-                    format @ KafkaSinkFormat::Avro { .. } => Some((topic, format.clone())),
+                    format @ KafkaSinkFormat::Avro { .. } => KafkaConsistencyConfig::Classic {
+                        topic,
+                        format: format.clone(),
+                    },
                     KafkaSinkFormat::Json => bail_unsupported!("CONSISTENCY FORMAT JSON"),
                 }
             }
@@ -2078,15 +2087,15 @@ fn get_kafka_sink_consistency_config(
                         "Using default consistency topic '{}' for topic '{}'",
                         default_consistency_topic, topic_name
                     );
-                    Some((
-                        default_consistency_topic,
-                        KafkaSinkFormat::Avro {
+                    KafkaConsistencyConfig::Classic {
+                        topic: default_consistency_topic,
+                        format: KafkaSinkFormat::Avro {
                             key_schema: None,
                             value_schema: avro::get_debezium_transaction_schema()
                                 .canonical_form(),
                             csr_connection: csr_connection.clone(),
                         },
-                    ))
+                    }
                 }
                 KafkaSinkFormat::Json => sql_bail!("For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY (TOPIC consistency_topic FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url)'. The default of using a JSON consistency topic is not supported."),
             }

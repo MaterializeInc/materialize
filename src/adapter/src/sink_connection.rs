@@ -16,9 +16,9 @@ use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
 use mz_storage::types::connections::{ConnectionContext, PopulateClientConfig};
 use mz_storage::types::sinks::{
-    KafkaSinkConnection, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
-    KafkaSinkConsistencyConnection, PublishedSchemaInfo, StorageSinkConnection,
-    StorageSinkConnectionBuilder,
+    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
+    KafkaSinkConnectionRetention, KafkaSinkConsistencyConnection, PublishedSchemaInfo,
+    StorageSinkConnection, StorageSinkConnectionBuilder,
 };
 
 use crate::error::AdapterError;
@@ -242,14 +242,15 @@ async fn build_kafka(
     };
 
     let consistency = match builder.consistency_config {
-        Some((
-            consistency_topic,
-            mz_storage::types::sinks::KafkaSinkFormat::Avro {
-                value_schema,
-                csr_connection,
-                ..
-            },
-        )) => {
+        KafkaConsistencyConfig::Classic {
+            topic: consistency_topic,
+            format:
+                mz_storage::types::sinks::KafkaSinkFormat::Avro {
+                    value_schema,
+                    csr_connection,
+                    ..
+                },
+        } => {
             // create consistency topic/schema and retrieve schema id
             ensure_kafka_topic(
                 &client,
@@ -280,7 +281,9 @@ async fn build_kafka(
                 schema_id: consistency_schema_id,
             })
         }
-        Some(other) => unreachable!("non-Avro consistency format for Kafka sink {:#?}", &other),
+        KafkaConsistencyConfig::Classic { topic: other, .. } => {
+            unreachable!("non-Avro consistency format for Kafka sink {:#?}", &other)
+        }
         _ => None,
     };
 

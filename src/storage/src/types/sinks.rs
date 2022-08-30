@@ -524,6 +524,18 @@ pub enum StorageSinkConnectionBuilder {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KafkaConsistencyConfig {
+    Yolo,
+    Classic {
+        topic: String,
+        format: KafkaSinkFormat,
+    },
+    Progress {
+        topic: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectionBuilder {
     pub connection_id: GlobalId,
     pub connection: KafkaConnection,
@@ -535,7 +547,7 @@ pub struct KafkaSinkConnectionBuilder {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
     pub topic_name: String,
-    pub consistency_config: Option<(String, KafkaSinkFormat)>,
+    pub consistency_config: KafkaConsistencyConfig,
     pub partition_count: i32,
     pub replication_factor: i32,
     pub fuel: usize,
