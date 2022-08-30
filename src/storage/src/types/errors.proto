@@ -47,8 +47,8 @@ message ProtoUpsertValueError {
 
 message ProtoUpsertError {
     oneof kind {
-	ProtoDecodeError key_decode = 1;
-	ProtoUpsertValueError value = 2;
+        ProtoDecodeError key_decode = 1;
+        ProtoUpsertValueError value = 2;
     }
 }
 
@@ -57,9 +57,9 @@ message ProtoUpsertError {
 // in the future.
 message ProtoEnvelopeErrorV1 {
     oneof kind {
-	string debezium = 1;
-	ProtoUpsertError upsert = 2;
-	string flat = 3;
+        string debezium = 1;
+        ProtoUpsertError upsert = 2;
+        string flat = 3;
     }
 }
 
@@ -69,6 +69,6 @@ message ProtoDataflowError {
         ProtoDecodeError decode_error = 1;
         mz_expr.scalar.ProtoEvalError eval_error = 2;
         ProtoSourceError source_error = 3;
-	ProtoEnvelopeErrorV1 envelope_error_v1 = 4;
+        ProtoEnvelopeErrorV1 envelope_error_v1 = 4;
     }
 }
