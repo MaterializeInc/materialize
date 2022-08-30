@@ -28,7 +28,7 @@ use tracing::trace;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::fetch::SerdeLeasedBatch;
+use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
@@ -84,25 +84,23 @@ pub fn persist_source_core<G>(
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
-    // WARNING! If emulating any of this code, you should read the doc string
-    // on [`LeasedBatch`] and [`Subscribe`] or will likely run into intentional
+    // WARNING! If emulating any of this code, you should read the doc string on
+    // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
     // panics.
     //
     // This source is split as such:
-    // 1. Sets up `async_stream`, which only yields data (hollow batches) on
-    //    one chosen worker. Generating hollow batches also generates
-    //    `consumed_batch` leases on the chosen worker, ensuring
-    //    `consumed_batch`s do not get GCed while in flight.
-    // 2. Batch distribution: A timely source operator which continuously reads
+    // 1. Sets up `async_stream`, which only yields data (parts) on one chosen
+    //    worker. Generating also generates SeqNo leases on the chosen worker,
+    //    ensuring `part`s do not get GCed while in flight.
+    // 2. Part distribution: A timely source operator which continuously reads
     //    from that stream, and distributes the data among workers.
-    // 3. Batch fetcher: A timely operator which downloads the batch's contents
+    // 3. Part fetcher: A timely operator which downloads the part's contents
     //    from S3, and outputs them to a timely stream. Additionally, the
-    //    operator returns the `ConsumedBatch` to the original worker, so it
-    //    can perform internal bookkeeping.
-    // 4. Consumed batch collector: A timely operator running only on the
-    //    original worker that collects workers' `LeasedBatch`es. Internally,
-    //    this drops the batch's `consumed_batch` lease, allowing compaction to
-    //    occur.
+    //    operator returns the `LeasedBatchPart` to the original worker, so it
+    //    can release the SeqNo lease.
+    // 4. Consumed part collector: A timely operator running only on the
+    //    original worker that collects workers' `LeasedBatchPart`s. Internally,
+    //    this drops the part's SeqNo lease, allowing GC to occur.
     let worker_index = scope.index();
     let peers = scope.peers();
     let chosen_worker = usize::cast_from(source_id.hashed()) % peers;
@@ -114,17 +112,17 @@ where
     let data_shard = metadata.data_shard.clone();
     let as_of_stream = as_of;
 
-    // Connects the consumed batch collector operator with the batch-issuing
+    // Connects the consumed part collector operator with the part-issuing
     // Subscribe.
-    let (consumed_batch_tx, mut consumed_batch_rx): (
-        mpsc::UnboundedSender<SerdeLeasedBatch>,
-        mpsc::UnboundedReceiver<SerdeLeasedBatch>,
+    let (consumed_part_tx, mut consumed_part_rx): (
+        mpsc::UnboundedSender<SerdeLeasedBatchPart>,
+        mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     ) = mpsc::unbounded_channel();
 
-    // This is a generator that sets up an async `Stream` that can be continously polled to get the
+    // This is a generator that sets up an async `Stream` that can be continuously polled to get the
     // values that are `yield`-ed from it's body.
     let async_stream = async_stream::try_stream!({
-        // Only one worker is responsible for distributing batches
+        // Only one worker is responsible for distributing parts
         if worker_index != chosen_worker {
             trace!(
                 "We are not the chosen worker ({}), exiting...",
@@ -149,8 +147,8 @@ where
             .expect("cannot serve requested as_of");
 
         loop {
-            while let Ok(leased_batch) = consumed_batch_rx.try_recv() {
-                subscription.return_leased_batch(leased_batch.into());
+            while let Ok(leased_part) = consumed_part_rx.try_recv() {
+                subscription.return_leased_part(leased_part.into());
             }
 
             yield subscription.next().await;
@@ -161,7 +159,7 @@ where
 
     let (inner, token) = crate::source::util::source(
         scope,
-        format!("persist_source {:?}: batch distribution", source_id),
+        format!("persist_source {:?}: part distribution", source_id),
         move |info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures::task::waker(waker_activator);
@@ -180,7 +178,7 @@ where
                             for part in parts {
                                 // Give the part to a random worker.
                                 let worker_idx = usize::cast_from(Instant::now().hashed()) % peers;
-                                session.give((worker_idx, part.get_droppable_batch()));
+                                session.give((worker_idx, part.into_exchangeable_part()));
                             }
 
                             cap_set.downgrade(progress.iter());
@@ -212,7 +210,7 @@ where
 
     let mut fetcher_builder = OperatorBuilder::new(
         format!(
-            "persist_source {:?}: batch fetcher {}",
+            "persist_source {:?}: part fetcher {}",
             worker_index, source_id
         ),
         scope.clone(),
@@ -223,10 +221,10 @@ where
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
     );
     let (mut update_output, update_output_stream) = fetcher_builder.new_output();
-    let (mut consumed_batch_output, consumed_batch_output_stream) = fetcher_builder.new_output();
+    let (mut consumed_part_output, consumed_part_output_stream) = fetcher_builder.new_output();
 
     let update_output_port = update_output_stream.name().port;
-    let consumed_batch_port = consumed_batch_output_stream.name().port;
+    let consumed_part_port = consumed_part_output_stream.name().port;
 
     fetcher_builder.build_async(
         scope.clone(),
@@ -248,30 +246,30 @@ where
             initial_capabilities.clear();
 
             let mut output_handle = update_output.activate();
-            let mut consumed_batch_output_handle = consumed_batch_output.activate();
+            let mut consumed_part_output_handle = consumed_part_output.activate();
 
             let mut buffer = Vec::new();
 
             while let Some((cap, data)) = fetcher_input.next() {
-                // `LeasedBatch`es cannot be dropped at this point w/o
+                // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 data.swap(&mut buffer);
 
                 let update_cap = cap.delayed_for_output(cap.time(), update_output_port);
                 let mut update_session = output_handle.session(&update_cap);
 
-                let consumed_batch_cap = cap.delayed_for_output(cap.time(), consumed_batch_port);
-                let mut consumed_batch_session =
-                    consumed_batch_output_handle.session(&consumed_batch_cap);
+                let consumed_part_cap = cap.delayed_for_output(cap.time(), consumed_part_port);
+                let mut consumed_part_session =
+                    consumed_part_output_handle.session(&consumed_part_cap);
 
-                for (_idx, batch) in buffer.drain(..) {
-                    let (consumed_batch, updates) = fetcher.fetch_batch(batch.into()).await;
+                for (_idx, part) in buffer.drain(..) {
+                    let (consumed_part, updates) = fetcher.fetch_leased_part(part.into()).await;
 
                     let mut updates = updates
                         .expect("shard_id generated for sources must match across all workers");
 
                     update_session.give_vec(&mut updates);
-                    consumed_batch_session.give(consumed_batch.get_droppable_batch());
+                    consumed_part_session.give(consumed_part.into_exchangeable_part());
                 }
             }
             false
@@ -279,22 +277,22 @@ where
     );
 
     // This operator is meant to only run on the chosen worker. All workers will
-    // exchange their fetched batches' `consumed_batch` back to the leasor.
-    let mut consumed_batch_builder = OperatorBuilder::new(
-        format!("persist_source {:?}: ConsumedBatch collector", source_id),
+    // exchange their fetched ("consumed") parts back to the leasor.
+    let mut consumed_part_builder = OperatorBuilder::new(
+        format!("persist_source {:?}: consumed part collector", source_id),
         scope.clone(),
     );
 
-    // Exchange all `consumed_batch`s back to the chosen worker/leasor.
-    let mut consumed_batch_input = consumed_batch_builder.new_input(
-        &consumed_batch_output_stream,
+    // Exchange all "consumed" parts back to the chosen worker/leasor.
+    let mut consumed_part_input = consumed_part_builder.new_input(
+        &consumed_part_output_stream,
         Exchange::new(move |_| u64::cast_from(chosen_worker)),
     );
 
     let last_token = Rc::new(token);
     let token = Rc::clone(&last_token);
 
-    consumed_batch_builder.build_async(
+    consumed_part_builder.build_async(
         scope.clone(),
         async_op!(|initial_capabilities, _frontiers| {
             initial_capabilities.clear();
@@ -310,17 +308,17 @@ where
 
             let mut buffer = Vec::new();
 
-            while let Some((_cap, data)) = consumed_batch_input.next() {
+            while let Some((_cap, data)) = consumed_part_input.next() {
                 data.swap(&mut buffer);
 
-                for batch in buffer.drain(..) {
-                    if let Err(mpsc::error::SendError(_batch)) = consumed_batch_tx.send(batch) {
+                for part in buffer.drain(..) {
+                    if let Err(mpsc::error::SendError(_part)) = consumed_part_tx.send(part) {
                         // Subscribe loop dropped, which drops its ReadHandle,
                         // which in turn drops all leases, so doing anything
                         // else here is both moot and impossible.
                         //
-                        // The batches we tried to send will just continue being
-                        // `SerdeLeasedBatch`'es.
+                        // The parts we tried to send will just continue being
+                        // `SerdeLeasedBatchPart`'es.
                     }
                 }
             }

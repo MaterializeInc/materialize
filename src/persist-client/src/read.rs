@@ -28,7 +28,9 @@ use uuid::Uuid;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
-use crate::fetch::{fetch_batch, BatchFetcher, LeasedBatch, SerdeLeasedBatchMetadata};
+use crate::fetch::{
+    fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPartMetadata,
+};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HollowBatch, Since};
@@ -69,7 +71,7 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    snapshot: Option<(Vec<LeasedBatch<T>>, Antichain<T>)>,
+    snapshot: Option<(Vec<LeasedBatchPart<T>>, Antichain<T>)>,
     listen: Listen<K, V, T, D>,
 }
 
@@ -81,40 +83,38 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn new(
-        snapshot_batches: Vec<LeasedBatch<T>>,
+        snapshot_parts: Vec<LeasedBatchPart<T>>,
         snapshot_as_of: Antichain<T>,
         listen: Listen<K, V, T, D>,
     ) -> Self {
         assert_eq!(snapshot_as_of, listen.as_of);
         Subscribe {
-            snapshot: Some((snapshot_batches, snapshot_as_of)),
+            snapshot: Some((snapshot_parts, snapshot_as_of)),
             listen,
         }
     }
 
     /// Returns a `HollowBatch` enriched with the proper metadata.
     ///
-    /// First returns snapshot batches, until they're exhausted, at which point
-    /// begins returning listen batches.
+    /// First returns snapshot parts, until they're exhausted, at which point
+    /// begins returning listen parts.
     ///
-    /// The returned Antichain represents the subscription progress as it will
-    /// be _after_ the returned batches are fetched.
+    /// The returned `Antichain` represents the subscription progress as it will
+    /// be _after_ the returned parts are fetched.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn next(&mut self) -> (Vec<LeasedBatch<T>>, Antichain<T>) {
+    pub async fn next(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
         match self.snapshot.take() {
             Some(x) => x,
-            None => self.listen.next_batch().await,
+            None => self.listen.next_parts().await,
         }
     }
 
-    /// Returns the given [`LeasedBatch`], releasing its lease.
-    pub fn return_leased_batch(&mut self, leased_batch: LeasedBatch<T>) {
-        self.listen
-            .handle
-            .process_returned_leased_batch(leased_batch)
+    /// Returns the given [`LeasedBatchPart`], releasing its lease.
+    pub fn return_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
+        self.listen.handle.process_returned_leased_part(leased_part)
     }
 }
 
@@ -187,12 +187,12 @@ where
 
     /// Attempt to pull out the next values of this subscription.
     ///
-    /// The returned [`LeasedBatch`] is appropriate to use with
-    /// `crate::fetch::fetch_batch`.
+    /// The returned [`LeasedBatchPart`] is appropriate to use with
+    /// `crate::fetch::fetch_leased_part`.
     ///
-    /// The returned Antichain represents the subscription progress as it will
-    /// be _after_ the returned batches are fetched.
-    pub async fn next_batch(&mut self) -> (Vec<LeasedBatch<T>>, Antichain<T>) {
+    /// The returned `Antichain` represents the subscription progress as it will
+    /// be _after_ the returned parts are fetched.
+    pub async fn next_parts(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
         // We might also want to call maybe_heartbeat_reader in the
         // `next_listen_batch` loop so that we can heartbeat even when batches
         // aren't incoming. At the moment, the ownership would be weird and we
@@ -256,7 +256,7 @@ where
         }
         self.handle.maybe_downgrade_since(&self.since).await;
 
-        let metadata = SerdeLeasedBatchMetadata::Listen {
+        let metadata = SerdeLeasedBatchPartMetadata::Listen {
             as_of: self.as_of.iter().map(T::encode).collect(),
             lower: self.frontier.iter().map(T::encode).collect(),
         };
@@ -281,17 +281,17 @@ where
     /// consolidated, come talk to us!
     #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
-        let (parts, progress) = self.next_batch().await;
+        let (parts, progress) = self.next_parts().await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
-            let (part, updates) = fetch_batch(
+            let (part, updates) = fetch_leased_part(
                 part,
                 self.handle.blob.as_ref(),
                 &self.handle.metrics,
                 Some(&self.handle.reader_id),
             )
             .await;
-            self.handle.process_returned_leased_batch(part);
+            self.handle.process_returned_leased_part(part);
             if !updates.is_empty() {
                 ret.push(ListenEvent::Updates(updates));
             }
@@ -450,15 +450,16 @@ where
         Ok(Listen::new(self, as_of).await)
     }
 
-    /// Returns a [`BatchFetcher`], which is only capable of fetching batches.
+    /// Returns a [`BatchFetcher`], which does not hold since or seqno
+    /// capabilities.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn batch_fetcher(self) -> BatchFetcher<K, V, T, D> {
         BatchFetcher::new(self).await
     }
 
     /// Returns all of the contents of the shard TVC at `as_of` broken up into
-    /// [`LeasedBatch`]es. These batches can be "turned in" via
-    /// `crate::fetch::fetch_batch` to receive the data they contain.
+    /// [`LeasedBatchPart`]es. These parts can be "turned in" via
+    /// `crate::fetch::fetch_batch_part` to receive the data they contain.
     ///
     /// This command returns the contents of this shard as of `as_of` once they
     /// are known. This may "block" (in an async-friendly way) if `as_of` is
@@ -470,21 +471,24 @@ where
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
     #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn snapshot(&mut self, as_of: Antichain<T>) -> Result<Vec<LeasedBatch<T>>, Since<T>> {
+    pub async fn snapshot(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Vec<LeasedBatchPart<T>>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
-        let metadata = SerdeLeasedBatchMetadata::Snapshot {
+        let metadata = SerdeLeasedBatchPartMetadata::Snapshot {
             as_of: as_of.iter().map(T::encode).collect(),
         };
-        let mut leased_batches = Vec::new();
+        let mut leased_parts = Vec::new();
         for batch in batches {
-            // Flatten the HollowBatch into one LeasedBatch per key. Each key
+            // Flatten the HollowBatch into one LeasedBatchPart per key. Each key
             // corresponds to a "part" or s3 object. This allows persist_source
             // to distribute work by parts (smallish, more even size) instead of
             // batches (arbitrarily large).
-            leased_batches.extend(self.lease_batch_parts(batch, metadata.clone()));
+            leased_parts.extend(self.lease_batch_parts(batch, metadata.clone()));
         }
-        Ok(leased_batches)
+        Ok(leased_parts)
     }
 
     /// Generates a [Self::snapshot], and fetches all of the batches
@@ -497,14 +501,14 @@ where
 
         let mut contents = Vec::new();
         for batch in snap {
-            let (batch, mut r) = fetch_batch(
+            let (batch, mut r) = fetch_leased_part(
                 batch,
                 self.blob.as_ref(),
                 &self.metrics,
                 Some(&self.reader_id),
             )
             .await;
-            self.process_returned_leased_batch(batch);
+            self.process_returned_leased_part(batch);
             contents.append(&mut r);
         }
         Ok(contents)
@@ -520,17 +524,17 @@ where
         mut self,
         as_of: Antichain<T>,
     ) -> Result<Subscribe<K, V, T, D>, Since<T>> {
-        let snapshot_batches = self.snapshot(as_of.clone()).await?;
+        let snapshot_parts = self.snapshot(as_of.clone()).await?;
         let listen = self.listen(as_of.clone()).await?;
-        Ok(Subscribe::new(snapshot_batches, as_of, listen))
+        Ok(Subscribe::new(snapshot_parts, as_of, listen))
     }
 
     fn lease_batch_parts(
         &mut self,
         batch: HollowBatch<T>,
-        metadata: SerdeLeasedBatchMetadata,
-    ) -> impl Iterator<Item = LeasedBatch<T>> + '_ {
-        batch.keys.into_iter().map(move |key| LeasedBatch {
+        metadata: SerdeLeasedBatchPartMetadata,
+    ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
+        batch.keys.into_iter().map(move |key| LeasedBatchPart {
             shard_id: self.machine.shard_id(),
             reader_id: self.reader_id.clone(),
             metadata: metadata.clone(),
@@ -551,14 +555,14 @@ where
         seqno
     }
 
-    /// Processes that a batch issued from `self` has been consumed, and `self`
+    /// Processes that a part issued from `self` has been consumed, and `self`
     /// can now process any internal bookkeeping.
     ///
     /// # Panics
-    /// - If `self` does not have record of issuing the [`LeasedBatch`], e.g.
+    /// - If `self` does not have record of issuing the [`LeasedBatchPart`], e.g.
     ///   it originated from from another `ReadHandle`.
-    pub(crate) fn process_returned_leased_batch(&mut self, mut leased_batch: LeasedBatch<T>) {
-        if let Some(lease) = leased_batch.return_lease(&self.reader_id) {
+    pub(crate) fn process_returned_leased_part(&mut self, mut leased_part: LeasedBatchPart<T>) {
+        if let Some(lease) = leased_part.return_lease(&self.reader_id) {
             // Tracks that a `SeqNo` lease has been returned and can be dropped. Once
             // a `SeqNo` has no more outstanding leases, it can be removed, and
             // `Self::downgrade_since` no longer needs to prevent it from being
@@ -727,7 +731,7 @@ where
 mod tests {
     use crate::tests::new_test_client;
 
-    // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatch` semantics.
+    // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
     #[tokio::test]
     async fn seqno_leases() {
         mz_ore::test::init_logging();
@@ -764,13 +768,13 @@ mod tests {
         // Determine sequence number at outset.
         let original_seqno_since = subscribe.listen.handle.machine.seqno_since();
 
-        let mut batches = vec![];
+        let mut parts = vec![];
 
         width = 4;
-        // Collect batches while continuing to write values
+        // Collect parts while continuing to write values
         for i in offset..offset + width {
-            let (mut parts, _) = subscribe.next().await;
-            batches.append(&mut parts);
+            let (mut new_parts, _) = subscribe.next().await;
+            parts.append(&mut new_parts);
             // Here and elsewhere we "cheat" and immediately downgrade the since
             // to demonstrate the effects of SeqNo leases immediately.
             subscribe
@@ -797,30 +801,30 @@ mod tests {
         // We're starting out with the original, non-downgraded SeqNo
         assert_eq!(seqno_since, original_seqno_since);
 
-        // We have to handle the batches we generate during the next loop to
+        // We have to handle the parts we generate during the next loop to
         // ensure they don't panic.
-        let mut subsequent_batches = vec![];
+        let mut subsequent_parts = vec![];
 
         // Ensure monotonicity of seqnos we're processing, otherwise the
-        // invariant we're testing (returning the last batch of a seqno will
+        // invariant we're testing (returning the last part of a seqno will
         // downgrade its since) will not hold.
         let mut this_seqno = None;
 
-        // Repeat the same process as above, more or less, while fetching + returning batches
-        for (mut i, batch) in batches.into_iter().enumerate() {
-            let batch_seqno = batch.leased_seqno.unwrap();
-            let last_seqno = this_seqno.replace(batch_seqno);
+        // Repeat the same process as above, more or less, while fetching + returning parts
+        for (mut i, part) in parts.into_iter().enumerate() {
+            let part_seqno = part.leased_seqno.unwrap();
+            let last_seqno = this_seqno.replace(part_seqno);
             assert!(last_seqno.is_none() || this_seqno >= last_seqno);
 
-            let (batch, _) = fetcher.fetch_batch(batch).await;
+            let (part, _) = fetcher.fetch_leased_part(part).await;
 
             // Emulating drop
-            subscribe.return_leased_batch(batch);
+            subscribe.return_leased_part(part);
 
             // Simulates an exchange
             let (parts, _) = subscribe.next().await;
             for part in parts {
-                subsequent_batches.push(part.get_droppable_batch());
+                subsequent_parts.push(part.into_exchangeable_part());
             }
 
             subscribe
@@ -835,13 +839,13 @@ mod tests {
                 .expect_compare_and_append(&data[i..i + 1], i as u64, i as u64 + 1)
                 .await;
 
-            // We should expect the SeqNo to be downgraded if this batch's SeqNo
-            // is no longer leased to any other batches, either.
+            // We should expect the SeqNo to be downgraded if this part's SeqNo
+            // is no longer leased to any other parts, either.
             let expect_downgrade = subscribe
                 .listen
                 .handle
                 .leased_seqnos
-                .get(&batch_seqno)
+                .get(&part_seqno)
                 .is_none();
 
             let new_seqno_since = subscribe.listen.handle.machine.seqno_since();
@@ -856,9 +860,9 @@ mod tests {
         // SeqNo since was downgraded
         assert!(seqno_since > original_seqno_since);
 
-        // Return any outstanding batches, to prevent a panic!
-        for batch in subsequent_batches {
-            subscribe.return_leased_batch(crate::fetch::LeasedBatch::from(batch));
+        // Return any outstanding parts, to prevent a panic!
+        for part in subsequent_parts {
+            subscribe.return_leased_part(part.into());
         }
 
         drop(subscribe);
