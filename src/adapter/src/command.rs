@@ -611,6 +611,7 @@ impl ExecuteResponse {
     pub fn generated_from(plan: PlanKind) -> Vec<ExecuteResponseKind> {
         use ExecuteResponseKind::*;
         use PlanKind::*;
+
         match plan {
             AbortTransaction | CommitTransaction => vec![TransactionExited],
             AlterItemRename | AlterNoop | AlterSecret | AlterSource | RotateKeys => {
@@ -634,7 +635,8 @@ impl ExecuteResponse {
             CreateSecret => vec![CreatedSecret],
             CreateSink => vec![CreatedSink],
             CreateTable => vec![CreatedTable],
-            CreateView | CreateViews => vec![CreatedView],
+            CreateView => vec![CreatedView],
+            CreateViews => vec![CreatedViews],
             CreateMaterializedView => vec![CreatedMaterializedView],
             CreateIndex => vec![CreatedIndex],
             CreateType => vec![CreatedType],
@@ -660,14 +662,13 @@ impl ExecuteResponse {
             ],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
             Explain | Peek | SendRows | ShowAllVariables | ShowVariable => {
-                vec![SendingRows]
+                vec![CopyTo, SendingRows]
             }
-            Execute => vec![],
+            Execute | ReadThenWrite | SendDiffs => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
             Insert => vec![Inserted, SendingRows],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raise],
-            ReadThenWrite | SendDiffs => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
             Tail => vec![Tailing, CopyTo],
             StartTransaction => vec![StartedTransaction],
