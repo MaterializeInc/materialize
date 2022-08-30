@@ -93,7 +93,7 @@ fn gc_broken_connections<'a, I>(conns: I, first_idx: usize)
 where
     I: IntoIterator<Item = &'a mut Option<TcpStream>>,
 {
-    let mut buf = [0; 1024];
+    let mut buf = [0];
     for (i, maybe_conn) in conns.into_iter().enumerate() {
         info!("peeking... {}", first_idx + i);
         if let Some(conn) = maybe_conn {
