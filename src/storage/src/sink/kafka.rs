@@ -102,23 +102,19 @@ where
         G: Scope<Timestamp = Timestamp>,
     {
         // consistent/exactly-once Kafka sinks need the timestamp in the row
-        let sinked_collection = if self.consistency.is_some() {
-            sinked_collection
-                .inner
-                .map(|((k, v), t, diff)| {
-                    let v = v.map(|mut v| {
-                        let t = t.to_string();
-                        RowPacker::for_existing_row(&mut v).push_list_with(|rp| {
-                            rp.push(Datum::String(&t));
-                        });
-                        v
+        let sinked_collection = sinked_collection
+            .inner
+            .map(|((k, v), t, diff)| {
+                let v = v.map(|mut v| {
+                    let t = t.to_string();
+                    RowPacker::for_existing_row(&mut v).push_list_with(|rp| {
+                        rp.push(Datum::String(&t));
                     });
-                    ((k, v), t, diff)
-                })
-                .as_collection()
-        } else {
-            sinked_collection
-        };
+                    v
+                });
+                ((k, v), t, diff)
+            })
+            .as_collection();
 
         // TODO: this is a brittle way to indicate the worker that will write to the sink
         // because it relies on us continuing to hash on the sink_id, with the same hash
