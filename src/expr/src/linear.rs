@@ -1447,6 +1447,12 @@ pub mod plan {
             }
             Ok(true)
         }
+
+        /// Returns true if evaluation could introduce an error on non-error inputs.
+        pub fn could_error(&self) -> bool {
+            self.mfp.predicates.iter().any(|(_pos, e)| e.could_error())
+                || self.mfp.expressions.iter().any(|e| e.could_error())
+        }
     }
 
     impl std::ops::Deref for SafeMfpPlan {
@@ -1824,6 +1830,13 @@ pub mod plan {
             } else {
                 None.into_iter().chain(None.into_iter())
             }
+        }
+
+        /// Returns true if evaluation could introduce an error on non-error inputs.
+        pub fn could_error(&self) -> bool {
+            self.mfp.could_error()
+                || self.lower_bounds.iter().any(|e| e.could_error())
+                || self.upper_bounds.iter().any(|e| e.could_error())
         }
     }
 }

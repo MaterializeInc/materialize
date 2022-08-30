@@ -2865,6 +2865,19 @@ impl BinaryFunc {
             _ => None,
         }
     }
+
+    /// Returns true if the function could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        match self {
+            BinaryFunc::Eq
+            | BinaryFunc::NotEq
+            | BinaryFunc::Lt
+            | BinaryFunc::Gte
+            | BinaryFunc::Gt
+            | BinaryFunc::Lte => false,
+            _ => true,
+        }
+    }
 }
 
 impl fmt::Display for BinaryFunc {
@@ -3961,6 +3974,14 @@ impl UnaryFunc {
             UnaryFunc::IsTrue(_) => Some("TRUE"),
             UnaryFunc::IsFalse(_) => Some("FALSE"),
             _ => None,
+        }
+    }
+
+    /// Returns true if the function could introduce an error on non-error input.
+    pub fn could_error(&self) -> bool {
+        match self {
+            UnaryFunc::IsNull(_) | UnaryFunc::CastVarCharToString(_) | UnaryFunc::Not(_) => false,
+            _ => true,
         }
     }
 }
@@ -6365,6 +6386,15 @@ impl VariadicFunc {
             VariadicFunc::And => MirScalarExpr::literal_false(),
             VariadicFunc::Or => MirScalarExpr::literal_true(),
             _ => unreachable!(),
+        }
+    }
+
+    /// Returns true if the function could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        match self {
+            VariadicFunc::And | VariadicFunc::Or => false,
+            // All other cases are unknown
+            _ => true,
         }
     }
 }

@@ -218,13 +218,13 @@ where
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self.differential_join_inner(local, oks, closure);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.push(errs2);
+                    errors.extend(errs2);
                     oks
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self.differential_join_inner(local, oks, closure);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.push(errs2);
+                    errors.extend(errs2);
                     oks
                 }
             },
@@ -232,13 +232,13 @@ where
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.push(errs2);
+                    errors.extend(errs2);
                     oks
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.push(errs2);
+                    errors.extend(errs2);
                     oks
                 }
             },
@@ -248,12 +248,18 @@ where
     /// Joins the arrangement for `next_input` to the arranged version of the
     /// join of previous inputs. This is split into its own method to enable
     /// reuse of code with different types of `next_input`.
+    ///
+    /// The return type includes an optional error collection, which may be
+    /// `None` if we can determine that `closure` cannot error.
     fn differential_join_inner<J, Tr2>(
         &mut self,
         prev_keyed: J,
         next_input: Arranged<G, Tr2>,
         closure: JoinClosure,
-    ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
+    ) -> (
+        Collection<G, Row, Diff>,
+        Option<Collection<G, DataflowError, Diff>>,
+    )
     where
         J: JoinCore<G, Row, Row, mz_repr::Diff>,
         Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = mz_repr::Diff>
@@ -267,24 +273,36 @@ where
         let mut datums = DatumVec::new();
         let mut row_builder = Row::default();
 
-        let (oks, err) = prev_keyed
-            .join_core(&next_input, move |key, old, new| {
+        if closure.could_error() {
+            let (oks, err) = prev_keyed
+                .join_core(&next_input, move |key, old, new| {
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datums.borrow_with_many(&[key, old, new]);
+                    closure
+                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                        .map_err(DataflowError::from)
+                        .transpose()
+                })
+                .inner
+                .ok_err(|(x, t, d)| {
+                    // TODO(mcsherry): consider `ok_err()` for `Collection`.
+                    match x {
+                        Ok(x) => Ok((x, t, d)),
+                        Err(x) => Err((x, t, d)),
+                    }
+                });
+
+            (oks.as_collection(), Some(err.as_collection()))
+        } else {
+            let oks = prev_keyed.join_core(&next_input, move |key, old, new| {
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow_with_many(&[key, old, new]);
                 closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                    .map_err(DataflowError::from)
-                    .transpose()
-            })
-            .inner
-            .ok_err(|(x, t, d)| {
-                // TODO(mcsherry): consider `ok_err()` for `Collection`.
-                match x {
-                    Ok(x) => Ok((x, t, d)),
-                    Err(x) => Err((x, t, d)),
-                }
+                    .expect("Closure claimed to never error")
             });
 
-        (oks.as_collection(), err.as_collection())
+            (oks, None)
+        }
     }
 }
