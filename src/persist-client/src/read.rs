@@ -9,7 +9,7 @@
 
 //! Read capabilities and handles
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
@@ -68,7 +68,7 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    snapshot_batches: VecDeque<LeasedBatch<T>>,
+    snapshot: Option<(Vec<LeasedBatch<T>>, Antichain<T>)>,
     listen: Listen<K, V, T, D>,
 }
 
@@ -79,9 +79,14 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    fn new(snapshot_batches: VecDeque<LeasedBatch<T>>, listen: Listen<K, V, T, D>) -> Self {
+    fn new(
+        snapshot_batches: Vec<LeasedBatch<T>>,
+        snapshot_as_of: Antichain<T>,
+        listen: Listen<K, V, T, D>,
+    ) -> Self {
+        assert_eq!(snapshot_as_of, listen.as_of);
         Subscribe {
-            snapshot_batches,
+            snapshot: Some((snapshot_batches, snapshot_as_of)),
             listen,
         }
     }
@@ -90,13 +95,16 @@ where
     ///
     /// First returns snapshot batches, until they're exhausted, at which point
     /// begins returning listen batches.
+    ///
+    /// The returned Antichain represents the subscription progress as it will
+    /// be _after_ the returned batches are fetched.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn next(&mut self) -> LeasedBatch<T> {
+    pub async fn next(&mut self) -> (Vec<LeasedBatch<T>>, Antichain<T>) {
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
-        match self.snapshot_batches.pop_front() {
-            Some(batch) => batch,
+        match self.snapshot.take() {
+            Some(x) => x,
             None => self.listen.next_batch().await,
         }
     }
@@ -180,7 +188,10 @@ where
     ///
     /// The returned [`LeasedBatch`] is appropriate to use with
     /// `crate::fetch::fetch_batch`.
-    pub async fn next_batch(&mut self) -> LeasedBatch<T> {
+    ///
+    /// The returned Antichain represents the subscription progress as it will
+    /// be _after_ the returned batches are fetched.
+    pub async fn next_batch(&mut self) -> (Vec<LeasedBatch<T>>, Antichain<T>) {
         // We might also want to call maybe_heartbeat_reader in the
         // `next_listen_batch` loop so that we can heartbeat even when batches
         // aren't incoming. At the moment, the ownership would be weird and we
@@ -242,23 +253,19 @@ where
                 self.since.join_assign(&Antichain::from_elem(x.clone()));
             }
         }
-
         self.handle.maybe_downgrade_since(&self.since).await;
 
-        let r = LeasedBatch {
-            shard_id: self.handle.machine.shard_id(),
-            reader_id: self.handle.reader_id.clone(),
-            metadata: crate::fetch::LeasedBatchMetadata::Listen {
-                as_of: self.as_of.clone(),
-                until: self.frontier.clone(),
-            },
-            batch,
-            leased_seqno: Some(self.handle.lease_seqno()),
+        let metadata = LeasedBatchMetadata::Listen {
+            as_of: self.as_of.clone(),
+            until: self.frontier.clone(),
         };
+        let parts = self.handle.lease_batch_parts(batch, metadata).collect();
 
-        // NB: Keep this after we use self.frontier to join_assign self.since.
+        // NB: Keep this after we use self.frontier to join_assign self.since
+        // and also after we construct metadata.
         self.frontier = new_frontier;
-        r
+
+        (parts, self.frontier.clone())
     }
 
     /// Attempt to pull out the next values of this subscription.
@@ -273,22 +280,20 @@ where
     /// consolidated, come talk to us!
     #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
-        let batch = self.next_batch().await;
-        let progress = batch.batch.desc.upper().clone();
-
-        let (batch, updates) = fetch_batch(
-            batch,
-            self.handle.blob.as_ref(),
-            &self.handle.metrics,
-            Some(&self.handle.reader_id),
-        )
-        .await;
-
-        self.handle.process_returned_leased_batch(batch);
-
-        let mut ret = Vec::with_capacity(2);
-        if !updates.is_empty() {
-            ret.push(ListenEvent::Updates(updates));
+        let (parts, progress) = self.next_batch().await;
+        let mut ret = Vec::with_capacity(parts.len() + 1);
+        for part in parts {
+            let (part, updates) = fetch_batch(
+                part,
+                self.handle.blob.as_ref(),
+                &self.handle.metrics,
+                Some(&self.handle.reader_id),
+            )
+            .await;
+            self.handle.process_returned_leased_batch(part);
+            if !updates.is_empty() {
+                ret.push(ListenEvent::Updates(updates));
+            }
         }
         ret.push(ListenEvent::Progress(progress));
         ret
@@ -467,37 +472,19 @@ where
     pub async fn snapshot(&mut self, as_of: Antichain<T>) -> Result<Vec<LeasedBatch<T>>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
+        let metadata = LeasedBatchMetadata::Snapshot { as_of };
         let mut leased_batches = Vec::new();
         for batch in batches {
             // Flatten the HollowBatch into one LeasedBatch per key. Each key
             // corresponds to a "part" or s3 object. This allows persist_source
             // to distribute work by parts (smallish, more even size) instead of
             // batches (arbitrarily large).
-            //
-            // TODO: Do the same for Listen batches. It's tricker because of the
-            // progress.
-            for key in batch.keys {
-                leased_batches.push(LeasedBatch {
-                    shard_id: self.machine.shard_id(),
-                    reader_id: self.reader_id.clone(),
-                    metadata: LeasedBatchMetadata::Snapshot {
-                        as_of: as_of.clone(),
-                    },
-                    batch: HollowBatch {
-                        desc: batch.desc.clone(),
-                        keys: vec![key.clone()],
-                        // This isn't quite right, but it's not used by anything
-                        // take operates on the leased_batch.
-                        len: batch.len,
-                    },
-                    leased_seqno: Some(self.lease_seqno()),
-                });
-            }
+            leased_batches.extend(self.lease_batch_parts(batch, metadata.clone()));
         }
         Ok(leased_batches)
     }
 
-    /// Generates a [shapshot](Self::snapshot), and fetches all of the batches
+    /// Generates a [Self::snapshot], and fetches all of the batches
     /// it contains.
     pub async fn snapshot_and_fetch(
         &mut self,
@@ -530,13 +517,35 @@ where
         mut self,
         as_of: Antichain<T>,
     ) -> Result<Subscribe<K, V, T, D>, Since<T>> {
-        let snapshot_batches = self.snapshot(as_of.clone()).await?.into();
-        let listen = self.listen(as_of).await?;
-        Ok(Subscribe::new(snapshot_batches, listen))
+        let snapshot_batches = self.snapshot(as_of.clone()).await?;
+        let listen = self.listen(as_of.clone()).await?;
+        Ok(Subscribe::new(snapshot_batches, as_of, listen))
+    }
+
+    fn lease_batch_parts(
+        &mut self,
+        batch: HollowBatch<T>,
+        metadata: LeasedBatchMetadata<T>,
+    ) -> impl Iterator<Item = LeasedBatch<T>> + '_ {
+        batch.keys.into_iter().map(move |key| {
+            LeasedBatch {
+                shard_id: self.machine.shard_id(),
+                reader_id: self.reader_id.clone(),
+                metadata: metadata.clone(),
+                batch: HollowBatch {
+                    desc: batch.desc.clone(),
+                    keys: vec![key],
+                    // This isn't quite right, but it's not used by anything
+                    // take operates on the leased_batch.
+                    len: batch.len,
+                },
+                leased_seqno: Some(self.lease_seqno()),
+            }
+        })
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
-    /// "leased out" to a `ReaderEncirchedHollowBatch`, and cannot be garbage
+    /// "leased out" to a `LeasedBatchPart`, and cannot be garbage
     /// collected until its lease has been returned.
     fn lease_seqno(&mut self) -> SeqNo {
         let seqno = self.machine.seqno();
@@ -674,7 +683,7 @@ where
         let mut ret = self
             .snapshot_and_fetch(Antichain::from_elem(as_of))
             .await
-            .expect("cannot serve rrequested as_of");
+            .expect("cannot serve requested as_of");
 
         ret.sort();
         ret
@@ -727,7 +736,7 @@ mod tests {
     async fn seqno_leases() {
         mz_ore::test::init_logging();
         let mut data = vec![];
-        for i in 0..10 {
+        for i in 0..20 {
             data.push(((i.to_string(), i.to_string()), i, 1))
         }
 
@@ -764,9 +773,10 @@ mod tests {
         width = 4;
         // Collect batches while continuing to write values
         for i in offset..offset + width {
-            batches.push(subscribe.next().await);
+            let (mut parts, _) = subscribe.next().await;
+            batches.append(&mut parts);
             // Here and elsewhere we "cheat" and immediately downgrade the since
-            // to demonstate the effects of SeqNo leases immediately.
+            // to demonstrate the effects of SeqNo leases immediately.
             subscribe
                 .listen
                 .handle
@@ -812,7 +822,10 @@ mod tests {
             subscribe.return_leased_batch(batch);
 
             // Simulates an exchange
-            subsequent_batches.push(subscribe.next().await.get_droppable_batch());
+            let (parts, _) = subscribe.next().await;
+            for part in parts {
+                subsequent_batches.push(part.get_droppable_batch());
+            }
 
             subscribe
                 .listen

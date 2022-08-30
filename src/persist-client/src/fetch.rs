@@ -398,15 +398,6 @@ where
         SerdeLeasedBatch::from(self)
     }
 
-    /// Signals whether or not `self` should downgrade the `Capability` its
-    /// presented alongside.
-    pub fn generate_progress(&self) -> Option<Antichain<T>> {
-        match self.metadata {
-            LeasedBatchMetadata::Listen { .. } => Some(self.batch.desc.upper().clone()),
-            LeasedBatchMetadata::Snapshot { .. } => None,
-        }
-    }
-
     /// Because sources get dropped without notice, we need to permit another
     /// operator to safely expire leases.
     ///

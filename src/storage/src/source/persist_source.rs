@@ -173,25 +173,24 @@ where
 
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
                     match item {
-                        Some(Ok(batch)) => {
+                        Some(Ok((parts, progress))) => {
                             let session_cap = cap_set.delayed(&current_ts);
                             let mut session = output.session(&session_cap);
 
-                            // Give the batch to a random worker.
-                            let worker_idx = usize::cast_from(Instant::now().hashed()) % peers;
-                            let progress = batch.generate_progress();
-                            session.give((worker_idx, batch.get_droppable_batch()));
+                            for part in parts {
+                                // Give the part to a random worker.
+                                let worker_idx = usize::cast_from(Instant::now().hashed()) % peers;
+                                session.give((worker_idx, part.get_droppable_batch()));
+                            }
 
-                            if let Some(frontier) = progress {
-                                cap_set.downgrade(frontier.iter());
-                                match frontier.into_option() {
-                                    Some(ts) => {
-                                        current_ts = ts;
-                                    }
-                                    None => {
-                                        cap_set.downgrade(&[]);
-                                        return;
-                                    }
+                            cap_set.downgrade(progress.iter());
+                            match progress.into_option() {
+                                Some(ts) => {
+                                    current_ts = ts;
+                                }
+                                None => {
+                                    cap_set.downgrade(&[]);
+                                    return;
                                 }
                             }
                         }
