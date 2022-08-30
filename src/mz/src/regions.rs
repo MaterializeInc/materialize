@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::utils::exit_with_fail_message;
+use crate::utils::{exit_with_fail_message, CloudProviderRegion};
 use crate::{
-    CloudProvider, CloudProviderRegion, ExitMessage, FronteggAuthMachine,
-    Region, CLOUD_PROVIDERS_URL, Environment,
+    CloudProvider, ExitMessage, FronteggAuthMachine,
+    Region, CLOUD_PROVIDERS_URL, Environment, CloudProviderAndRegion,
 };
 
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ use reqwest::{Client, Error};
 fn format_region_url(cloud_provider_region: CloudProviderRegion) -> String {
     format!(
         "https://ec.0.{}.aws.cloud.materialize.com/api/environment",
-        parse_cloud_provider_region(cloud_provider_region)
+        cloud_provider_region.region_name()
     )
 }
 
@@ -46,7 +46,7 @@ fn build_region_request_headers(authorization: &str) -> HeaderMap {
 /// Enables a particular cloud provider's region
 pub(crate) async fn enable_region(
     client: Client,
-    cloud_provider_region: CloudProviderRegionEnum,
+    cloud_provider_region: CloudProviderRegion,
     frontegg_auth_machine: FronteggAuthMachine,
 ) -> Result<Region, reqwest::Error> {
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
@@ -74,8 +74,8 @@ pub(crate) async fn cloud_provider_region_details(
 ) -> Result<Option<Vec<Region>>, Error> {
     let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
     let headers = build_region_request_headers(&authorization);
-    let mut region_api_url = cloud_provider_region.environment_controller_url.clone();
-    region_api_url.push_str("/api/environment");
+    let mut region_api_url = cloud_provider_region.region_controller_url.clone();
+    region_api_url.push_str("/api/environmentassignment");
 
     let response = client.get(region_api_url).headers(headers).send().await?;
 
@@ -120,18 +120,18 @@ pub(crate) async fn list_regions(
     cloud_providers: &Vec<CloudProvider>,
     client: &Client,
     frontegg_auth_machine: &FronteggAuthMachine,
-) -> Vec<CloudProviderRegion> {
+) -> Vec<CloudProviderAndRegion> {
     // TODO: Run requests in parallel
-    let mut cloud_providers_and_regions: Vec<CloudProviderRegion> = Vec::new();
+    let mut cloud_providers_and_regions: Vec<CloudProviderAndRegion> = Vec::new();
 
     for cloud_provider in cloud_providers {
         match cloud_provider_region_details(client, cloud_provider, frontegg_auth_machine).await {
             Ok(Some(mut region)) => match region.pop() {
-                Some(region) => cloud_providers_and_regions.push(CloudProviderRegion {
+                Some(region) => cloud_providers_and_regions.push(CloudProviderAndRegion {
                     cloud_provider: cloud_provider.clone(),
                     region: Some(region),
                 }),
-                None => cloud_providers_and_regions.push(CloudProviderRegion {
+                None => cloud_providers_and_regions.push(CloudProviderAndRegion {
                     cloud_provider: cloud_provider.clone(),
                     region: None,
                 }),
@@ -172,7 +172,7 @@ pub(crate) async fn list_cloud_providers(
 /// Prints if a region is enabled or not
 ///
 /// E.g.: AWS/us-east-1  enabled
-pub(crate) fn print_region_enabled(cloud_provider_and_region: &CloudProviderRegion) {
+pub(crate) fn print_region_enabled(cloud_provider_and_region: &CloudProviderAndRegion) {
     let region = &cloud_provider_and_region.region;
     let cloud_provider = &cloud_provider_and_region.cloud_provider;
 
@@ -200,10 +200,10 @@ pub(crate) fn print_environment_status(environment: Environment, health: bool) {
     } else {
         println!("Healthy:\tno");
     }
-    println!("SQL address: \t{}", &environment.environmentd_pgwire_address[0..environment.environmentd_pgwire_address.len() - 3]);
+    println!("SQL address: \t{}", &environment.environmentd_pgwire_address[0..environment.environmentd_pgwire_address.len() - 5]);
     // Remove port from url
     println!(
         "HTTPS address: \thttps://{}",
-        &environment.environmentd_https_address[0..environment.environmentd_https_address.len() - 3]
+        &environment.environmentd_https_address[0..environment.environmentd_https_address.len() - 4]
     );
 }

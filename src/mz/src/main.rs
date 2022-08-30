@@ -21,13 +21,15 @@ mod regions;
 mod shell;
 mod utils;
 
+use std::str::FromStr;
+
 use profiles::get_profile;
 use regions::{print_region_enabled, print_environment_status, region_environment_details};
 use serde::{Deserialize, Serialize};
 
 use clap::{Args, Parser, Subcommand};
 use reqwest::Client;
-use shell::check_region_health;
+use shell::check_environment_health;
 use utils::{exit_with_fail_message, run_loading_spinner, CloudProviderRegion};
 
 use crate::login::{login_with_browser, login_with_console};
@@ -60,7 +62,7 @@ enum Commands {
     Regions(Regions),
     /// Open a SQL shell over a region
     Shell {
-        #[clap(possible_values = CloudProviderRegionEnum::variants())]
+        #[clap(possible_values = CloudProviderRegion::variants())]
         cloud_provider_region: String,
     },
 }
@@ -146,7 +148,7 @@ struct Profile {
     region: Option<String>,
 }
 
-struct CloudProviderRegion {
+struct CloudProviderAndRegion {
     cloud_provider: CloudProvider,
     region: Option<Region>,
 }
@@ -276,12 +278,12 @@ async fn main() {
                                                     })
                                                     .collect::<Vec<CloudProvider>>();
 
-                                        let mut cloud_provider_regions = list_regions(
-                                            &filtered_providers,
-                                            &client,
-                                            &frontegg_auth_machine,
-                                        )
-                                        .await;
+                                            let mut cloud_provider_regions = list_regions(
+                                                &filtered_providers,
+                                                &client,
+                                                &frontegg_auth_machine,
+                                            )
+                                            .await;
 
                                         match cloud_provider_regions.pop() {
                                             Some(cloud_provider_region) => {
@@ -320,6 +322,7 @@ async fn main() {
                                             None => exit_with_fail_message(ExitMessage::Str(
                                                 "Error. Missing provider.",
                                             )),
+                                        }
                                         }
                                     }
                                     Err(error) => exit_with_fail_message(ExitMessage::String(

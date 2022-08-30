@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use crate::regions::{cloud_provider_region_details, list_cloud_providers, region_environment_details};
-use crate::utils::{exit_with_fail_message, CloudProviderRegionEnum};
+use crate::utils::{exit_with_fail_message, CloudProviderRegion};
 use crate::{ExitMessage, FronteggAuthMachine, Profile, Environment};
 use reqwest::Client;
 use std::process::exit;
@@ -100,10 +100,12 @@ pub(crate) async fn shell(
                     .await
                     {
                         Ok(Some(mut cloud_provider_regions)) => {
+                            println!("WOHOOO1");
                             println!("{:?}", cloud_provider_regions);
                             match cloud_provider_regions.pop() {
                                 Some(region) => {
                                     // TODO: Replicated code.
+                                                        println!("WOHOOO");
                                     match region_environment_details(&client, &region, &frontegg_auth_machine).await {
                                         Ok(environment_details) => {
                                             if let Some(mut environment_list) = environment_details {
@@ -136,7 +138,7 @@ pub(crate) async fn shell(
                             "Error retrieving region details: {:?}",
                             error
                         ))),
-                        a => {println!("{:?}", a)}
+                        Ok(None) => {println!("No region found.")}
                     }
                 }
                 None => exit_with_fail_message(ExitMessage::Str("Unknown region.")),
