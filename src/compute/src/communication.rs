@@ -25,7 +25,7 @@ use std::time::Duration;
 use mz_ore::collections::CollectionExt;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
-use tracing::{info, warn};
+use tracing::{info, warn, trace};
 
 use crate::server::CommunicationConfig;
 
@@ -95,7 +95,7 @@ where
 {
     let mut buf = [0];
     for (i, maybe_conn) in conns.into_iter().enumerate() {
-        info!("peeking... {}", first_idx + i);
+        trace!("peeking {} to detect whether it's broken", first_idx + i);
         if let Some(conn) = maybe_conn {
             let closed = match conn.peek(&mut buf) {
                 Ok(0) => true, // EOF
@@ -108,6 +108,8 @@ where
                     i + first_idx
                 );
                 *maybe_conn = None;
+            } else {
+                trace!("Peek OK")
             }
         }
     }
@@ -118,17 +120,26 @@ fn start_connections(
     addresses: Arc<Vec<String>>,
     my_index: usize,
 ) -> Result<Vec<Option<TcpStream>>, io::Error> {
-    let addresses: Vec<_> = addresses
-        .iter()
-        .take(my_index)
-        .map(|address| {
-            address
-                .as_str()
-                .to_socket_addrs()
-                .expect("Failed to parse address")
-                .into_element()
-        })
-        .collect();
+    let addresses = loop {
+        match addresses
+            .iter()
+            .take(my_index)
+            .map(|address| {
+                address
+                    .as_str()
+                    .to_socket_addrs()
+                    .map(|addrs| addrs.into_first()) // `man getaddrinfo` claims it returns at least one element
+                    .map_err(|e| (e, address.clone()))
+            })
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(addresses) => break addresses,
+            Err((e, addr)) => {
+                warn!("Failed to resolve {addr}: {e}, will retry");
+                sleep(Duration::from_secs(1));
+            }
+        }
+    };
     let mut results: Vec<_> = (0..my_index).map(|_| None).collect();
 
     // We do not want to provide opportunities for the startup
@@ -161,7 +172,7 @@ fn start_connections(
                     } else {
                         info!(
                             worker = my_index,
-                            "error connection to process {i}: {err}; will retry"
+                            "error connecting to process {i}: {err}; will retry"
                         );
                         sleep(Duration::from_secs(1));
                     }
