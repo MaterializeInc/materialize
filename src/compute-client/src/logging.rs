@@ -327,10 +327,10 @@ impl LogView {
             LogView::MzArrangementSharing => (
                 "SELECT
                     operator,
-                    worker,
+                    worker_id,
                     pg_catalog.count(*) AS count
                 FROM mz_catalog.mz_arrangement_sharing_internal_{}
-                GROUP BY operator, worker",
+                GROUP BY operator, worker_id",
                 "mz_arrangement_sharing_{}",
             ),
 
@@ -338,35 +338,35 @@ impl LogView {
                 "WITH batches_cte AS (
                     SELECT
                         operator,
-                        worker,
+                        worker_id,
                         pg_catalog.count(*) AS batches
                     FROM
                         mz_catalog.mz_arrangement_batches_internal_{}
                     GROUP BY
-                        operator, worker
+                        operator, worker_id
                 ),
                 records_cte AS (
                     SELECT
                         operator,
-                        worker,
+                        worker_id,
                         pg_catalog.count(*) AS records
                     FROM
                         mz_catalog.mz_arrangement_records_internal_{}
                     GROUP BY
-                        operator, worker
+                        operator, worker_id
                 )
                 SELECT
                     batches_cte.operator,
-                    batches_cte.worker,
+                    batches_cte.worker_id,
                     records_cte.records,
                     batches_cte.batches
-                FROM batches_cte JOIN records_cte USING (operator, worker)",
+                FROM batches_cte JOIN records_cte USING (operator, worker_id)",
                 "mz_arrangement_sizes_{}",
             ),
 
             LogView::MzDataflowNames => (
                 "SELECT mz_dataflow_addresses_{}.id,
-                        mz_dataflow_addresses_{}.worker,
+                        mz_dataflow_addresses_{}.worker_id,
                         mz_dataflow_addresses_{}.address[1] AS local_id,
                         mz_dataflow_operators_{}.name
                  FROM
@@ -374,7 +374,7 @@ impl LogView {
                         mz_catalog.mz_dataflow_operators_{}
                  WHERE
                         mz_dataflow_addresses_{}.id = mz_dataflow_operators_{}.id AND
-                        mz_dataflow_addresses_{}.worker = mz_dataflow_operators_{}.worker AND
+                        mz_dataflow_addresses_{}.worker_id = mz_dataflow_operators_{}.worker_id AND
                         mz_catalog.list_length(mz_dataflow_addresses_{}.address) = 1",
                 "mz_dataflows_{}",
             ),
@@ -383,7 +383,7 @@ impl LogView {
                 "SELECT
                     mz_dataflow_operators_{}.id,
                     mz_dataflow_operators_{}.name,
-                    mz_dataflow_operators_{}.worker,
+                    mz_dataflow_operators_{}.worker_id,
                     mz_dataflows_{}.id as dataflow_id,
                     mz_dataflows_{}.name as dataflow_name
                 FROM
@@ -392,9 +392,9 @@ impl LogView {
                     mz_catalog.mz_dataflows_{}
                 WHERE
                     mz_dataflow_operators_{}.id = mz_dataflow_addresses_{}.id AND
-                    mz_dataflow_operators_{}.worker = mz_dataflow_addresses_{}.worker AND
+                    mz_dataflow_operators_{}.worker_id = mz_dataflow_addresses_{}.worker_id AND
                     mz_dataflows_{}.local_id = mz_dataflow_addresses_{}.address[1] AND
-                    mz_dataflows_{}.worker = mz_dataflow_addresses_{}.worker",
+                    mz_dataflows_{}.worker_id = mz_dataflow_addresses_{}.worker_id",
                 "mz_dataflow_operator_dataflows_{}",
             ),
 
@@ -402,13 +402,13 @@ impl LogView {
                 "SELECT
                     address,
                     port,
-                    worker,
+                    worker_id,
                     update_type,
                     timestamp,
                     pg_catalog.count(*) as count
                  FROM
                     mz_catalog.mz_dataflow_operator_reachability_internal_{}
-                 GROUP BY address, port, worker, update_type, timestamp",
+                 GROUP BY address, port, worker_id, update_type, timestamp",
                 "mz_dataflow_operator_reachability_{}",
             ),
 
@@ -424,32 +424,32 @@ impl LogView {
                 "WITH sent_cte AS (
                     SELECT
                         channel,
-                        source_worker,
-                        target_worker,
+                        source_worker_id,
+                        target_worker_id,
                         pg_catalog.count(*) AS sent
                     FROM
                         mz_catalog.mz_message_counts_sent_internal_{}
                     GROUP BY
-                        channel, source_worker, target_worker
+                        channel, source_worker_id, target_worker_id
                 ),
                 received_cte AS (
                     SELECT
                         channel,
-                        source_worker,
-                        target_worker,
+                        source_worker_id,
+                        target_worker_id,
                         pg_catalog.count(*) AS received
                     FROM
                         mz_catalog.mz_message_counts_received_internal_{}
                     GROUP BY
-                        channel, source_worker, target_worker
+                        channel, source_worker_id, target_worker_id
                 )
                 SELECT
                     sent_cte.channel,
-                    sent_cte.source_worker,
-                    sent_cte.target_worker,
+                    sent_cte.source_worker_id,
+                    sent_cte.target_worker_id,
                     sent_cte.sent,
                     received_cte.received
-                FROM sent_cte JOIN received_cte USING (channel, source_worker, target_worker)",
+                FROM sent_cte JOIN received_cte USING (channel, source_worker_id, target_worker_id)",
                 "mz_message_counts_{}",
             ),
 
@@ -457,17 +457,17 @@ impl LogView {
                 "WITH records_cte AS (
                     SELECT
                         operator,
-                        worker,
+                        worker_id,
                         pg_catalog.count(*) AS records
                     FROM
                         mz_catalog.mz_arrangement_records_internal_{}
                     GROUP BY
-                        operator, worker
+                        operator, worker_id
                 )
                 SELECT
                     mz_dataflow_operator_dataflows_{}.id,
                     mz_dataflow_operator_dataflows_{}.name,
-                    mz_dataflow_operator_dataflows_{}.worker,
+                    mz_dataflow_operator_dataflows_{}.worker_id,
                     mz_dataflow_operator_dataflows_{}.dataflow_id,
                     records_cte.records
                 FROM
@@ -475,7 +475,7 @@ impl LogView {
                     mz_catalog.mz_dataflow_operator_dataflows_{}
                 WHERE
                     mz_dataflow_operator_dataflows_{}.id = records_cte.operator AND
-                    mz_dataflow_operator_dataflows_{}.worker = records_cte.worker",
+                    mz_dataflow_operator_dataflows_{}.worker_id = records_cte.worker_id",
                 "mz_records_per_dataflow_operator_{}",
             ),
 
@@ -483,18 +483,18 @@ impl LogView {
                 "SELECT
                     mz_records_per_dataflow_operator_{}.dataflow_id as id,
                     mz_dataflows_{}.name,
-                    mz_records_per_dataflow_operator_{}.worker,
+                    mz_records_per_dataflow_operator_{}.worker_id,
                     pg_catalog.SUM(mz_records_per_dataflow_operator_{}.records) as records
                 FROM
                     mz_catalog.mz_records_per_dataflow_operator_{},
                     mz_catalog.mz_dataflows_{}
                 WHERE
                     mz_records_per_dataflow_operator_{}.dataflow_id = mz_dataflows_{}.id AND
-                    mz_records_per_dataflow_operator_{}.worker = mz_dataflows_{}.worker
+                    mz_records_per_dataflow_operator_{}.worker_id = mz_dataflows_{}.worker_id
                 GROUP BY
                     mz_records_per_dataflow_operator_{}.dataflow_id,
                     mz_dataflows_{}.name,
-                    mz_records_per_dataflow_operator_{}.worker",
+                    mz_records_per_dataflow_operator_{}.worker_id",
                 "mz_records_per_dataflow_{}",
             ),
 
@@ -513,31 +513,31 @@ impl LogView {
 
             LogView::MzSchedulingElapsed => (
                 "SELECT
-                    id, worker, pg_catalog.count(*) AS elapsed_ns
+                    id, worker_id, pg_catalog.count(*) AS elapsed_ns
                 FROM
                     mz_catalog.mz_scheduling_elapsed_internal_{}
                 GROUP BY
-                    id, worker",
+                    id, worker_id",
                 "mz_scheduling_elapsed_{}",
             ),
 
             LogView::MzSchedulingHistogram => (
                 "SELECT
-                    id, worker, duration_ns, pg_catalog.count(*) AS count
+                    id, worker_id, duration_ns, pg_catalog.count(*) AS count
                 FROM
                     mz_catalog.mz_scheduling_histogram_internal_{}
                 GROUP BY
-                    id, worker, duration_ns",
+                    id, worker_id, duration_ns",
                 "mz_scheduling_histogram_{}",
             ),
 
             LogView::MzSchedulingParks => (
                 "SELECT
-                    worker, slept_for, requested, pg_catalog.count(*) AS count
+                    worker_id, slept_for, requested, pg_catalog.count(*) AS count
                 FROM
                     mz_catalog.mz_scheduling_parks_internal_{}
                 GROUP BY
-                    worker, slept_for, requested",
+                    worker_id, slept_for, requested",
                 "mz_scheduling_parks_{}",
             ),
         }
@@ -564,13 +564,13 @@ impl LogVariant {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
                 .with_column("id", ScalarType::Int64.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column("name", ScalarType::String.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
                 .with_column("id", ScalarType::Int64.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column("source_node", ScalarType::Int64.nullable(false))
                 .with_column("source_port", ScalarType::Int64.nullable(false))
                 .with_column("target_node", ScalarType::Int64.nullable(false))
@@ -579,16 +579,16 @@ impl LogVariant {
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
                 .with_column("id", ScalarType::Int64.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false)),
+                .with_column("worker_id", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
                 .with_column("id", ScalarType::Int64.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column("duration_ns", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
                 .with_column("id", ScalarType::Int64.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column(
                     "address",
                     ScalarType::List {
@@ -600,19 +600,19 @@ impl LogVariant {
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column("slept_for", ScalarType::Int64.nullable(false))
                 .with_column("requested", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::empty()
                 .with_column("channel", ScalarType::Int64.nullable(false))
-                .with_column("source_worker", ScalarType::Int64.nullable(false))
-                .with_column("target_worker", ScalarType::Int64.nullable(false)),
+                .with_column("source_worker_id", ScalarType::Int64.nullable(false))
+                .with_column("target_worker_id", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::MessagesSent) => RelationDesc::empty()
                 .with_column("channel", ScalarType::Int64.nullable(false))
-                .with_column("source_worker", ScalarType::Int64.nullable(false))
-                .with_column("target_worker", ScalarType::Int64.nullable(false)),
+                .with_column("source_worker_id", ScalarType::Int64.nullable(false))
+                .with_column("target_worker_id", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::empty()
                 .with_column(
@@ -624,7 +624,7 @@ impl LogVariant {
                     .nullable(false),
                 )
                 .with_column("port", ScalarType::Int64.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column("update_type", ScalarType::String.nullable(false))
                 .with_column("timestamp", ScalarType::Int64.nullable(true)),
 
@@ -632,46 +632,46 @@ impl LogVariant {
             | LogVariant::Differential(DifferentialLog::ArrangementRecords)
             | LogVariant::Differential(DifferentialLog::Sharing) => RelationDesc::empty()
                 .with_column("operator", ScalarType::Int64.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false)),
+                .with_column("worker_id", ScalarType::Int64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::empty()
                 .with_column("global_id", ScalarType::String.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Compute(ComputeLog::DataflowDependency) => RelationDesc::empty()
                 .with_column("dataflow", ScalarType::String.nullable(false))
                 .with_column("source", ScalarType::String.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false)),
+                .with_column("worker_id", ScalarType::Int64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
                 .with_column("global_id", ScalarType::String.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::SourceFrontierCurrent) => RelationDesc::empty()
                 .with_column("global_id", ScalarType::String.nullable(false))
                 .with_column("source", ScalarType::String.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierDelay) => RelationDesc::empty()
                 .with_column("global_id", ScalarType::String.nullable(false))
                 .with_column("source", ScalarType::String.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column("delay_ns", ScalarType::Int64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2, 3]),
 
             LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()
                 .with_column("id", ScalarType::Uuid.nullable(false))
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column("index_id", ScalarType::String.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
-                .with_column("worker", ScalarType::Int64.nullable(false))
+                .with_column("worker_id", ScalarType::Int64.nullable(false))
                 .with_column("duration_ns", ScalarType::Int64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),

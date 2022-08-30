@@ -43,7 +43,7 @@ take the largest total amount of time.
 
 ```sql
 -- Extract raw elapsed time information, by worker
-select mdo.id, mdo.name, mdo.worker, mse.elapsed_ns
+select mdo.id, mdo.name, mdo.worker_id, mse.elapsed_ns
 from mz_scheduling_elapsed as mse,
      mz_dataflow_operators as mdo
 where
@@ -76,7 +76,7 @@ and incriminate the subject.
 
 ```sql
 -- Extract raw scheduling histogram information, by worker.
-select mdo.id, mdo.name, mdo.worker, msh.duration_ns, count
+select mdo.id, mdo.name, mdo.worker_id, msh.duration_ns, count
 from mz_scheduling_histogram as msh,
      mz_dataflow_operators as mdo
 where

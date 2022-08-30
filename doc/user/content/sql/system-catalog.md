@@ -64,7 +64,7 @@ in the system is used.
 Field      | Type       | Meaning
 -----------|------------|--------
 `operator` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`worker`   | [`bigint`] | The ID of the worker thread hosting the arrangement.
+`worker_id`| [`bigint`] | The ID of the worker thread hosting the arrangement.
 `count`    | [`bigint`] | The number of operators that share the arrangement.
 
 ### `mz_arrangement_sizes`
@@ -75,7 +75,7 @@ the system.
 Field      | Type       | Meaning
 -----------|------------|--------
 `operator` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`worker`   | [`bigint`] | The worker hosting the arrangement.
+`worker_id`| [`bigint`] | The ID of the worker hosting the arrangement.
 `records`  | [`bigint`] | The number of records in the arrangement.
 `batches`  | [`bigint`] | The number of batches in the arrangement.
 
@@ -135,7 +135,7 @@ source operator to one of the inputs of a target operator.
 Field         | Type       | Meaning
 --------------|------------|--------
 `id`          | [`bigint`] | The ID of the channel.
-`worker`      | [`bigint`] | The ID of the worker thread hosting the channel.
+`worker_id`   | [`bigint`] | The ID of the worker thread hosting the channel.
 `source_node` | [`bigint`] | The ID of the source operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
 `source_port` | [`bigint`] | The source operator's output port.
 `target_node` | [`bigint`] | The ID of the target operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
@@ -148,7 +148,7 @@ The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
 Field      | Type       | Meaning
 -----------|------------|--------
 `id`       | [`bigint`] | The ID of the dataflow.
-`worker`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`worker_id`| [`bigint`] | The ID of the worker thread hosting the dataflow.
 `local_id` | [`bigint`] | The scope-local index of the dataflow.
 `name`     | [`text`]   | The internal name of the dataflow.
 
@@ -157,11 +157,11 @@ Field      | Type       | Meaning
 The `mz_dataflow_addresses` source describes how the dataflow channels
 and operators in the system are nested into scopes.
 
-Field     | Type            | Meaning
-----------|-----------------|--------
-`id`      | [`bigint`]      | The ID of the channel or operator. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels) or [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`worker`  | [`bigint`]      | The ID of the worker thread hosting the channel or operator.
-`address` | [`bigint list`] | A list of scope-local indexes indicating the path from the root to this channel or operator.
+Field       | Type            | Meaning
+------------|-----------------|--------
+`id`        | [`bigint`]      | The ID of the channel or operator. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels) or [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker_id` | [`bigint`]      | The ID of the worker thread hosting the channel or operator.
+`address`   | [`bigint list`] | A list of scope-local indexes indicating the path from the root to this channel or operator.
 
 ### `mz_dataflow_operator_dataflows`
 
@@ -172,7 +172,7 @@ Field           | Type       | Meaning
 ----------------|------------|--------
 `id`            | [`bigint`] | The ID of the operator.
 `name`          | [`text`]   | The internal name of the operator.
-`worker`        | [`bigint`] | The ID of the worker thread hosting the operator.
+`worker_id`     | [`bigint`] | The ID of the worker thread hosting the operator.
 `dataflow_id`   | [`bigint`] | The ID of the dataflow hosting the operator.
 `dataflow_name` | [`text`]   | The name of the dataflow hosting the operator.
 
@@ -183,9 +183,9 @@ system.
 
 Field    | Type       | Meaning
 ---------|------------|--------
-`id`     | [`bigint`] | The ID of the operator.
-`worker` | [`bigint`] | The ID of the worker thread hosting the operator.
-`name`   | [`text`]   | The name of the operator.
+`id`        | [`bigint`] | The ID of the operator.
+`worker_id` | [`bigint`] | The ID of the worker thread hosting the operator.
+`name`      | [`text`]   | The name of the operator.
 
 ### `mz_functions`
 
@@ -254,13 +254,13 @@ Field        | Type     | Meaning
 The `mz_message_counts` source describes the messages sent and received over the
 dataflow channels in the system.
 
-Field           | Type       | Meaning
-----------------|------------|--------
-`channel`       | [`bigint`] | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).
-`source_worker` | [`bigint`] | The ID of the worker thread sending the message.
-`target_worker` | [`bigint`] | The ID of the worker thread receiving the message.
-`sent`          | [`bigint`] | The number of messages sent.
-`received`      | [`bigint`] | The number of messages received.
+Field             | Type       | Meaning
+------------------|------------|--------
+`channel`         | [`bigint`] | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).
+`source_worker_id`| [`bigint`] | The ID of the worker thread sending the message.
+`target_worker_id`| [`bigint`] | The ID of the worker thread receiving the message.
+`sent`            | [`bigint`] | The number of messages sent.
+`received`        | [`bigint`] | The number of messages received.
 
 ### `mz_materialization_dependencies`
 
@@ -270,9 +270,9 @@ other dataflows.
 
 Field      | Type       | Meaning
 -----------|------------|--------
-`dataflow` | [`text`]   | The ID of the index that created the dataflow. Corresponds to [`mz_materializations.global_id`](#mz_materializations).
-`source`   | [`text`]   | The ID of the source. Corresponds to [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materializations.global_id`](#mz_materializations).
-`worker`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`dataflow`    | [`text`]   | The ID of the index that created the dataflow. Corresponds to [`mz_materializations.global_id`](#mz_materializations).
+`source`      | [`text`]   | The ID of the source. Corresponds to [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materializations.global_id`](#mz_materializations).
+`worker_id`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
 
 ### `mz_materialization_frontiers`
 
@@ -312,7 +312,7 @@ The `mz_materializations` source describes the dataflows created by indexes and 
 Field       | Type       | Meaning
 ------------|------------|--------
 `global_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
-`worker`    | [`bigint`] | The ID of the worker thread hosting the corresponding [dataflow].
+`worker_id` | [`bigint`] | The ID of the worker thread hosting the corresponding [dataflow].
 
 ### `mz_materialized_views`
 
@@ -358,7 +358,7 @@ pending in the dataflow layer.
 Field      | Type       | Meaning
 -----------|------------|--------
 `id`       | [`uuid`]   | The ID of the peek request.
-`worker`   | [`bigint`] | The ID of the worker thread servicing the peek.
+`worker_id`| [`bigint`] | The ID of the worker thread servicing the peek.
 `index_id` | [`text`]   | The ID of the index the peek is targeting.
 `time`     | [`bigint`] | The timestamp the peek has requested.
 
@@ -369,7 +369,7 @@ queries ("peeks") in the dataflow layer.
 
 Field         | Type       | Meaning
 --------------|------------|--------
-`worker`      | [`bigint`] | The ID of the worker thread servicing the peek.
+`worker_id`   | [`bigint`] | The ID of the worker thread servicing the peek.
 `duration_ns` | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`       | [`bigint`] | The (noncumulative) count of peeks in this bucket.
 
@@ -389,12 +389,12 @@ The `mz_records_per_dataflow` view describes the number of records in each
 For the same information aggregated across all workers, see
 [`mz_records_per_dataflow_global`](#mz_records_per_dataflow_global).
 
-Field     | Type        | Meaning
-----------|-------------|--------
-`id`      | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
-`name`    | [`text`]    | The internal name of the dataflow.
-`worker`  | [`bigint`]  | The ID of the worker thread hosting the dataflow.
-`records` | [`numeric`] | The number of records in the dataflow.
+Field       | Type        | Meaning
+------------|-------------|--------
+`id`        | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+`name`      | [`text`]    | The internal name of the dataflow.
+`worker_id` | [`bigint`]  | The ID of the worker thread hosting the dataflow.
+`records`   | [`numeric`] | The number of records in the dataflow.
 
 ### `mz_records_per_dataflow_global`
 
@@ -419,7 +419,7 @@ Field         | Type        | Meaning
 --------------|-------------|--------
 `id`          | [`bigint`]  | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
 `name`        | [`text`]    | The internal name of the dataflow.
-`worker`      | [`bigint`]  | The ID of the worker thread hosting the dataflow.
+`worker_id`   | [`bigint`]  | The ID of the worker thread hosting the dataflow.
 `dataflow_id` | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
 `records`     | [`numeric`] | The number of records in the dataflow.
 
@@ -454,7 +454,7 @@ each [dataflow] operator.
 Field        | Type       | Meaning
 -------------|------------|--------
 `id`         | [`bigint`] | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`worker`     | [`bigint`] | The ID of the worker thread hosting the operator.
+`worker_id`  | [`bigint`] | The ID of the worker thread hosting the operator.
 `elapsed_ns` | [`bigint`] | The total elapsed time spent in the operator in nanoseconds.
 
 ### `mz_scheduling_histogram`
@@ -465,7 +465,7 @@ duration of each invocation for each [dataflow] operator.
 Field         | Type       | Meaning
 --------------|------------|--------
 `id`          | [`bigint`] | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`worker`      | [`bigint`] | The ID of the worker thread hosting the operator.
+`worker_id`   | [`bigint`] | The ID of the worker thread hosting the operator.
 `duration_ns` | [`bigint`] | The upper bound of the bucket.
 `count`       | [`bigint`] | The number of recordings in the bucket.
 
@@ -476,7 +476,7 @@ park events. A park event occurs when a worker has no outstanding work.
 
 Field       | Type       | Meaning
 ------------|------------| -------
-`worker`    | [`bigint`] | The ID of the worker thread.
+`worker_id` | [`bigint`] | The ID of the worker thread.
 `slept_for` | [`bigint`] | The actual length of the park event.
 `requested` | [`bigint`] | The requested length of the park event.
 `count`     | [`bigint`] | The number of park events in this bucket.
@@ -574,7 +574,7 @@ For frontier information aggregated across all workers, see
 Field       | Type       | Meaning
 ------------|------------|--------
 `global_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.global_id`](#mz_materializations).
-`worker`    | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`bigint`] | The next timestamp at which the dataflow may change.
 
 ### `mz_worker_materialization_source_frontiers`
@@ -591,7 +591,7 @@ Field       | Type       | Meaning
 ------------|------------|--------
 `global_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.global_id`](#mz_materializations).
 `source`    | [`text`]   | The ID of the input storage source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
-`worker`    | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`bigint`] | The next timestamp at which the source instantiation may change.
 
 ### `mz_worker_materialization_delays`
@@ -605,7 +605,7 @@ Field       | Type       | Meaning
 ------------|------------|--------
 `global_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.global_id`](#mz_materializations).
 `source`    | [`text`]   | The ID of the input storage source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
-`worker`    | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `delay_ns`  | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`     | [`bigint`] | The (noncumulative) count of delay measurements in this bucket.
 

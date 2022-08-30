@@ -35,9 +35,9 @@
 ###    "mz_scheduling_histogram"
 ###   ]
 ###   STAR_OVERRIDE = {
-###           "mz_dataflow_addresses" : "id,worker",
-###           "mz_dataflow_operator_reachability_internal" : "port,worker,update_type",
-###           "mz_dataflow_operator_reachability" : "port,worker,update_type",
+###           "mz_dataflow_addresses" : "id,worker_id",
+###           "mz_dataflow_operator_reachability_internal" : "port,worker_id,update_type",
+###           "mz_dataflow_operator_reachability" : "port,worker_id,update_type",
 ###   }
 ###
 ###   def query_empty(q):
@@ -158,19 +158,19 @@ SELECT * FROM ((SELECT * FROM mz_dataflow_channels_1) EXCEPT (SELECT * FROM mz_d
 ----
 
 query T
-SELECT id,worker FROM ((SELECT id,worker FROM mz_dataflow_addresses) EXCEPT (SELECT id,worker FROM mz_dataflow_addresses_1));
+SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_dataflow_addresses) EXCEPT (SELECT id,worker_id FROM mz_dataflow_addresses_1));
 ----
 
 query T
-SELECT id,worker FROM ((SELECT id,worker FROM mz_dataflow_addresses_1) EXCEPT (SELECT id,worker FROM mz_dataflow_addresses));
+SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_dataflow_addresses_1) EXCEPT (SELECT id,worker_id FROM mz_dataflow_addresses));
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal_1));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal_1));
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal_1) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal_1) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal));
 ----
 
 query T
@@ -294,11 +294,11 @@ SELECT * FROM ((SELECT * FROM mz_dataflow_operator_dataflows_1) EXCEPT (SELECT *
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_1));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_1));
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_1) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_1) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability));
 ----
 
 query T
@@ -399,19 +399,19 @@ SELECT * FROM ((SELECT * FROM mz_dataflow_channels_2) EXCEPT (SELECT * FROM mz_d
 ----
 
 query T
-SELECT id,worker FROM ((SELECT id,worker FROM mz_dataflow_addresses) EXCEPT (SELECT id,worker FROM mz_dataflow_addresses_2));
+SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_dataflow_addresses) EXCEPT (SELECT id,worker_id FROM mz_dataflow_addresses_2));
 ----
 
 query T
-SELECT id,worker FROM ((SELECT id,worker FROM mz_dataflow_addresses_2) EXCEPT (SELECT id,worker FROM mz_dataflow_addresses));
+SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_dataflow_addresses_2) EXCEPT (SELECT id,worker_id FROM mz_dataflow_addresses));
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal_2));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal_2));
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal_2) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal_2) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal));
 ----
 
 query T
@@ -535,11 +535,11 @@ SELECT * FROM ((SELECT * FROM mz_dataflow_operator_dataflows_2) EXCEPT (SELECT *
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_2));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_2));
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_2) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_2) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability));
 ----
 
 query T
@@ -650,19 +650,19 @@ SELECT * FROM ((SELECT * FROM mz_dataflow_channels_3) EXCEPT (SELECT * FROM mz_d
 ----
 
 query T
-SELECT id,worker FROM ((SELECT id,worker FROM mz_dataflow_addresses) EXCEPT (SELECT id,worker FROM mz_dataflow_addresses_3));
+SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_dataflow_addresses) EXCEPT (SELECT id,worker_id FROM mz_dataflow_addresses_3));
 ----
 
 query T
-SELECT id,worker FROM ((SELECT id,worker FROM mz_dataflow_addresses_3) EXCEPT (SELECT id,worker FROM mz_dataflow_addresses));
+SELECT id,worker_id FROM ((SELECT id,worker_id FROM mz_dataflow_addresses_3) EXCEPT (SELECT id,worker_id FROM mz_dataflow_addresses));
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal_3));
+SELECT port,worke_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal_3));
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal_3) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_internal));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal_3) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_internal));
 ----
 
 query T
@@ -786,11 +786,11 @@ SELECT * FROM ((SELECT * FROM mz_dataflow_operator_dataflows_3) EXCEPT (SELECT *
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_3));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_3));
 ----
 
 query T
-SELECT port,worker,update_type FROM ((SELECT port,worker,update_type FROM mz_dataflow_operator_reachability_3) EXCEPT (SELECT port,worker,update_type FROM mz_dataflow_operator_reachability));
+SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability_3) EXCEPT (SELECT port,worker_id,update_type FROM mz_dataflow_operator_reachability));
 ----
 
 query T
