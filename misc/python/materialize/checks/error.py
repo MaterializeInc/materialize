@@ -166,8 +166,9 @@ class DecodeError(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
-                $ kafka-ingest format=avro topic=decode-error schema=${schema-f2} repeat=1
-                {"f2": 123456789}
+                # {"f2": 123456789}, no publish
+                $ kafka-ingest format=bytes topic=decode-error repeat=1
+                \\x00\x00\x00\x00\x01\xaa\xb4\xde\x75
                 """,
                 """
                 $ kafka-ingest format=bytes topic=decode-error repeat=1
