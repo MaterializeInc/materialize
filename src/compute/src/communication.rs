@@ -93,14 +93,13 @@ fn gc_broken_connections<'a, I>(conns: I, first_idx: usize)
 where
     I: IntoIterator<Item = &'a mut Option<TcpStream>>,
 {
-    let mut buf = [0];
+    let mut buf = [0; 1024];
     for (i, maybe_conn) in conns.into_iter().enumerate() {
         info!("peeking... {}", first_idx + i);
         if let Some(conn) = maybe_conn {
             let closed = match conn.peek(&mut buf) {
                 Ok(0) => true, // EOF
-                Ok(1) => false,
-                Ok(_) => unreachable!("We only attempted to read one byte"),
+                Ok(_) => false,
                 Err(err) => err.kind() != std::io::ErrorKind::WouldBlock,
             };
             if closed {
