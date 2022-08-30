@@ -18,6 +18,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::task::RuntimeExt;
+use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
@@ -27,14 +28,14 @@ use uuid::Uuid;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
-use crate::fetch::{fetch_batch, BatchFetcher, LeasedBatch, LeasedBatchMetadata};
+use crate::fetch::{fetch_batch, BatchFetcher, LeasedBatch, SerdeLeasedBatchMetadata};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HollowBatch, Since};
 use crate::{GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReaderId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for ReaderId {
@@ -255,9 +256,9 @@ where
         }
         self.handle.maybe_downgrade_since(&self.since).await;
 
-        let metadata = LeasedBatchMetadata::Listen {
-            as_of: self.as_of.clone(),
-            until: self.frontier.clone(),
+        let metadata = SerdeLeasedBatchMetadata::Listen {
+            as_of: self.as_of.iter().map(T::encode).collect(),
+            lower: self.frontier.iter().map(T::encode).collect(),
         };
         let parts = self.handle.lease_batch_parts(batch, metadata).collect();
 
@@ -472,7 +473,9 @@ where
     pub async fn snapshot(&mut self, as_of: Antichain<T>) -> Result<Vec<LeasedBatch<T>>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
-        let metadata = LeasedBatchMetadata::Snapshot { as_of };
+        let metadata = SerdeLeasedBatchMetadata::Snapshot {
+            as_of: as_of.iter().map(T::encode).collect(),
+        };
         let mut leased_batches = Vec::new();
         for batch in batches {
             // Flatten the HollowBatch into one LeasedBatch per key. Each key
@@ -525,22 +528,15 @@ where
     fn lease_batch_parts(
         &mut self,
         batch: HollowBatch<T>,
-        metadata: LeasedBatchMetadata<T>,
+        metadata: SerdeLeasedBatchMetadata,
     ) -> impl Iterator<Item = LeasedBatch<T>> + '_ {
-        batch.keys.into_iter().map(move |key| {
-            LeasedBatch {
-                shard_id: self.machine.shard_id(),
-                reader_id: self.reader_id.clone(),
-                metadata: metadata.clone(),
-                batch: HollowBatch {
-                    desc: batch.desc.clone(),
-                    keys: vec![key],
-                    // This isn't quite right, but it's not used by anything
-                    // take operates on the leased_batch.
-                    len: batch.len,
-                },
-                leased_seqno: Some(self.lease_seqno()),
-            }
+        batch.keys.into_iter().map(move |key| LeasedBatch {
+            shard_id: self.machine.shard_id(),
+            reader_id: self.reader_id.clone(),
+            metadata: metadata.clone(),
+            desc: batch.desc.clone(),
+            key,
+            leased_seqno: Some(self.lease_seqno()),
         })
     }
 

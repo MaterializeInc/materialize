@@ -17,7 +17,6 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use prost::Message;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -26,13 +25,11 @@ use tracing::{debug_span, trace_span, Instrument};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::{ProtoType, RustType};
 
 use crate::error::InvalidUsage;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::PartialBatchKey;
-use crate::internal::state::{HollowBatch, ProtoLeasedBatch};
 use crate::read::{ReadHandle, ReaderId};
 use crate::ShardId;
 
@@ -100,6 +97,49 @@ where
     }
 }
 
+enum FetchBatchFilter<T> {
+    Snapshot {
+        as_of: Antichain<T>,
+    },
+    Listen {
+        as_of: Antichain<T>,
+        lower: Antichain<T>,
+    },
+}
+
+impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
+    fn filter_ts(&self, t: &mut T) -> bool {
+        match self {
+            FetchBatchFilter::Snapshot { as_of } => {
+                // This time is covered by a listen
+                if as_of.less_than(&t) {
+                    return false;
+                }
+                t.advance_by(as_of.borrow());
+                true
+            }
+            FetchBatchFilter::Listen { as_of, lower } => {
+                // This time is covered by a snapshot
+                if !as_of.less_than(&t) {
+                    return false;
+                }
+
+                // Because of compaction, the next batch we get might also
+                // contain updates we've already emitted. For example, we
+                // emitted `[1, 2)` and then compaction combined that batch with
+                // a `[2, 3)` batch into a new `[1, 3)` batch. If this happens,
+                // we just need to filter out anything < the frontier. This
+                // frontier was the upper of the last batch (and thus exclusive)
+                // so for the == case, we still emit.
+                if !lower.less_equal(&t) {
+                    return false;
+                }
+                true
+            }
+        }
+    }
+}
+
 /// Trade in an exchange-able [LeasedBatch] for the data it represents.
 ///
 /// Note to check the `LeasedBatch` documentation for how to handle the
@@ -120,66 +160,53 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     let mut updates = Vec::new();
-    for key in batch.batch.keys.iter() {
-        fetch_batch_part(
-            &batch.shard_id,
-            blob,
-            &metrics,
-            &key,
-            &batch.batch.desc.clone(),
-            |k, v, mut t, d| {
-                match &batch.metadata {
-                    LeasedBatchMetadata::Listen { as_of, until } => {
-                        // This time is covered by a snapshot
-                        if !as_of.less_than(&t) {
-                            return;
-                        }
+    let ts_filter = match &batch.metadata {
+        SerdeLeasedBatchMetadata::Snapshot { as_of } => {
+            let as_of = Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+            FetchBatchFilter::Snapshot { as_of }
+        }
+        SerdeLeasedBatchMetadata::Listen { as_of, lower } => {
+            let as_of = Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+            let lower = Antichain::from(lower.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+            FetchBatchFilter::Listen { as_of, lower }
+        }
+    };
 
-                        // Because of compaction, the next batch we get might also
-                        // contain updates we've already emitted. For example, we
-                        // emitted `[1, 2)` and then compaction combined that batch
-                        // with a `[2, 3)` batch into a new `[1, 3)` batch. If this
-                        // happens, we just need to filter out anything < the
-                        // frontier. This frontier was the upper of the last batch
-                        // (and thus exclusive) so for the == case, we still emit.
-                        if !until.less_equal(&t) {
-                            return;
-                        }
-                    }
-                    LeasedBatchMetadata::Snapshot { as_of } => {
-                        // This time is covered by a listen
-                        if as_of.less_than(&t) {
-                            return;
-                        }
-                        t.advance_by(as_of.borrow())
-                    }
-                }
+    fetch_batch_part(
+        &batch.shard_id,
+        blob,
+        &metrics,
+        &batch.key,
+        &batch.desc,
+        |k, v, mut t, d| {
+            if !ts_filter.filter_ts(&mut t) {
+                return;
+            }
 
-                let k = metrics.codecs.key.decode(|| K::decode(k));
-                let v = metrics.codecs.val.decode(|| V::decode(v));
-                let d = D::decode(d);
-                updates.push(((k, v), t, d));
-            },
+            let k = metrics.codecs.key.decode(|| K::decode(k));
+            let v = metrics.codecs.val.decode(|| V::decode(v));
+            let d = D::decode(d);
+            updates.push(((k, v), t, d));
+        },
+    )
+    .await
+    .unwrap_or_else(|err| {
+        // Ideally, readers should never encounter a missing blob. They place a seqno
+        // hold as they consume their snapshot/listen, preventing any blobs they need
+        // from being deleted by garbage collection, and all blob implementations are
+        // linearizable so there should be no possibility of stale reads.
+        //
+        // If we do have a bug and a reader does encounter a missing blob, the state
+        // cannot be recovered, and our best option is to panic and retry the whole
+        // process.
+        panic!(
+            "{} could not fetch batch part: {}",
+            reader_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "batch fetcher".to_string()),
+            err
         )
-        .await
-        .unwrap_or_else(|err| {
-            // Ideally, readers should never encounter a missing blob. They place a seqno
-            // hold as they consume their snapshot/listen, preventing any blobs they need
-            // from being deleted by garbage collection, and all blob implementations are
-            // linearizable so there should be no possibility of stale reads.
-            //
-            // If we do have a bug and a reader does encounter a missing blob, the state
-            // cannot be recovered, and our best option is to panic and retry the whole
-            // process.
-            panic!(
-                "{} could not fetch batch part: {}",
-                reader_id
-                    .map(|id| id.to_string())
-                    .unwrap_or_else(|| "batch fetcher".to_string()),
-                err
-            )
-        });
-    }
+    });
 
     (batch, updates)
 }
@@ -322,19 +349,19 @@ fn decode_inline_desc<T: Timestamp + Codec64>(desc: &Description<u64>) -> Descri
 
 /// Propagates metadata from readers alongside a `HollowBatch` to apply the
 /// desired semantics.
-#[derive(Debug, Clone)]
-pub(crate) enum LeasedBatchMetadata<T> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) enum SerdeLeasedBatchMetadata {
     /// Apply snapshot-style semantics to the fetched batch.
     Snapshot {
         /// Return all values with time leq `as_of`.
-        as_of: Antichain<T>,
+        as_of: Vec<[u8; 8]>,
     },
     /// Apply listen-style semantics to the fetched batch.
     Listen {
         /// Return all values with time in advance of `as_of`.
-        as_of: Antichain<T>,
-        /// Return all values with time leq `until`.
-        until: Antichain<T>,
+        as_of: Vec<[u8; 8]>,
+        /// Return all values with `lower` leq time.
+        lower: Vec<[u8; 8]>,
     },
 }
 
@@ -352,7 +379,7 @@ pub(crate) enum LeasedBatchMetadata<T> {
 ///   including over the network.
 ///
 /// n.b. `Self::get_droppable_batch` is known to be equivalent to
-/// `SerdeLeasedBatch::from(self)`, but we want the additonal warning message to
+/// `SerdeLeasedBatch::from(self)`, but we want the additional warning message to
 /// be visible and sufficiently scary.
 ///
 /// # Panics
@@ -371,8 +398,9 @@ where
 {
     pub(crate) shard_id: ShardId,
     pub(crate) reader_id: ReaderId,
-    pub(crate) metadata: LeasedBatchMetadata<T>,
-    pub(crate) batch: HollowBatch<T>,
+    pub(crate) metadata: SerdeLeasedBatchMetadata,
+    pub(crate) desc: Description<T>,
+    pub(crate) key: PartialBatchKey,
     /// The `SeqNo` from which this batch originated; we track this value as
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
@@ -441,7 +469,16 @@ where
 /// - From<SerdeLeasedBatch> for LeasedBatch<T>
 /// - From<LeasedBatch<T>> for SerdeLeasedBatch
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SerdeLeasedBatch(Vec<u8>);
+pub struct SerdeLeasedBatch {
+    shard_id: ShardId,
+    metadata: SerdeLeasedBatchMetadata,
+    lower: Vec<[u8; 8]>,
+    upper: Vec<[u8; 8]>,
+    since: Vec<[u8; 8]>,
+    key: PartialBatchKey,
+    leased_seqno: Option<SeqNo>,
+    reader_id: ReaderId,
+}
 
 impl<T: Timestamp + Codec64> From<LeasedBatch<T>> for SerdeLeasedBatch {
     /// Takes a [`LeasedBatch`] into a [`SerdeLeasedBatch`].
@@ -453,7 +490,16 @@ impl<T: Timestamp + Codec64> From<LeasedBatch<T>> for SerdeLeasedBatch {
     ///
     /// For more details, see [`LeasedBatch`]'s documentation.
     fn from(mut x: LeasedBatch<T>) -> Self {
-        let r = SerdeLeasedBatch(x.into_proto().encode_to_vec());
+        let r = SerdeLeasedBatch {
+            shard_id: x.shard_id,
+            metadata: x.metadata.clone(),
+            lower: x.desc.lower().iter().map(T::encode).collect(),
+            upper: x.desc.upper().iter().map(T::encode).collect(),
+            since: x.desc.since().iter().map(T::encode).collect(),
+            key: x.key.clone(),
+            leased_seqno: x.leased_seqno,
+            reader_id: x.reader_id.clone(),
+        };
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = x.leased_seqno.take();
         r
@@ -470,11 +516,18 @@ impl<T: Timestamp + Codec64> From<SerdeLeasedBatch> for LeasedBatch<T> {
     ///
     /// For more details, see [`LeasedBatch`]'s documentation.
     fn from(x: SerdeLeasedBatch) -> Self {
-        let proto = ProtoLeasedBatch::decode(x.0.as_slice())
-            .expect("internal error: invalid ProtoLeasedBatch");
-        proto
-            .into_rust()
-            .expect("internal error: invalid ProtoLeasedBatch")
+        LeasedBatch {
+            shard_id: x.shard_id,
+            metadata: x.metadata,
+            desc: Description::new(
+                Antichain::from(x.lower.into_iter().map(T::decode).collect::<Vec<_>>()),
+                Antichain::from(x.upper.into_iter().map(T::decode).collect::<Vec<_>>()),
+                Antichain::from(x.since.into_iter().map(T::decode).collect::<Vec<_>>()),
+            ),
+            key: x.key,
+            leased_seqno: x.leased_seqno,
+            reader_id: x.reader_id,
+        }
     }
 }
 
