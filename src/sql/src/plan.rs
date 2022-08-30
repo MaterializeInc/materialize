@@ -140,7 +140,9 @@ pub enum Plan {
 }
 
 impl Plan {
-    fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
+    /// Expresses which [`StatementKind`] can generate which set of
+    /// [`PlanKind`].
+    pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
         match stmt {
             StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
             StatementKind::AlterIndex => vec![
@@ -162,7 +164,7 @@ impl Plan {
             StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
-            StatementKind::Copy => vec![PlanKind::CopyFrom],
+            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Peek, PlanKind::SendDiffs],
             StatementKind::CreateCluster => vec![PlanKind::CreateComputeInstance],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateComputeInstanceReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
@@ -199,21 +201,11 @@ impl Plan {
             StatementKind::Select => vec![PlanKind::Peek, PlanKind::SendDiffs],
             StatementKind::SetTransaction => vec![],
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
-            StatementKind::ShowColumns
-            | StatementKind::ShowCreateConnection
-            | StatementKind::ShowCreateIndex
-            | StatementKind::ShowCreateMaterializedView
-            | StatementKind::ShowCreateSink
-            | StatementKind::ShowCreateSource
-            | StatementKind::ShowCreateTable
-            | StatementKind::ShowCreateView
-            | StatementKind::ShowDatabases
-            | StatementKind::ShowIndexes
-            | StatementKind::ShowObjects
-            | StatementKind::ShowSchemas => vec![PlanKind::SendRows],
-            StatementKind::ShowVariable => {
-                vec![PlanKind::ShowVariable, PlanKind::ShowAllVariables]
-            }
+            StatementKind::Show => vec![
+                PlanKind::Peek,
+                PlanKind::ShowVariable,
+                PlanKind::ShowAllVariables,
+            ],
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
             StatementKind::Tail => vec![PlanKind::Tail],
             StatementKind::Update => vec![PlanKind::ReadThenWrite, PlanKind::SendRows],

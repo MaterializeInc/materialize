@@ -179,6 +179,17 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             status: StatusCode::OK,
             body: r#"{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block"}]}"#,
         },
+        // Unsupported statement types
+        TestCase {
+            query: "tail (select * from v1)",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"unsupported via this API: TAIL (SELECT * FROM v1)"}]}"#,
+        },
+        TestCase {
+            query: "set var = 1",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"unsupported via this API: SET var = 1"}]}"#,
+        },
         // Syntax errors fail the request.
         TestCase {
             query: "'",

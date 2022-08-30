@@ -12,6 +12,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
+use mz_sql::ast::display::AstDisplay;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
@@ -19,12 +20,13 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
-use mz_sql::ast::{Raw, Statement};
+use mz_sql::ast::{Raw, SelectStatement, Statement};
+use mz_sql::plan::Plan;
 
 use crate::catalog::SYSTEM_USER;
 use crate::command::{
-    Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
-    StartupResponse,
+    Canceled, Command, ExecuteResponse, ExecuteResponseKind, Response, SimpleExecuteResponse,
+    SimpleResult, StartupResponse,
 };
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;

@@ -663,7 +663,7 @@ impl ExecuteResponse {
             ],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
             Explain | Peek | SendRows | ShowAllVariables | ShowVariable => {
-                vec![SendingRows]
+                vec![CopyTo, SendingRows]
             }
             Execute => vec![],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
