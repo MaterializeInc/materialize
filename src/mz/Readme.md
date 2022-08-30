@@ -46,7 +46,7 @@ mz login
 Using email and password:
 
 ```bash
-mz login interactive
+mz login --interactive
 ```
 
 ### Profiles
@@ -66,27 +66,30 @@ Windows: (TBC)
 
 ### Regions
 
-Deploy Materialize in any region by simply:
+Deploy Materialize in any region:
 
 ```bash
-mz regions enable us-east-1
+mz regions enable aws/us-east-1
 ```
 
-Delete any region using:
+List all the enabled regions:
 
 ```bash
-mz regions delete us-east-1
+mz regions list
 ```
 
-***Delete command is followed by a prompt warning to avoid any accidental delete***
+Check any enabled region's status:
 
+```bash
+mz regions status aws/us-east-1
+```
 
 ### Shell
 
 Connect to a Materialize instance to run your SQL using the CLI shell:
 
 ```bash
-mz shell us-east-1
+mz shell aws/us-east-1
 ```
 
 ### Dependencies
@@ -113,11 +116,7 @@ source ~/.bash_profile
 
 ### Future work
 #### Improvements
-- [ ]  Selecting a default region
 - [ ]  Run requests in parallel
-- [ ]  Enable selecting an environment as a flag in `Shell`
-- [ ]  `region` should be a flag not a subcommand
-- [ ]  `Interactive` should be a flag and not a subcommand
 - [ ]  Reduce `.unwrap` usage
 - [ ]  Add optional `—force` command to delete to avoid manual input
 - [ ]  Handle request errors to frontegg
