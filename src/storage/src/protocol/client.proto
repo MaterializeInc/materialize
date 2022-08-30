@@ -57,12 +57,7 @@ message ProtoFrontierUppersKind {
 
 message ProtoTrace {
     mz_repr.global_id.ProtoGlobalId id = 1;
-    repeated ProtoUpdate updates = 2;
-}
-
-message ProtoUpdate {
-    uint64 timestamp = 1;
-    int64 diff = 2;
+    mz_persist.gen.persist.ProtoU64Antichain upper = 2;
 }
 
 message ProtoStorageCommand {

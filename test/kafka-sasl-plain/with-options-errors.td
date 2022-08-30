@@ -50,7 +50,7 @@ contains:invalid CONNECTION: under-specified security configuration
 #       sasl_password_env = 'SASL_PASSWORD',
 #       ssl_ca_location = '/share/secrets/ca.crt'
 #   )
-#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   WITH (
 #       ssl_ca_location = '/share/secrets/ca.crt'
 #   )

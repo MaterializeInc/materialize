@@ -160,9 +160,13 @@ $ kafka-ingest format=avro topic=avro-data schema=${writer-schema} publish=true 
 $ kafka-ingest format=avro topic=avro-data schema=${reader-schema} publish=true timestamp=1
 { "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE avro_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > SELECT f0::text, f11, f12, f13, f2, f51, f52
   FROM avro_data

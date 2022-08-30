@@ -409,6 +409,17 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: ssh-connection
+    label: SSH connection tests
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/ssh-connection]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: ssh-connection
+    agents:
+      queue: linux-x86_64
+
   - id: kafka-resumption
     label: Kafka resumption tests
     depends_on: build-x86_64

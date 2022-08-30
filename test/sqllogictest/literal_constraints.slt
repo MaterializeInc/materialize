@@ -344,10 +344,32 @@ WHERE a+a IN (2, 6)
 2
 6
 
-# In the following query, we would be able to detect literal constraints if we called `canonicalize_equivalences`
-
 statement ok
 CREATE INDEX idx_t2_a ON t2(a);
+
+# Only some of the fields are literals in an IN list. This exercises the
+# `record_create(a1, a2, ...) = record_create(b1, b2, ...)` case in `MirScalarExpr::reduce()`
+
+query T multiline
+EXPLAIN SELECT * FROM t2
+WHERE (a,b) IN ((1, 4*a), (2, 5*a), (3, a+20))
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t2_a
+| | Lookup values [(1); (2); (3)]
+| Filter (((#0 = 1) AND (#1 = (4 * #0))) OR ((#0 = 2) AND (#1 = (5 * #0))) OR ((#0 = 3) AND (#1 = (#0 + 20))))
+| Project (#0..=#2)
+
+EOF
+
+query III rowsort
+SELECT * FROM t2
+WHERE (a,b) IN ((1, 4*a), (2, 5*a), (3, a+20))
+----
+1  4  7
+3  23  33
+
+# In the following query, we would be able to detect literal constraints if we called `canonicalize_equivalences`
 
 query T multiline
 EXPLAIN SELECT a, b, c FROM t2 WHERE a IN (a + b, a + c, 1 + 5) AND a + b = 5 AND a + c = 4;

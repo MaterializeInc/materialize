@@ -176,6 +176,10 @@ t1
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 $ kafka-create-topic topic=source1 partitions=1
 $ kafka-ingest format=bytes topic=source1
 A
@@ -190,7 +194,7 @@ A
 # Sinks
 > CREATE SINK sink1 FROM v1mat
   INTO KAFKA CONNECTION kafka_conn TOPIC 'sink1'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
 {"before": null, "after": {"row":{"c1": 3}}, "transaction": {"id": "<TIMESTAMP>"}}

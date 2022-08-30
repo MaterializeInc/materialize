@@ -19,12 +19,16 @@ syntax = "proto3";
 message Message1 {}
 message Message2 {}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 ! CREATE SOURCE fail FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-too-few-${testdrive.seed}'
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Protobuf schemas with no messages not yet supported
 
 ! CREATE SOURCE fail FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-too-many-${testdrive.seed}'
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Protobuf schemas with multiple messages not yet supported

@@ -70,6 +70,7 @@ pub enum PlanError {
     UpsertSinkWithoutKey,
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
+    InvalidObject(ResolvedObjectName),
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(ResolvedObjectName),
     InvalidTemporarySchema,
@@ -197,6 +198,7 @@ impl fmt::Display for PlanError {
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
             Self::Parser(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
+            Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::Qgm(e) => e.fmt(f),
             Self::InvalidTemporarySchema => {

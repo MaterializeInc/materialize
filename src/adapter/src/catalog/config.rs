@@ -9,12 +9,14 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
 use mz_controller::ComputeInstanceReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
+use mz_secrets::SecretsReader;
 use mz_storage::types::hosts::StorageHostResourceAllocation;
 
 use crate::catalog::storage;
@@ -42,6 +44,8 @@ pub struct Config<'a, S> {
     pub default_storage_host_size: Option<String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
+    /// A handle to a secrets manager that can only read secrets.
+    pub secrets_reader: Arc<dyn SecretsReader>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -21,8 +21,12 @@ $ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schem
 > DROP SCHEMA IF EXISTS public CASCADE
 > CREATE SCHEMA public
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 ! CREATE SOURCE resolution_no_publish_writer
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-no-publish-writer-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 contains:No value schema found

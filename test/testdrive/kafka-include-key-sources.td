@@ -40,11 +40,15 @@ contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FO
   INCLUDE KEY AS key_col
 contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 # "Bare" format works when the key format is in a registry
 > CREATE SOURCE bareformatconfluent
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-avro-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS named
   ENVELOPE UPSERT
 

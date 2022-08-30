@@ -273,6 +273,7 @@ Right
 Role
 Roles
 Rollback
+Rotate
 Row
 Rows
 S3

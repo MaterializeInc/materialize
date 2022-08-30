@@ -26,11 +26,13 @@ use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::proto_leased_batch_metadata;
 use crate::internal::state::{
     HollowBatch, ProtoHollowBatch, ProtoLeasedBatch, ProtoLeasedBatchMetadata, ProtoReaderState,
-    ProtoStateDiff, ProtoStateFieldDiff, ProtoStateFieldDiffType, ProtoStateRollup, ProtoTrace,
-    ProtoU64Antichain, ProtoU64Description, ProtoWriterState, ReaderState, State, StateCollections,
-    WriterState,
+    ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
+    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState,
+    ReaderState, State, StateCollections, WriterState,
 };
-use crate::internal::state_diff::{StateDiff, StateFieldDiff, StateFieldValDiff};
+use crate::internal::state_diff::{
+    ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
+};
 use crate::internal::trace::Trace;
 use crate::read::ReaderId;
 use crate::{ShardId, WriterId};
@@ -178,54 +180,69 @@ where
 
 impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
     fn into_proto(&self) -> ProtoStateDiff {
+        let mut field_diffs = ProtoStateFieldDiffs::default();
+        field_diffs_into_proto(
+            ProtoStateField::LastGcReq,
+            &self.last_gc_req,
+            &mut field_diffs,
+            |()| Vec::new(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+        field_diffs_into_proto(
+            ProtoStateField::Rollups,
+            &self.rollups,
+            &mut field_diffs,
+            |k| k.into_proto().encode_to_vec(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+        field_diffs_into_proto(
+            ProtoStateField::Readers,
+            &self.readers,
+            &mut field_diffs,
+            |k| k.into_proto().encode_to_vec(),
+            |v| {
+                ProtoReaderState {
+                    since: Some(v.since.into_proto()),
+                    seqno: v.seqno.into_proto(),
+                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
+                }
+                .encode_to_vec()
+            },
+        );
+        field_diffs_into_proto(
+            ProtoStateField::Writers,
+            &self.writers,
+            &mut field_diffs,
+            |k| k.into_proto().encode_to_vec(),
+            |v| {
+                ProtoWriterState {
+                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
+                    lease_duration_ms: v.lease_duration_ms,
+                }
+                .encode_to_vec()
+            },
+        );
+        field_diffs_into_proto(
+            ProtoStateField::Since,
+            &self.since,
+            &mut field_diffs,
+            |()| Vec::new(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+        field_diffs_into_proto(
+            ProtoStateField::Spine,
+            &self.spine,
+            &mut field_diffs,
+            |k| k.into_proto().encode_to_vec(),
+            |()| Vec::new(),
+        );
+        debug_assert_eq!(field_diffs.validate(), Ok(()));
         ProtoStateDiff {
             applier_version: self.applier_version.to_string(),
             seqno_from: self.seqno_from.into_proto(),
             seqno_to: self.seqno_to.into_proto(),
             latest_rollup_key: self.latest_rollup_key.into_proto(),
-            rollups: field_diffs_into_proto(
-                &self.rollups,
-                |k| k.into_proto().encode_to_vec(),
-                |v| v.into_proto().encode_to_vec(),
-            ),
-            last_gc_req: field_diffs_into_proto(
-                &self.last_gc_req,
-                |()| Vec::new(),
-                |v| v.into_proto().encode_to_vec(),
-            ),
-            readers: field_diffs_into_proto(
-                &self.readers,
-                |k| k.into_proto().encode_to_vec(),
-                |v| {
-                    ProtoReaderState {
-                        since: Some(v.since.into_proto()),
-                        seqno: v.seqno.into_proto(),
-                        last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                    }
-                    .encode_to_vec()
-                },
-            ),
-            writers: field_diffs_into_proto(
-                &self.writers,
-                |k| k.into_proto().encode_to_vec(),
-                |v| {
-                    ProtoWriterState {
-                        last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                        lease_duration_ms: v.lease_duration_ms,
-                    }
-                    .encode_to_vec()
-                },
-            ),
-            since: field_diffs_into_proto(
-                &self.since,
-                |()| Vec::new(),
-                |v| v.into_proto().encode_to_vec(),
-            ),
-            spine: field_diffs_into_proto(
-                &self.spine,
-                |k| k.into_proto().encode_to_vec(),
-                |()| Vec::new(),
-            ),
+            field_diffs: Some(field_diffs),
         }
     }
 
@@ -243,142 +260,168 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                 ))
             })?
         };
-        Ok(StateDiff {
+        let mut state_diff = StateDiff::new(
             applier_version,
-            seqno_from: proto.seqno_from.into_rust()?,
-            seqno_to: proto.seqno_to.into_rust()?,
-            latest_rollup_key: proto.latest_rollup_key.into_rust()?,
-            rollups: field_diffs_into_rust::<u64, String, _, _, _, _>(
-                proto.rollups,
-                |k| k.into_rust(),
-                |v| v.into_rust(),
-            )?
-            .into_iter()
-            .collect(),
-            last_gc_req: field_diffs_into_rust::<(), u64, _, _, _, _>(
-                proto.last_gc_req,
-                |()| Ok(()),
-                |v| v.into_rust(),
-            )?,
-            readers: field_diffs_into_rust::<String, ProtoReaderState, _, _, _, _>(
-                proto.readers,
-                |k| k.into_rust(),
-                |v| {
-                    Ok(ReaderState {
-                        since: v.since.into_rust_if_some("since")?,
-                        seqno: v.seqno.into_rust()?,
-                        last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                    })
-                },
-            )?
-            .into_iter()
-            .collect(),
-            writers: field_diffs_into_rust::<String, ProtoWriterState, _, _, _, _>(
-                proto.writers,
-                |k| k.into_rust(),
-                |v| {
-                    Ok(WriterState {
-                        last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                        lease_duration_ms: v.lease_duration_ms,
-                    })
-                },
-            )?
-            .into_iter()
-            .collect(),
-            since: field_diffs_into_rust::<(), ProtoU64Antichain, _, _, _, _>(
-                proto.since,
-                |()| Ok(()),
-                |v| v.into_rust(),
-            )?,
-            spine: field_diffs_into_rust::<ProtoHollowBatch, (), _, _, _, _>(
-                proto.spine,
-                |k| k.into_rust(),
-                |()| Ok(()),
-            )?,
-        })
+            proto.seqno_from.into_rust()?,
+            proto.seqno_to.into_rust()?,
+            proto.latest_rollup_key.into_rust()?,
+        );
+        if let Some(field_diffs) = proto.field_diffs {
+            debug_assert_eq!(field_diffs.validate(), Ok(()));
+            for field_diff in field_diffs.iter() {
+                let (field, diff) = field_diff?;
+                match field {
+                    ProtoStateField::LastGcReq => field_diff_into_rust::<(), u64, _, _, _, _>(
+                        diff,
+                        &mut state_diff.last_gc_req,
+                        |()| Ok(()),
+                        |v| v.into_rust(),
+                    )?,
+                    ProtoStateField::Rollups => field_diff_into_rust::<u64, String, _, _, _, _>(
+                        diff,
+                        &mut state_diff.rollups,
+                        |k| k.into_rust(),
+                        |v| v.into_rust(),
+                    )?,
+                    ProtoStateField::Readers => {
+                        field_diff_into_rust::<String, ProtoReaderState, _, _, _, _>(
+                            diff,
+                            &mut state_diff.readers,
+                            |k| k.into_rust(),
+                            |v| {
+                                Ok(ReaderState {
+                                    since: v.since.into_rust_if_some("since")?,
+                                    seqno: v.seqno.into_rust()?,
+                                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
+                                })
+                            },
+                        )?
+                    }
+                    ProtoStateField::Writers => {
+                        field_diff_into_rust::<String, ProtoWriterState, _, _, _, _>(
+                            diff,
+                            &mut state_diff.writers,
+                            |k| k.into_rust(),
+                            |v| {
+                                Ok(WriterState {
+                                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
+                                    lease_duration_ms: v.lease_duration_ms,
+                                })
+                            },
+                        )?
+                    }
+                    ProtoStateField::Since => {
+                        field_diff_into_rust::<(), ProtoU64Antichain, _, _, _, _>(
+                            diff,
+                            &mut state_diff.since,
+                            |()| Ok(()),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    ProtoStateField::Spine => {
+                        field_diff_into_rust::<ProtoHollowBatch, (), _, _, _, _>(
+                            diff,
+                            &mut state_diff.spine,
+                            |k| k.into_rust(),
+                            |()| Ok(()),
+                        )?
+                    }
+                }
+            }
+        }
+        Ok(state_diff)
     }
 }
 
 fn field_diffs_into_proto<K, V, KFn, VFn>(
+    field: ProtoStateField,
     diffs: &[StateFieldDiff<K, V>],
+    proto: &mut ProtoStateFieldDiffs,
     k_fn: KFn,
     v_fn: VFn,
-) -> Vec<ProtoStateFieldDiff>
-where
+) where
     KFn: Fn(&K) -> Vec<u8>,
     VFn: Fn(&V) -> Vec<u8>,
 {
-    diffs
-        .iter()
-        .map(|diff| {
-            let (diff_type, from, to) = match &diff.val {
-                StateFieldValDiff::Insert(to) => {
-                    (ProtoStateFieldDiffType::Insert, Vec::new(), v_fn(to))
-                }
-                StateFieldValDiff::Update(from, to) => {
-                    (ProtoStateFieldDiffType::Update, v_fn(from), v_fn(to))
-                }
-                StateFieldValDiff::Delete(from) => {
-                    (ProtoStateFieldDiffType::Delete, v_fn(from), Vec::new())
-                }
-            };
-            ProtoStateFieldDiff {
-                key: k_fn(&diff.key),
-                diff_type: i32::from(diff_type),
-                from,
-                to,
-            }
-        })
-        .collect()
+    for diff in diffs.iter() {
+        field_diff_into_proto(field, diff, proto, &k_fn, &v_fn);
+    }
 }
 
-fn field_diffs_into_rust<KP, VP, K, V, KFn, VFn>(
-    protos: Vec<ProtoStateFieldDiff>,
+fn field_diff_into_proto<K, V, KFn, VFn>(
+    field: ProtoStateField,
+    diff: &StateFieldDiff<K, V>,
+    proto: &mut ProtoStateFieldDiffs,
     k_fn: KFn,
     v_fn: VFn,
-) -> Result<Vec<StateFieldDiff<K, V>>, TryFromProtoError>
+) where
+    KFn: Fn(&K) -> Vec<u8>,
+    VFn: Fn(&V) -> Vec<u8>,
+{
+    proto.fields.push(i32::from(field));
+    proto.push_data(k_fn(&diff.key));
+    match &diff.val {
+        StateFieldValDiff::Insert(to) => {
+            proto
+                .diff_types
+                .push(i32::from(ProtoStateFieldDiffType::Insert));
+            proto.push_data(v_fn(to));
+        }
+        StateFieldValDiff::Update(from, to) => {
+            proto
+                .diff_types
+                .push(i32::from(ProtoStateFieldDiffType::Update));
+            proto.push_data(v_fn(from));
+            proto.push_data(v_fn(to));
+        }
+        StateFieldValDiff::Delete(from) => {
+            proto
+                .diff_types
+                .push(i32::from(ProtoStateFieldDiffType::Delete));
+            proto.push_data(v_fn(from));
+        }
+    };
+}
+
+fn field_diff_into_rust<KP, VP, K, V, KFn, VFn>(
+    proto: ProtoStateFieldDiff<'_>,
+    diffs: &mut Vec<StateFieldDiff<K, V>>,
+    k_fn: KFn,
+    v_fn: VFn,
+) -> Result<(), TryFromProtoError>
 where
     KP: prost::Message + Default,
     VP: prost::Message + Default,
     KFn: Fn(KP) -> Result<K, TryFromProtoError>,
     VFn: Fn(VP) -> Result<V, TryFromProtoError>,
 {
-    let mut diffs = Vec::new();
-    for proto in protos {
-        let val = match ProtoStateFieldDiffType::from_i32(proto.diff_type) {
-            Some(ProtoStateFieldDiffType::Insert) => {
-                let to = VP::decode(proto.to.as_slice())
-                    .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
-                StateFieldValDiff::Insert(v_fn(to)?)
-            }
-            Some(ProtoStateFieldDiffType::Update) => {
-                let from = VP::decode(proto.from.as_slice())
-                    .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
-                let to = VP::decode(proto.to.as_slice())
-                    .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+    let val = match proto.diff_type {
+        ProtoStateFieldDiffType::Insert => {
+            let to = VP::decode(proto.to)
+                .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+            StateFieldValDiff::Insert(v_fn(to)?)
+        }
+        ProtoStateFieldDiffType::Update => {
+            let from = VP::decode(proto.from)
+                .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+            let to = VP::decode(proto.to)
+                .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
 
-                StateFieldValDiff::Update(v_fn(from)?, v_fn(to)?)
-            }
-            Some(ProtoStateFieldDiffType::Delete) => {
-                let from = VP::decode(proto.from.as_slice())
-                    .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
-                StateFieldValDiff::Delete(v_fn(from)?)
-            }
-            None => {
-                return Err(TryFromProtoError::unknown_enum_variant(format!(
-                    "ProtoStateFieldDiffType {}",
-                    proto.diff_type,
-                )))
-            }
-        };
-        let key = KP::decode(proto.key.as_slice())
-            .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
-        diffs.push(StateFieldDiff {
-            key: k_fn(key)?,
-            val,
-        });
-    }
-    Ok(diffs)
+            StateFieldValDiff::Update(v_fn(from)?, v_fn(to)?)
+        }
+        ProtoStateFieldDiffType::Delete => {
+            let from = VP::decode(proto.from)
+                .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+            StateFieldValDiff::Delete(v_fn(from)?)
+        }
+    };
+    let key = KP::decode(proto.key)
+        .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+    diffs.push(StateFieldDiff {
+        key: k_fn(key)?,
+        val,
+    });
+    Ok(())
 }
 
 impl<K, V, T, D> State<K, V, T, D>

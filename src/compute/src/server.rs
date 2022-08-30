@@ -22,8 +22,7 @@ use timely::WorkerConfig;
 use tokio::sync::mpsc;
 
 use mz_build_info::BuildInfo;
-use mz_compute_client::command::ComputeCommand;
-use mz_compute_client::controller::replicated::ComputeCommandHistory;
+use mz_compute_client::command::{ComputeCommand, ComputeCommandHistory};
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_ore::metrics::MetricsRegistry;

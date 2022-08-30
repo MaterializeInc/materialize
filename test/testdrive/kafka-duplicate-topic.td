@@ -22,25 +22,29 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema} publish=true repeat=1
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE source0
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-topic0-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 > CREATE SOURCE source1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-topic1-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 > CREATE SINK sink0 FROM source0
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-sink-output-${testdrive.seed}'
   KEY (f2)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK sink1 FROM source1
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-sink-output-${testdrive.seed}'
   KEY (f2)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
 

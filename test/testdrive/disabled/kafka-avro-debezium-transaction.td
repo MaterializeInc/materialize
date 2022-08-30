@@ -220,11 +220,14 @@ $ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=2
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 8, "b": 9}}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c", "transaction": {"total_order": null, "id": "5"}}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 > CREATE SINK data_sink FROM data_schema_inline
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-sink-${testdrive.seed}'
   FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # Check that repeated Debezium messages are skipped.
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
@@ -335,7 +338,7 @@ $ unset-regex
 # Reingest to verify that we keep transactionality
 > CREATE SOURCE data_sink_reingest
   FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-sink-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 > SELECT after::text FROM data_sink_reingest ORDER BY transaction ASC

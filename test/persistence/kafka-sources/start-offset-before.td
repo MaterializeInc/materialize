@@ -44,18 +44,22 @@ $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} 
 $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count} timestamp=3
 {"f1": "c${kafka-ingest.iteration}"} {"f2": "c${kafka-ingest.iteration}"}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE start_offset
   FROM KAFKA CONNECTION kafka_conn
   WITH (START OFFSET = [100])
   TOPIC 'testdrive-offset-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE SOURCE kafka_time_offset
   FROM KAFKA CONNECTION kafka_conn
   WITH (START TIMESTAMP=2)
   TOPIC 'testdrive-offset-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > SELECT COUNT(*) FROM start_offset;
