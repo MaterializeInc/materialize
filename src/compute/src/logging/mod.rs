@@ -41,10 +41,10 @@ where
     time_ms: Timestamp,
     event_pusher: P,
     _phantom: ::std::marker::PhantomData<(E, T)>,
-    /// Each time is advanced to the strictly next millisecond that is a multiple of this granularity.
+    /// Each time is advanced to the strictly next millisecond that is a multiple of this interval.
     /// This means we should be able to perform the same action on timestamp capabilities, and only
     /// flush buffers when this timestamp advances.
-    granularity_ms: u64,
+    interval_ms: u64,
     /// A stash for data that does not yet need to be sent.
     buffer: Vec<(Duration, E, T)>,
 }
@@ -69,12 +69,12 @@ where
     }
 
     /// Creates a new batch logger.
-    pub fn new(event_pusher: P, granularity_ms: u64) -> Self {
+    pub fn new(event_pusher: P, interval_ms: u64) -> Self {
         BatchLogger {
             time_ms: 0,
             event_pusher,
             _phantom: ::std::marker::PhantomData,
-            granularity_ms,
+            interval_ms,
             buffer: Vec::with_capacity(Self::buffer_capacity()),
         }
     }
@@ -82,7 +82,7 @@ where
     /// Publishes a batch of logged events and advances the capability.
     pub fn publish_batch(&mut self, time: &Duration, data: &mut Vec<(Duration, E, T)>) {
         let new_time_ms =
-            (((time.as_millis() as Timestamp) / self.granularity_ms) + 1) * self.granularity_ms;
+            (((time.as_millis() as Timestamp) / self.interval_ms) + 1) * self.interval_ms;
         if !data.is_empty() {
             // If we don't need to grow our buffer, move
             if data.len() > self.buffer.capacity() - self.buffer.len() {
@@ -105,7 +105,7 @@ where
             }
 
             // In principle we can buffer up until this point, if that is appealing to us.
-            // We could buffer more aggressively if the logging granularity were exposed
+            // We could buffer more aggressively if the logging interval were exposed
             // here, as the forward ticks would be that much less frequent.
             self.event_pusher
                 .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));

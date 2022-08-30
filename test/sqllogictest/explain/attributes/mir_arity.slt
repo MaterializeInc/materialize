@@ -1,0 +1,135 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+)
+
+statement ok
+CREATE TABLE u (
+  c int,
+  d int
+)
+
+statement ok
+CREATE TABLE v (
+  e int,
+  f int
+)
+
+statement ok
+CREATE INDEX t_a_idx ON T(a);
+
+statement ok
+CREATE INDEX u_d_idx ON U(d);
+
+# Constant EXCEPT (<outer join> order by ..) will return at least one instance
+# of each flavor of MirRelationExpr.
+
+statement ok
+CREATE VIEW test1 AS
+(SELECT 1 as a, 2 as b, 11 as h, 12 as g) EXCEPT (SELECT t.*, u.c + 1 as g FROM (SELECT a, b, generate_series(a, b) as h FROM t) t LEFT OUTER JOIN u on t.a = u.d
+ORDER BY t.b LIMIT 10 OFFSET 1);
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR VIEW test1
+----
+Explained Query
+  Let // { arity: 4 }
+    Threshold // { arity: 4 }
+      Union // { arity: 4 }
+        Negate // { arity: 4 }
+          Distinct group_by=[#0, #1, #2, #3] // { arity: 4 }
+            TopK order_by=[#1 asc nulls_last] limit=10 offset=1 monotonic=false // { arity: 4 }
+              Project (#0..=#2, #4) // { arity: 4 }
+                Map ((#3 + 1)) // { arity: 5 }
+                  Union // { arity: 4 }
+                    Map (null) // { arity: 4 }
+                      Union // { arity: 3 }
+                        Negate // { arity: 3 }
+                          Project (#0..=#2) // { arity: 3 }
+                            Join on=(#0 = #3) type=differential // { arity: 4 }
+                              Get l0 // { arity: 3 }
+                              ArrangeBy keys=[[#0]] // { arity: 1 }
+                                Distinct group_by=[#0] // { arity: 1 }
+                                  Project (#0) // { arity: 1 }
+                                    Get l1 // { arity: 4 }
+                        Get l0 // { arity: 3 }
+                    Get l1 // { arity: 4 }
+        Constant // { arity: 4 }
+          - (1, 2, 11, 12)
+    Where
+      l1 =
+        Project (#0..=#3) // { arity: 4 }
+          Join on=(#0 = #4) type=differential // { arity: 5 }
+            Filter (#0) IS NOT NULL // { arity: 3 }
+              Get l0 // { arity: 3 }
+            ArrangeBy keys=[[#1]] // { arity: 2 }
+              Get materialize.public.u // { arity: 2 }
+      l0 =
+        FlatMap generate_series(#0, #1, 1) // { arity: 3 }
+          Get materialize.public.t // { arity: 2 }
+
+Used Indexes:
+  - materialize.public.t_a_idx
+  - materialize.public.u_d_idx
+
+EOF
+
+# a reduce with an aggregation.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
+SELECT sum(e * f), max(f) FROM v GROUP BY mod(e, 5)
+----
+Explained Query
+  Project (#1, #2) // { arity: 2 }
+    Reduce group_by=[(#0 % 5)] aggregates=[sum((#0 * #1)), max(#1)] // { arity: 3 }
+      Get materialize.public.v // { arity: 2 }
+
+Source materialize.public.v
+  Demand (#0, #1)
+
+EOF
+
+# A let where the value has a different arity from the body
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
+WITH u AS (select u.c + 1 as g from u)
+SELECT u.g as g, w.g as h FROM u, u as w WHERE u.g = w.g
+----
+Explained Query
+  Let // { arity: 2 }
+    Project (#0, #0) // { arity: 2 }
+      Join on=(#0 = #1) type=differential // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Get l0 // { arity: 1 }
+        Get l0 // { arity: 1 }
+    Where
+      l0 =
+        Project (#2) // { arity: 1 }
+          Filter (#0) IS NOT NULL // { arity: 3 }
+            Map ((#0 + 1)) // { arity: 3 }
+              Get materialize.public.u // { arity: 2 }
+
+Used Indexes:
+  - materialize.public.u_d_idx
+
+EOF
+
+# a constant error
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
+SELECT * FROM u WHERE (SELECT f FROM v WHERE v.e = u.d)
+----
+EOF

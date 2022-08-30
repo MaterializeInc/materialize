@@ -92,9 +92,13 @@ $ kafka-create-topic topic=input_avro
 $ kafka-ingest format=avro topic=input_avro schema=${schema} publish=true timestamp=1
 {"before": null, "after": {"row": {"a": 123}}, "op": "c", "source": {"snapshot": false, "lsn": null, "sequence": null}}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE input_avro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_avro-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM input_avro

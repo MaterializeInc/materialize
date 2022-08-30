@@ -278,11 +278,11 @@ SELECT * FROM ((SELECT * FROM mz_arrangement_sizes_1) EXCEPT (SELECT * FROM mz_a
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_dataflow_names) EXCEPT (SELECT * FROM mz_dataflow_names_1));
+SELECT * FROM ((SELECT * FROM mz_dataflows) EXCEPT (SELECT * FROM mz_dataflows_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_dataflow_names_1) EXCEPT (SELECT * FROM mz_dataflow_names));
+SELECT * FROM ((SELECT * FROM mz_dataflows_1) EXCEPT (SELECT * FROM mz_dataflows));
 ----
 
 query T
@@ -519,11 +519,11 @@ SELECT * FROM ((SELECT * FROM mz_arrangement_sizes_2) EXCEPT (SELECT * FROM mz_a
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_dataflow_names) EXCEPT (SELECT * FROM mz_dataflow_names_2));
+SELECT * FROM ((SELECT * FROM mz_dataflows) EXCEPT (SELECT * FROM mz_dataflows_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_dataflow_names_2) EXCEPT (SELECT * FROM mz_dataflow_names));
+SELECT * FROM ((SELECT * FROM mz_dataflows_2) EXCEPT (SELECT * FROM mz_dataflows));
 ----
 
 query T
@@ -770,11 +770,11 @@ SELECT * FROM ((SELECT * FROM mz_arrangement_sizes_3) EXCEPT (SELECT * FROM mz_a
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_dataflow_names) EXCEPT (SELECT * FROM mz_dataflow_names_3));
+SELECT * FROM ((SELECT * FROM mz_dataflows) EXCEPT (SELECT * FROM mz_dataflows_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_dataflow_names_3) EXCEPT (SELECT * FROM mz_dataflow_names));
+SELECT * FROM ((SELECT * FROM mz_dataflows_3) EXCEPT (SELECT * FROM mz_dataflows));
 ----
 
 query T

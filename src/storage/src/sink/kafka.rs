@@ -408,7 +408,6 @@ impl KafkaSinkStateEnum {
 struct KafkaSinkState {
     name: String,
     topic: String,
-    topic_prefix: String,
     shutdown_flag: Arc<AtomicBool>,
     metrics: Arc<SinkMetrics>,
     producer: KafkaTxProducer,
@@ -445,7 +444,13 @@ impl KafkaSinkState {
         metrics: &KafkaBaseMetrics,
         connection_context: &ConnectionContext,
     ) -> Self {
-        let config = Self::create_producer_config(&connection, connection_context);
+        let transactional_id = if connection.exactly_once {
+            Some(format!("mz-producer-{sink_id}-{worker_id}"))
+        } else {
+            None
+        };
+        let config =
+            Self::create_producer_config(&connection, connection_context, transactional_id);
         let consistency_client_config =
             Self::create_consistency_client_config(&connection, connection_context);
 
@@ -481,8 +486,7 @@ impl KafkaSinkState {
 
         KafkaSinkState {
             name: sink_name,
-            topic: connection.topic,
-            topic_prefix: connection.topic_prefix,
+            topic: connection.topic.clone(),
             shutdown_flag,
             metrics,
             producer,
@@ -500,6 +504,7 @@ impl KafkaSinkState {
     fn create_producer_config(
         connection: &KafkaSinkConnection,
         connection_context: &ConnectionContext,
+        transactional_id: Option<String>,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
         TokioHandle::current().block_on(
@@ -530,13 +535,9 @@ impl KafkaSinkState {
         // if it makes a big difference
         config.set("queue.buffering.max.ms", &format!("{}", 10));
 
-        if connection.exactly_once {
-            // TODO(aljoscha): this only works for now, once there's an actual
-            // Kafka producer on each worker they would step on each others toes
-            let transactional_id = format!("mz-producer-{}", connection.topic);
-            config.set("transactional.id", transactional_id);
+        if let Some(id) = transactional_id {
+            config.set("transactional.id", id);
         }
-
         config
     }
 
@@ -901,7 +902,7 @@ impl KafkaSinkState {
     ) -> KafkaResult<()> {
         let encoded = avro::encode_debezium_transaction_unchecked(
             consistency.schema_id,
-            &self.topic_prefix,
+            &self.topic,
             transaction_id,
             status,
             message_count,
@@ -909,7 +910,7 @@ impl KafkaSinkState {
 
         let record = BaseRecord::to(&consistency.topic)
             .payload(&encoded)
-            .key(&self.topic_prefix);
+            .key(&self.topic);
 
         self.send(record).await
     }

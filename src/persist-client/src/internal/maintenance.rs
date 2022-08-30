@@ -18,6 +18,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
+use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use std::fmt::Debug;
 use timely::progress::Timestamp;
@@ -44,6 +45,7 @@ pub struct LeaseExpiration {
 pub struct RoutineMaintenance {
     pub(crate) garbage_collection: Option<GcReq>,
     pub(crate) lease_expiration: Option<LeaseExpiration>,
+    pub(crate) write_rollup: Option<SeqNo>,
 }
 
 impl RoutineMaintenance {
@@ -51,7 +53,7 @@ impl RoutineMaintenance {
     pub(crate) fn start_performing<K, V, T, D>(
         self,
         machine: &Machine<K, V, T, D>,
-        gc: &GarbageCollector,
+        gc: &GarbageCollector<K, V, T, D>,
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -69,7 +71,7 @@ impl RoutineMaintenance {
     pub(crate) async fn perform<K, V, T, D>(
         self,
         machine: &Machine<K, V, T, D>,
-        gc: &GarbageCollector,
+        gc: &GarbageCollector<K, V, T, D>,
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -88,7 +90,7 @@ impl RoutineMaintenance {
     fn perform_in_background<K, V, T, D>(
         self,
         machine: &Machine<K, V, T, D>,
-        gc: &GarbageCollector,
+        gc: &GarbageCollector<K, V, T, D>,
     ) -> Vec<BoxFuture<'static, ()>>
     where
         K: Debug + Codec,
@@ -103,6 +105,28 @@ impl RoutineMaintenance {
                 // case of shutdown, the sender may have been dropped
                 futures.push(recv.map(|_| ()).boxed());
             }
+        }
+
+        if let Some(rollup_seqno) = self.write_rollup {
+            let mut machine = machine.clone();
+            futures.push(
+                mz_ore::task::spawn(|| "persist::write_rollup", async move {
+                    if machine.seqno() < rollup_seqno {
+                        machine.fetch_and_update_state().await;
+                    }
+                    // We don't have to write at exactly rollup_seqno, just need
+                    // something recent.
+                    assert!(
+                        machine.seqno() >= rollup_seqno,
+                        "{} vs {}",
+                        machine.seqno(),
+                        rollup_seqno
+                    );
+                    machine.add_rollup_for_current_seqno().await;
+                })
+                .map(|_| ())
+                .boxed(),
+            );
         }
 
         if let Some(lease_expiration) = self.lease_expiration {
@@ -160,7 +184,7 @@ where
     pub(crate) fn start_performing<K, V, D>(
         self,
         machine: &Machine<K, V, T, D>,
-        gc: &GarbageCollector,
+        gc: &GarbageCollector<K, V, T, D>,
         compactor: Option<&Compactor>,
     ) where
         K: Debug + Codec,
@@ -178,7 +202,7 @@ where
     pub(crate) async fn perform<K, V, D>(
         self,
         machine: &Machine<K, V, T, D>,
-        gc: &GarbageCollector,
+        gc: &GarbageCollector<K, V, T, D>,
         compactor: Option<&Compactor>,
     ) where
         K: Debug + Codec,
@@ -197,7 +221,7 @@ where
     fn perform_in_background<K, V, D>(
         self,
         machine: &Machine<K, V, T, D>,
-        gc: &GarbageCollector,
+        gc: &GarbageCollector<K, V, T, D>,
         compactor: Option<&Compactor>,
     ) -> Vec<BoxFuture<'static, ()>>
     where

@@ -25,14 +25,18 @@ $ schema-registry-wait-schema schema=postgres.public.insert_multi_table1-value
 
 $ schema-registry-wait-schema schema=postgres.public.insert_multi_table2-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE insert_multi_table1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.insert_multi_table1'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > CREATE SOURCE insert_multi_table2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.insert_multi_table2'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 $ postgres-connect name=conn1 url=postgres://postgres:postgres@postgres

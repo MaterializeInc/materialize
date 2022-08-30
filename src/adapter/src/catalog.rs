@@ -43,6 +43,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::{explain_new::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
+use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
@@ -649,7 +650,7 @@ impl CatalogState {
                     active_logs.insert(log.variant.clone(), index_id);
                 }
                 Some(DataflowLoggingConfig {
-                    granularity_ns: introspection.granularity.as_nanos(),
+                    interval_ns: introspection.interval.as_nanos(),
                     log_logging: introspection.debugging,
                     active_logs,
                     sink_logs: BTreeMap::new(),
@@ -1771,7 +1772,7 @@ impl<S: Append> Catalog<S> {
                     cluster_id: config.storage.cluster_id(),
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
-                    timestamp_frequency: Duration::from_secs(1),
+                    timestamp_interval: Duration::from_secs(1),
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
@@ -2099,6 +2100,20 @@ impl<S: Append> Catalog<S> {
             .apply_persisted_builtin_migration(&mut builtin_migration_metadata)
             .await?;
 
+        // Load public keys for SSH connections from the secrets store to the catalog
+        for (id, entry) in catalog.state.entry_by_id.iter_mut() {
+            if let CatalogItem::Connection(ref mut connection) = entry.item {
+                if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) =
+                    connection.connection
+                {
+                    let secret = config.secrets_reader.read(*id).await?;
+                    let keyset = mz_ore::ssh_key::SshKeyset::from_bytes(&secret)?;
+                    let public_keypair = keyset.public_keys();
+                    ssh.public_keys = Some(public_keypair);
+                }
+            }
+        }
+
         let mut builtin_table_updates = vec![];
         for (schema_id, schema) in &catalog.state.ambient_schemas_by_id {
             let db_spec = ResolvedDatabaseSpecifier::Ambient;
@@ -2271,6 +2286,9 @@ impl<S: Append> Catalog<S> {
             CatalogType::Int16 => CatalogType::Int16,
             CatalogType::Int32 => CatalogType::Int32,
             CatalogType::Int64 => CatalogType::Int64,
+            CatalogType::UInt16 => CatalogType::UInt16,
+            CatalogType::UInt32 => CatalogType::UInt32,
+            CatalogType::UInt64 => CatalogType::UInt64,
             CatalogType::Interval => CatalogType::Interval,
             CatalogType::Jsonb => CatalogType::Jsonb,
             CatalogType::Numeric => CatalogType::Numeric,
@@ -2563,6 +2581,7 @@ impl<S: Append> Catalog<S> {
             },
         )
         .await?;
+        let secrets_reader = Arc::new(InMemorySecretsController::new());
         let (catalog, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
@@ -2574,6 +2593,7 @@ impl<S: Append> Catalog<S> {
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
             availability_zones: vec![],
+            secrets_reader,
         })
         .await?;
         Ok(catalog)
@@ -3237,6 +3257,10 @@ impl<S: Append> Catalog<S> {
                 name: String,
             },
             ResetAllSystemConfiguration,
+            UpdateRotatedKeys {
+                id: GlobalId,
+                new_item: CatalogItem,
+            },
         }
 
         let drop_ids: HashSet<_> = ops
@@ -3734,6 +3758,38 @@ impl<S: Append> Catalog<S> {
                     tx.clear_system_configs().await;
                     vec![Action::ResetAllSystemConfiguration]
                 }
+                Op::UpdateRotatedKeys {
+                    id,
+                    previous_public_keypair,
+                    new_public_keypair,
+                } => {
+                    let entry = self.get_entry(&id);
+                    let name = &entry.name().item;
+                    // Retract old keys
+                    builtin_table_updates.extend(self.state.pack_ssh_tunnel_connection_update(
+                        id,
+                        name,
+                        &previous_public_keypair,
+                        -1,
+                    ));
+                    // Assert the new rotated keys
+                    builtin_table_updates.extend(self.state.pack_ssh_tunnel_connection_update(
+                        id,
+                        name,
+                        &new_public_keypair,
+                        1,
+                    ));
+
+                    let mut connection = entry.connection()?.clone();
+                    if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) =
+                        connection.connection
+                    {
+                        ssh.public_keys = Some(new_public_keypair)
+                    }
+                    let new_item = CatalogItem::Connection(connection);
+
+                    vec![Action::UpdateRotatedKeys { id, new_item }]
+                }
             });
         }
 
@@ -3981,6 +4037,19 @@ impl<S: Append> Catalog<S> {
                 }
                 Action::ResetAllSystemConfiguration {} => {
                     state.clear_system_configuration();
+                }
+
+                Action::UpdateRotatedKeys { id, new_item } => {
+                    let old_entry = state.entry_by_id.remove(&id).unwrap();
+                    info!(
+                        "update {} {} ({})",
+                        old_entry.item_type(),
+                        state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
+                        id
+                    );
+                    let mut new_entry = old_entry.clone();
+                    new_entry.item = new_item;
+                    state.entry_by_id.insert(id, new_entry);
                 }
             }
         }
@@ -4373,6 +4442,11 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration {},
+    UpdateRotatedKeys {
+        id: GlobalId,
+        previous_public_keypair: (String, String),
+        new_public_keypair: (String, String),
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -4553,6 +4627,9 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .join(",")
             ),
             PgLegacyChar => "\"char\"".into(),
+            UInt16 => "uint2".into(),
+            UInt32 => "uint4".into(),
+            UInt64 => "uint8".into(),
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let pg_catalog_schema =

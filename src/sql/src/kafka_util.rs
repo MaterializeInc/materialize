@@ -10,26 +10,22 @@
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
 use std::collections::{BTreeMap, HashSet};
-use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
 
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
-use reqwest::Url;
 use tokio::time::Duration;
 
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{KafkaConfigOption, KafkaConfigOptionName, Value};
-use mz_storage::types::connections::{
-    CsrConnection, CsrConnectionHttpAuth, KafkaConnection, StringOrSecret, TlsIdentity,
-};
+use mz_sql_parser::ast::{KafkaConfigOption, KafkaConfigOptionName};
+use mz_storage::types::connections::{KafkaConnection, StringOrSecret};
 
 use crate::names::Aug;
-use crate::normalize::{generate_extracted_config, SqlValueOrSecret};
+use crate::normalize::generate_extracted_config;
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError;
 
@@ -40,6 +36,7 @@ generate_extracted_config!(
     (EnableAutoCommit, bool),
     (EnableIdempotence, bool),
     (FetchMessageMaxBytes, i32),
+    (GroupIdPrefix, String),
     (
         IsolationLevel,
         String,
@@ -47,10 +44,16 @@ generate_extracted_config!(
     ),
     (StatisticsIntervalMs, i32, Default(1_000)),
     (TopicMetadataRefreshIntervalMs, i32),
-    (TransactionTimeoutMs, i32)
+    (TransactionTimeoutMs, i32),
+    (StartTimestamp, i64),
+    (StartOffset, Vec<i64>)
 );
 
-impl TryFrom<KafkaConfigOptionExtracted> for BTreeMap<String, StringOrSecret> {
+/// The config options we expect to pass along when connecting to librdkafka
+#[derive(Debug)]
+pub struct LibRdKafkaConfig(pub BTreeMap<String, StringOrSecret>);
+
+impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
     type Error = PlanError;
     fn try_from(
         KafkaConfigOptionExtracted {
@@ -63,9 +66,9 @@ impl TryFrom<KafkaConfigOptionExtracted> for BTreeMap<String, StringOrSecret> {
             statistics_interval_ms,
             topic_metadata_refresh_interval_ms,
             transaction_timeout_ms,
-            seen: _,
-        }: KafkaConfigOptionExtracted,
-    ) -> Result<BTreeMap<String, StringOrSecret>, Self::Error> {
+            ..
+        }: &KafkaConfigOptionExtracted,
+    ) -> Result<LibRdKafkaConfig, Self::Error> {
         let mut o = BTreeMap::new();
 
         macro_rules! fill_options {
@@ -90,13 +93,13 @@ impl TryFrom<KafkaConfigOptionExtracted> for BTreeMap<String, StringOrSecret> {
         fill_options!(
             Some(statistics_interval_ms),
             "statistics.interval.ms",
-            |i| { 0 <= i && i <= 86_400_000 },
+            |i: &i32| { 0 <= *i && *i <= 86_400_000 },
             "STATISTICS INTERVAL MS must be within [0, 86,400,000]"
         );
         fill_options!(
             topic_metadata_refresh_interval_ms,
             "topic.metadata.refresh.interval.ms",
-            |i| { 0 <= i && i <= 3_600_000 },
+            |i: &i32| { 0 <= *i && *i <= 3_600_000 },
             "TOPIC METADATA REFRESH INTERVAL MS must be within [0, 3,600,000]"
         );
         fill_options!(enable_auto_commit, "enable.auto.commit");
@@ -104,7 +107,7 @@ impl TryFrom<KafkaConfigOptionExtracted> for BTreeMap<String, StringOrSecret> {
         fill_options!(
             transaction_timeout_ms,
             "transaction.timeout.ms",
-            |i| 0 <= i,
+            |i: &i32| 0 <= *i,
             "TRANSACTION TIMEOUT MS must be greater than or equval to 0"
         );
         fill_options!(enable_idempotence, "enable.idempotence");
@@ -113,81 +116,41 @@ impl TryFrom<KafkaConfigOptionExtracted> for BTreeMap<String, StringOrSecret> {
             "fetch.message.max_bytes",
             // The range of values comes from `fetch.message.max.bytes` in
             // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-            |i| { 0 <= i && i <= 1_000_000_000 },
+            |i: &i32| { 0 <= *i && *i <= 1_000_000_000 },
             "FETCH MESSAGE MAX BYTES must be within [0, 1,000,000,000]"
         );
 
-        Ok(o)
+        Ok(LibRdKafkaConfig(o))
     }
 }
 
-// todo: remove this type entirely when getting rid of string-keyed options for
-// CSR connections.
-enum ValType {
-    StringOrSecret,
-    Secret,
+/// An enum that represents start offsets for a kafka consumer.
+#[derive(Debug)]
+pub enum KafkaStartOffsetType {
+    /// Fully specified, either by the user or generated.
+    StartOffset(Vec<i64>),
+    /// Specified by the user.
+    StartTimestamp(i64),
 }
 
-// Describes Kafka cluster configurations users can supply using `CREATE
-// SOURCE...WITH (option_list)`.
-struct Config {
-    name: &'static str,
-    val_type: ValType,
-    default: Option<String>,
-}
-
-impl Config {
-    fn new(name: &'static str, val_type: ValType) -> Self {
-        Config {
-            name,
-            val_type,
-            default: None,
-        }
-    }
-    /// Shorthand for a config option that can be either a string or a secret.
-    fn string_or_secret(name: &'static str) -> Self {
-        Config::new(name, ValType::StringOrSecret)
-    }
-
-    /// Shorthand for secret config options.
-    fn secret(name: &'static str) -> Self {
-        Config::new(name, ValType::Secret)
-    }
-
-    /// Get the appropriate String to use as the Kafka config key.
-    fn get_kafka_config_key(&self) -> String {
-        self.name.replace('_', ".")
-    }
-}
-
-fn extract(
-    input: &mut BTreeMap<String, SqlValueOrSecret>,
-    configs: &[Config],
-) -> Result<BTreeMap<String, StringOrSecret>, PlanError> {
-    let mut out = BTreeMap::new();
-    for config in configs {
-        // Look for config.name
-        let value = match (input.remove(config.name), &config.val_type) {
-            (Some(SqlValueOrSecret::Secret(id)), ValType::Secret)
-            | (Some(SqlValueOrSecret::Secret(id)), ValType::StringOrSecret) => {
-                StringOrSecret::Secret(id)
+impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
+    type Error = PlanError;
+    fn try_from(
+        KafkaConfigOptionExtracted {
+            start_offset,
+            start_timestamp,
+            ..
+        }: &KafkaConfigOptionExtracted,
+    ) -> Result<Option<KafkaStartOffsetType>, Self::Error> {
+        Ok(match (start_offset, start_timestamp) {
+            (Some(_), Some(_)) => {
+                sql_bail!("cannot specify START TIMESTAMP and START OFFSET at same time")
             }
-            // Check for default values
-            (None, _) => match &config.default {
-                Some(v) => StringOrSecret::String(v.to_string()),
-                None => continue,
-            },
-            (Some(SqlValueOrSecret::Value(v)), _) => {
-                sql_bail!(
-                    "Invalid WITH option {}={}: unexpected value type",
-                    config.name,
-                    v
-                );
-            }
-        };
-        out.insert(config.get_kafka_config_key(), value);
+            (Some(so), _) => Some(KafkaStartOffsetType::StartOffset(so.clone())),
+            (_, Some(sto)) => Some(KafkaStartOffsetType::StartTimestamp(*sto)),
+            _ => None,
+        })
     }
-    Ok(out)
 }
 
 /// Create a new `rdkafka::ClientConfig` with the provided
@@ -254,51 +217,41 @@ pub async fn create_consumer(
 }
 
 /// Returns start offsets for the partitions of `topic` and the provided
-/// `kafka_time_offset` option.
+/// `START TIMESTAMP` option.
 ///
 /// For each partition, the returned offset is the earliest offset whose
 /// timestamp is greater than or equal to the given timestamp for the
 /// partition. If no such message exists (or the Kafka broker is before
 /// 0.10.0), the current end offset is returned for the partition.
 ///
-/// The provided `kafka_time_offset` option must be a non-zero number:
+/// The provided `START TIMESTAMP` option must be a non-zero number:
 /// * Non-Negative numbers will used as is (e.g. `1622659034343`)
 /// * Negative numbers will be translated to a timestamp in millis
 ///   before now (e.g. `-10` means 10 millis ago)
 ///
-/// If `kafka_time_offset` has not been configured, an empty Option is
+/// If `START TIMESTAMP` has not been configured, an empty Option is
 /// returned.
 pub async fn lookup_start_offsets(
     consumer: Arc<BaseConsumer<KafkaErrCheckContext>>,
     topic: &str,
-    with_options: &BTreeMap<String, SqlValueOrSecret>,
+    offsets: KafkaStartOffsetType,
     now: u64,
 ) -> Result<Option<Vec<i64>>, PlanError> {
-    let time_offset = match with_options.get("kafka_time_offset").cloned() {
-        None => return Ok(None),
-        Some(_) if with_options.contains_key("start_offset") => {
-            sql_bail!("`start_offset` and `kafka_time_offset` cannot be set at the same time.")
-        }
-        Some(offset) => offset,
+    let time_offset = match offsets {
+        KafkaStartOffsetType::StartTimestamp(time) => time,
+        _ => return Ok(None),
     };
 
-    // Validate and resolve `kafka_time_offset`.
-    let time_offset = match time_offset.into() {
-        Some(Value::Number(s)) => match s.parse::<i64>() {
-            // Timestamp in millis *before* now (e.g. -10 means 10 millis ago)
-            Ok(ts) if ts < 0 => {
-                let now: i64 = now.try_into()?;
-                let ts = now - ts.abs();
-                if ts <= 0 {
-                    sql_bail!("Relative `kafka_time_offset` must be smaller than current system timestamp")
-                }
-                ts
-            }
-            // Timestamp in millis (e.g. 1622659034343)
-            Ok(ts) => ts,
-            _ => sql_bail!("`kafka_time_offset` must be a number"),
-        },
-        _ => sql_bail!("`kafka_time_offset` must be a number"),
+    let time_offset = if time_offset < 0 {
+        let now: i64 = now.try_into()?;
+        let ts = now - time_offset.abs();
+
+        if ts <= 0 {
+            sql_bail!("Relative START TIMESTAMP must be smaller than current system timestamp")
+        }
+        ts
+    } else {
+        time_offset
     };
 
     // Lookup offsets
@@ -402,53 +355,4 @@ impl ClientContext for KafkaErrCheckContext {
         *self.error.lock().expect("lock poisoned") = Some(reason.to_string());
         MzClientContext.error(error, reason)
     }
-}
-
-// Generates a `CsrConnection` based on the configuration extracted from
-// `extract_security_config()`.
-pub fn generate_ccsr_connection(
-    url: Url,
-    ccsr_options: &mut BTreeMap<String, SqlValueOrSecret>,
-) -> Result<CsrConnection, PlanError> {
-    let mut ccsr_options = extract(
-        ccsr_options,
-        &[
-            Config::string_or_secret("ssl_ca_pem"),
-            Config::secret("ssl_key_pem"),
-            Config::string_or_secret("ssl_certificate_pem"),
-            Config::string_or_secret("username"),
-            Config::secret("password"),
-        ],
-    )?;
-
-    let tls_root_cert = ccsr_options.remove("ssl.ca.pem");
-    let cert = ccsr_options.remove("ssl.certificate.pem");
-    let key = ccsr_options.remove("ssl.key.pem");
-    let tls_identity = match (cert, key) {
-        (None, None) => None,
-        (Some(cert), Some(key)) => {
-            // `key` was verified to be a secret by `extract`.
-            let key = key.unwrap_secret();
-            Some(TlsIdentity { cert, key })
-        }
-        _ => sql_bail!(
-            "Reading from SSL-auth Confluent Schema Registry \
-             requires both ssl.key.pem and ssl.certificate.pem"
-        ),
-    };
-    let http_auth = match ccsr_options.remove("username") {
-        None => None,
-        Some(username) => {
-            let password = ccsr_options.remove("password");
-            // `password` was verified to be a secret by `extract`.
-            let password = password.map(|p| p.unwrap_secret());
-            Some(CsrConnectionHttpAuth { username, password })
-        }
-    };
-    Ok(CsrConnection {
-        url,
-        tls_root_cert,
-        tls_identity,
-        http_auth,
-    })
 }

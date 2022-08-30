@@ -27,7 +27,7 @@ contains:If providing a custom region, an `endpoint` option must also be provide
 
 > CREATE SOURCE f
   FROM KINESIS ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
-  WITH (access_key_id = '${testdrive.aws-access-key-id}',
+  LEGACYWITH (access_key_id = '${testdrive.aws-access-key-id}',
         secret_access_key = '${testdrive.aws-secret-access-key}',
         token = '${testdrive.aws-token}',
         endpoint = '${testdrive.aws-endpoint}')

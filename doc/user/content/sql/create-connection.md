@@ -1,6 +1,7 @@
 ---
 title: "CREATE CONNECTION"
 description: "`CREATE CONNECTION` describes how to connect and authenticate to an external system in Materialize"
+pagerank: 10
 menu:
   main:
     parent: 'commands'

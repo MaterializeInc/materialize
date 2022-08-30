@@ -25,7 +25,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOption, WithOptionValue};
+use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -107,7 +107,7 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
                 f.write_str("USING ");
                 schema.fmt(f);
                 if !with_options.is_empty() {
-                    f.write_str(" WITH (");
+                    f.write_str(" (");
                     f.write_node(&display::comma_separated(with_options));
                     f.write_str(")");
                 }
@@ -149,9 +149,8 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CsrConnection<T: AstInfo> {
-    Inline { url: String },
-    Reference { connection: T::ObjectName },
+pub struct CsrConnection<T: AstInfo> {
+    pub connection: T::ObjectName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -173,31 +172,15 @@ pub struct CsrConnectionAvro<T: AstInfo> {
     pub key_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub value_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub seed: Option<CsrSeedAvro>,
-    pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
-        match &self.connection {
-            CsrConnection::Inline { url: uri, .. } => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(uri));
-                f.write_str("'");
-            }
-            CsrConnection::Reference { connection, .. } => {
-                f.write_str("CONNECTION ");
-                f.write_node(connection);
-            }
-        }
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION ");
+        f.write_node(&self.connection.connection);
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
-        }
-        if !&self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
         }
     }
 }
@@ -207,33 +190,16 @@ impl_display_t!(CsrConnectionAvro);
 pub struct CsrConnectionProtobuf<T: AstInfo> {
     pub connection: CsrConnection<T>,
     pub seed: Option<CsrSeedProtobuf>,
-    pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectionProtobuf<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
-        match &self.connection {
-            CsrConnection::Inline { url: uri, .. } => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(uri));
-                f.write_str("'");
-            }
-            CsrConnection::Reference { connection, .. } => {
-                f.write_str("CONNECTION ");
-                f.write_node(connection);
-            }
-        }
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION ");
+        f.write_node(&self.connection.connection);
 
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
-        }
-
-        if !&self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
         }
     }
 }
@@ -814,10 +780,13 @@ pub enum KafkaConfigOptionName {
     EnableAutoCommit,
     EnableIdempotence,
     FetchMessageMaxBytes,
+    GroupIdPrefix,
     IsolationLevel,
     StatisticsIntervalMs,
     TopicMetadataRefreshIntervalMs,
     TransactionTimeoutMs,
+    StartTimestamp,
+    StartOffset,
 }
 
 impl AstDisplay for KafkaConfigOptionName {
@@ -828,12 +797,15 @@ impl AstDisplay for KafkaConfigOptionName {
             KafkaConfigOptionName::EnableAutoCommit => "ENABLE AUTO COMMIT",
             KafkaConfigOptionName::EnableIdempotence => "ENABLE IDEMPOTENCE",
             KafkaConfigOptionName::FetchMessageMaxBytes => "FETCH MESSAGE MAX BYTES",
+            KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
             KafkaConfigOptionName::IsolationLevel => "ISOLATION LEVEL",
             KafkaConfigOptionName::StatisticsIntervalMs => "STATISTICS INTERVAL MS",
             KafkaConfigOptionName::TopicMetadataRefreshIntervalMs => {
                 "TOPIC METADATA REFRESH INTERVAL MS"
             }
             KafkaConfigOptionName::TransactionTimeoutMs => "TRANSACTION TIMEOUT MS",
+            KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",
+            KafkaConfigOptionName::StartOffset => "START OFFSET",
         })
     }
 }
@@ -1272,15 +1244,21 @@ impl_display!(KeyConstraint);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceOptionName {
-    Size,
+    IgnoreKeys,
     Remote,
+    Size,
+    Timeline,
+    TimestampInterval,
 }
 
 impl AstDisplay for CreateSourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            CreateSourceOptionName::Size => "SIZE",
+            CreateSourceOptionName::IgnoreKeys => "IGNORE KEYS",
             CreateSourceOptionName::Remote => "REMOTE",
+            CreateSourceOptionName::Size => "SIZE",
+            CreateSourceOptionName::Timeline => "TIMELINE",
+            CreateSourceOptionName::TimestampInterval => "TIMESTAMP INTERVAL",
         })
     }
 }

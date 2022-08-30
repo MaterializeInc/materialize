@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
@@ -311,6 +312,37 @@ impl MirScalarExpr {
 
     pub fn call_is_null(self) -> Self {
         self.call_unary(UnaryFunc::IsNull(func::IsNull))
+    }
+
+    /// Match AND or OR on self and get the args. If no match, then interpret self as if it were
+    /// wrapped in a 1-arg AND/OR.
+    pub fn and_or_args(&self, func_to_match: VariadicFunc) -> Vec<MirScalarExpr> {
+        assert!(func_to_match == VariadicFunc::Or || func_to_match == VariadicFunc::And);
+        match self {
+            MirScalarExpr::CallVariadic { func, exprs } if *func == func_to_match => exprs.clone(),
+            _ => vec![self.clone()],
+        }
+    }
+
+    pub fn expr_eq_literal(&self, expr: &MirScalarExpr) -> Option<Datum> {
+        if let MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1,
+            expr2,
+        } = self
+        {
+            if let Some(Ok(datum1)) = expr1.as_literal() {
+                if &**expr2 == expr {
+                    return Some(datum1);
+                }
+            }
+            if let Some(Ok(datum2)) = expr2.as_literal() {
+                if &**expr1 == expr {
+                    return Some(datum2);
+                }
+            }
+        }
+        None
     }
 
     /// Rewrites column indices with their value in `permutation`.
@@ -741,6 +773,8 @@ impl MirScalarExpr {
                             && expr2 < expr1
                         {
                             // Canonically order elements so that deduplication works better.
+                            // Also, the below `Literal([c1, c2]) = record_create(e1, e2)` matching
+                            // relies on this canonical ordering.
                             mem::swap(expr1, expr2);
                         } else if let (
                             BinaryFunc::Eq,
@@ -759,7 +793,7 @@ impl MirScalarExpr {
                                 func: VariadicFunc::RecordCreate { .. },
                                 exprs: rec_create_args,
                             },
-                        ) = (func, (**expr1).clone(), (**expr2).clone())
+                        ) = (&*func, &**expr1, &**expr2)
                         {
                             // Literal([c1, c2]) = record_create(e1, e2)
                             //  -->
@@ -769,7 +803,6 @@ impl MirScalarExpr {
                             //
                             // `MapFilterProject::literal_constraints` relies on this transform,
                             // because `(e1,e2) IN ((1,2))` is desugared using `record_create`.
-
                             match lit_row.unpack_first() {
                                 Datum::List(datum_list) => {
                                     *e = MirScalarExpr::CallVariadic {
@@ -783,14 +816,49 @@ impl MirScalarExpr {
                                             func: BinaryFunc::Eq,
                                             expr1: Box::new(MirScalarExpr::Literal(
                                                 Ok(Row::pack_slice(&[d])),
-                                                typ,
+                                                typ.clone(),
                                             )),
-                                            expr2: Box::new(a),
+                                            expr2: Box::new(a.clone()),
                                         })
                                         .collect(),
                                     };
                                 }
                                 _ => {}
+                            }
+                        } else if let (
+                            BinaryFunc::Eq,
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate { .. },
+                                exprs: rec_create_args1,
+                            },
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate { .. },
+                                exprs: rec_create_args2,
+                            },
+                        ) = (&*func, &**expr1, &**expr2)
+                        {
+                            // record_create(a1, a2, ...) = record_create(b1, b2, ...)
+                            //  -->
+                            // a1 = b1 AND a2 = b2 AND ...
+                            //
+                            // This is similar to the previous reduction, but this one kicks in also
+                            // when only some (or none) of the record fields are literals. This
+                            // enables the discovery of literal constraints for those fields.
+                            //
+                            // Note that there is a similar decomposition in
+                            // `mz_sql::plan::transform_ast::Desugarer`, but that is earlier in the
+                            // pipeline than the compilation of IN lists to `record_create`.
+                            *e = MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::And,
+                                exprs: rec_create_args1
+                                    .into_iter()
+                                    .zip(rec_create_args2)
+                                    .map(|(a, b)| MirScalarExpr::CallBinary {
+                                        func: BinaryFunc::Eq,
+                                        expr1: Box::new(a.clone()),
+                                        expr2: Box::new(b.clone()),
+                                    })
+                                    .collect(),
                             }
                         }
                     }
@@ -1111,7 +1179,7 @@ impl MirScalarExpr {
 
     /// Flattens a chain of ORs or a chain of ANDs
     /// todo: We could do this for any associative function
-    fn flatten_and_or(&mut self) {
+    pub fn flatten_and_or(&mut self) {
         if let MirScalarExpr::CallVariadic {
             exprs: outer_operands,
             func: outer_func @ (VariadicFunc::Or | VariadicFunc::And),
@@ -1203,7 +1271,7 @@ impl MirScalarExpr {
         }
     }
 
-    /// AND/OR undistribution to apply at each `ScalarExpr`.
+    /// AND/OR undistribution (factoring out) to apply at each `MirScalarExpr`.
     /// Transforms (a && b) || (a && c) into a && (b || c)
     /// Transforms (a || b) && (a || c) into a || (b && c)
     ///
@@ -1211,6 +1279,12 @@ impl MirScalarExpr {
     ///
     /// Also works with more than 2 arguments at the top, e.g.:
     /// (a && b) || (a && c) || (a && d)  -->  a && (b || c || d)
+    /// Can factor out something from only a subset of the top arguments, e.g.:
+    /// (a && b) || (a && c) || (d && e)  -->  (a && (b || c)) || (d && e)
+    /// Note that sometimes there are two overlapping possibilities to factor out from, e.g.
+    /// (a && b) || (a && c) || (d && c): Here we can factor out `a` from from the 1. and 2. terms,
+    /// or we can factor out `c` from the 2. and 3. terms. One of these might lead to more/better
+    /// undistribution opportunities later, but we just pick one randomly.
     ///
     /// It also handles the absorption law (<https://en.wikipedia.org/wiki/Absorption_law>):
     ///   a || (a && c)  -->  a
@@ -1224,7 +1298,7 @@ impl MirScalarExpr {
     ///   -->
     ///   a
     /// where only the first step is performed by this function, the rest is done by
-    /// reduce_and_canonicalize_and_or.
+    /// reduce_and_canonicalize_and_or called after us in `reduce()`.
     fn undistribute_and_or(&mut self) {
         self.reduce_and_canonicalize_and_or(); // We don't want to deal with 1-arg AND/OR
         if let MirScalarExpr::CallVariadic {
@@ -1253,7 +1327,7 @@ impl MirScalarExpr {
                 })
                 .collect();
 
-            // Find inner operands to undistribute, i.e., which are in all of the outer operands.
+            // Find inner operands to undistribute, i.e., which are in _all_ of the outer operands.
             let mut intersection = inner_operands_refs
                 .iter()
                 .map(|v| (**v).clone())
@@ -1282,12 +1356,63 @@ impl MirScalarExpr {
                         .collect(),
                 };
             } else {
-                // Undo the 1-arg wrapping that we did at the beginning.
+                // If the intersection was empty, that means that there is nothing we can factor out
+                // from _all_ the top-level args. However, we might still find something to factor
+                // out from a subset of the top-level args. To find such an opportunity, we look for
+                // duplicates across all inner args, e.g. if we have
+                // `(...) OR (... AND `a` AND ...) OR (...) OR (... AND `a` AND ...)`
+                // then we'll find that `a` occurs in more than one top-level arg, so
+                // `indexes_to_undistribute` will point us to the 2. and 4. top-level args.
+
+                // Create (inner_operand, index) pairs, where the index is the position in outer_operands
+                let mut all_inner_operands: Vec<(MirScalarExpr, usize)> = inner_operands_refs
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, inner_vec)| inner_vec.iter().map(move |a| ((*a).clone(), i)))
+                    .collect();
+                // Find an inner operand that occurs more than once, and get a vector of its positions
+                all_inner_operands.sort();
+                let indexes_to_undistribute = all_inner_operands
+                    .iter()
+                    .group_by(|(a, _i)| a)
+                    .into_iter()
+                    .map(|(_a, g)| g.map(|(_a, i)| *i).collect_vec())
+                    .find(|g| g.len() > 1);
+
+                // In any case, undo the 1-arg wrapping that we did at the beginning.
                 outer_operands
                     .iter_mut()
                     .for_each(|o| o.reduce_and_canonicalize_and_or());
+
+                if let Some(indexes_to_undistribute) = indexes_to_undistribute {
+                    // Found something to undistribute from a subset of the outer operands.
+                    // We temporarily remove these from outer_operands, call ourselves on it, and
+                    // then push back the result.
+                    let mut undistribute_from = MirScalarExpr::CallVariadic {
+                        func: (*outer_func).clone(),
+                        exprs: MirScalarExpr::swap_remove_multiple(
+                            outer_operands,
+                            indexes_to_undistribute,
+                        ),
+                    };
+                    undistribute_from.undistribute_and_or();
+                    outer_operands.push(undistribute_from);
+                }
             }
         }
+    }
+
+    fn swap_remove_multiple(
+        v: &mut Vec<MirScalarExpr>,
+        mut indexes: Vec<usize>,
+    ) -> Vec<MirScalarExpr> {
+        indexes.sort();
+        indexes.reverse();
+        let mut result = Vec::new();
+        for r in indexes {
+            result.push(v.swap_remove(r));
+        }
+        result
     }
 
     /* #endregion */
@@ -1400,6 +1525,14 @@ impl MirScalarExpr {
             }
         });
         contains
+    }
+
+    pub fn size(&self) -> Result<usize, RecursionLimitError> {
+        let mut size = 0;
+        self.visit_post(&mut |_: &MirScalarExpr| {
+            size += 1;
+        })?;
+        Ok(size)
     }
 }
 
@@ -1620,6 +1753,9 @@ pub enum EvalError {
     Int16OutOfRange,
     Int32OutOfRange,
     Int64OutOfRange,
+    UInt16OutOfRange,
+    UInt32OutOfRange,
+    UInt64OutOfRange,
     OidOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
@@ -1707,6 +1843,9 @@ impl fmt::Display for EvalError {
             EvalError::Int16OutOfRange => f.write_str("smallint out of range"),
             EvalError::Int32OutOfRange => f.write_str("integer out of range"),
             EvalError::Int64OutOfRange => f.write_str("bigint out of range"),
+            EvalError::UInt16OutOfRange => f.write_str("uint2 out of range"),
+            EvalError::UInt32OutOfRange => f.write_str("uint4 out of range"),
+            EvalError::UInt64OutOfRange => f.write_str("uint8 out of range"),
             EvalError::OidOutOfRange => f.write_str("OID out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
@@ -1909,6 +2048,9 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::Int16OutOfRange => Int16OutOfRange(()),
             EvalError::Int32OutOfRange => Int32OutOfRange(()),
             EvalError::Int64OutOfRange => Int64OutOfRange(()),
+            EvalError::UInt16OutOfRange => Uint16OutOfRange(()),
+            EvalError::UInt32OutOfRange => Uint32OutOfRange(()),
+            EvalError::UInt64OutOfRange => Uint64OutOfRange(()),
             EvalError::OidOutOfRange => OidOutOfRange(()),
             EvalError::IntervalOutOfRange => IntervalOutOfRange(()),
             EvalError::TimestampOutOfRange => TimestampOutOfRange(()),
@@ -2011,6 +2153,9 @@ impl RustType<ProtoEvalError> for EvalError {
                 Int16OutOfRange(()) => Ok(EvalError::Int16OutOfRange),
                 Int32OutOfRange(()) => Ok(EvalError::Int32OutOfRange),
                 Int64OutOfRange(()) => Ok(EvalError::Int64OutOfRange),
+                Uint16OutOfRange(()) => Ok(EvalError::UInt16OutOfRange),
+                Uint32OutOfRange(()) => Ok(EvalError::UInt32OutOfRange),
+                Uint64OutOfRange(()) => Ok(EvalError::UInt64OutOfRange),
                 OidOutOfRange(()) => Ok(EvalError::OidOutOfRange),
                 IntervalOutOfRange(()) => Ok(EvalError::IntervalOutOfRange),
                 TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),

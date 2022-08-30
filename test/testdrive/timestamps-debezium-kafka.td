@@ -93,14 +93,13 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 
 > CREATE SOURCE data_foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
-    WITH (timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'user')
 
 > CREATE SOURCE data_bar
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bar-${testdrive.seed}'
-    WITH (timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
-
+  WITH (TIMELINE 'user')
 
 > CREATE MATERIALIZED VIEW foo AS SELECT b, sum(a) FROM data_foo GROUP BY b
 

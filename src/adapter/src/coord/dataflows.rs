@@ -404,7 +404,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 value_desc: mview.desc.clone(),
                 storage_metadata: (),
             }),
-            envelope: None,
             as_of: SinkAsOf {
                 frontier: as_of,
                 strict: false,

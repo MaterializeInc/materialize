@@ -14,4 +14,4 @@
 # injects a `WITH` option into the wrong spot.
 
 > SHOW CREATE SOURCE data
-"materialize.public.data" "CREATE SOURCE \"materialize\".\"public\".\"data\" FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081/' SEED VALUE SCHEMA '{\"type\":\"record\",\"name\":\"foo\",\"fields\":[{\"name\":\"a\",\"type\":\"int\"}]}' ENVELOPE NONE"
+"materialize.public.data" "CREATE SOURCE \"materialize\".\"public\".\"data\" FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" SEED VALUE SCHEMA '{\"type\":\"record\",\"name\":\"foo\",\"fields\":[{\"name\":\"a\",\"type\":\"int\"}]}' ENVELOPE NONE"

@@ -133,6 +133,7 @@ pub enum Plan {
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
+    RotateKeys(RotateKeysPlan),
 }
 
 #[derive(Debug)]
@@ -179,7 +180,7 @@ pub struct ComputeInstanceIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
     /// The interval at which to introspect.
-    pub granularity: Duration,
+    pub interval: Duration,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -497,6 +498,11 @@ pub struct AlterSystemResetPlan {
 
 #[derive(Debug)]
 pub struct AlterSystemResetAllPlan {}
+
+#[derive(Debug)]
+pub struct RotateKeysPlan {
+    pub id: GlobalId,
+}
 
 #[derive(Debug)]
 pub struct DeclarePlan {

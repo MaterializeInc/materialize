@@ -177,7 +177,7 @@ where
         DateTimeUnits::Decade => Ok(D::from(ts.decade())),
         DateTimeUnits::Year => Ok(D::from(ts.year())),
         DateTimeUnits::Quarter => Ok(D::from(ts.quarter())),
-        DateTimeUnits::Week => Ok(D::from(ts.week())),
+        DateTimeUnits::Week => Ok(D::from(ts.iso_week_number())),
         DateTimeUnits::Month => Ok(D::from(ts.month())),
         DateTimeUnits::Day => Ok(D::from(ts.day())),
         DateTimeUnits::DayOfWeek => Ok(D::from(ts.day_of_week())),

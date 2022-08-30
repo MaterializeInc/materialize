@@ -8,11 +8,10 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
 itertools = "0.10.3"
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
-phf = { version = "0.11.0", features = ["uncased"] }
-serde = { version = "1.0.140", features = ["derive"] }
+phf = { version = "0.11.1", features = ["uncased"] }
+serde = { version = "1.0.144", features = ["derive"] }
 tracing = "0.1.36"
 uncased = "0.9.7"
 
@@ -21,9 +20,9 @@ datadriven = "0.6.0"
 unicode-width = "0.1.9"
 
 [build-dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 mz-ore = { path = "../ore", default-features = false }
 mz-walkabout = { path = "../walkabout" }
-phf = { version = "0.11.0", features = ["uncased"] }
-phf_codegen = "0.11.0"
+phf = { version = "0.11.1", features = ["uncased"] }
+phf_codegen = "0.11.1"
 uncased = "0.9.7"

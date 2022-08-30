@@ -27,14 +27,14 @@ use uuid::Uuid;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
-use crate::fetch::{fetch_batch, BatchFetcher, LeasedBatch};
+use crate::fetch::{fetch_batch, BatchFetcher, LeasedBatch, LeasedBatchMetadata};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
-use crate::internal::state::Since;
+use crate::internal::state::{HollowBatch, Since};
 use crate::{GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReaderId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for ReaderId {
@@ -367,7 +367,7 @@ where
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
-    pub(crate) gc: GarbageCollector,
+    pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     pub(crate) since: Antichain<T>,
@@ -467,21 +467,34 @@ where
     pub async fn snapshot(&mut self, as_of: Antichain<T>) -> Result<Vec<LeasedBatch<T>>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
-        let r = batches
-            .into_iter()
-            .filter(|batch| batch.len > 0)
-            .map(|batch| LeasedBatch {
-                shard_id: self.machine.shard_id(),
-                reader_id: self.reader_id.clone(),
-                metadata: crate::fetch::LeasedBatchMetadata::Snapshot {
-                    as_of: as_of.clone(),
-                },
-                batch,
-                leased_seqno: Some(self.lease_seqno()),
-            })
-            .collect::<Vec<_>>();
-
-        Ok(r)
+        let mut leased_batches = Vec::new();
+        for batch in batches {
+            // Flatten the HollowBatch into one LeasedBatch per key. Each key
+            // corresponds to a "part" or s3 object. This allows persist_source
+            // to distribute work by parts (smallish, more even size) instead of
+            // batches (arbitrarily large).
+            //
+            // TODO: Do the same for Listen batches. It's tricker because of the
+            // progress.
+            for key in batch.keys {
+                leased_batches.push(LeasedBatch {
+                    shard_id: self.machine.shard_id(),
+                    reader_id: self.reader_id.clone(),
+                    metadata: LeasedBatchMetadata::Snapshot {
+                        as_of: as_of.clone(),
+                    },
+                    batch: HollowBatch {
+                        desc: batch.desc.clone(),
+                        keys: vec![key.clone()],
+                        // This isn't quite right, but it's not used by anything
+                        // take operates on the leased_batch.
+                        len: batch.len,
+                    },
+                    leased_seqno: Some(self.lease_seqno()),
+                });
+            }
+        }
+        Ok(leased_batches)
     }
 
     /// Generates a [shapshot](Self::snapshot), and fetches all of the batches

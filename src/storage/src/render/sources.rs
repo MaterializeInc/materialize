@@ -22,15 +22,14 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 
-use mz_expr::PartitionId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
 use crate::controller::CollectionMetadata;
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
-use crate::source::persist_source;
+use crate::source::types::DecodeResult;
 use crate::source::{
-    self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
+    self, persist_source, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
     LoadGeneratorSourceReader, PostgresSourceReader, RawSourceCreationConfig, S3SourceReader,
 };
 use crate::types::errors::{DataflowError, DecodeError, EnvelopeError};
@@ -103,7 +102,7 @@ where
         encoding,
         envelope,
         metadata_columns,
-        ts_frequency,
+        timestamp_interval,
     } = description.desc;
 
     // All sources should push their various error streams into this vector,
@@ -116,27 +115,13 @@ where
     // is called on each timely worker as part of
     // [`super::build_storage_dataflow`].
 
-    // All workers are responsible for reading in Kafka sources. Other sources
-    // support single-threaded ingestion only. Note that in all cases we want all
-    // readers of the same source or same partition to reside on the same worker,
-    // and only load-balance responsibility across distinct sources.
-    let active_read_worker = if let SourceConnection::Kafka(_) = connection {
-        true
-    } else {
-        // TODO: This feels icky, but getting rid of hardcoding this difference between
-        // Kafka and all other sources seems harder.
-        crate::source::responsible_for(&id, scope.index(), scope.peers(), &PartitionId::None)
-    };
-
     let source_name = format!("{}-{}", connection.name(), id);
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
         upstream_name: connection.upstream_name().map(ToOwned::to_owned),
         id,
         scope,
-        // Distribute read responsibility among workers.
-        active: active_read_worker,
-        timestamp_frequency: ts_frequency,
+        timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
         encoding: encoding.clone(),
@@ -428,7 +413,14 @@ where
                 move |(input_row, time, diff)| {
                     let arena = mz_repr::RowArena::new();
                     let mut datums_local = datum_vec.borrow_with(&input_row);
-                    linear_op_mfp.evaluate(&mut datums_local, &arena, time, diff, &mut row_builder)
+                    linear_op_mfp.evaluate(
+                        &mut datums_local,
+                        &arena,
+                        time,
+                        diff,
+                        |_time| true,
+                        &mut row_builder,
+                    )
                 }
             });
 

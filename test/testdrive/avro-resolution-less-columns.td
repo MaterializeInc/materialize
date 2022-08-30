@@ -19,9 +19,13 @@ $ kafka-create-topic topic=resolution-2to1
 $ kafka-ingest format=avro topic=resolution-2to1 schema=${2columns} publish=true timestamp=1
 {"f1": "val_f1a", "f2": "val_f2a"}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE resolution_2to1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-2to1-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 $ kafka-ingest format=avro topic=resolution-2to1 schema=${1column} publish=true timestamp=2

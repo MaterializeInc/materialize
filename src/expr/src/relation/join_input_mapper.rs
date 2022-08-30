@@ -96,11 +96,14 @@ impl JoinInputMapper {
     /// figures out which keys remain unique in the larger join
     /// Currently, we only figure out a small subset of the keys that
     /// can remain unique.
-    pub fn global_keys(
+    pub fn global_keys<'a, I>(
         &self,
-        local_keys: &[Vec<Vec<usize>>],
+        mut local_keys: I,
         equivalences: &[Vec<MirScalarExpr>],
-    ) -> Vec<Vec<usize>> {
+    ) -> Vec<Vec<usize>>
+    where
+        I: Iterator<Item = &'a Vec<Vec<usize>>>,
+    {
         // A relation's uniqueness constraint holds if there is a
         // sequence of the other relations such that each one has
         // a uniqueness constraint whose columns are used in join
@@ -137,18 +140,21 @@ impl JoinInputMapper {
             }
         }
 
-        // for inputs `1..self.total_inputs()`, checks the keys belong to each
-        // input against the storage of columns that exist in join constraints
-        // that have expressions belonging to earlier inputs.
-        let remains_unique = local_keys.iter().skip(1).enumerate().all(|(index, keys)| {
-            keys.iter().any(|ks| {
-                ks.iter()
-                    .all(|k| column_with_prior_bound_by_input[index].contains(k))
-            })
-        });
+        if self.total_inputs() > 0 {
+            let first_input_keys = local_keys.next().unwrap().clone();
+            // for inputs `1..self.total_inputs()`, checks the keys belong to each
+            // input against the storage of columns that exist in join constraints
+            // that have expressions belonging to earlier inputs.
+            let remains_unique = local_keys.enumerate().all(|(index, keys)| {
+                keys.iter().any(|ks| {
+                    ks.iter()
+                        .all(|k| column_with_prior_bound_by_input[index].contains(k))
+                })
+            });
 
-        if remains_unique && self.total_inputs() > 0 {
-            return local_keys[0].clone();
+            if remains_unique {
+                return first_input_keys;
+            }
         }
         vec![]
     }

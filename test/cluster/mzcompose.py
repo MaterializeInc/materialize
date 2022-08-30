@@ -78,6 +78,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Disabled to permit a breaking change.
         # See: https://materializeinc.slack.com/archives/C02FWJ94HME/p1661288774456699?thread_ts=1661288684.301649&cid=C02FWJ94HME
         # "test-builtin-migration",
+        "pg-snapshot-resumption",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -239,9 +240,7 @@ def workflow_test_remote_storaged(c: Composition) -> None:
             "materialized",
             "postgres",
             "storaged",
-            "zookeeper",
-            "kafka",
-            "schema-registry",
+            "redpanda",
         ]
         c.start_and_wait_for_tcp(
             services=dependencies,
@@ -341,3 +340,42 @@ def workflow_test_builtin_migration(c: Composition) -> None:
     """
             )
         )
+
+
+def workflow_pg_snapshot_resumption(c: Composition) -> None:
+    """Test creating sources in a remote storaged process."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        # Start postgres for the pg source
+        Postgres(),
+        Testdrive(no_reset=True),
+        Storaged(environment=["FAILPOINTS=pg_snapshot_failure=return"]),
+    ):
+        dependencies = [
+            "materialized",
+            "postgres",
+            "storaged",
+        ]
+        c.start_and_wait_for_tcp(
+            services=dependencies,
+        )
+
+        c.run("testdrive", "pg-snapshot-resumption/01-configure-postgres.td")
+        c.run("testdrive", "pg-snapshot-resumption/02-create-sources.td")
+
+        # storaged should crash
+        c.run("testdrive", "pg-snapshot-resumption/03-while-storaged-down.td")
+
+        print("Sleeping to ensure that storaged crashes")
+        time.sleep(10)
+
+        with c.override(
+            # turn off the failpoint
+            Storaged()
+        ):
+            c.start_and_wait_for_tcp(
+                services=["storaged"],
+            )
+            c.run("testdrive", "pg-snapshot-resumption/04-verify-data.td")

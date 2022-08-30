@@ -49,7 +49,7 @@ pub fn construct<A: Allocate>(
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
+    let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000) as Timestamp;
     let peers = worker.peers();
 
     // A dataflow for multiple log-derived arrangements.
@@ -57,7 +57,7 @@ pub fn construct<A: Allocate>(
         let (logs, token) = Some(linked).mz_replay(
             scope,
             "timely logs",
-            Duration::from_nanos(config.granularity_ns as u64),
+            Duration::from_nanos(config.interval_ns as u64),
             activator,
         );
 
@@ -114,8 +114,8 @@ pub fn construct<A: Allocate>(
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ns = time.as_nanos();
-                        let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
-                            * granularity_ms) as Timestamp;
+                        let time_ms = (((time.as_millis() as Timestamp / interval_ms) + 1)
+                            * interval_ms) as Timestamp;
 
                         match datum {
                             TimelyEvent::Operates(event) => {

@@ -17,8 +17,8 @@ $ kafka-create-topic topic=input-system
 
 > CREATE SOURCE source_system_user
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-system-${testdrive.seed}'
-    WITH (timeline = 'user')
   FORMAT BYTES
+  WITH (TIMELINE 'user')
 
 $ set schema=[
   {
@@ -116,30 +116,22 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 
 ! CREATE SOURCE source_cdcv2_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (epoch_ms_timeline=false)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
-contains:unsupported epoch_ms_timeline value
-
-# Can't specify epoch_ms_timeline and timeline.
-! CREATE SOURCE source_cdcv2_system
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (epoch_ms_timeline=false, timeline='user')
-  FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE MATERIALIZE
-contains:unexpected parameters for CREATE SOURCE: epoch_ms_timeline
+  WITH (TIMELINE 'mz_foo')
+contains:unacceptable timeline name "mz_foo"
 
 > CREATE SOURCE source_cdcv2_system
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (epoch_ms_timeline=true)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'mz_epoch_ms')
 
 > CREATE SOURCE source_cdcv2_user
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'user')
 
 > CREATE TABLE input_table (a bigint);
 

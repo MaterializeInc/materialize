@@ -14,6 +14,7 @@ use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation};
 use mz_expr::MirScalarExpr;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
@@ -55,8 +56,7 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_DATABASES),
             row: Row::pack_slice(&[
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(id.0 as i64),
+                Datum::UInt64(id.0),
                 Datum::UInt32(database.oid),
                 Datum::String(database.name()),
             ]),
@@ -80,11 +80,9 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SCHEMAS),
             row: Row::pack_slice(&[
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(schema_id.0 as i64),
+                Datum::UInt64(schema_id.0),
                 Datum::UInt32(schema.oid),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::from(database_id.map(|id| id as i64)),
+                Datum::from(database_id),
                 Datum::String(&schema.name.schema),
             ]),
             diff,
@@ -112,8 +110,7 @@ impl CatalogState {
         let id = self.compute_instances_by_name[name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-            row: Row::pack_slice(&[Datum::Int64(id as i64), Datum::String(&name)]),
+            row: Row::pack_slice(&[Datum::UInt64(id), Datum::String(&name)]),
             diff,
         }
     }
@@ -141,10 +138,8 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS_BASE),
             row: Row::pack_slice(&[
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(compute_instance_id as i64),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(id as i64),
+                Datum::UInt64(compute_instance_id),
+                Datum::UInt64(id),
                 Datum::String(&name),
                 Datum::from(size),
                 Datum::from(az),
@@ -172,8 +167,7 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_STATUSES),
             row: Row::pack_slice(&[
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(replica_id as i64),
+                Datum::UInt64(replica_id),
                 Datum::Int64(process_id),
                 Datum::String(status),
                 Datum::TimestampTz(event.time),
@@ -235,7 +229,7 @@ impl CatalogState {
                     row: Row::pack_slice(&[
                         Datum::String(&id.to_string()),
                         Datum::String(column_name.as_str()),
-                        Datum::Int64(i as i64 + 1),
+                        Datum::UInt64(u64::cast_from(i + 1)),
                         Datum::from(column_type.nullable),
                         Datum::String(pgtype.name()),
                         default,
@@ -262,8 +256,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(u64::from(schema_id) as i64),
+                Datum::UInt64(schema_id.into()),
                 Datum::String(name),
             ]),
             diff,
@@ -284,8 +277,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(u64::from(schema_id) as i64),
+                Datum::UInt64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(source_desc_name),
             ]),
@@ -307,8 +299,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(u64::from(schema_id) as i64),
+                Datum::UInt64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(match connection.connection {
                     mz_storage::types::connections::Connection::Kafka { .. } => "kafka",
@@ -323,16 +314,25 @@ impl CatalogState {
             diff,
         }];
         if let mz_storage::types::connections::Connection::Ssh(ssh) = &connection.connection {
-            updates.extend(self.pack_ssh_tunnel_connection_update(id, name, &ssh.public_key, diff));
+            if let Some(public_keypair) = ssh.public_keys.as_ref() {
+                updates.extend(self.pack_ssh_tunnel_connection_update(
+                    id,
+                    name,
+                    public_keypair,
+                    diff,
+                ));
+            } else {
+                tracing::error!("does this even happen?");
+            }
         }
         updates
     }
 
-    fn pack_ssh_tunnel_connection_update(
+    pub(crate) fn pack_ssh_tunnel_connection_update(
         &self,
         id: GlobalId,
         name: &str,
-        public_key: &str,
+        (public_key_primary, public_key_secondary): &(String, String),
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -340,7 +340,8 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(name),
-                Datum::String(public_key),
+                Datum::String(&public_key_primary),
+                Datum::String(&public_key_secondary),
             ]),
             diff,
         }]
@@ -373,8 +374,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(u64::from(schema_id) as i64),
+                Datum::UInt64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(&query_string),
             ]),
@@ -409,11 +409,9 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(u64::from(schema_id) as i64),
+                Datum::UInt64(schema_id.into()),
                 Datum::String(name),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(mview.compute_instance as i64),
+                Datum::UInt64(mview.compute_instance),
                 Datum::String(&query_string),
             ]),
             diff,
@@ -460,8 +458,7 @@ impl CatalogState {
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(oid),
-                    // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                    Datum::Int64(u64::from(schema_id) as i64),
+                    Datum::UInt64(schema_id.into()),
                     Datum::String(name),
                     Datum::String(connection.name()),
                 ]),
@@ -496,8 +493,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(index.compute_instance as i64),
+                Datum::UInt64(index.compute_instance),
             ]),
             diff,
         });
@@ -513,23 +509,22 @@ impl CatalogState {
                         .column_types,
                 )
                 .nullable;
-            let seq_in_index = i64::try_from(i + 1).expect("invalid index sequence number");
+            let seq_in_index = u64::cast_from(i + 1);
             let key_sql = key_sqls
                 .get(i)
                 .expect("missing sql information for index key")
                 .to_string();
             let (field_number, expression) = match key {
-                MirScalarExpr::Column(col) => (
-                    Datum::Int64(i64::try_from(*col + 1).expect("invalid index column number")),
-                    Datum::Null,
-                ),
+                MirScalarExpr::Column(col) => {
+                    (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)
+                }
                 _ => (Datum::Null, Datum::String(&key_sql)),
             };
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_INDEX_COLUMNS),
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
-                    Datum::Int64(seq_in_index),
+                    Datum::UInt64(seq_in_index),
                     field_number,
                     expression,
                     Datum::from(nullable),
@@ -555,8 +550,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(u64::from(schema_id) as i64),
+                Datum::UInt64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
             ]),
@@ -634,8 +628,7 @@ impl CatalogState {
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(func_impl_details.oid),
-                    // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                    Datum::Int64(u64::from(schema_id) as i64),
+                    Datum::UInt64(schema_id.into()),
                     Datum::String(name),
                     arg_ids,
                     Datum::from(
@@ -669,8 +662,7 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_SECRETS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-                Datum::Int64(u64::from(schema_id) as i64),
+                Datum::UInt64(schema_id.into()),
                 Datum::String(name),
             ]),
             diff,
@@ -706,16 +698,11 @@ impl CatalogState {
             .into_row();
         let event_details = event_details.iter().next().unwrap();
         let dt = mz_ore::now::to_datetime(occurred_at).naive_utc();
-        let id = i64::try_from(event.sortable_id()).map_err(|e| {
-            Error::new(ErrorKind::Unstructured(format!(
-                "exceeded event id space: {}",
-                e
-            )))
-        })?;
+        let id = event.sortable_id();
         Ok(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_AUDIT_EVENTS),
             row: Row::pack_slice(&[
-                Datum::Int64(id),
+                Datum::UInt64(id),
                 Datum::String(&format!("{}", event_type)),
                 Datum::String(&format!("{}", object_type)),
                 event_details,
@@ -734,11 +721,7 @@ impl CatalogState {
     ) -> BuiltinTableUpdate {
         let ReplicaMetadata { last_heartbeat } = md;
         let table = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
-        let row = Row::pack_slice(&[
-            // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-            Datum::Int64(id.try_into().expect("Replica IDs should not overflow i64")),
-            Datum::TimestampTz(last_heartbeat),
-        ]);
+        let row = Row::pack_slice(&[Datum::UInt64(id), Datum::TimestampTz(last_heartbeat)]);
         BuiltinTableUpdate {
             id: table,
             row,
@@ -757,12 +740,6 @@ impl CatalogState {
                 }
             };
 
-        let valid_id = i64::try_from(id).map_err(|e| {
-            Error::new(ErrorKind::Unstructured(format!(
-                "exceeded event id space: {}",
-                e
-            )))
-        })?;
         let table = self.resolve_builtin_table(&MZ_STORAGE_USAGE);
         let object_id_val = match object_id {
             Some(s) => Datum::String(s),
@@ -771,14 +748,9 @@ impl CatalogState {
         let dt = mz_ore::now::to_datetime(collection_timestamp).naive_utc();
 
         let row = Row::pack_slice(&[
-            Datum::Int64(valid_id),
+            Datum::UInt64(id),
             object_id_val,
-            Datum::Int64(
-                size_bytes
-                    .try_into()
-                    // Unless one object has over 9k petabytes of storage...
-                    .expect("Storage bytes size should not overflow i64"),
-            ),
+            Datum::UInt64(size_bytes),
             Datum::TimestampTz(DateTime::from_utc(dt, Utc)),
         ]);
         let diff = 1;

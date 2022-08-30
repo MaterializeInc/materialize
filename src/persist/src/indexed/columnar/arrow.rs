@@ -135,7 +135,7 @@ fn decode_arrow_file_kvtd<R: Read + Seek>(
     file_meta: FileMetadata,
 ) -> Result<Vec<ColumnarRecords>, Error> {
     let projection = None;
-    let file_reader = FileReader::new(r, file_meta, projection);
+    let file_reader = FileReader::new(r, file_meta, projection, None);
 
     let file_schema = file_reader.schema().fields.as_slice();
     // We're not trying to accept any sort of user created data, so be strict.
@@ -155,26 +155,26 @@ fn decode_arrow_file_kvtd<R: Read + Seek>(
 }
 
 /// Converts a ColumnarRecords into an arrow [(K, V, T, D)] Chunk.
-pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Arc<dyn Array>> {
+pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Box<dyn Array>> {
     Chunk::try_new(vec![
-        Arc::new(BinaryArray::from_data(
+        Box::new(BinaryArray::from_data(
             DataType::Binary,
             x.key_offsets.clone(),
             x.key_data.clone(),
             None,
-        )) as Arc<dyn Array>,
-        Arc::new(BinaryArray::from_data(
+        )) as Box<dyn Array>,
+        Box::new(BinaryArray::from_data(
             DataType::Binary,
             x.val_offsets.clone(),
             x.val_data.clone(),
             None,
         )),
-        Arc::new(PrimitiveArray::from_data(
+        Box::new(PrimitiveArray::from_data(
             DataType::Int64,
             x.timestamps.clone(),
             None,
         )),
-        Arc::new(PrimitiveArray::from_data(
+        Box::new(PrimitiveArray::from_data(
             DataType::Int64,
             x.diffs.clone(),
             None,
@@ -184,7 +184,7 @@ pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Arc<dyn Array>> {
 }
 
 /// Converts an arrow [(K, V, T, D)] Chunk into a ColumnarRecords.
-pub fn decode_arrow_batch_kvtd(x: &Chunk<Arc<dyn Array>>) -> Result<ColumnarRecords, String> {
+pub fn decode_arrow_batch_kvtd(x: &Chunk<Box<dyn Array>>) -> Result<ColumnarRecords, String> {
     let columns = x.columns();
     if columns.len() != 4 {
         return Err(format!("expected 4 fields got {}", columns.len()));

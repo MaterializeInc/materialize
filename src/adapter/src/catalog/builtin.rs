@@ -837,6 +837,72 @@ pub const TYPE_ANYCOMPATIBLEMAP: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_UINT2: BuiltinType<NameReference> = BuiltinType {
+    name: "uint2",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT2_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::UInt16,
+        array_id: None,
+    },
+};
+
+pub const TYPE_UINT2_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_uint2",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT2_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_UINT2.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_UINT4: BuiltinType<NameReference> = BuiltinType {
+    name: "uint4",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT4_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::UInt32,
+        array_id: None,
+    },
+};
+
+pub const TYPE_UINT4_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_uint4",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT4_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_UINT4.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_UINT8: BuiltinType<NameReference> = BuiltinType {
+    name: "uint8",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT8_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::UInt64,
+        array_id: None,
+    },
+};
+
+pub const TYPE_UINT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_uint8",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_UINT8_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_UINT8.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
     schema: MZ_CATALOG_SCHEMA,
@@ -985,7 +1051,7 @@ pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
@@ -993,9 +1059,9 @@ pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_schemas",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("database_id", ScalarType::Int64.nullable(true))
+        .with_column("database_id", ScalarType::UInt64.nullable(true))
         .with_column("name", ScalarType::String.nullable(false)),
 });
 pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1004,7 +1070,7 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("position", ScalarType::Int64.nullable(false))
+        .with_column("position", ScalarType::UInt64.nullable(false))
         .with_column("nullable", ScalarType::Bool.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("default", ScalarType::String.nullable(true))
@@ -1018,15 +1084,15 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("on_id", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::Int64.nullable(false)),
+        .with_column("cluster_id", ScalarType::UInt64.nullable(false)),
 });
 pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_index_columns",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("index_id", ScalarType::String.nullable(false))
-        .with_column("index_position", ScalarType::Int64.nullable(false))
-        .with_column("on_position", ScalarType::Int64.nullable(true))
+        .with_column("index_position", ScalarType::UInt64.nullable(false))
+        .with_column("on_position", ScalarType::UInt64.nullable(true))
         .with_column("on_expression", ScalarType::String.nullable(true))
         .with_column("nullable", ScalarType::Bool.nullable(false)),
 });
@@ -1036,7 +1102,7 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::Int64.nullable(false))
+        .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
 pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1045,7 +1111,7 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::Int64.nullable(false))
+        .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false)),
 });
@@ -1055,7 +1121,8 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("public_key", ScalarType::String.nullable(false)),
+        .with_column("public_key_1", ScalarType::String.nullable(false))
+        .with_column("public_key_2", ScalarType::String.nullable(false)),
 });
 pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sources",
@@ -1063,7 +1130,7 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::Int64.nullable(false))
+        .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false)),
 });
@@ -1073,7 +1140,7 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::Int64.nullable(false))
+        .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false)),
 });
@@ -1083,7 +1150,7 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::Int64.nullable(false))
+        .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false)),
 });
@@ -1093,9 +1160,9 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::Int64.nullable(false))
+        .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("cluster_id", ScalarType::Int64.nullable(false))
+        .with_column("cluster_id", ScalarType::UInt64.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false)),
 });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1104,7 +1171,7 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::Int64.nullable(false))
+        .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("category", ScalarType::String.nullable(false)),
 });
@@ -1154,7 +1221,7 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::Int64.nullable(false))
+        .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column(
             "arg_ids",
@@ -1168,7 +1235,7 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_clusters",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
 pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1176,15 +1243,15 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("schema_id", ScalarType::Int64.nullable(false))
+        .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
 pub static MZ_CLUSTER_REPLICAS_BASE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replicas_base",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("cluster_id", ScalarType::Int64.nullable(false))
-        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("cluster_id", ScalarType::UInt64.nullable(false))
+        .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("availability_zone", ScalarType::String.nullable(true)),
@@ -1194,7 +1261,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
     name: "mz_cluster_replica_statuses",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::Int64.nullable(false))
+        .with_column("replica_id", ScalarType::UInt64.nullable(false))
         .with_column("process_id", ScalarType::Int64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("last_update", ScalarType::TimestampTz.nullable(false)),
@@ -1204,7 +1271,7 @@ pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| Buil
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::Int64.nullable(false))
+        .with_column("replica_id", ScalarType::UInt64.nullable(false))
         .with_column("last_heartbeat", ScalarType::TimestampTz.nullable(false)),
 });
 
@@ -1212,7 +1279,7 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_audit_events",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("event_type", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
         .with_column("event_details", ScalarType::Jsonb.nullable(false))
@@ -1240,9 +1307,9 @@ pub static MZ_STORAGE_USAGE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::Int64.nullable(false))
+        .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("object_id", ScalarType::String.nullable(true))
-        .with_column("size_bytes", ScalarType::Int64.nullable(false))
+        .with_column("size_bytes", ScalarType::UInt64.nullable(false))
         .with_column(
             "collection_timestamp",
             ScalarType::TimestampTz.nullable(false),
@@ -1301,10 +1368,10 @@ JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
 };
 
-pub const MZ_DATAFLOW_NAMES: BuiltinView = BuiltinView {
-    name: "mz_dataflow_names",
+pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
+    name: "mz_dataflows",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_dataflow_names AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_dataflows AS SELECT
     mz_dataflow_addresses.id,
     mz_dataflow_addresses.worker,
     mz_dataflow_addresses.address[1] AS local_id,
@@ -1325,17 +1392,17 @@ pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
     mz_dataflow_operators.id,
     mz_dataflow_operators.name,
     mz_dataflow_operators.worker,
-    mz_dataflow_names.id as dataflow_id,
-    mz_dataflow_names.name as dataflow_name
+    mz_dataflows.id as dataflow_id,
+    mz_dataflows.name as dataflow_name
 FROM
     mz_catalog.mz_dataflow_operators,
     mz_catalog.mz_dataflow_addresses,
-    mz_catalog.mz_dataflow_names
+    mz_catalog.mz_dataflows
 WHERE
     mz_dataflow_operators.id = mz_dataflow_addresses.id AND
     mz_dataflow_operators.worker = mz_dataflow_addresses.worker AND
-    mz_dataflow_names.local_id = mz_dataflow_addresses.address[1] AND
-    mz_dataflow_names.worker = mz_dataflow_addresses.worker",
+    mz_dataflows.local_id = mz_dataflow_addresses.address[1] AND
+    mz_dataflows.worker = mz_dataflow_addresses.worker",
 };
 
 pub const MZ_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
@@ -1416,18 +1483,18 @@ pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_records_per_dataflow AS SELECT
     mz_records_per_dataflow_operator.dataflow_id as id,
-    mz_dataflow_names.name,
+    mz_dataflows.name,
     mz_records_per_dataflow_operator.worker,
     pg_catalog.SUM(mz_records_per_dataflow_operator.records) as records
 FROM
     mz_catalog.mz_records_per_dataflow_operator,
-    mz_catalog.mz_dataflow_names
+    mz_catalog.mz_dataflows
 WHERE
-    mz_records_per_dataflow_operator.dataflow_id = mz_dataflow_names.id AND
-    mz_records_per_dataflow_operator.worker = mz_dataflow_names.worker
+    mz_records_per_dataflow_operator.dataflow_id = mz_dataflows.id AND
+    mz_records_per_dataflow_operator.worker = mz_dataflows.worker
 GROUP BY
     mz_records_per_dataflow_operator.dataflow_id,
-    mz_dataflow_names.name,
+    mz_dataflows.name,
     mz_records_per_dataflow_operator.worker",
 };
 
@@ -1543,13 +1610,13 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     -- MZ doesn't support replication so indisreplident is filled with false
     false::pg_catalog.bool AS indisreplident,
     -- Return zero if the index attribute is not a simple column reference, column position otherwise
-    pg_catalog.string_agg(coalesce(mz_index_columns.on_position, 0)::pg_catalog.text, ' ' ORDER BY mz_index_columns.index_position)::pg_catalog.int2vector AS indkey,
+    pg_catalog.string_agg(coalesce(mz_index_columns.on_position::int8, 0)::pg_catalog.text, ' ' ORDER BY mz_index_columns.index_position::int8)::pg_catalog.int2vector AS indkey,
     -- MZ doesn't have per-column flags, so returning a 0 for each column in the index
     pg_catalog.string_agg('0', ' ')::pg_catalog.int2vector AS indoption,
     -- Index expressions are returned in MZ format
-    CASE pg_catalog.string_agg(mz_index_columns.on_expression, ' ' ORDER BY mz_index_columns.index_position)
+    CASE pg_catalog.string_agg(mz_index_columns.on_expression, ' ' ORDER BY mz_index_columns.index_position::int8)
     WHEN NULL THEN NULL
-    ELSE '{' || pg_catalog.string_agg(mz_index_columns.on_expression, '}, {' ORDER BY mz_index_columns.index_position) || '}'
+    ELSE '{' || pg_catalog.string_agg(mz_index_columns.on_expression, '}, {' ORDER BY mz_index_columns.index_position::int8) || '}'
     END AS indexprs,
     -- MZ doesn't support indexes with predicates
     NULL::pg_catalog.text AS indpred
@@ -1601,7 +1668,15 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
         WHEN 'unknown' THEN 'X'
     END) AS typcategory,
     0::pg_catalog.oid AS typrelid,
-    NULL::pg_catalog.oid AS typelem,
+    coalesce(
+        (
+            SELECT t.oid
+            FROM mz_catalog.mz_array_types a
+            JOIN mz_catalog.mz_types t ON a.element_id = t.id
+            WHERE a.type_id = mz_types.id
+        ),
+        0
+    ) AS typelem,
     coalesce(
         (
             SELECT
@@ -1711,7 +1786,7 @@ pub const PG_ATTRDEF: BuiltinView = BuiltinView {
     sql: "CREATE VIEW pg_catalog.pg_attrdef AS SELECT
     NULL::pg_catalog.oid AS oid,
     mz_objects.oid AS adrelid,
-    mz_columns.position AS adnum,
+    mz_columns.position::int8 AS adnum,
     mz_columns.default AS adbin,
     mz_columns.default AS adsrc
 FROM mz_catalog.mz_columns
@@ -1971,7 +2046,7 @@ SELECT
     s.name AS table_schema,
     o.name AS table_name,
     c.name AS column_name,
-    c.position AS ordinal_position,
+    c.position::int8 AS ordinal_position,
     c.type AS data_type,
     NULL::pg_catalog.int4 AS character_maximum_length,
     NULL::pg_catalog.int4 AS numeric_precision,
@@ -2146,6 +2221,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_ANYCOMPATIBLENONARRAY),
         Builtin::Type(&TYPE_ANYCOMPATIBLELIST),
         Builtin::Type(&TYPE_ANYCOMPATIBLEMAP),
+        Builtin::Type(&TYPE_UINT2),
+        Builtin::Type(&TYPE_UINT2_ARRAY),
+        Builtin::Type(&TYPE_UINT4),
+        Builtin::Type(&TYPE_UINT4_ARRAY),
+        Builtin::Type(&TYPE_UINT8),
+        Builtin::Type(&TYPE_UINT8_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -2219,7 +2300,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_CATALOG_NAMES),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES),
-        Builtin::View(&MZ_DATAFLOW_NAMES),
+        Builtin::View(&MZ_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICAS),

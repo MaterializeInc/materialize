@@ -78,6 +78,9 @@ where
     /// imported traces, both because it improves performance, and because
     /// potentially incorrect results are visible in sinks.
     pub as_of_frontier: Antichain<T>,
+    /// Frontier after which updates should not be emitted.
+    /// Used to limit the amount of work done when appropriate.
+    pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
 }
@@ -100,6 +103,7 @@ where
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
             as_of_frontier,
+            until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
         }
     }
@@ -497,6 +501,7 @@ where
         &self,
         mut mfp: MapFilterProject,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        until: Antichain<mz_repr::Timestamp>,
     ) -> (
         Collection<S, mz_repr::Row, Diff>,
         Collection<S, DataflowError, Diff>,
@@ -522,10 +527,12 @@ where
         let (stream, errors) = self.flat_map(key_val, || {
             let mut row_builder = Row::default();
             let mut datum_vec = DatumVec::new();
-
+            // Wrap in an `Rc` so that lifetimes work out.
+            let until = std::rc::Rc::new(until);
             move |row_parts, time, diff| {
                 use crate::render::RenderTimestamp;
 
+                let until = std::rc::Rc::clone(&until);
                 let temp_storage = RowArena::new();
                 let mut datums_local = datum_vec.borrow_with_many(row_parts);
                 let time = time.clone();
@@ -536,6 +543,7 @@ where
                         &temp_storage,
                         event_time,
                         diff.clone(),
+                        move |time| !until.less_equal(time),
                         &mut row_builder,
                     )
                     .map(move |x| match x {
@@ -568,6 +576,7 @@ where
         collections: AvailableCollections,
         input_key: Option<Vec<MirScalarExpr>>,
         input_mfp: MapFilterProject,
+        until: Antichain<mz_repr::Timestamp>,
     ) -> Self {
         if collections == Default::default() {
             return self;
@@ -588,7 +597,7 @@ where
                 .any(|(key, _, _)| !self.arranged.contains_key(key));
         if form_raw_collection && self.collection.is_none() {
             self.collection =
-                Some(self.as_collection_core(input_mfp, input_key.map(|k| (k, None))));
+                Some(self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until));
         }
         for (key, _, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {

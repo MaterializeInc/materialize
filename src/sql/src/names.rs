@@ -1096,6 +1096,17 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 Secret(object_name)
             }
+            Object(obj) => {
+                let object_name = self.fold_object_name(obj);
+                match &object_name {
+                    ResolvedObjectName::Object { .. } => {}
+                    ResolvedObjectName::Cte { .. } => {
+                        self.status = Err(PlanError::InvalidObject(object_name.clone()));
+                    }
+                    ResolvedObjectName::Error => {}
+                }
+                Object(object_name)
+            }
         }
     }
 }

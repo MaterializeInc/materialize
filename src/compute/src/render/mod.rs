@@ -166,13 +166,23 @@ pub fn build_compute_dataflow<A: Allocate>(
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
                 // Note: For correctness, we require that sources only emit times advanced by
                 // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                let (mut ok_stream, err_stream, token) = persist_source::persist_source(
+                let (mut ok_stream, mut err_stream, token) = persist_source::persist_source(
                     region,
                     *source_id,
                     Arc::clone(&compute_state.persist_clients),
                     source.storage_metadata.clone(),
                     dataflow.as_of.clone().unwrap(),
                 );
+
+                // Restrict updates by `dataflow.until`, retaining those at times not greater or equal to it.
+                // TODO: Teach `persist_source` to accept `until` and drop its capabilities when it passes.
+                if !dataflow.until.is_empty() {
+                    use timely::dataflow::operators::Filter;
+                    let until1 = dataflow.until.clone();
+                    let until2 = dataflow.until.clone();
+                    ok_stream = ok_stream.filter(move |(_, time, _)| !until1.less_equal(time));
+                    err_stream = err_stream.filter(move |(_, time, _)| !until2.less_equal(time));
+                }
 
                 // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
                 // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
@@ -303,13 +313,13 @@ where
                 scope,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
-                Default::default(),
+                self.until.clone(),
             );
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 scope,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
-                Default::default(),
+                self.until.clone(),
             );
             let ok_arranged = ok_arranged.enter(region);
             let err_arranged = err_arranged.enter(region);
@@ -427,15 +437,20 @@ where
 
                 // We should advance times in constant collections to start from `as_of`.
                 let as_of_frontier = self.as_of_frontier.clone();
+                let until = self.until.clone();
                 let ok_collection = rows
                     .into_iter()
-                    .map(move |(row, mut time, diff)| {
+                    .filter_map(move |(row, mut time, diff)| {
                         time.advance_by(as_of_frontier.borrow());
-                        (
-                            row,
-                            <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(time),
-                            diff,
-                        )
+                        if !until.less_equal(&time) {
+                            Some((
+                                row,
+                                <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(time),
+                                diff,
+                            ))
+                        } else {
+                            None
+                        }
                     })
                     .to_stream(scope)
                     .as_collection();
@@ -477,11 +492,16 @@ where
                         collection
                     }
                     mz_compute_client::plan::GetPlan::Arrangement(key, row, mfp) => {
-                        let (oks, errs) = collection.as_collection_core(mfp, Some((key, row)));
+                        let (oks, errs) = collection.as_collection_core(
+                            mfp,
+                            Some((key, row)),
+                            self.until.clone(),
+                        );
                         CollectionBundle::from_collections(oks, errs)
                     }
                     mz_compute_client::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) = collection.as_collection_core(mfp, None);
+                        let (oks, errs) =
+                            collection.as_collection_core(mfp, None, self.until.clone());
                         CollectionBundle::from_collections(oks, errs)
                     }
                 }
@@ -506,7 +526,8 @@ where
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) = input.as_collection_core(mfp, input_key_val);
+                    let (oks, errs) =
+                        input.as_collection_core(mfp, input_key_val, self.until.clone());
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
@@ -580,7 +601,7 @@ where
                 input_mfp,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                input.ensure_collections(keys, input_key, input_mfp)
+                input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
             }
         }
     }

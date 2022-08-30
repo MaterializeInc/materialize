@@ -19,9 +19,12 @@ use mz_expr::{
     visit::{Visit, Visitor},
     MirRelationExpr, OptimizedMirRelationExpr,
 };
-use mz_ore::stack::RecursionLimitError;
+use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
-use mz_transform::attribute::{non_negative::NonNegative, subtree_size::SubtreeSize, Attribute};
+use mz_transform::attribute::{
+    arity::Arity, non_negative::NonNegative, relation_type::RelationType,
+    subtree_size::SubtreeSize, Attribute,
+};
 
 use super::{
     AnnotatedPlan, Attributes, ExplainContext, ExplainMultiPlan, ExplainSinglePlan, Explainable,
@@ -48,7 +51,7 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
             normalize_lets_in_tree(self.0)?;
         }
 
-        let plan = AnnotatedPlan::try_from(config, self.0)?;
+        let plan = AnnotatedPlan::try_from(context, self.0)?;
         Ok(ExplainSinglePlan { context, plan })
     }
 }
@@ -84,7 +87,7 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
                     .humanizer
                     .humanize_id(build_desc.id)
                     .unwrap_or_else(|| build_desc.id.to_string());
-                let plan = AnnotatedPlan::try_from(config, build_desc.plan.as_inner())?;
+                let plan = AnnotatedPlan::try_from(context, build_desc.plan.as_inner())?;
                 Ok((id, plan))
             })
             .collect::<Result<Vec<_>, RecursionLimitError>>()?;
@@ -115,6 +118,8 @@ struct ExplainAttributes<'a> {
     config: &'a ExplainConfig,
     non_negative: NonNegative,
     subtree_size: SubtreeSize,
+    arity: Arity,
+    types: RelationType,
 }
 
 impl<'a> From<&'a ExplainConfig> for ExplainAttributes<'a> {
@@ -123,16 +128,19 @@ impl<'a> From<&'a ExplainConfig> for ExplainAttributes<'a> {
             config,
             non_negative: NonNegative::default(),
             subtree_size: SubtreeSize::default(),
+            arity: Arity::default(),
+            types: RelationType::default(),
         }
     }
 }
 
 impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
     fn try_from(
-        config: &'a ExplainConfig,
+        context: &'a ExplainContext,
         plan: &'a MirRelationExpr,
     ) -> Result<Self, RecursionLimitError> {
         let mut annotations = HashMap::<&MirRelationExpr, Attributes>::default();
+        let config = context.config;
 
         if config.requires_attributes() {
             // get the annotation keys
@@ -159,6 +167,29 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
                     attrs.non_negative = Some(attr);
                 }
             }
+
+            if config.arity {
+                for (expr, attr) in
+                    std::iter::zip(subtree_refs.iter(), explain_attrs.arity.results.into_iter())
+                {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.arity = Some(attr);
+                }
+            }
+
+            if config.types {
+                for (expr, types) in
+                    std::iter::zip(subtree_refs.iter(), explain_attrs.types.results.into_iter())
+                {
+                    let humanized_columns = types
+                        .into_iter()
+                        .map(|c| context.humanizer.humanize_column_type(&c))
+                        .collect::<Vec<_>>();
+                    let attr = bracketed("(", ")", separated(", ", humanized_columns)).to_string();
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.types = Some(attr);
+                }
+            }
         }
 
         Ok(AnnotatedPlan { plan, annotations })
@@ -174,18 +205,36 @@ impl<'a> Visitor<MirRelationExpr> for ExplainAttributes<'a> {
         if self.config.non_negative {
             self.non_negative.schedule_env_tasks(expr);
         }
+        if self.config.arity {
+            self.arity.schedule_env_tasks(expr);
+        }
+        if self.config.types {
+            self.types.schedule_env_tasks(expr);
+        }
     }
 
     fn post_visit(&mut self, expr: &MirRelationExpr) {
         // Derive attributes and handle environment maintenance tasks
         // in reverse dependency order.
-        if self.config.subtree_size || self.config.non_negative {
+        if self.config.subtree_size
+            || self.config.non_negative
+            || self.config.arity
+            || self.config.types
+        {
             self.subtree_size.derive(expr, &());
             self.subtree_size.handle_env_tasks();
         }
         if self.config.non_negative {
             self.non_negative.derive(expr, &self.subtree_size);
             self.non_negative.handle_env_tasks();
+        }
+        if self.config.arity {
+            self.arity.derive(expr, &self.subtree_size);
+            self.arity.handle_env_tasks();
+        }
+        if self.config.types {
+            self.types.derive(expr, &self.subtree_size);
+            self.types.handle_env_tasks();
         }
     }
 }

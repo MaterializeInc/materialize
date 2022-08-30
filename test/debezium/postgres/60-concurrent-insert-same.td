@@ -18,9 +18,13 @@ INSERT INTO insert_same_table VALUES (0);
 
 $ schema-registry-wait-schema schema=postgres.public.insert_same_table-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE insert_same_table
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.insert_same_table'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 $ postgres-connect name=conn1 url=postgres://postgres:postgres@postgres

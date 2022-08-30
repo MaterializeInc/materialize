@@ -18,7 +18,7 @@ Materialize's type system consists of two classes of types:
 ## Built-in types
 
 Type | Aliases | Use | Size (bytes) | Catalog name | Syntax
------|---------|-----|--------------|----------------|-----
+-----|-------|-----|--------------|----------------|-----
 [`bigint`](integer) | `int8` | Large signed integer | 8 | Named | `123`
 [`boolean`](boolean) | `bool` | State of `TRUE` or `FALSE` | 1 | Named | `TRUE`, `FALSE`
 [`bytea`](bytea) | `bytea` | Unicode string | Variable | Named | `'\xDEADBEEF'` or `'\\000'`
@@ -33,8 +33,12 @@ Type | Aliases | Use | Size (bytes) | Catalog name | Syntax
 [`oid`](oid) | | PostgreSQL object identifier | 4 | Named | `123`
 [`real`](float) | `float4` | Single precision floating-point number | 4 | Named | `1.23`
 [`record`](record) | | Tuple with arbitrary contents | Variable | Unnameable | `ROW($expr, ...)`
+[`smallint`](integer) | `int2` | Small signed integer | 2 | Named | `123`
 [`text`](text) | `string` | Unicode string | Variable | Named | `'foo'`
 [`time`](time) | | Time without date | 4 | Named | `TIME '01:23:45'`
+[`uint2`](uint) | | Small unsigned integer | 2 | Named | `123`
+[`uint4`](uint) | `uint` | Unsigned integer | 4 | Named | `123`
+[`uint8`](uint) | | Large unsigned integer | 8 | Named | `123`
 [`timestamp`](timestamp) | | Date and time | 8 | Named | `TIMESTAMP '2007-02-01 15:04:05'`
 [`timestamp with time zone`](timestamp) | `timestamp with time zone` | Date and time with timezone | 8 | Named | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
 [Arrays](array) (`[]`) | | Multidimensional array | Variable | Named | `ARRAY[...]`

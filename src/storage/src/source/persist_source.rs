@@ -13,9 +13,10 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use differential_dataflow::Hashable;
-use futures_util::Stream as FuturesStream;
+use futures::Stream as FuturesStream;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Map, OkErr};
@@ -163,15 +164,9 @@ where
         format!("persist_source {:?}: batch distribution", source_id),
         move |info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-            let waker = futures_util::task::waker(waker_activator);
+            let waker = futures::task::waker(waker_activator);
 
             let mut current_ts = 0;
-
-            // `i` gets used to round-robin distribution of hollow batches. We
-            // start at a different worker for each source, so as to prevent
-            // sources started at the same time from distributing sources in
-            // lock step with one another.
-            let mut i = usize::cast_from(source_id.hashed()) % peers;
 
             move |cap_set, output| {
                 let mut context = Context::from_waker(&waker);
@@ -182,11 +177,11 @@ where
                             let session_cap = cap_set.delayed(&current_ts);
                             let mut session = output.session(&session_cap);
 
+                            // Give the batch to a random worker.
+                            let worker_idx = usize::cast_from(Instant::now().hashed()) % peers;
                             let progress = batch.generate_progress();
-                            session.give((i, batch.get_droppable_batch()));
+                            session.give((worker_idx, batch.get_droppable_batch()));
 
-                            // Round robin
-                            i = (i + 1) % peers;
                             if let Some(frontier) = progress {
                                 cap_set.downgrade(frontier.iter());
                                 match frontier.into_option() {

@@ -10,30 +10,24 @@ publish = false
 name = "sqlite"
 harness = false
 
-# [[bench]]
-# name = "consolidation"
-# harness = false
-
 [dependencies]
-async-trait = "0.1.56"
+async-trait = "0.1.57"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.21"
+futures = "0.3.23"
 mz-ore = { path = "../ore" }
 mz-persist-types = { path = "../persist-types" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 rand = "0.8.5"
 rusqlite = { version = "0.28.0", features = ["bundled"] }
-serde = "1.0.140"
-serde_json = "1.0.82"
+serde = "1.0.144"
+serde_json = "1.0.85"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 tokio = "1.19.2"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = [ "with-serde_json-1" ] }
 tracing = "0.1.36"
 
 [dev-dependencies]
-anyhow = "1.0.58"
-# benchmark is currently unused
-# criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = [ "html_reports" ] }
+anyhow = "1.0.62"
 mz-postgres-util = { path = "../postgres-util" }
 tempfile = "3.2.0"
 tokio = { version = "1.19.2", features = ["macros"] }

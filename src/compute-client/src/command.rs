@@ -347,10 +347,12 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     /// the upper bound of `since` frontiers contributing to the dataflow.
     /// It is an error for this to be set to a frontier not beyond that default.
     pub as_of: Option<Antichain<T>>,
+    /// Frontier beyond which the dataflow should not execute.
+    /// Specifically, updates at times greater or equal to this frontier are suppressed.
+    /// This is often set to `as_of + 1` to enable "batch" computations.
+    pub until: Antichain<T>,
     /// Human readable name
     pub debug_name: String,
-    /// Unique ID of the dataflow
-    pub id: uuid::Uuid,
 }
 
 fn any_source_import(
@@ -395,7 +397,6 @@ proptest::prop_compose! {
         as_of_some in any::<bool>(),
         as_of in proptest::collection::vec(any::<u64>(), 1..5),
         debug_name in ".*",
-        id in any_uuid(),
     ) -> DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
@@ -410,8 +411,8 @@ proptest::prop_compose! {
             } else {
                 None
             },
+            until: Antichain::new(),
             debug_name,
-            id,
         }
     }
 }
@@ -435,8 +436,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             index_exports: Default::default(),
             sink_exports: Default::default(),
             as_of: Default::default(),
+            until: Antichain::new(),
             debug_name: name,
-            id: uuid::Uuid::new_v4(),
         }
     }
 
@@ -672,8 +673,8 @@ impl RustType<ProtoDataflowDescription>
             index_exports: self.index_exports.into_proto(),
             sink_exports: self.sink_exports.into_proto(),
             as_of: self.as_of.as_ref().map(Into::into),
+            until: Some((&self.until).into()),
             debug_name: self.debug_name.clone(),
-            id: Some(self.id.into_proto()),
         }
     }
 
@@ -685,8 +686,8 @@ impl RustType<ProtoDataflowDescription>
             index_exports: proto.index_exports.into_rust()?,
             sink_exports: proto.sink_exports.into_rust()?,
             as_of: proto.as_of.map(Into::into),
+            until: proto.until.map(Into::into).unwrap_or_else(Antichain::new),
             debug_name: proto.debug_name,
-            id: proto.id.into_rust_if_some("ProtoDataflowDescription::id")?,
         })
     }
 }
@@ -831,8 +832,10 @@ impl RustType<ProtoIndexDesc> for IndexDesc {
 pub struct Peek<T = mz_repr::Timestamp> {
     /// The identifier of the arrangement.
     pub id: GlobalId,
-    /// An optional key that should be used for the arrangement.
-    pub key: Option<Row>,
+    /// If `Some`, then look up only the given keys from the arrangement (instead of a full scan).
+    /// The vector is never empty.
+    #[proptest(strategy = "proptest::option::of(proptest::collection::vec(any::<Row>(), 1..5))")]
+    pub literal_constraints: Option<Vec<Row>>,
     /// The identifier of this peek request.
     ///
     /// Used in responses and cancellation requests.
@@ -860,7 +863,15 @@ impl RustType<ProtoPeek> for Peek {
     fn into_proto(&self) -> ProtoPeek {
         ProtoPeek {
             id: Some(self.id.into_proto()),
-            key: self.key.into_proto(),
+            key: match &self.literal_constraints {
+                // In the Some case, the vector is never empty, so it's safe to encode None as an
+                // empty vector, and Some(vector) as just the vector.
+                Some(vec) => {
+                    assert!(!vec.is_empty());
+                    vec.into_proto()
+                }
+                None => Vec::<Row>::new().into_proto(),
+            },
             uuid: Some(self.uuid.into_proto()),
             timestamp: self.timestamp,
             finishing: Some(self.finishing.into_proto()),
@@ -873,7 +884,14 @@ impl RustType<ProtoPeek> for Peek {
     fn from_proto(x: ProtoPeek) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             id: x.id.into_rust_if_some("ProtoPeek::id")?,
-            key: x.key.into_rust()?,
+            literal_constraints: {
+                let vec: Vec<Row> = x.key.into_rust()?;
+                if vec.is_empty() {
+                    None
+                } else {
+                    Some(vec)
+                }
+            },
             uuid: x.uuid.into_rust_if_some("ProtoPeek::uuid")?,
             timestamp: x.timestamp,
             finishing: x.finishing.into_rust_if_some("ProtoPeek::finishing")?,
@@ -888,6 +906,190 @@ impl RustType<ProtoPeek> for Peek {
 
 fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
+}
+
+#[derive(Debug)]
+pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {
+    /// The number of commands at the last time we compacted the history.
+    reduced_count: usize,
+    /// The sequence of commands that should be applied.
+    ///
+    /// This list may not be "compact" in that there can be commands that could be optimized
+    /// or removed given the context of other commands, for example compaction commands that
+    /// can be unified, or dataflows that can be dropped due to allowed compaction.
+    commands: Vec<ComputeCommand<T>>,
+}
+
+impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
+    /// Add a command to the history.
+    pub fn push(&mut self, command: ComputeCommand<T>) {
+        self.commands.push(command);
+        if self.commands.len() > 2 * self.reduced_count {
+            self.reduce();
+        }
+    }
+
+    /// Reduces `self.history` to a minimal form.
+    ///
+    /// This action not only simplifies the issued history, but importantly reduces the instructions
+    /// to only reference inputs from times that are still certain to be valid. Commands that allow
+    /// compaction of a collection also remove certainty that the inputs will be available for times
+    /// not greater or equal to that compaction frontier.
+    pub fn reduce(&mut self) {
+        // First determine what the final compacted frontiers will be for each collection.
+        // These will determine for each collection whether the command that creates it is required,
+        // and if required what `as_of` frontier should be used for its updated command.
+        let mut final_frontiers = std::collections::BTreeMap::new();
+        let mut live_dataflows = Vec::new();
+        let mut live_peeks = Vec::new();
+        let mut live_cancels = std::collections::BTreeSet::new();
+
+        let mut create_command = None;
+        let mut drop_command = None;
+
+        let mut initialization_complete = false;
+
+        for command in self.commands.drain(..) {
+            match command {
+                create @ ComputeCommand::CreateInstance(_) => {
+                    // We should be able to handle this, should this client need to be restartable.
+                    assert!(create_command.is_none());
+                    create_command = Some(create);
+                }
+                cmd @ ComputeCommand::DropInstance => {
+                    assert!(drop_command.is_none());
+                    drop_command = Some(cmd);
+                }
+                ComputeCommand::InitializationComplete => {
+                    initialization_complete = true;
+                }
+                ComputeCommand::CreateDataflows(dataflows) => {
+                    live_dataflows.extend(dataflows);
+                }
+                ComputeCommand::AllowCompaction(frontiers) => {
+                    for (id, frontier) in frontiers {
+                        final_frontiers.insert(id, frontier.clone());
+                    }
+                }
+                ComputeCommand::Peek(peek) => {
+                    live_peeks.push(peek);
+                }
+                ComputeCommand::CancelPeeks { uuids } => {
+                    live_cancels.extend(uuids);
+                }
+            }
+        }
+
+        // Determine the required antichains to support live peeks;
+        let mut live_peek_frontiers = std::collections::BTreeMap::new();
+        for Peek { id, timestamp, .. } in live_peeks.iter() {
+            // Introduce `time` as a constraint on the `as_of` frontier of `id`.
+            live_peek_frontiers
+                .entry(id)
+                .or_insert_with(Antichain::new)
+                .insert(timestamp.clone());
+        }
+
+        // Update dataflow `as_of` frontiers, constrained by live peeks and allowed compaction.
+        // One possible frontier is the empty frontier, indicating that the dataflow can be removed.
+        for dataflow in live_dataflows.iter_mut() {
+            let mut as_of = Antichain::new();
+            for id in dataflow.export_ids() {
+                // If compaction has been allowed use that; otherwise use the initial `as_of`.
+                if let Some(frontier) = final_frontiers.get(&id) {
+                    as_of.extend(frontier.clone());
+                } else {
+                    as_of.extend(dataflow.as_of.clone().unwrap());
+                }
+                // If we have requirements from peeks, apply them to hold `as_of` back.
+                if let Some(frontier) = live_peek_frontiers.get(&id) {
+                    as_of.extend(frontier.clone());
+                }
+            }
+
+            // Remove compaction for any collection that brought us to `as_of`.
+            for id in dataflow.export_ids() {
+                if let Some(frontier) = final_frontiers.get(&id) {
+                    if frontier == &as_of {
+                        final_frontiers.remove(&id);
+                    }
+                }
+            }
+
+            dataflow.as_of = Some(as_of);
+        }
+
+        // Discard dataflows whose outputs have all been allowed to compact away.
+        live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
+
+        // Record the volume of post-compaction commands.
+        let mut command_count = 1;
+        command_count += live_dataflows.len();
+        command_count += final_frontiers.len();
+        command_count += live_peeks.len();
+        command_count += live_cancels.len();
+        if drop_command.is_some() {
+            command_count += 1;
+        }
+
+        // Reconstitute the commands as a compact history.
+        if let Some(create_command) = create_command {
+            self.commands.push(create_command);
+        }
+        if !live_dataflows.is_empty() {
+            self.commands
+                .push(ComputeCommand::CreateDataflows(live_dataflows));
+        }
+        self.commands
+            .extend(live_peeks.into_iter().map(ComputeCommand::Peek));
+        if !live_cancels.is_empty() {
+            self.commands.push(ComputeCommand::CancelPeeks {
+                uuids: live_cancels,
+            });
+        }
+        // Allow compaction only after emmitting peek commands.
+        if !final_frontiers.is_empty() {
+            self.commands.push(ComputeCommand::AllowCompaction(
+                final_frontiers.into_iter().collect(),
+            ));
+        }
+        if initialization_complete {
+            self.commands.push(ComputeCommand::InitializationComplete);
+        }
+        if let Some(drop_command) = drop_command {
+            self.commands.push(drop_command);
+        }
+
+        self.reduced_count = command_count;
+    }
+
+    /// Retain only those peeks present in `peeks` and discard the rest.
+    pub fn retain_peeks<V>(&mut self, peeks: &std::collections::HashMap<uuid::Uuid, V>) {
+        for command in self.commands.iter_mut() {
+            if let ComputeCommand::CancelPeeks { uuids } = command {
+                uuids.retain(|uuid| peeks.contains_key(uuid));
+            }
+        }
+        self.commands.retain(|command| match command {
+            ComputeCommand::Peek(peek) => peeks.contains_key(&peek.uuid),
+            ComputeCommand::CancelPeeks { uuids } => !uuids.is_empty(),
+            _ => true,
+        });
+    }
+
+    /// Iterate through the contained commands.
+    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
+        self.commands.iter()
+    }
+}
+
+impl<T> Default for ComputeCommandHistory<T> {
+    fn default() -> Self {
+        Self {
+            reduced_count: 0,
+            commands: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]

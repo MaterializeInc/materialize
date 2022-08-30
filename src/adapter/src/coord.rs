@@ -574,13 +574,10 @@ impl<S: Append + 'static> Coordinator<S> {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connection = sink_connection::build(
-                        builder.clone(),
-                        entry.id(),
-                        self.connection_context.clone(),
-                    )
-                    .await
-                    .with_context(|| format!("recreating sink {}", entry.name()))?;
+                    let connection =
+                        sink_connection::build(builder.clone(), self.connection_context.clone())
+                            .await
+                            .with_context(|| format!("recreating sink {}", entry.name()))?;
                     // `builtin_table_updates` is the desired state of the system tables. However,
                     // it already contains a (cur_sink, +1) entry from [`Catalog::open`]. The line
                     // below this will negate that entry with a (cur_sink, -1) entry. The
@@ -745,7 +742,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // For non-realtime timelines, nothing pushes the timestamps forward, so we must do
         // it manually.
         let mut advance_timelines_interval =
-            tokio::time::interval(self.catalog.config().timestamp_frequency);
+            tokio::time::interval(self.catalog.config().timestamp_interval);
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.watch_compute_services();
 
@@ -868,6 +865,7 @@ pub async fn serve<S: Append + 'static>(
             storage_host_sizes,
             default_storage_host_size,
             availability_zones,
+            secrets_reader: secrets_controller.reader(),
         })
         .await?;
     let cluster_id = catalog.config().cluster_id;

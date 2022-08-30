@@ -15,8 +15,11 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
 ©1
 ©2
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-bytes-${testdrive.seed}'
   FORMAT BYTES
   INCLUDE OFFSET
 
@@ -35,7 +38,7 @@ data           offset
 # Test that CREATE SOURCE can specify a custom name for the column.
 
 > CREATE SOURCE data_named_col (named_col)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-bytes-${testdrive.seed}'
   FORMAT BYTES
 
 > SHOW COLUMNS FROM data_named_col
@@ -44,8 +47,9 @@ name       nullable  type
 named_col  false     bytea
 
 > CREATE SOURCE data_offset
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
-  WITH (start_offset=1)
+  FROM KAFKA CONNECTION kafka_conn
+  WITH (START OFFSET=[1])
+  TOPIC 'testdrive-bytes-${testdrive.seed}'
   FORMAT BYTES
   INCLUDE OFFSET
 
@@ -63,8 +67,9 @@ $ kafka-ingest format=bytes topic=bytes-partitions timestamp=1 partition=1
 ©2
 
 > CREATE SOURCE data_offset_2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-partitions-${testdrive.seed}'
-  WITH (start_offset=[0,1])
+  FROM KAFKA CONNECTION kafka_conn
+  WITH (START OFFSET=[0,1])
+  TOPIC 'testdrive-bytes-partitions-${testdrive.seed}'
   FORMAT BYTES
   INCLUDE OFFSET
 

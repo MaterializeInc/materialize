@@ -7,20 +7,20 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 async-stream = "0.3.3"
-async-trait = "0.1.56"
-chrono = { version = "0.4.19", default_features = false }
-futures = "0.3.21"
+async-trait = "0.1.57"
+chrono = { version = "0.4.20", default_features = false }
+futures = "0.3.23"
 itertools = "0.10.3"
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore" }
 mz-pid-file = { path = "../pid-file" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
-serde_json = "1.0.82"
+serde_json = "1.0.85"
 scopeguard = "1.1.0"
-sysinfo = "0.24.7"
+sysinfo = "0.25.3"
 tokio = "1.19.2"
 tracing = "0.1.36"
 

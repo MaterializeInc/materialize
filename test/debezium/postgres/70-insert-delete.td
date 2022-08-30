@@ -18,9 +18,13 @@ INSERT INTO insert_delete VALUES (1);
 
 $ schema-registry-wait-schema schema=postgres.public.insert_delete-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE insert_delete
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.insert_delete'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres

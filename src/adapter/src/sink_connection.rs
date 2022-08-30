@@ -14,7 +14,6 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, Top
 
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
-use mz_repr::GlobalId;
 use mz_storage::types::connections::{ConnectionContext, PopulateClientConfig};
 use mz_storage::types::sinks::{
     KafkaSinkConnection, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
@@ -26,11 +25,10 @@ use crate::error::AdapterError;
 
 pub async fn build(
     builder: StorageSinkConnectionBuilder,
-    id: GlobalId,
     connection_context: ConnectionContext,
 ) -> Result<StorageSinkConnection, AdapterError> {
     match builder {
-        StorageSinkConnectionBuilder::Kafka(k) => build_kafka(k, id, connection_context).await,
+        StorageSinkConnectionBuilder::Kafka(k) => build_kafka(k, connection_context).await,
     }
 }
 
@@ -39,7 +37,6 @@ async fn register_kafka_topic(
     topic: &str,
     mut partition_count: i32,
     mut replication_factor: i32,
-    succeed_if_exists: bool,
     retention: KafkaSinkConnectionRetention,
 ) -> Result<(), AdapterError> {
     // if either partition count or replication factor should be defaulted to the broker's config
@@ -143,21 +140,12 @@ async fn register_kafka_topic(
         kafka_topic = kafka_topic.set("retention.bytes", retention_bytes);
     }
 
-    if succeed_if_exists {
-        mz_kafka_util::admin::ensure_topic(
-            client,
-            &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
-            &kafka_topic,
-        )
-        .await
-    } else {
-        mz_kafka_util::admin::create_new_topic(
-            client,
-            &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
-            &kafka_topic,
-        )
-        .await
-    }
+    mz_kafka_util::admin::ensure_topic(
+        client,
+        &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
+        &kafka_topic,
+    )
+    .await
     .with_context(|| format!("Error creating topic {} for sink", topic))?;
 
     Ok(())
@@ -166,7 +154,7 @@ async fn register_kafka_topic(
 /// Publish value and optional key schemas for a given topic.
 ///
 /// TODO(benesch): do we need to delete the Kafka topic if publishing the
-// schema fails?
+/// schema fails?
 async fn publish_kafka_schemas(
     ccsr: &mz_ccsr::Client,
     topic: &str,
@@ -203,7 +191,6 @@ async fn publish_kafka_schemas(
 
 async fn build_kafka(
     builder: KafkaSinkConnectionBuilder,
-    id: GlobalId,
     connection_context: ConnectionContext,
 ) -> Result<StorageSinkConnection, AdapterError> {
     // Create Kafka topic
@@ -216,29 +203,16 @@ async fn build_kafka(
         .create_with_context(MzClientContext)
         .context("creating admin client failed")?;
 
-    let maybe_append_nonce = {
-        let reuse_topic = builder.reuse_topic;
-        let topic_suffix_nonce = builder.topic_suffix_nonce;
-        move |topic: &str| {
-            if reuse_topic {
-                topic.to_string()
-            } else {
-                format!("{}-{}-{}", topic, id, topic_suffix_nonce)
-            }
-        }
-    };
-    let topic = maybe_append_nonce(&builder.topic_prefix);
-
     register_kafka_topic(
         &client,
-        &topic,
+        &builder.topic_name,
         builder.partition_count,
         builder.replication_factor,
-        builder.reuse_topic,
         builder.retention,
     )
     .await
     .context("error registering kafka topic for sink")?;
+
     let published_schema_info = match builder.format {
         mz_storage::types::sinks::KafkaSinkFormat::Avro {
             key_schema,
@@ -251,7 +225,7 @@ async fn build_kafka(
                 .await?;
             let (key_schema_id, value_schema_id) = publish_kafka_schemas(
                 &ccsr,
-                &topic,
+                &builder.topic_name,
                 key_schema.as_deref(),
                 Some(mz_ccsr::SchemaType::Avro),
                 &value_schema,
@@ -273,19 +247,13 @@ async fn build_kafka(
             csr_connection,
             ..
         }) => {
-            let consistency_topic = maybe_append_nonce(
-                builder
-                    .consistency_topic_prefix
-                    .as_ref()
-                    .expect("known to exist"),
-            );
+            let consistency_topic = builder.consistency_topic_name.expect("known to exist");
             // create consistency topic/schema and retrieve schema id
             register_kafka_topic(
                 &client,
                 &consistency_topic,
                 1,
                 builder.replication_factor,
-                builder.reuse_topic,
                 KafkaSinkConnectionRetention::default(),
             )
             .await
@@ -317,14 +285,13 @@ async fn build_kafka(
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
         connection: builder.connection,
         options: builder.options,
-        topic,
-        topic_prefix: builder.topic_prefix,
+        topic: builder.topic_name,
         relation_key_indices: builder.relation_key_indices,
         key_desc_and_indices: builder.key_desc_and_indices,
         value_desc: builder.value_desc,
         published_schema_info,
         consistency,
-        exactly_once: builder.reuse_topic,
+        exactly_once: true,
         fuel: builder.fuel,
     }))
 }

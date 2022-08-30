@@ -635,8 +635,10 @@ pub struct PostgresConnection {
     pub user: StringOrSecret,
     /// An optional password for authentication.
     pub password: Option<GlobalId>,
-    /// An optional named SSH tunnel connection.
-    pub ssh_tunnel: Option<String>,
+    /// An optional named SSH tunnel connection ID. Used to manage the public key secret.
+    pub ssh_tunnel_id: Option<GlobalId>,
+    /// An optional SSH tunnel connection details.
+    pub ssh_tunnel: Option<SshConnection>,
     /// Whether to use TLS for encryption, authentication, or both.
     pub tls_mode: SslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
@@ -647,7 +649,7 @@ pub struct PostgresConnection {
 }
 
 impl PostgresConnection {
-    pub async fn config(
+    pub async fn postgres_config(
         &self,
         secrets_reader: &dyn mz_secrets::SecretsReader,
     ) -> Result<tokio_postgres::Config, anyhow::Error> {
@@ -674,6 +676,36 @@ impl PostgresConnection {
         }
         Ok(config)
     }
+
+    pub async fn config(
+        &self,
+        secrets_reader: &dyn mz_secrets::SecretsReader,
+    ) -> Result<mz_postgres_util::Config, anyhow::Error> {
+        let ssh_tunnel = if let (Some(ssh_secret_id), Some(ssh_tunnel)) =
+            (self.ssh_tunnel_id, self.ssh_tunnel.as_ref())
+        {
+            let secret = secrets_reader.read(ssh_secret_id).await?;
+            let keyset = mz_ore::ssh_key::SshKeyset::from_bytes(&secret)?;
+            let public_key = std::str::from_utf8(keyset.primary().ssh_public_key())?.to_string();
+            let private_key = std::str::from_utf8(keyset.primary().ssh_private_key())?.to_string();
+            mz_postgres_util::SshTunnelConfig::Tunnel {
+                host: ssh_tunnel.host.clone(),
+                port: ssh_tunnel.port,
+                user: ssh_tunnel.user.clone(),
+                public_key,
+                private_key,
+            }
+        } else {
+            mz_postgres_util::SshTunnelConfig::Direct
+        };
+
+        Ok(mz_postgres_util::Config::new(
+            self.postgres_config(secrets_reader).await?,
+            &self.host,
+            self.port,
+            ssh_tunnel,
+        ))
+    }
 }
 
 impl RustType<ProtoPostgresConnection> for PostgresConnection {
@@ -684,6 +716,7 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
             database: self.database.into_proto(),
             user: Some(self.user.into_proto()),
             password: self.password.into_proto(),
+            ssh_tunnel_id: self.ssh_tunnel_id.into_proto(),
             ssh_tunnel: self.ssh_tunnel.into_proto(),
             tls_mode: Some(self.tls_mode.into_proto()),
             tls_root_cert: self.tls_root_cert.into_proto(),
@@ -700,6 +733,7 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
                 .user
                 .into_rust_if_some("ProtoPostgresConnection::user")?,
             password: proto.password.into_rust()?,
+            ssh_tunnel_id: proto.ssh_tunnel_id.into_rust()?,
             ssh_tunnel: proto.ssh_tunnel.into_rust()?,
             tls_mode: proto
                 .tls_mode
@@ -721,7 +755,8 @@ impl Arbitrary for PostgresConnection {
             any::<String>(),
             any::<StringOrSecret>(),
             any::<Option<GlobalId>>(),
-            any::<Option<String>>(),
+            any::<Option<GlobalId>>(),
+            any::<Option<SshConnection>>(),
             any_ssl_mode(),
             any::<Option<StringOrSecret>>(),
             any::<Option<TlsIdentity>>(),
@@ -733,6 +768,7 @@ impl Arbitrary for PostgresConnection {
                     database,
                     user,
                     password,
+                    ssh_tunnel_id,
                     ssh_tunnel,
                     tls_mode,
                     tls_root_cert,
@@ -744,6 +780,7 @@ impl Arbitrary for PostgresConnection {
                         database,
                         user,
                         password,
+                        ssh_tunnel_id,
                         ssh_tunnel,
                         tls_mode,
                         tls_root_cert,
@@ -759,8 +796,42 @@ impl Arbitrary for PostgresConnection {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshConnection {
     pub host: String,
-    pub port: i32,
+    pub port: u16,
     pub user: String,
-    pub public_key: String,
-    pub private_key: GlobalId,
+    pub public_keys: Option<(String, String)>,
+}
+
+use proto_ssh_connection::ProtoPublicKeys;
+
+impl RustType<ProtoPublicKeys> for (String, String) {
+    fn into_proto(&self) -> ProtoPublicKeys {
+        ProtoPublicKeys {
+            primary_public_key: self.0.into_proto(),
+            secondary_public_key: self.1.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoPublicKeys) -> Result<Self, TryFromProtoError> {
+        Ok((proto.primary_public_key, proto.secondary_public_key))
+    }
+}
+
+impl RustType<ProtoSshConnection> for SshConnection {
+    fn into_proto(&self) -> ProtoSshConnection {
+        ProtoSshConnection {
+            host: self.host.into_proto(),
+            port: self.port.into_proto(),
+            user: self.user.into_proto(),
+            public_keys: self.public_keys.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoSshConnection) -> Result<Self, TryFromProtoError> {
+        Ok(SshConnection {
+            host: proto.host,
+            port: proto.port.into_rust()?,
+            user: proto.user,
+            public_keys: proto.public_keys.into_rust()?,
+        })
+    }
 }

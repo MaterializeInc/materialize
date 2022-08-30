@@ -41,13 +41,6 @@ This page describes how to connect Materialize to Kinesis Data Streams to read d
 
 {{% create-source/syntax-connector-details connector="kinesis" envelopes="append-only" %}}
 
-### `WITH` options
-
-Field                                | Value     | Description
--------------------------------------|-----------|-------------------------------------
-`timestamp_frequency_ms`             | `int`     | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently the source advances its timestamp. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
-
-
 ## Supported formats
 
 |<div style="width:290px">Format</div> | [Append-only envelope] | [Upsert envelope] | [Debezium envelope] |

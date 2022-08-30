@@ -43,14 +43,14 @@ contains:invalid CONNECTION: under-specified security configuration
 
 # ! CREATE SOURCE data
 #   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-#   WITH (
+#   LEGACYWITH (
 #       security_protocol = 'SASL_SSL',
 #       sasl_mechanisms = 'PLAIN',
 #       sasl_username = 'materialize',
 #       sasl_password_env = 'SASL_PASSWORD',
 #       ssl_ca_location = '/share/secrets/ca.crt'
 #   )
-#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   WITH (
 #       ssl_ca_location = '/share/secrets/ca.crt'
 #   )

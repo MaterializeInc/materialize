@@ -267,7 +267,7 @@ Every time `TAIL` is invoked, a dataflow using the `Dataflow: tail` prefix is cr
 -- Report the number of tails running
 SELECT count(1) FROM (
     SELECT id
-    FROM mz_dataflow_names
+    FROM mz_dataflows
     WHERE substring(name, 0, 15) = 'Dataflow: tail'
     GROUP BY id
 );
