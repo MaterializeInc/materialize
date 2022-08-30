@@ -125,7 +125,7 @@ fn start_connections(
                 .as_str()
                 .to_socket_addrs()
                 .expect("Failed to parse address")
-                .into_first()
+                .into_element()
         })
         .collect();
     let mut results: Vec<_> = (0..(addresses.len() - my_index - 1))
@@ -143,6 +143,10 @@ fn start_connections(
         if results[i].is_none() {
             match TcpStream::connect_timeout(&addresses[i], Duration::from_secs(1)) {
                 Ok(s) => {
+                    s.set_nodelay(true).expect("set_nodelay call failed");
+
+                    s.write_all(&my_index.to_ne_bytes());
+
                     s.set_nonblocking(true)
                         .expect("set_nonblocking(true) call failed");
                     info!(worker = my_index, "Connected to process {i}");
