@@ -141,7 +141,7 @@ where
                                 source_relation,
                                 initial_closure,
                             );
-                            region_errs.push(err_stream);
+                            region_errs.extend(err_stream);
                             update_stream
                         }
                         Err(trace) => {
@@ -152,7 +152,7 @@ where
                                 source_relation,
                                 initial_closure,
                             );
-                            region_errs.push(err_stream);
+                            region_errs.extend(err_stream);
                             update_stream
                         }
                     };
@@ -230,7 +230,7 @@ where
                                 }
                             };
                         update_stream = oks;
-                        region_errs.push(errs);
+                        region_errs.extend(errs);
                     }
 
                     // Delay updates as appropriate.
@@ -248,6 +248,7 @@ where
                     // For example, we may have expressions not pushed down (e.g. literals)
                     // and projections that could not be applied (e.g. column repetition).
                     if let Some(final_closure) = final_closure {
+                        let could_error = final_closure.could_error();
                         let (updates, errors) =
                             update_stream.flat_map_fallible("DeltaJoinFinalization", {
                                 // Reuseable allocation for unpacking.
@@ -265,20 +266,28 @@ where
                             });
 
                         update_stream = updates;
-                        region_errs.push(errors);
+                        if could_error {
+                            region_errs.push(errors);
+                        }
                     }
 
-                    inner_errs.push(
-                        differential_dataflow::collection::concatenate(region, region_errs).leave(),
-                    );
+                    if !region_errs.is_empty() {
+                        inner_errs.push(
+                            differential_dataflow::collection::concatenate(region, region_errs)
+                                .leave(),
+                        );
+                    }
                     update_stream.leave()
                 });
 
                 join_results.push(path_results);
             }
 
-            scope_errs
-                .push(differential_dataflow::collection::concatenate(inner, inner_errs).leave());
+            if !inner_errs.is_empty() {
+                scope_errs.push(
+                    differential_dataflow::collection::concatenate(inner, inner_errs).leave(),
+                );
+            }
 
             // Concatenate the results of each delta query as the accumulated results.
             (
@@ -315,7 +324,7 @@ fn build_halfjoin<G, Tr, CF>(
     closure: JoinClosure,
 ) -> (
     Collection<G, (Row, G::Timestamp), Diff>,
-    Collection<G, DataflowError, Diff>,
+    Vec<Collection<G, DataflowError, Diff>>,
 )
 where
     G: Scope,
@@ -323,6 +332,8 @@ where
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
+    let mut errors = Vec::new();
+    let prev_key_could_error = prev_key.iter().any(|e| e.could_error());
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -345,6 +356,10 @@ where
         }
     });
 
+    if prev_key_could_error {
+        errors.push(errs);
+    }
+
     use crate::render::RenderTimestamp;
     use differential_dataflow::AsCollection;
     use timely::dataflow::operators::OkErr;
@@ -352,7 +367,7 @@ where
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
 
-    if closure.could_error() {
+    let oks = if closure.could_error() {
         let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
             trace,
@@ -380,12 +395,10 @@ where
             }
         });
 
-        (
-            oks.as_collection().flat_map(|x| x),
-            errs.concat(&errs2.as_collection()),
-        )
+        errors.push(errs2.as_collection());
+        oks.as_collection().flat_map(|x| x)
     } else {
-        let oks = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
+        dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
             trace,
             |time| time.step_back(),
@@ -403,10 +416,10 @@ where
                 let diff = diff1.clone() * diff2.clone();
                 row.map(|r| ((r, time.clone()), initial.clone(), diff))
             },
-        );
+        )
+    };
 
-        (oks, errs)
-    }
+    (oks, errors)
 }
 
 /// Builds the beginning of the update stream of a delta path.
@@ -419,7 +432,10 @@ fn build_update_stream<G, Tr>(
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
-) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
+) -> (
+    Collection<G, Row, Diff>,
+    Option<Collection<G, DataflowError, Diff>>,
+)
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
@@ -434,6 +450,8 @@ where
     for event_time in as_of.elements().iter() {
         inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
     }
+
+    let could_error = initial_closure.could_error();
 
     let mut row_buf = Row::default();
     let (ok_stream, err_stream) =
@@ -500,6 +518,10 @@ where
 
     (
         ok_stream.as_collection(),
-        err_stream.as_collection().map(DataflowError::from),
+        if could_error {
+            Some(err_stream.as_collection().map(DataflowError::from))
+        } else {
+            None
+        },
     )
 }
