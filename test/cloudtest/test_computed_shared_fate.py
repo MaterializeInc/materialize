@@ -10,8 +10,6 @@
 import subprocess
 from textwrap import dedent
 
-import pytest
-
 from materialize.cloudtest.application import MaterializeApplication
 
 CLUSTER_SIZE = 16
