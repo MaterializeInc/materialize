@@ -48,7 +48,7 @@ from mz_scheduling_elapsed as mse,
      mz_dataflow_operators as mdo
 where
     mse.id = mdo.id and
-    mse.worker = mdo.worker
+    mse.worker_id = mdo.worker_id
 order by elapsed_ns desc;
 ```
 
@@ -59,7 +59,7 @@ from mz_scheduling_elapsed as mse,
      mz_dataflow_operators as mdo
 where
     mse.id = mdo.id and
-    mse.worker = mdo.worker
+    mse.worker_id = mdo.worker_id
 group by mdo.id, mdo.name
 order by elapsed_ns desc;
 ```
@@ -81,7 +81,7 @@ from mz_scheduling_histogram as msh,
      mz_dataflow_operators as mdo
 where
     msh.id = mdo.id and
-    msh.worker = mdo.worker
+    msh.worker_id = mdo.worker_id
 order by msh.duration_ns desc;
 ```
 
@@ -92,7 +92,7 @@ from mz_scheduling_histogram as msh,
      mz_dataflow_operators as mdo
 where
     msh.id = mdo.id and
-    msh.worker = mdo.worker
+    msh.worker_id = mdo.worker_id
 group by mdo.id, mdo.name, msh.duration_ns
 order by msh.duration_ns desc;
 ```
@@ -109,12 +109,12 @@ number, and anything significantly larger is probably a bug.
 
 ```sql
 -- Extract arrangement records and batches, by worker.
-select mdo.id, mdo.name, mdo.worker, mas.records, mas.batches
+select mdo.id, mdo.name, mdo.worker_id, mas.records, mas.batches
 from mz_arrangement_sizes as mas,
      mz_dataflow_operators as mdo
 where
     mas.operator = mdo.id and
-    mas.worker = mdo.worker
+    mas.worker_id = mdo.worker_id
 order by mas.records desc;
 ```
 
@@ -125,7 +125,7 @@ from mz_arrangement_sizes as mas,
      mz_dataflow_operators as mdo
 where
     mas.operator = mdo.id and
-    mas.worker = mdo.worker
+    mas.worker_id = mdo.worker_id
 group by mdo.id, mdo.name
 order by sum(mas.records) desc;
 ```
@@ -172,7 +172,7 @@ group by
 select
     mse.id,
     dod.name,
-    mse.worker,
+    mse.worker_id,
     elapsed_ns,
     avg_ns,
     elapsed_ns/avg_ns as ratio
@@ -184,7 +184,7 @@ where
     mse.id = aebi.id and
     mse.elapsed_ns > 2 * aebi.avg_ns and
     mse.id = dod.id and
-    mse.worker = dod.worker
+    mse.worker_id = dod.worker_id
 order by ratio desc;
 ```
 
@@ -196,12 +196,12 @@ defined by positions `0..n-1`. The example SQL query and result below shows an
 operator whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
 ```sql
-select * from mz_dataflow_addresses where id=515 and worker=0;
+select * from mz_dataflow_addresses where id=515 and worker_id=0;
 ```
 ```
- id  | worker | address
------+--------+----------
- 515 |      0 | {21,1,5}
+ id  | worker_id | address
+-----+-----------+----------
+ 515 |      0    | {21,1,5}
 ```
 
 Usually, it is only important to know the name of the dataflow a problematic
@@ -230,14 +230,14 @@ FROM
     FROM
       mz_dataflow_addresses mda
     WHERE
-      mda.worker = 0
+      mda.worker_id = 0
       AND list_length(mda.address) = 1) dataflows
 WHERE
-    mda.worker = 0
+    mda.worker_id = 0
     AND mda.id = <problematic_operator_id>
     AND mda.address[1] = dataflows.dataflow_address
     AND mdo.id = dataflows.dataflow_operator
-    AND mdo.worker = 0;
+    AND mdo.worker_id = 0;
 ```
 
 ### How much disk space is Materialize using?
