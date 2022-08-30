@@ -18,14 +18,14 @@ use mz_expr::{LocalId, MirRelationExpr};
 
 use self::{
     arity::Arity, non_negative::NonNegative, relation_type::RelationType,
-    subtree_size::SubtreeSize, /*unique_keys::UniqueKeys,*/
+    subtree_size::SubtreeSize, unique_keys::UniqueKeys,
 };
 
 pub mod arity;
 pub mod non_negative;
 pub mod relation_type;
 pub mod subtree_size;
-//pub mod unique_keys;
+pub mod unique_keys;
 
 /// A common interface to be implemented by all derived attributes.
 pub trait Attribute {
@@ -209,7 +209,7 @@ pub struct AttributeDeriver {
 }
 
 /// A topological sort of extant attributes.
-/// 
+///
 /// The attribute assigned value 0 depends on no other attributes.
 /// We expect the attributes to be assigned numbers in the range
 /// 0..TOTAL_ATTRIBUTES with no gaps in between.
@@ -219,11 +219,11 @@ enum AttributeId {
     NonNegative = 1,
     Arity = 2,
     RelationType = 3,
-    //UniqueKeys = 4,
+    UniqueKeys = 4,
 }
 
 /// Should always be equal to the number of attributes
-const TOTAL_ATTRIBUTES: usize = 4;
+const TOTAL_ATTRIBUTES: usize = 5;
 
 impl AttributeDeriver {
     /// Does derivation work required upon entering a subexpression
@@ -250,9 +250,9 @@ impl AttributeDeriver {
                 Some(AttributeId::Arity) => {
                     schedule_env_tasks::<Arity>(&mut self.attributes, expr);
                 }
-                /*Some(AttributeId::UniqueKeys) => {
+                Some(AttributeId::UniqueKeys) => {
                     schedule_env_tasks::<UniqueKeys>(&mut self.attributes, expr);
-                }*/
+                }
                 None => {}
             }
         }
@@ -285,9 +285,9 @@ impl AttributeDeriver {
                 Some(AttributeId::Arity) => {
                     post::<Arity>(&mut self.attributes, expr, &mut deps);
                 }
-                /*Some(AttributeId::UniqueKeys) => {
+                Some(AttributeId::UniqueKeys) => {
                     post::<UniqueKeys>(&mut self.attributes, expr, &mut deps);
-                }*/
+                }
                 None => {}
             }
         }
@@ -351,9 +351,14 @@ impl AttributeDeriver {
                         r.results.pop();
                     });
                 }
-                /*Some(AttributeId::UniqueKeys) => {
-                    post::<UniqueKeys>(&mut self.attributes, expr, &mut deps);
-                }*/
+                Some(AttributeId::UniqueKeys) => {
+                    self.attributes
+                        .get_mut::<UniqueKeys>()
+                        .iter_mut()
+                        .for_each(|r| {
+                            r.results.pop();
+                        });
+                }
                 None => {}
             }
         }

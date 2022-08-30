@@ -23,7 +23,7 @@ use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::{
     arity::Arity, non_negative::NonNegative, relation_type::RelationType,
-    subtree_size::SubtreeSize, AttributeBuilder, AttributeDeriver,
+    subtree_size::SubtreeSize, unique_keys::UniqueKeys, AttributeBuilder, AttributeDeriver,
 };
 
 use super::{
@@ -133,9 +133,9 @@ impl From<&ExplainConfig> for ExplainAttributes {
         if config.arity {
             builder.add_attribute::<Arity>();
         }
-        /*if config.unique_keys {
-            builder.add_attribute::<UniqueKeeys>();
-        }*/
+        if config.keys {
+            builder.add_attribute::<UniqueKeys>();
+        }
         ExplainAttributes {
             deriver: builder.finish(),
         }
@@ -211,6 +211,24 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
                     let attr = bracketed("(", ")", separated(", ", humanized_columns)).to_string();
                     let attrs = annotations.entry(expr).or_default();
                     attrs.types = Some(attr);
+                }
+            }
+
+            if config.keys {
+                for (expr, keys) in std::iter::zip(
+                    subtree_refs.iter(),
+                    attribute_map
+                        .remove::<UniqueKeys>()
+                        .unwrap()
+                        .results
+                        .into_iter(),
+                ) {
+                    let formatted_keys = keys
+                        .into_iter()
+                        .map(|key_set| bracketed("[", "]", separated(", ", key_set)).to_string());
+                    let attr = bracketed("(", ")", separated(", ", formatted_keys)).to_string();
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.keys = Some(attr);
                 }
             }
         }

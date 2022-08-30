@@ -88,6 +88,7 @@ pub struct Attributes {
     subtree_size: Option<usize>,
     arity: Option<usize>,
     types: Option<String>,
+    keys: Option<String>,
 }
 
 impl fmt::Display for Attributes {
@@ -104,6 +105,9 @@ impl fmt::Display for Attributes {
         }
         if let Some(types) = &self.types {
             builder.field("types", types);
+        }
+        if let Some(keys) = &self.keys {
+            builder.field("keys", keys);
         }
         builder.finish()
     }
