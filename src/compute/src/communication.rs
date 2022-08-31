@@ -88,6 +88,8 @@ fn create_sockets(
 ///
 /// If an EOF or an error other than those two is signaled, the connection is broken
 /// and should be set to `None`.
+///
+/// `first_idx` is used only for error messages; it does not impact behavior otherwise.
 fn gc_broken_connections<'a, I>(conns: I, first_idx: usize)
 where
     I: IntoIterator<Item = &'a mut Option<TcpStream>>,
@@ -128,38 +130,33 @@ fn start_connections(
     // about whether this results in crash loops and global deadlocks.
     // Thus, in between connection attempts, check whether a previously-established connection has
     // gone away; if so, we clear it and retry it again later.
-    let mut i = 0;
-    while results.iter().any(|r| r.is_none()) {
-        if results[i].is_none() {
-            match TcpStream::connect(&addresses[i]) {
-                Ok(mut s) => {
-                    s.set_nodelay(true).expect("set_nodelay call failed");
+    while let Some(i) = results.iter().position(|r| r.is_none()) {
+        match TcpStream::connect(&addresses[i]) {
+            Ok(mut s) => {
+                s.set_nodelay(true).expect("set_nodelay call failed");
 
-                    s.write_all(&my_index.to_ne_bytes())
-                        .expect("failed to send worker index");
+                s.write_all(&my_index.to_ne_bytes())
+                    .expect("failed to send worker index");
 
-                    // This is necessary for `gc_broken_connections`; it will be unset
-                    // before actually trying to use the sockets.
-                    s.set_nonblocking(true)
-                        .expect("set_nonblocking(true) call failed");
+                // This is necessary for `gc_broken_connections`; it will be unset
+                // before actually trying to use the sockets.
+                s.set_nonblocking(true)
+                    .expect("set_nonblocking(true) call failed");
 
-                    info!(worker = my_index, "Connected to process {i}");
-                    results[i] = Some(s);
-                }
-                Err(err) => {
-                    info!(
-                        worker = my_index,
-                        "error connecting to process {i}: {err}; will retry"
-                    );
-                    sleep(Duration::from_secs(1));
-                }
+                info!(worker = my_index, "Connected to process {i}");
+                results[i] = Some(s);
+            }
+            Err(err) => {
+                info!(
+                    worker = my_index,
+                    "error connecting to process {i}: {err}; will retry"
+                );
+                sleep(Duration::from_secs(1));
             }
         }
-
         // If a peer failed, it's better that we detect it now than spin up Timely
         // and immediately crash.
         gc_broken_connections(&mut results, 0);
-        i = (i + 1) % results.len();
     }
 
     Ok(results)
