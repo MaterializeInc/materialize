@@ -172,6 +172,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                     Arc::clone(&compute_state.persist_clients),
                     source.storage_metadata.clone(),
                     dataflow.as_of.clone().unwrap(),
+                    dataflow.until.clone(),
+                    None,
                 );
 
                 // Restrict updates by `dataflow.until`, retaining those at times not greater or equal to it.

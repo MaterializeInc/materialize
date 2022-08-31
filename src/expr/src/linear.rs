@@ -1635,6 +1635,19 @@ pub mod plan {
                 && self.upper_bounds.is_empty()
         }
 
+        /// Returns `self`, and leaves behind an identity operator that acts on its output.
+        pub fn take(&mut self) -> Self {
+            let mut identity = Self {
+                mfp: SafeMfpPlan {
+                    mfp: MapFilterProject::new(self.mfp.projection.len()),
+                },
+                lower_bounds: Default::default(),
+                upper_bounds: Default::default(),
+            };
+            std::mem::swap(self, &mut identity);
+            identity
+        }
+
         /// Attempt to convert self into a non-temporal MapFilterProject plan.
         ///
         /// If that is not possible, the original instance is returned as an error.
