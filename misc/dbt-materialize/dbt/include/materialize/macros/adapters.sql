@@ -18,8 +18,7 @@
 -- See: https://github.com/dbt-labs/dbt-core/blob/13b18654f/plugins/postgres/dbt/include/postgres/macros/adapters.sql
 
 {% macro materialize__create_view_as(relation, sql) -%}
-  {%- set default_cluster = config.get('credentials.cluster', None) -%}
-  {%- set cluster = config.get('cluster', default_cluster) -%}
+  {%- set cluster = config.get('cluster', None) -%}
 
   create view {{ relation }}
   {% if cluster %}
@@ -31,8 +30,7 @@
 {%- endmacro %}
 
 {% macro materialize__create_materialized_view_as(relation, sql) -%}
-  {%- set default_cluster = config.get('credentials.cluster', None) -%}
-  {%- set cluster = config.get('cluster', default_cluster) -%}
+  {%- set cluster = config.get('cluster', None) -%}
 
   create materialized view {{ relation }}
   {% if cluster %}
@@ -76,9 +74,7 @@
 
 {% macro materialize__get_create_index_sql(relation, index_dict) -%}
   {%- set index_config = adapter.parse_index(index_dict) -%}
-  {%- set default_cluster = config.get('credentials.cluster', None) -%}
-  {%- set cluster = index_config.cluster or config.get('cluster', default_cluster) -%}
-
+  {%- set cluster = index_config.cluster or config.get('cluster', None) -%}
     create
     {% if index_config.default -%}
       default

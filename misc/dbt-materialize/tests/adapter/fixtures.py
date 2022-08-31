@@ -59,13 +59,6 @@ test_source = {
         """,
 }
 
-test_index = """
-{{ config(materialized='index') }}
-
-    CREATE DEFAULT INDEX test_index
-    ON {{ ref('test_source') }}
-"""
-
 test_source_index = {
     "materialize_cloud": """
         {{ config(
@@ -87,23 +80,23 @@ test_source_index = {
         FORMAT BYTES
         """,
 }
-
-test_sink = {
-    "materialize_cloud": """
-        {{ config(materialized='sink') }}
-            CREATE SINK {{ this }}
-            FROM {{ ref('test_materialized_view') }}
-            INTO KAFKA CONNECTION kafka_connection TOPIC 'test-sink'
-            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{{ env_var('SCHEMA_REGISTRY_URL', 'http://localhost:8081') }}'
-        """,
-    "materialize_binary": """
-        {{ config(materialized='sink') }}
-            CREATE SINK {{ this }}
-            FROM {{ ref('test_materialized_view') }}
-            INTO KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-sink'
-            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{{ env_var('SCHEMA_REGISTRY_URL', 'http://localhost:8081') }}'
-        """,
-}
+# TODO(ahelium) re-enable SINKS tests when syntax becomes clear
+# test_sink = {
+#     "materialize_cloud": """
+#         {{ config(materialized='sink') }}
+#             CREATE SINK {{ this }}
+#             FROM {{ ref('test_materialized_view') }}
+#             INTO KAFKA CONNECTION kafka_connection TOPIC 'test-sink'
+#             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{{ env_var('SCHEMA_REGISTRY_URL', 'http://localhost:8081') }}'
+#         """,
+#     "materialize_binary": """
+#         {{ config(materialized='sink') }}
+#             CREATE SINK {{ this }}
+#             FROM {{ ref('test_materialized_view') }}
+#             INTO KAFKA BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}' TOPIC 'test-sink'
+#             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{{ env_var('SCHEMA_REGISTRY_URL', 'http://localhost:8081') }}'
+#         """,
+# }
 
 actual_indexes = """
 SELECT
@@ -123,7 +116,6 @@ expected_indexes = {
 object_name,index_position,on_position,on_expression,index_name
 test_materialized_view_index,1,1,,a_idx
 test_materialized_view_index,2,,pg_catalog.length(a),a_idx
-test_source,1,1,,test_index
 test_source_index,1,1,,test_source_index_data_idx
 test_view_index,1,1,,test_view_index_primary_idx
 """.lstrip(),
@@ -138,8 +130,6 @@ test_materialized_view,1,1,,test_materialized_view_primary_idx
 test_materialized_view_index,1,1,,a_idx
 test_materialized_view_index,1,1,,test_materialized_view_index_primary_idx
 test_materialized_view_index,2,,pg_catalog.length(a),a_idx
-test_source,1,1,,test_index
-test_source,2,2,,test_index
 test_source_index,1,1,,test_source_index_data_idx
 test_view_index,1,1,,test_view_index_primary_idx
 """.lstrip(),
