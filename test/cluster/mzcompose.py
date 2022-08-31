@@ -240,7 +240,9 @@ def workflow_test_remote_storaged(c: Composition) -> None:
             "materialized",
             "postgres",
             "storaged",
-            "redpanda",
+            "zookeeper",
+            "kafka",
+            "schema-registry",
         ]
         c.start_and_wait_for_tcp(
             services=dependencies,
