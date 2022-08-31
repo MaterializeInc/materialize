@@ -230,6 +230,10 @@ pub enum ExecuteResponse {
     CreatedView {
         existed: bool,
     },
+    /// The requested views were created.
+    CreatedViews {
+        existed: bool,
+    },
     /// The requested materialized view was created.
     CreatedMaterializedView {
         existed: bool,
@@ -362,6 +366,7 @@ impl ExecuteResponse {
             CreatedSources => created!("sources"),
             CreatedTable { .. } => created!("table"),
             CreatedView { .. } => created!("view"),
+            CreatedViews { .. } => created!("views"),
             CreatedMaterializedView { .. } => created!("materialized view"),
             CreatedType => created!("type"),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
