@@ -353,7 +353,7 @@ impl ExecuteResponse {
             CreatedDatabase { .. } => created!("database"),
             CreatedSchema { .. } => created!("schema"),
             CreatedRole => created!("role"),
-            CreatedComputeInstance { .. } => created!("connection"),
+            CreatedComputeInstance { .. } => created!("cluster"),
             CreatedComputeInstanceReplica { .. } => created!("cluster replica"),
             CreatedIndex { .. } => created!("index"),
             CreatedSecret { .. } => created!("secret"),
