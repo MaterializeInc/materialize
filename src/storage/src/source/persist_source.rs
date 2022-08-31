@@ -46,7 +46,7 @@ use crate::types::sources::SourceData;
 /// and any un-applied part of the argument will be left behind in the argument.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G>(
+pub fn persist_source<G, YFn>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -54,6 +54,7 @@ pub fn persist_source<G>(
     as_of: Antichain<Timestamp>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
+    yield_fn: YFn,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -61,6 +62,7 @@ pub fn persist_source<G>(
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
+    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let (stream, token) = persist_source_core(
         scope,
@@ -70,6 +72,7 @@ where
         as_of,
         until,
         map_filter_project,
+        yield_fn,
     );
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((row, t, r)),
@@ -84,7 +87,7 @@ where
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source_core<G>(
+pub fn persist_source_core<G, YFn>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -92,12 +95,14 @@ pub fn persist_source_core<G>(
     as_of: Antichain<Timestamp>,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
+    yield_fn: YFn,
 ) -> (
     Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
+    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
@@ -306,6 +311,11 @@ where
                             fetcher.fetch_leased_part(part.into()).await;
                         let fetched_part = fetched_part
                             .expect("shard_id generated for sources must match across all workers");
+                        // SUBTLE: This operator yields back to timely whenever an await returns a
+                        // Pending result from the overall async/await state machine `poll`. Since
+                        // this is fetching from remote storage, it will yield and thus we can reset
+                        // our yield counters here.
+                        let mut decode_start = Instant::now();
 
                         // Apply as much logic to `updates` as we can, before we emit anything.
                         let (updates_size_hint_min, updates_size_hint_max) =
@@ -356,12 +366,20 @@ where
                                     }
                                 }
                             }
-                            // TODO: Figure out how to actually make the operator
-                            // yield here if this invocation has spent "too much"
-                            // time running.
+                            if yield_fn(decode_start, updates.len()) {
+                                // A large part of the point of yielding is to let later operators
+                                // reduce down the data, so emit what we have. Note that this means
+                                // we don't get to consolidate everything, but that's part of the
+                                // tradeoff in tuning yield_fn.
+                                differential_dataflow::consolidation::consolidate_updates(
+                                    &mut updates,
+                                );
+                                update_session.give_vec(&mut updates);
+                                force_yield().await;
+                                decode_start = Instant::now();
+                            }
                         }
                         differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
                         update_session.give_vec(&mut updates);
                         consumed_part_session.give(consumed_part.into_exchangeable_part());
                     }
@@ -424,4 +442,24 @@ where
     let token = Rc::new(token);
 
     (update_output_stream, token)
+}
+
+// The build_async operator yields to timely whenever the Future handed to it
+// (in practice an async/await state machine) returns from `poll` with a
+// `Pending`. Force a yield by constructing a future that returns Pending the
+// first time it's polled and `Ready` the second.
+//
+// This allows us to yield without having to do anything special to stash
+// in-progress work. (Basically, the async/await state machine does it for us.)
+async fn force_yield() {
+    let mut polled = false;
+    let () = futures::future::poll_fn(move |cx| match polled {
+        true => Poll::Ready(()),
+        false => {
+            polled = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await;
 }
