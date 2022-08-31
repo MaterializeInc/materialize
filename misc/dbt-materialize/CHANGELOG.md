@@ -13,7 +13,7 @@
   SELECT ...
   ```
 
-  * A new `default` parameter. Default to false. If set to True, will create
+  * A new `default` parameter. Defaults to `False`. If set to `True`, will create
     default primary indexes.
   ```sql
   {{ config(materialized='materializedview',
