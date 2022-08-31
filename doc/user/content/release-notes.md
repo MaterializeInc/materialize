@@ -23,7 +23,7 @@ process by the release notes team.
 
 {{< note >}}
 v0.26 is a **long-term support (LTS)** release of Materialize. We will support
-the v0.26.x series through at least August 31 2022, issuing **patch releases** as
+the v0.26.x series through at least October 31, 2022, issuing **patch releases** as
 necessary to address severe bugs and security vulnerabilities.
 {{</ note >}}
 
