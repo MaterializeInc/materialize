@@ -626,18 +626,6 @@ where
             self.depends_on_into(id, out)
         }
     }
-
-    /// Determine a unique id for this dataflow based on the indexes it exports.
-    // TODO: The semantics of this function are only useful for command reconciliation at the moment.
-    pub fn global_id(&self) -> Option<GlobalId> {
-        let mut exports = self.export_ids();
-        let id = exports.next()?;
-        if exports.all(|other_id| other_id == id) {
-            Some(id)
-        } else {
-            None
-        }
-    }
 }
 
 impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P, S, T> {
