@@ -7,13 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::regions::{
-    cloud_provider_region_details, list_cloud_providers, region_environment_details,
-};
-use crate::utils::{exit_with_fail_message, CloudProviderRegion};
-use crate::{Environment, ExitMessage, FronteggAuthMachine, Profile};
+use crate::regions::get_provider_region_environment;
+use crate::utils::CloudProviderRegion;
+use crate::{Environment, Profile, ValidProfile};
+use anyhow::{Context, Result};
 use reqwest::Client;
-use std::process::exit;
 use subprocess::Exec;
 
 /// ----------------------------
@@ -32,9 +30,9 @@ pub(crate) fn parse_pgwire(envrionment: &Environment) -> (&str, &str) {
 }
 
 /// Runs psql as a subprocess command
-fn run_psql_shell(profile: Profile, environment: &Environment) {
+fn run_psql_shell(valid_profile: ValidProfile, environment: &Environment) {
     let (host, port) = parse_pgwire(environment);
-    let email = profile.email.clone();
+    let email = valid_profile.profile.email.clone();
 
     let output = Exec::cmd("psql")
         .arg("-U")
@@ -44,7 +42,7 @@ fn run_psql_shell(profile: Profile, environment: &Environment) {
         .arg("-p")
         .arg(port)
         .arg("materialize")
-        .env("PGPASSWORD", password_from_profile(profile))
+        .env("PGPASSWORD", password_from_profile(valid_profile.profile))
         .join()
         .expect("failed to execute process");
 
@@ -52,9 +50,12 @@ fn run_psql_shell(profile: Profile, environment: &Environment) {
 }
 
 /// Runs pg_isready to check if an environment is healthy
-pub(crate) fn check_environment_health(profile: Profile, environment: &Environment) -> bool {
+pub(crate) fn check_environment_health(
+    valid_profile: ValidProfile,
+    environment: &Environment,
+) -> bool {
     let (host, port) = parse_pgwire(environment);
-    let email = profile.email.clone();
+    let email = valid_profile.profile.email.clone();
 
     let output = Exec::cmd("pg_isready")
         .arg("-U")
@@ -63,7 +64,7 @@ pub(crate) fn check_environment_health(profile: Profile, environment: &Environme
         .arg(host)
         .arg("-p")
         .arg(port)
-        .env("PGPASSWORD", password_from_profile(profile))
+        .env("PGPASSWORD", password_from_profile(valid_profile.profile))
         .arg("-d")
         .arg("materialize")
         .arg("-q")
@@ -81,89 +82,15 @@ fn password_from_profile(profile: Profile) -> String {
 /// Command to run a shell (psql) on a Materialize cloud instance
 pub(crate) async fn shell(
     client: Client,
-    profile: Profile,
-    frontegg_auth_machine: FronteggAuthMachine,
+    valid_profile: ValidProfile,
     cloud_provider_region: CloudProviderRegion,
-) {
-    match list_cloud_providers(&client, &frontegg_auth_machine).await {
-        Ok(cloud_providers) => {
-            let region = cloud_provider_region;
+) -> Result<()> {
+    let environment =
+        get_provider_region_environment(&client, &valid_profile, &cloud_provider_region)
+            .await
+            .with_context(|| "Retrieving cloud provider region.")?;
 
-            // TODO: A map would be more efficient.
-            let selected_cloud_provider_filtered = cloud_providers
-                .into_iter()
-                .find(|cloud_provider| cloud_provider.region == region.region_name());
+    run_psql_shell(valid_profile, &environment);
 
-            match selected_cloud_provider_filtered {
-                Some(cloud_provider) => {
-                    match cloud_provider_region_details(
-                        &client,
-                        &cloud_provider,
-                        &frontegg_auth_machine,
-                    )
-                    .await
-                    {
-                        Ok(Some(mut cloud_provider_regions)) => {
-                            println!("WOHOOO1");
-                            println!("{:?}", cloud_provider_regions);
-                            match cloud_provider_regions.pop() {
-                                Some(region) => {
-                                    // TODO: Replicated code.
-                                    match region_environment_details(
-                                        &client,
-                                        &region,
-                                        &frontegg_auth_machine,
-                                    )
-                                    .await
-                                    {
-                                        Ok(environment_details) => {
-                                            if let Some(mut environment_list) = environment_details
-                                            {
-                                                match environment_list.pop() {
-                                                    Some(environment) => {
-                                                        run_psql_shell(profile, &environment)
-                                                    }
-                                                    None => {
-                                                        exit_with_fail_message(ExitMessage::Str(
-                                                            "Error. Missing environment.",
-                                                        ))
-                                                    }
-                                                }
-                                            } else {
-                                                exit_with_fail_message(ExitMessage::Str(
-                                                    "Environment unavailable.",
-                                                ));
-                                            }
-                                        }
-                                        Err(error) => {
-                                            exit_with_fail_message(ExitMessage::String(format!(
-                                                "Error getting environment details: {:}",
-                                                error
-                                            )))
-                                        }
-                                    }
-                                }
-                                None => {
-                                    println!("The region is not enabled.");
-                                    exit(0);
-                                }
-                            }
-                        }
-                        Err(error) => exit_with_fail_message(ExitMessage::String(format!(
-                            "Error retrieving region details: {:?}",
-                            error
-                        ))),
-                        Ok(None) => {
-                            println!("No region found.")
-                        }
-                    }
-                }
-                None => exit_with_fail_message(ExitMessage::Str("Unknown region.")),
-            }
-        }
-        Err(error) => exit_with_fail_message(ExitMessage::String(format!(
-            "Error retrieving cloud providers: {:?}",
-            error
-        ))),
-    }
+    Ok(())
 }

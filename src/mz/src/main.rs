@@ -24,8 +24,10 @@ mod utils;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use profiles::get_profile;
-use regions::{print_environment_status, print_region_enabled, region_environment_details};
+use regions::{
+    get_provider_by_region_name, get_provider_region_environment, get_region_environment,
+    print_environment_status, print_region_enabled,
+};
 use serde::{Deserialize, Serialize};
 
 use clap::{Args, Parser, Subcommand};
@@ -34,8 +36,8 @@ use shell::check_environment_health;
 use utils::{exit_with_fail_message, run_loading_spinner, CloudProviderRegion};
 
 use crate::login::{login_with_browser, login_with_console};
-use crate::profiles::{authenticate_profile, validate_profile};
-use crate::regions::{enable_region, list_cloud_providers, list_regions};
+use crate::profiles::validate_profile;
+use crate::regions::{enable_region_environment, list_cloud_providers, list_regions};
 use crate::shell::shell;
 
 /// Command-line interface for Materialize.
@@ -119,7 +121,7 @@ struct FronteggAuthUser {
     access_token: String,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FronteggAuthMachine {
     access_token: String,
@@ -148,6 +150,12 @@ struct Profile {
     client_id: String,
     secret: String,
     region: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ValidProfile {
+    profile: Profile,
+    frontegg_auth_machine: FronteggAuthMachine,
 }
 
 struct CloudProviderAndRegion {
@@ -183,7 +191,7 @@ const PROFILE_NOT_FOUND_MESSAGE: &str =
 const ERROR_UNKNOWN_REGION: &str = "Unknown region";
 
 #[tokio::main]
-async fn main() -> Result<()>  {
+async fn main() -> Result<()> {
     let args = Cli::parse();
     let profile_name = args.profile;
 
@@ -207,28 +215,51 @@ async fn main() -> Result<()>  {
             match regions_cmd.command {
                 RegionsCommands::Enable {
                     cloud_provider_region,
-                } => {
-                    match CloudProviderRegion::from_str(&cloud_provider_region) {
-                        Ok(cloud_provider_region) => {
-                            let frontegg_auth_machine =  validate_profile(profile_name, &client).await.with_context(|| "Authenticating profile.")?;
-                            let loading_spinner = run_loading_spinner("Enabling region...".to_string());
-                            enable_region(
-                                client,
-                                cloud_provider_region,
-                                frontegg_auth_machine,
-                            ).await.with_context(|| "Enabling region.")?;
-                            loading_spinner.finish_with_message("Region enabled.");
+                } => match CloudProviderRegion::from_str(&cloud_provider_region) {
+                    Ok(cloud_provider_region) => {
+                        let valid_profile = validate_profile(profile_name, &client)
+                            .await
+                            .with_context(|| "Validating profile.")?;
+                        let loading_spinner = run_loading_spinner("Enabling region...".to_string());
+                        let cloud_provider = get_provider_by_region_name(
+                            &client,
+                            &valid_profile,
+                            &cloud_provider_region,
+                        )
+                        .await
+                        .with_context(|| "Retrieving cloud provider.")?;
+
+                        let region =
+                            enable_region_environment(&client, &cloud_provider, &valid_profile)
+                                .await
+                                .with_context(|| "Enabling region.")?;
+
+                        let environment = get_region_environment(&client, &valid_profile, &region)
+                            .await
+                            .with_context(|| "Retrieving environment data.")?;
+
+                        loop {
+                            if check_environment_health(valid_profile.clone(), &environment) {
+                                break;
+                            }
                         }
-                        Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
+
+                        loading_spinner.finish_with_message("Region enabled.");
                     }
-                }
+                    Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
+                },
 
                 RegionsCommands::List => {
-                    let frontegg_auth_machine =  validate_profile(profile_name, &client).await.with_context(|| "Authenticating profile.")?;
-                    let cloud_providers = list_cloud_providers(&client, &frontegg_auth_machine).await.with_context(|| "Retrieving cloud providers.")?;
+                    let valid_profile = validate_profile(profile_name, &client)
+                        .await
+                        .with_context(|| "Authenticating profile.")?;
+                    let cloud_providers = list_cloud_providers(&client, &valid_profile)
+                        .await
+                        .with_context(|| "Retrieving cloud providers.")?;
                     let cloud_providers_regions =
-                        list_regions(&cloud_providers, &client, &frontegg_auth_machine)
-                            .await;
+                        list_regions(&cloud_providers, &client, &valid_profile)
+                            .await
+                            .with_context(|| "Listing regions.")?;
                     cloud_providers_regions
                         .iter()
                         .for_each(|cloud_provider_region| {
@@ -238,64 +269,42 @@ async fn main() -> Result<()>  {
 
                 RegionsCommands::Status {
                     cloud_provider_region,
-                } => {
-                    let profile = get_profile(profile_name).with_context(|| "Profile not found. Please, add one or login using `mz login`.")?;
-                    let client = Client::new();
-                    let frontegg_auth_machine = authenticate_profile(&client, &profile).await.with_context(|| "Authenticating profile.")?;
-                    let cloud_providers = list_cloud_providers(&client, &frontegg_auth_machine).await.with_context(|| "Retrieving cloud providers.")?;
-                    match CloudProviderRegion::from_str(&cloud_provider_region) {
-                        Ok(cloud_provider_region) => {
-                            let filtered_providers: Vec<CloudProvider> =
-                            cloud_providers
-                                .into_iter()
-                                .filter(|provider| {
-                                    provider.region
-                                        == cloud_provider_region
-                                            .region_name()
-                                })
-                                .collect::<Vec<CloudProvider>>();
+                } => match CloudProviderRegion::from_str(&cloud_provider_region) {
+                    Ok(cloud_provider_region) => {
+                        let client = Client::new();
+                        let valid_profile = validate_profile(profile_name, &client)
+                            .await
+                            .with_context(|| "Authenticating profile.")?;
+                        let environment = get_provider_region_environment(
+                            &client,
+                            &valid_profile,
+                            &cloud_provider_region,
+                        )
+                        .await
+                        .with_context(|| "Retrieving cloud provider region.")?;
+                        let health = check_environment_health(valid_profile, &environment);
 
-                            let mut cloud_provider_regions = list_regions(
-                                &filtered_providers,
-                                &client,
-                                &frontegg_auth_machine,
-                            )
-                            .await;
-
-                            let cloud_provider_region = cloud_provider_regions.pop().with_context(|| "Missing provider")?;
-                            let region = cloud_provider_region.region.with_context(|| "Region unavailable")?;
-                            let environment_details = region_environment_details(&client, &region, &frontegg_auth_machine).await.with_context(|| "Environment unavailable")?;
-                            let mut environment_list = environment_details.with_context(|| "Environment unlisted")?;
-                            let environment = environment_list.pop().with_context(|| "Missing environment")?;
-                            let health =
-                            check_environment_health(profile, &environment);
-                            print_environment_status(environment, health);
-                        }
-                        Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
+                        print_environment_status(environment, health);
                     }
-                }
+                    Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
+                },
             }
         }
 
         Commands::Shell {
             cloud_provider_region,
-        } => {
-            match CloudProviderRegion::from_str(&cloud_provider_region) {
-                Ok(cloud_provider_region) => {
-                    let profile = get_profile(profile_name).with_context(|| "Profile not found. Please, add one or login using `mz login`.")?;
-                    let client = Client::new();
-                    let frontegg_auth_machine = authenticate_profile(&client, &profile).await.with_context(|| "Authenticating profile.")?;
-                    shell(
-                        client,
-                        profile,
-                        frontegg_auth_machine,
-                        cloud_provider_region,
-                    )
-                    .await;
-                }
-                Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
+        } => match CloudProviderRegion::from_str(&cloud_provider_region) {
+            Ok(cloud_provider_region) => {
+                let client = Client::new();
+                let valid_profile = validate_profile(profile_name, &client)
+                    .await
+                    .with_context(|| "Authenticating profile.")?;
+                shell(client, valid_profile, cloud_provider_region)
+                    .await
+                    .with_context(|| "Running shell")?;
             }
-        }
+            Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
+        },
     }
 
     Ok(())

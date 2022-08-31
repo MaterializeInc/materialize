@@ -106,7 +106,6 @@ async fn generate_api_token(
         .await
 }
 
-
 /// Generates an access token using an API token
 async fn authenticate_user(
     client: &Client,
