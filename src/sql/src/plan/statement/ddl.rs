@@ -2019,10 +2019,15 @@ fn kafka_sink_builder(
 fn get_kafka_sink_consistency_config(
     scx: &StatementContext,
     topic_name: &str,
-    _progress_topic_name: Option<&str>,
+    progress_topic_name: Option<&str>,
     sink_format: &KafkaSinkFormat,
     consistency: Option<KafkaConsistency<Aug>>,
 ) -> Result<KafkaConsistencyConfig, PlanError> {
+    if let Some(topic) = progress_topic_name {
+        return Ok(KafkaConsistencyConfig::Progress {
+            topic: topic.to_string(),
+        });
+    };
     let result = match consistency {
         Some(KafkaConsistency {
             topic,

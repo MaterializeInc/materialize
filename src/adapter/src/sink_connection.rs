@@ -284,7 +284,23 @@ async fn build_kafka(
         KafkaConsistencyConfig::Classic { topic: other, .. } => {
             unreachable!("non-Avro consistency format for Kafka sink {:#?}", &other)
         }
-        _ => None,
+        KafkaConsistencyConfig::Progress { topic } => {
+            ensure_kafka_topic(
+                &client,
+                &topic,
+                1,
+                builder.replication_factor,
+                KafkaSinkConnectionRetention::default(),
+            )
+            .await
+            .context("error registering kafka consistency topic for sink")?;
+
+            Some(KafkaSinkConsistencyConnection {
+                topic,
+                schema_id: None,
+            })
+        }
+        KafkaConsistencyConfig::Yolo => None,
     };
 
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {

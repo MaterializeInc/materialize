@@ -942,7 +942,7 @@ impl KafkaSinkState {
             let encoded = serde_json::to_vec(&ProgressRecord {
                 timestamp: transaction_id,
             })?;
-            let key = self.id.to_string();
+            let key = format!("sink-{}", self.id);
             let record = BaseRecord::to(&consistency.topic)
                 .payload(&encoded)
                 .key(&key);
