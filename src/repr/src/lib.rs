@@ -29,6 +29,7 @@ mod row;
 mod scalar;
 
 pub mod adt;
+pub mod antichain;
 pub mod chrono;
 pub mod explain_new;
 pub mod global_id;

@@ -39,6 +39,7 @@ serde = { version = "1.0.144", features = ["derive"] }
 serde_json = { version = "1.0.85", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
 smallvec = { version = "1.9.0", features = ["serde", "union"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "1.1.2", features = ["serde"] }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }

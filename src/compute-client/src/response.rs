@@ -205,7 +205,7 @@ impl RustType<ProtoTailResponse> for TailResponse<mz_repr::Timestamp> {
         ProtoTailResponse {
             kind: Some(match self {
                 TailResponse::Batch(tail_batch) => Batch(tail_batch.into_proto()),
-                TailResponse::DroppedAt(antichain) => DroppedAt(antichain.into()),
+                TailResponse::DroppedAt(antichain) => DroppedAt(antichain.into_proto()),
             }),
         }
     }
@@ -214,7 +214,7 @@ impl RustType<ProtoTailResponse> for TailResponse<mz_repr::Timestamp> {
         use proto_tail_response::Kind::*;
         match proto.kind {
             Some(Batch(tail_batch)) => Ok(TailResponse::Batch(tail_batch.into_rust()?)),
-            Some(DroppedAt(antichain)) => Ok(TailResponse::DroppedAt(antichain.into())),
+            Some(DroppedAt(antichain)) => Ok(TailResponse::DroppedAt(antichain.into_rust()?)),
             None => Err(TryFromProtoError::missing_field("ProtoTailResponse::kind")),
         }
     }
@@ -249,8 +249,8 @@ impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoTailBatch {
         use proto_tail_batch::ProtoUpdate;
         ProtoTailBatch {
-            lower: Some((&self.lower).into()),
-            upper: Some((&self.upper).into()),
+            lower: Some(self.lower.into_proto()),
+            upper: Some(self.upper.into_proto()),
             updates: self
                 .updates
                 .iter()
@@ -265,14 +265,8 @@ impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoTailBatch) -> Result<Self, TryFromProtoError> {
         Ok(TailBatch {
-            lower: proto
-                .lower
-                .map(Into::into)
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::lower"))?,
-            upper: proto
-                .upper
-                .map(Into::into)
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::upper"))?,
+            lower: proto.lower.into_rust_if_some("ProtoTailUpdate::lower")?,
+            upper: proto.upper.into_rust_if_some("ProtoTailUpdate::upper")?,
             updates: proto
                 .updates
                 .into_iter()

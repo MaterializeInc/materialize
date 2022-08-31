@@ -149,7 +149,7 @@ impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand<mz_repr::Timesta
         ProtoIngestSourceCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
-            resume_upper: Some((&self.resume_upper).into()),
+            resume_upper: Some(self.resume_upper.into_proto()),
         }
     }
 
@@ -159,9 +159,9 @@ impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand<mz_repr::Timesta
             description: proto
                 .description
                 .into_rust_if_some("ProtoIngestSourceCommand::description")?,
-            resume_upper: proto.resume_upper.map(Into::into).ok_or_else(|| {
-                TryFromProtoError::missing_field("ProtoIngestSourceCommand::resume_upper")
-            })?,
+            resume_upper: proto
+                .resume_upper
+                .into_rust_if_some("ProtoIngestSourceCommand::resume_upper")?,
         })
     }
 }
@@ -436,17 +436,14 @@ impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>) {
     fn into_proto(&self) -> ProtoTrace {
         ProtoTrace {
             id: Some(self.0.into_proto()),
-            upper: Some((&self.1).into()),
+            upper: Some(self.1.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
         Ok((
             proto.id.into_rust_if_some("ProtoTrace::id")?,
-            proto
-                .upper
-                .map(Into::into)
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTrace::upper"))?,
+            proto.upper.into_rust_if_some("ProtoTrace::upper")?,
         ))
     }
 }
@@ -467,7 +464,7 @@ impl RustType<ProtoCompaction> for (GlobalId, Antichain<u64>) {
     fn into_proto(&self) -> ProtoCompaction {
         ProtoCompaction {
             id: Some(self.0.into_proto()),
-            frontier: Some((&self.1).into()),
+            frontier: Some(self.1.into_proto()),
         }
     }
 
@@ -476,8 +473,7 @@ impl RustType<ProtoCompaction> for (GlobalId, Antichain<u64>) {
             proto.id.into_rust_if_some("ProtoCompaction::id")?,
             proto
                 .frontier
-                .map(Into::into)
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoCompaction::frontier"))?,
+                .into_rust_if_some("ProtoCompaction::frontier")?,
         ))
     }
 }

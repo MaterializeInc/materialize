@@ -11,7 +11,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "persist/src/persist.proto";
+import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage/src/controller.proto";
@@ -61,7 +61,7 @@ message ProtoKafkaSinkConsistencyConnection {
 }
 
 message ProtoSinkAsOf {
-    mz_persist.gen.persist.ProtoU64Antichain frontier = 1;
+    mz_repr.antichain.ProtoU64Antichain frontier = 1;
     bool strict = 2;
 }
 
