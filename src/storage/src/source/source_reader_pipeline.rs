@@ -829,7 +829,7 @@ where
 
         let upper_ts = resume_upper.as_option().copied().unwrap();
         let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-        let mut timestamper = ReclockFollower::new(as_of);
+        let timestamper = ReclockFollower::new(as_of);
 
         move |frontiers| {
             batch_input.for_each(|_cap, data| {
@@ -876,32 +876,34 @@ where
             );
 
             while let Some(untimestamped_batch) = untimestamped_batches.front_mut() {
-                let reclocked = match timestamper.reclock(&mut untimestamped_batch.messages) {
-                    Ok(reclocked) => reclocked,
-                    Err((pid, offset)) => panic!("failed to reclock {} @ {}", pid, offset),
-                };
+                // This scope is necessary to convince rustc that `untimestamped_batches` is unused
+                // when we pop from the front at the bottom of this loop.
+                {
+                    let reclocked = match timestamper.reclock(&mut untimestamped_batch.messages) {
+                        Ok(reclocked) => reclocked,
+                        Err((pid, offset)) => panic!("failed to reclock {} @ {}", pid, offset),
+                    };
 
-                let reclocked = match reclocked {
-                    Some(reclocked) => reclocked,
-                    None => {
-                        trace!(
-                            "reclock({id}) {worker_id}/{worker_count}: \
+                    let reclocked = match reclocked {
+                        Some(reclocked) => reclocked,
+                        None => {
+                            trace!(
+                                "reclock({id}) {worker_id}/{worker_count}: \
                                 cannot yet reclock batch with source frontier {:?} \
                                 reclock.source_frontier: {:?}",
-                            untimestamped_batch.source_upper,
-                            timestamper.source_upper
-                        );
-                        // We keep batches in the order they arrive from the
-                        // source. And we assume that the source frontier never
-                        // regressses. So we can break now.
-                        break;
-                    }
-                };
+                                untimestamped_batch.source_upper,
+                                timestamper.source_upper()
+                            );
+                            // We keep batches in the order they arrive from the
+                            // source. And we assume that the source frontier never
+                            // regressses. So we can break now.
+                            break;
+                        }
+                    };
 
-                let mut output = reclocked_output.activate();
+                    let mut output = reclocked_output.activate();
 
-                for (_, part_messages) in reclocked {
-                    for (message, ts) in part_messages {
+                    reclocked.for_each(|message, ts| {
                         trace!(
                             "reclock({id}) {worker_id}/{worker_count}: \
                                 handling reclocked message: {:?}:{:?} -> {}",
@@ -917,28 +919,28 @@ where
                             &mut metric_updates,
                             ts,
                         )
-                    }
-                }
+                    });
 
-                // TODO: We should not emit the non-definite errors as
-                // DataflowErrors, which will make them end up on the persist
-                // shard for this source. Instead they should be reported to the
-                // Healthchecker. But that's future work.
-                if !untimestamped_batch.non_definite_errors.is_empty() {
-                    // If there are errors, it means that someone must also have
-                    // given us a capability because a batch/batch-summary was
-                    // emitted to the remap operator.
-                    let err_cap = cap_set.delayed(
-                        cap_set
-                            .first()
-                            .expect("missing a capability for emitting errors"),
-                    );
-                    let mut session = output.session(&err_cap);
-                    let errors = untimestamped_batch
-                        .non_definite_errors
-                        .iter()
-                        .map(|e| Err(e.clone()));
-                    session.give_iterator(errors);
+                    // TODO: We should not emit the non-definite errors as
+                    // DataflowErrors, which will make them end up on the persist
+                    // shard for this source. Instead they should be reported to the
+                    // Healthchecker. But that's future work.
+                    if !untimestamped_batch.non_definite_errors.is_empty() {
+                        // If there are errors, it means that someone must also have
+                        // given us a capability because a batch/batch-summary was
+                        // emitted to the remap operator.
+                        let err_cap = cap_set.delayed(
+                            cap_set
+                                .first()
+                                .expect("missing a capability for emitting errors"),
+                        );
+                        let mut session = output.session(&err_cap);
+                        let errors = untimestamped_batch
+                            .non_definite_errors
+                            .iter()
+                            .map(|e| Err(e.clone()));
+                        session.give_iterator(errors);
+                    }
                 }
 
                 // Pop off the processed batch.
