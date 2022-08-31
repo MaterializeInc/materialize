@@ -382,23 +382,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 compute_state.traces.maintenance();
             }
 
-            // Ask Timely to execute a unit of work.
-            //
-            // If there are no pending commands, we ask Timely to park the
-            // thread if there's nothing to do. We rely on another thread
-            // unparking us when there's new work to be done, e.g., when sending
-            // a command or when new Kafka messages have arrived.
-            //
-            // It is critical that we allow Timely to park iff there are no
-            // pending commands. The unpark token associated with any pending
-            // commands may have already been consumed by the call to
-            // `client_rx.recv`. For details, see:
-            // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
-            if command_rx.is_empty() {
-                self.timely_worker.step_or_park(None);
-            } else {
-                self.timely_worker.step();
-            }
+            self.timely_worker.step_or_park(None);
 
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
