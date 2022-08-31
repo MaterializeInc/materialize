@@ -309,6 +309,9 @@ pub struct Args {
     storaged_image: Option<String>,
 
     // === Compute options. ===
+    /// The PostgreSQL URL for the compute stash.
+    #[clap(long, env = "COMPUTE_STASH_URL", value_name = "POSTGRES_URL")]
+    compute_stash_url: String,
     /// The computed image reference to use.
     #[structopt(
         long,
@@ -571,6 +574,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         persist_clients,
         storage_stash_url: args.storage_stash_url,
         storaged_image: args.storaged_image.expect("clap enforced"),
+        compute_stash_url: args.compute_stash_url,
         computed_image: args.computed_image.expect("clap enforced"),
     };
 

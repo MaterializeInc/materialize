@@ -85,6 +85,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--persist-consensus-url=postgres://postgres@postgres.default?options=--search_path=consensus",
                 "--adapter-stash-url=postgres://postgres@postgres.default?options=--search_path=catalog",
                 "--storage-stash-url=postgres://postgres@postgres.default?options=--search_path=storage",
+                "--compute-stash-url=postgres://postgres@postgres.default?options=--search_path=compute",
                 "--unsafe-mode",
             ],
             env=env,

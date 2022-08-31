@@ -25,6 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{self, Debug};
+use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
@@ -37,6 +38,7 @@ use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row};
+use mz_stash::{Stash, StashCollection, StashError};
 use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
 use mz_storage::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
@@ -85,6 +87,7 @@ pub struct ComputeControllerMut<'a, T> {
     instance: ComputeInstanceId,
     compute: &'a mut ComputeControllerState<T>,
     storage_controller: &'a mut dyn StorageController<Timestamp = T>,
+    _stash: &'a mut ComputeStash,
 }
 
 /// Responses from a compute instance controller.
@@ -257,11 +260,13 @@ impl<'a, T> ComputeControllerMut<'a, T> {
         instance: ComputeInstanceId,
         compute: &'a mut ComputeControllerState<T>,
         storage_controller: &'a mut dyn StorageController<Timestamp = T>,
+        stash: &'a mut ComputeStash,
     ) -> Self {
         Self {
             instance,
             compute,
             storage_controller,
+            _stash: stash,
         }
     }
 
@@ -967,5 +972,51 @@ impl<T: Timestamp> CollectionState<T> {
     /// Reports the current write frontier.
     pub fn write_frontier(&self) -> AntichainRef<T> {
         self.write_frontier.borrow()
+    }
+}
+
+/// Stash used by compute controllers.
+#[derive(Debug)]
+pub struct ComputeStash(mz_stash::Memory<mz_stash::Postgres>);
+
+impl ComputeStash {
+    /// Connect to `postgres_url` to create a new compute stash.
+    pub async fn connect(postgres_url: String) -> Result<Self, StashError> {
+        let postgres_config = tokio_postgres::config::Config::from_str(&postgres_url)?;
+        let tls = mz_postgres_util::make_tls(&postgres_config).map_err(|e| e.to_string())?;
+        let stash = mz_stash::Postgres::new(postgres_url, None, tls).await?;
+        let stash = mz_stash::Memory::new(stash);
+
+        Ok(Self(stash))
+    }
+
+    /// Return the stash collection that holds the compute controller log for the given compute
+    /// instance.
+    async fn log_collection(
+        &mut self,
+        instance: ComputeInstanceId,
+    ) -> Result<StashCollection<(), ()>, StashError> {
+        let name = format!("compute-log-{}", instance);
+        self.0.collection(&name).await
+    }
+
+    /// Clean up any state associated with the given compute instance.
+    pub async fn cleanup_instance(
+        &mut self,
+        instance: ComputeInstanceId,
+    ) -> Result<(), StashError> {
+        let collection = self.log_collection(instance).await?;
+
+        // Compact to the empty frontier and then consolidate. This causes all data in the
+        // collection to be removed. Note that other collection metadata (name, since, upper) is
+        // not removed but leaked (https://github.com/MaterializeInc/materialize/issues/14585).
+        //
+        // TODO(teskje): Ensure we clean up the collection metadata as well, once we have an
+        // appropriate stash API.
+        self.0.seal(collection, AntichainRef::new(&[])).await?;
+        self.0.compact(collection, AntichainRef::new(&[])).await?;
+        self.0.consolidate(collection.id).await?;
+
+        Ok(())
     }
 }

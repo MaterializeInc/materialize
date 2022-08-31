@@ -126,7 +126,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         }
         Some(data_directory) => (data_directory, None),
     };
-    let (consensus_uri, adapter_stash_url, storage_stash_url) = {
+    let (consensus_uri, adapter_stash_url, storage_stash_url, compute_stash_url) = {
         let seed = config.seed;
         let postgres_url = env::var("POSTGRES_URL")
             .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
@@ -134,12 +134,14 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         conn.batch_execute(&format!(
             "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
              CREATE SCHEMA IF NOT EXISTS adapter_{seed};
-             CREATE SCHEMA IF NOT EXISTS storage_{seed};",
+             CREATE SCHEMA IF NOT EXISTS storage_{seed};
+             CREATE SCHEMA IF NOT EXISTS compute_{seed};",
         ))?;
         (
             format!("{postgres_url}?options=--search_path=consensus_{seed}"),
             format!("{postgres_url}?options=--search_path=adapter_{seed}"),
             format!("{postgres_url}?options=--search_path=storage_{seed}"),
+            format!("{postgres_url}?options=--search_path=compute_{seed}"),
         )
     };
     let metrics_registry = MetricsRegistry::new();
@@ -181,6 +183,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             },
             persist_clients,
             storage_stash_url,
+            compute_stash_url,
         },
         secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
         sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

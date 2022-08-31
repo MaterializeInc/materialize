@@ -78,6 +78,7 @@ SERVICES = [
             [
                 "--persist-consensus-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=consensus",
                 "--storage-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=storage",
+                "--compute-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=compute",
                 "--adapter-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=adapter",
             ]
         )
@@ -107,6 +108,7 @@ def setup(c: Composition) -> None:
         sql=f"""
        CREATE SCHEMA IF NOT EXISTS consensus;
        CREATE SCHEMA IF NOT EXISTS storage;
+       CREATE SCHEMA IF NOT EXISTS compute;
        CREATE SCHEMA IF NOT EXISTS adapter;
     """,
         service="postgres-backend",

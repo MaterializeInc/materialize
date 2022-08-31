@@ -44,7 +44,7 @@ use mz_build_info::BuildInfo;
 use mz_compute_client::command::{ComputeCommand, ProcessId, ProtoComputeCommand, ReplicaId};
 use mz_compute_client::controller::{
     ComputeController, ComputeControllerMut, ComputeControllerResponse, ComputeControllerState,
-    ComputeInstanceId,
+    ComputeInstanceId, ComputeStash,
 };
 use mz_compute_client::logging::{LogVariant, LogView, LoggingConfig};
 use mz_compute_client::response::{
@@ -85,6 +85,8 @@ pub struct ControllerConfig {
     pub storage_stash_url: String,
     /// The storaged image to use when starting new storage processes.
     pub storaged_image: String,
+    /// The stash URL for the compute controller.
+    pub compute_stash_url: String,
     /// The computed image to use when starting new compute processes.
     pub computed_image: String,
 }
@@ -270,6 +272,7 @@ enum Readiness {
 pub struct Controller<T = mz_repr::Timestamp> {
     build_info: &'static BuildInfo,
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
+    compute_stash: ComputeStash,
     compute_orchestrator: Arc<dyn NamespacedOrchestrator>,
     computed_image: String,
     compute: BTreeMap<ComputeInstanceId, ComputeControllerState<T>>,
@@ -457,6 +460,7 @@ where
     ) -> Result<(), anyhow::Error> {
         if let Some(compute_state) = self.compute.remove(&instance) {
             compute_state.drop();
+            self.compute_stash.cleanup_instance(instance).await?;
             self.compute_orchestrator
                 .drop_service(&format!("cluster-{instance}"))
                 .await?;
@@ -523,6 +527,7 @@ impl<T> Controller<T> {
             instance,
             compute,
             &mut *self.storage_controller,
+            &mut self.compute_stash,
         ))
     }
 }
@@ -540,8 +545,13 @@ where
     pub fn initialization_complete(&mut self) {
         self.initialized = true;
         for (instance, compute) in self.compute.iter_mut() {
-            ComputeControllerMut::new(*instance, compute, &mut *self.storage_controller)
-                .initialization_complete();
+            ComputeControllerMut::new(
+                *instance,
+                compute,
+                &mut *self.storage_controller,
+                &mut self.compute_stash,
+            )
+            .initialization_complete();
         }
         self.storage_mut().initialization_complete();
     }
@@ -627,9 +637,15 @@ where
             config.storaged_image,
         )
         .await;
+
+        let compute_stash = ComputeStash::connect(config.compute_stash_url)
+            .await
+            .expect("could not connect to compute stash");
+
         Self {
             build_info: config.build_info,
             storage_controller: Box::new(storage_controller),
+            compute_stash,
             compute_orchestrator: config.orchestrator.namespace("compute"),
             computed_image: config.computed_image,
             compute: BTreeMap::default(),

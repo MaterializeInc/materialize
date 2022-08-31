@@ -51,6 +51,7 @@ class PostgresConfigMap(K8sConfigMap):
                 CREATE SCHEMA consensus;
                 CREATE SCHEMA catalog;
                 CREATE SCHEMA storage;
+                CREATE SCHEMA compute;
             """
                 ),
             },

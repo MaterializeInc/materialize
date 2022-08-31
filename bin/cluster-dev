@@ -35,6 +35,7 @@ data:
     CREATE SCHEMA consensus;
     CREATE SCHEMA adapter;
     CREATE SCHEMA storage;
+    CREATE SCHEMA compute;
 ---
 apiVersion: v1
 kind: Service
@@ -146,6 +147,7 @@ spec:
             - --persist-consensus-url=postgres://postgres@postgres.default?options=--search_path=consensus
             - --persist-blob-url=file:///tmp/persist/blob
             - --storage-stash-url=postgres://postgres@postgres.default?options=--search_path=storage
+            - --compute-stash-url=postgres://postgres@postgres.default?options=--search_path=compute
             - --adapter-stash-url=postgres://postgres@postgres.default?options=--search_path=catalog
             - --storaged-image=$(bin/mzimage spec --dev storaged)
             - --computed-image=$(bin/mzimage spec --dev computed)

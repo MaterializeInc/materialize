@@ -118,7 +118,7 @@ def main() -> int:
             if args.reset:
                 print("Removing mzdata directory...")
                 shutil.rmtree(ROOT / "mzdata", ignore_errors=True)
-            for schema in ["consensus", "adapter", "storage"]:
+            for schema in ["consensus", "adapter", "storage", "compute"]:
                 if args.reset:
                     _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
                 _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
@@ -127,6 +127,7 @@ def main() -> int:
                 f"--persist-blob-url=file://{ROOT}/mzdata/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
+                f"--compute-stash-url={args.postgres}?options=--search_path=compute",
             ]
         elif args.program == "sqllogictest":
             _handle_lingering_services(kill=True)

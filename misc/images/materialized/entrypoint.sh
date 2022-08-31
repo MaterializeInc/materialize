@@ -15,6 +15,7 @@ COCKROACH_SKIP_ENABLING_DIAGNOSTIC_REPORTING=true cockroach start-single-node --
 
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS consensus"
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS storage"
+cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS compute"
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS adapter"
 
 exec environmentd \
@@ -24,5 +25,6 @@ exec environmentd \
     --internal-http-listen-addr=0.0.0.0:6878 \
     "--persist-consensus-url=postgresql://root@$(hostname):26257?options=--search_path=consensus" \
     "--storage-stash-url=postgresql://root@$(hostname):26257?options=--search_path=storage" \
+    "--compute-stash-url=postgresql://root@$(hostname):26257?options=--search_path=compute" \
     "--adapter-stash-url=postgresql://root@$(hostname):26257?options=--search_path=adapter" \
     "$@"

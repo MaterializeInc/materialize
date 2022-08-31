@@ -600,7 +600,7 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 impl Runner {
     pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
-        let (consensus_uri, adapter_stash_url, storage_stash_url) = {
+        let (consensus_uri, adapter_stash_url, storage_stash_url, compute_stash_url) = {
             let postgres_url = &config.postgres_url;
             let (client, conn) = tokio_postgres::connect(&postgres_url, NoTls).await?;
             task::spawn(|| "sqllogictest_connect", async move {
@@ -613,15 +613,18 @@ impl Runner {
                     "DROP SCHEMA IF EXISTS sqllogictest_consensus CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
+                     DROP SCHEMA IF EXISTS sqllogictest_compute CASCADE;
                      CREATE SCHEMA sqllogictest_consensus;
                      CREATE SCHEMA sqllogictest_adapter;
-                     CREATE SCHEMA sqllogictest_storage;",
+                     CREATE SCHEMA sqllogictest_storage;
+                     CREATE SCHEMA sqllogictest_compute;",
                 ))
                 .await?;
             (
                 format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_adapter"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_compute"),
             )
         };
         let orchestrator = Arc::new(
@@ -654,6 +657,7 @@ impl Runner {
                 },
                 persist_clients,
                 storage_stash_url,
+                compute_stash_url,
             },
             secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
             // Setting the port to 0 means that the OS will automatically
