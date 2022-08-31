@@ -38,6 +38,7 @@ use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{BinaryFunc, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, VariadicFunc};
 use mz_ore::stack::RecursionLimitError;
+use mz_ore::vec::swap_remove_multiple;
 use mz_repr::{GlobalId, Row};
 
 /// Canonicalizes MFPs and performs common sub-expression elimination.
@@ -73,11 +74,37 @@ impl CanonicalizeMfp {
         {
             let orig_mfp = mfp.clone();
 
-            // Prepare for the literal constraints detection. These might make the MFP more
-            // complicated, so we'll later want to either get back to orig_mfp, or undo these.
+            // Preparation for the literal constraints detection.
             CanonicalizeMfp::inline_literal_constraints(&mut mfp)?;
             CanonicalizeMfp::list_of_predicates_to_and_of_predicates(&mut mfp);
             CanonicalizeMfp::distribute_and_over_or(&mut mfp)?;
+            CanonicalizeMfp::unary_and(&mut mfp);
+
+            /// The above preparation might make the MFP more complicated, so we'll later want to
+            /// either undo the preparation transformations or get back to `orig_mfp`.
+            fn undo_preparation(
+                mfp: &mut MapFilterProject,
+                orig_mfp: &MapFilterProject,
+                relation: &mut MirRelationExpr,
+            ) -> Result<(), RecursionLimitError> {
+                // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
+                // (It undoes the latter 2 through `MirScalarExp::reduce`.)
+                CanonicalizeMfp::canonicalize_predicates(mfp, &relation);
+                // undo inline_literal_constraints
+                mfp.optimize();
+                // We can usually undo, but sometimes not (see comment on `distribute_and_over_or`),
+                // so in those cases we might have a more complicated MFP than the original MFP
+                // (despite the removal of the literal constraints and/or contradicting OR args).
+                // So let's use the simpler one.
+                if CanonicalizeMfp::predicates_size(orig_mfp)?
+                    < CanonicalizeMfp::predicates_size(mfp)?
+                {
+                    *mfp = orig_mfp.clone();
+                }
+                Ok(())
+            }
+
+            let removed_contradicting_or_args = Self::remove_impossible_or_args(&mut mfp)?;
 
             // todo: We might want to also call `canonicalize_equivalences`,
             // see near the end of literal_constraints.slt.
@@ -86,28 +113,24 @@ impl CanonicalizeMfp {
 
             match key_val {
                 None => {
-                    // We didn't find a usable index, let's go with the original MFP.
-                    mfp = orig_mfp;
+                    // We didn't find a usable index, so no chance to remove literal constraints.
+                    // But, we might have removed contradicting OR args.
+                    if removed_contradicting_or_args {
+                        undo_preparation(&mut mfp, &orig_mfp, relation)?;
+                    } else {
+                        // We didn't remove anything, so let's go with the original MFP.
+                        mfp = orig_mfp;
+                    }
                 }
                 Some((key, possible_vals)) => {
                     // We found a usable index. We'll try to remove the corresponding literal
-                    // constraint.
-                    if CanonicalizeMfp::remove_literal_constraints(&mut mfp, &key) {
-                        // We were able to remove the literal constraint, so we would like to use
-                        // this new MFP, so we try undoing the preparation for the literal
-                        // constraint detection.
-                        // undo distribute_and_over_or, list_of_predicates_to_and_of_predicates
-                        CanonicalizeMfp::canonicalize_predicates(&mut mfp, &relation);
-                        // undo inline_literal_constraints:
-                        mfp.optimize();
-                        // We can usually undo it, but sometimes not, so in those cases we might
-                        // have a more complicated MFP than the original (despite the removal of the
-                        // literal constraint). So let's use the simpler one.
-                        if CanonicalizeMfp::predicates_size(&orig_mfp)?
-                            < CanonicalizeMfp::predicates_size(&mfp)?
-                        {
-                            mfp = orig_mfp;
-                        }
+                    // constraints.
+                    if CanonicalizeMfp::remove_literal_constraints(&mut mfp, &key)
+                        || removed_contradicting_or_args
+                    {
+                        // We were able to remove the literal constraints or contradicting OR args,
+                        // so we would like to use this new MFP, so we try undoing the preparation.
+                        undo_preparation(&mut mfp, &orig_mfp, relation)?;
                     } else {
                         // We were not able to remove the literal constraint, so `mfp` is
                         // equivalent to `orig_mfp`, but `orig_mfp` is often simpler (or the same).
@@ -200,6 +223,8 @@ impl CanonicalizeMfp {
                         .iter()
                         .find_map(|and_arg| and_arg.expr_eq_literal(key_field))
                     {
+                        // (Note that the above find_map can find only 0 or 1 result, because
+                        // of `remove_impossible_or_args`.)
                         packer.push(literal);
                     } else {
                         return None;
@@ -224,9 +249,7 @@ impl CanonicalizeMfp {
                 let possible_vals = if key.is_empty() {
                     None
                 } else {
-                    assert_eq!(mfp.predicates.len(), 1); // list_of_predicates_to_and_of_predicates ensured this
-                    let (_, pred) = mfp.predicates.get(0).unwrap();
-                    let or_args = pred.and_or_args(VariadicFunc::Or);
+                    let or_args = Self::get_or_args(mfp);
                     each_or_arg_constrains_each_key_field(key, or_args)
                 };
                 possible_vals.map(|vals| (key.to_owned(), vals))
@@ -245,9 +268,7 @@ impl CanonicalizeMfp {
     /// `(f1 = 3 AND f2 = 5) OR (f1 = 7 AND f2 = 555)`, then we cannot remove the `f1` parts,
     /// because then the filter wouldn't know whether to check `f2 = 5` or `f2 = 555`.
     fn remove_literal_constraints(mfp: &mut MapFilterProject, key: &Vec<MirScalarExpr>) -> bool {
-        assert_eq!(mfp.predicates.len(), 1); // list_of_predicates_to_and_of_predicates ensured this
-        let (_, pred) = mfp.predicates.get(0).unwrap();
-        let or_args = pred.and_or_args(VariadicFunc::Or);
+        let or_args = Self::get_or_args(mfp);
         if or_args.len() == 0 {
             return false;
         }
@@ -255,6 +276,15 @@ impl CanonicalizeMfp {
             .iter()
             .map(|or_arg| {
                 let mut and_args = or_arg.and_or_args(VariadicFunc::And);
+                // Note that `remove_impossible_or_args` made sure that inside each or_arg, each
+                // expression can have only one literal constraint. So if we find one of the
+                // key fields being literal constrained, then it's definitely that literal
+                // constraint that detect_literal_constraints based it's return values on.
+                //
+                // This is important, because without `remove_impossible_or_args`, we might
+                // have the situation here that or_arg would be something like
+                // `a = 5 AND a = 8`, of which `detect_literal_constraints` found only the `a = 5`,
+                // but here we would remove both the `a = 5` and the `a = 8`.
                 and_args.retain(|and_arg| {
                     !key.iter()
                         .any(|key_field| matches!(and_arg.expr_eq_literal(key_field), Some(..)))
@@ -283,6 +313,92 @@ impl CanonicalizeMfp {
         } else {
             false
         }
+    }
+
+    /// 1. Removes such OR args in which there are contradicting literal constraints.
+    /// 2. Also, if an OR arg doesn't have any contradiction, this fn just deduplicates the
+    /// AND arg list of that OR arg.
+    ///
+    /// Example for 1:
+    /// `<arg1> OR (a = 5 AND a = 5 AND a = 8) OR <arg3>`
+    /// -->
+    /// `<arg1> OR <arg3> `
+    ///
+    /// Example for 2:
+    /// `<arg1> OR (a = 5 AND a = 5 AND b = 8) OR <arg3>`
+    /// -->
+    /// `<arg1> OR (a = 5 AND b = 8) OR <arg3>`
+    fn remove_impossible_or_args(mfp: &mut MapFilterProject) -> Result<bool, RecursionLimitError> {
+        let mut or_args = Self::get_or_args(mfp);
+        if or_args.len() == 0 {
+            return Ok(false);
+        }
+        let mut to_remove = Vec::new();
+        let mut changed = false;
+        or_args.iter_mut().enumerate().for_each(|(i, or_arg)| {
+            if let MirScalarExpr::CallVariadic {
+                func: VariadicFunc::And,
+                exprs: and_args,
+            } = or_arg
+            {
+                if Self::has_duplicates(and_args.clone()) {
+                    changed = true;
+                    and_args.sort();
+                    and_args.dedup();
+                }
+                // Deduplicated, so we cannot have something like `a = 5 AND a = 5`.
+                // This means that if we now have `<expr1> = <literal1> AND <expr1> = <literal2>`,
+                // then `literal1` is definitely not the same as `literal2`. This means that this
+                // whole or_arg is a contradiction, because it's something like `a = 5 AND a = 8`.
+                let literal_constrained_exprs = and_args
+                    .iter()
+                    .filter_map(|and_arg| and_arg.any_expr_eq_literal());
+                if Self::has_duplicates(literal_constrained_exprs) {
+                    changed = true;
+                    to_remove.push(i);
+                }
+            } else {
+                // `unary_and` made sure that each OR arg is an AND
+                unreachable!("OR arg was not an AND in remove_impossible_or_args");
+            }
+        });
+        swap_remove_multiple(&mut or_args, to_remove);
+        if changed {
+            let new_predicates = vec![MirScalarExpr::CallVariadic {
+                func: VariadicFunc::Or,
+                exprs: or_args,
+            }];
+            let (map, _predicates, project) = mfp.as_map_filter_project();
+            *mfp = MapFilterProject::new(mfp.input_arity)
+                .map(map)
+                .filter(new_predicates)
+                .project(project);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Determines whether the given iterable has any duplicates.
+    fn has_duplicates<T>(iter: T) -> bool
+    where
+        T: IntoIterator,
+        T::Item: std::hash::Hash + Eq,
+    {
+        let mut seen = std::collections::HashSet::new();
+        // Insert each element. If any are not newly inserted then it's a duplicate.
+        iter.into_iter().any(move |x| !seen.insert(x))
+    }
+
+    /// Returns the arguments of the predicate's top-level OR as a Vec.
+    /// If there is no top-level OR, then interpret the predicate as a 1-arg OR, i.e., return a
+    /// 1-element Vec.
+    ///
+    /// Assumes that [CanonicalizeMfp::list_of_predicates_to_and_of_predicates] has already run.
+    fn get_or_args(mfp: &MapFilterProject) -> Vec<MirScalarExpr> {
+        assert_eq!(mfp.predicates.len(), 1); // list_of_predicates_to_and_of_predicates ensured this
+        let (_, pred) = mfp.predicates.get(0).unwrap();
+        pred.and_or_args(VariadicFunc::Or)
     }
 
     /// Makes the job of [CanonicalizeMfp::detect_literal_constraints] easier by undoing some CSE to
@@ -446,6 +562,40 @@ impl CanonicalizeMfp {
             }
             Ok(())
         })
+    }
+
+    /// For each of the arguments of the top-level OR (if no top-level OR, then interpret the whole
+    /// expression as a 1-arg OR, see [CanonicalizeMfp::get_or_args]), check if it's an AND, and
+    /// if not, then wrap it in a 1-arg AND.
+    fn unary_and(mfp: &mut MapFilterProject) {
+        let mut or_args = Self::get_or_args(mfp);
+        let mut changed = false;
+        or_args.iter_mut().for_each(|or_arg| {
+            if !matches!(
+                or_arg,
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::And,
+                    ..
+                }
+            ) {
+                *or_arg = MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::And,
+                    exprs: vec![or_arg.clone()],
+                };
+                changed = true;
+            }
+        });
+        if changed {
+            let new_predicates = vec![MirScalarExpr::CallVariadic {
+                func: VariadicFunc::Or,
+                exprs: or_args,
+            }];
+            let (map, _predicates, project) = mfp.as_map_filter_project();
+            *mfp = MapFilterProject::new(mfp.input_arity)
+                .map(map)
+                .filter(new_predicates)
+                .project(project);
+        }
     }
 
     fn predicates_size(mfp: &MapFilterProject) -> Result<usize, RecursionLimitError> {
