@@ -173,7 +173,7 @@ where
             ingest.resume_upper = ingest
                 .description
                 .storage_metadata
-                .get_resume_upper::<T>(&self.persist, &ingest.description.desc.envelope)
+                .get_resume_upper::<T, _>(&self.persist, &ingest.description.desc.envelope)
                 .await;
         }
 

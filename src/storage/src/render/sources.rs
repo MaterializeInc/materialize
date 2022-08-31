@@ -121,50 +121,54 @@ where
         resume_upper: resume_upper.clone(),
         storage_metadata: description.storage_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
-        envelope: envelope.clone(),
     };
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let ((ok_source, err_source), capability) = match connection {
         SourceConnection::Kafka(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader>(
+            let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
                 base_source_config,
                 &connection,
                 storage_state.connection_context.clone(),
+                envelope.clone(),
             );
             ((SourceType::Delimited(ok), err), cap)
         }
         SourceConnection::Kinesis(_) => {
             let ((ok, err), cap) =
-                source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>>(
+                source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
                     base_source_config,
                     &connection,
                     storage_state.connection_context.clone(),
+                    envelope.clone(),
                 );
             ((SourceType::Delimited(ok), err), cap)
         }
         SourceConnection::S3(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader>(
+            let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
                 base_source_config,
                 &connection,
                 storage_state.connection_context.clone(),
+                envelope.clone(),
             );
             ((SourceType::ByteStream(ok), err), cap)
         }
         SourceConnection::Postgres(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader>(
+            let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
                 base_source_config,
                 &connection,
                 storage_state.connection_context.clone(),
+                envelope.clone(),
             );
             ((SourceType::Row(ok), err), cap)
         }
         SourceConnection::LoadGenerator(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader>(
+            let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
                 base_source_config,
                 &connection,
                 storage_state.connection_context.clone(),
+                envelope.clone(),
             );
             ((SourceType::Row(ok), err), cap)
         }

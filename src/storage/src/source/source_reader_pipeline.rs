@@ -55,7 +55,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
 use mz_timely_util::operator::StreamExt as _;
 
-use crate::controller::CollectionMetadata;
+use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::source::healthcheck::Healthchecker;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::ReclockFollower;
@@ -67,7 +67,7 @@ use crate::source::util::source;
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::SourceError;
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{MzOffset, SourceConnection, SourceEnvelope};
+use crate::types::sources::{MzOffset, SourceConnection};
 
 // Interval after which the source operator will yield control.
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);
@@ -104,9 +104,6 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub resume_upper: Antichain<Timestamp>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
-    /// The `SourceEnvelope` that is used after this raw source.
-    /// Required for the `resumption_operator`
-    pub envelope: SourceEnvelope,
 }
 
 /// A batch of messages from a source reader, along with the current upper and
@@ -143,10 +140,11 @@ struct SourceUpperSummary {
 ///
 /// See the [`source` module docs](crate::source) for more details about how raw
 /// sources are used.
-pub fn create_raw_source<G, S: 'static>(
+pub fn create_raw_source<G, S: 'static, R>(
     config: RawSourceCreationConfig<G>,
     source_connection: &SourceConnection,
     connection_context: ConnectionContext,
+    calc: R,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
@@ -157,9 +155,10 @@ pub fn create_raw_source<G, S: 'static>(
 where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
+    R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
     let (resume_stream, downgrade_resume_token) =
-        super::resumption::resumption_operator(config.clone());
+        super::resumption::resumption_operator(config.clone(), calc);
 
     let ((batches, source_upper_summaries), source_reader_token) = source_reader_operator::<G, S>(
         config.clone(),
@@ -219,8 +218,6 @@ where
         base_metrics,
         now,
         persist_clients,
-        // Unused by this raw source operator
-        envelope: _,
     } = config;
 
     let (stream, capability) = source(scope, name.clone(), Some(resume_stream), move |info| {
@@ -595,7 +592,6 @@ where
         base_metrics: _,
         now,
         persist_clients,
-        envelope: _,
     } = config;
 
     let chosen_worker = (id.hashed() % worker_count as u64) as usize;
@@ -791,7 +787,6 @@ where
         base_metrics,
         now: _,
         persist_clients: _,
-        envelope: _,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();

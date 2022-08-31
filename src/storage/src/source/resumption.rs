@@ -23,6 +23,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::timestamp::Timestamp as _;
 
+use crate::controller::ResumptionFrontierCalculator;
 use crate::source::source_reader_pipeline::RawSourceCreationConfig;
 use mz_repr::Timestamp;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
@@ -30,11 +31,13 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 /// Generates a timely `Stream` with no inputs that periodically
 /// downgrades its output `Capability` _to the "resumption frontier"
 /// of the source_. It does not produce meaningful data.
-pub fn resumption_operator<G>(
+pub fn resumption_operator<G, R>(
     config: RawSourceCreationConfig<G>,
+    calc: R,
 ) -> (timely::dataflow::Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
+    R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
     let RawSourceCreationConfig {
         id: source_id,
@@ -43,7 +46,6 @@ where
         worker_id,
         storage_metadata,
         persist_clients,
-        envelope,
         ..
     } = config;
 
@@ -98,7 +100,7 @@ where
                 let new_upper = storage_metadata.get_resume_upper_from_handles(
                     &remap_write,
                     &data_write,
-                    &envelope,
+                    &calc,
                 );
 
                 if PartialOrder::less_equal(&new_upper, &upper) {

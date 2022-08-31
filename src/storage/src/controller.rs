@@ -413,18 +413,46 @@ impl Codec for CollectionMetadata {
     }
 }
 
+/// A trait that is used to calculate safe _resumption frontiers_
+/// from uppers generated from persist
+pub trait ResumptionFrontierCalculator<T> {
+    /// Given a new `upper`, calculated from a sources persist shards,
+    /// generate a safe _resumption frontier_.
+    fn get_resumption_frontier(&self, new_upper: Antichain<T>) -> Antichain<T>;
+}
+impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
+    for SourceEnvelope
+{
+    fn get_resumption_frontier(&self, new_upper: Antichain<T>) -> Antichain<T> {
+        // Check if this ingestion is using any operators that are stateful AND are not
+        // storing their state in persist shards. This whole section should be eventually
+        // removed as we make each operator durably record its state in persist shards.
+        let resume_upper = match self {
+            // We can only resume with the None envelope, which is stateless,
+            // or with the [Debezium] Upsert envelope, which is easy
+            //   (re-ingest the last emitted state)
+            SourceEnvelope::None(_) => new_upper,
+            SourceEnvelope::Upsert(_) => new_upper,
+            // Otherwise re-ingest everything
+            _ => Antichain::from_elem(T::minimum()),
+        };
+        resume_upper
+    }
+}
+
 impl CollectionMetadata {
     /// Calculate the point at which we can resume ingestion computing the greatest
     /// antichain that is less or equal to all state and output shard uppers,
     /// using pre-existing `WriteHandle`s
-    pub fn get_resume_upper_from_handles<T>(
+    pub fn get_resume_upper_from_handles<T, R>(
         &self,
         remap_write: &WriteHandle<(), PartitionId, T, MzOffset>,
         data_write: &WriteHandle<SourceData, (), T, Diff>,
-        envelope: &SourceEnvelope,
+        calc: &R,
     ) -> Antichain<T>
     where
         T: timely::progress::Timestamp + Lattice + Codec64,
+        R: ResumptionFrontierCalculator<T>,
     {
         // Calculate the point at which we can resume ingestion computing the greatest
         // antichain that is less or equal to all state and output shard uppers.
@@ -436,19 +464,7 @@ impl CollectionMetadata {
             resume_upper.insert(t.clone());
         }
 
-        // Check if this ingestion is using any operators that are stateful AND are not
-        // storing their state in persist shards. This whole section should be eventually
-        // removed as we make each operator durably record its state in persist shards.
-        let resume_upper = match envelope {
-            // We can only resume with the None envelope, which is stateless,
-            // or with the [Debezium] Upsert envelope, which is easy
-            //   (re-ingest the last emitted state)
-            SourceEnvelope::None(_) => resume_upper,
-            SourceEnvelope::Upsert(_) => resume_upper,
-            // Otherwise re-ingest everything
-            _ => Antichain::from_elem(T::minimum()),
-        };
-        resume_upper
+        calc.get_resumption_frontier(resume_upper)
     }
 
     /// returns the `WriteHandle` for the remap shard and the data shard
@@ -484,16 +500,17 @@ impl CollectionMetadata {
 
     /// Calculate the point at which we can resume ingestion computing the greatest
     /// antichain that is less or equal to all state and output shard uppers.
-    pub async fn get_resume_upper<T>(
+    pub async fn get_resume_upper<T, R>(
         &self,
         persist: &Mutex<PersistClientCache>,
-        envelope: &SourceEnvelope,
+        calc: &R,
     ) -> Antichain<T>
     where
         T: timely::progress::Timestamp + Lattice + Codec64,
+        R: ResumptionFrontierCalculator<T>,
     {
         let (remap_write, data_write) = self.get_write_handles(persist).await;
-        self.get_resume_upper_from_handles(&remap_write, &data_write, envelope)
+        self.get_resume_upper_from_handles(&remap_write, &data_write, calc)
     }
 }
 
