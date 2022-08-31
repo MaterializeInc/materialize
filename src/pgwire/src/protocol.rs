@@ -1067,7 +1067,7 @@ where
         timeout: ExecuteTimeout,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
-        let mut non_term_err = ErrorResponse::non_terminating_from_execute_response(&response);
+        let mut non_term_err = response.partial_err().map(ErrorResponse::from);
 
         macro_rules! command_complete {
             () => {{
