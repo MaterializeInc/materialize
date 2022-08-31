@@ -111,12 +111,20 @@ async fn get_topic(
 ) -> Result<String, anyhow::Error> {
     let query = format!(
         "SELECT {} FROM mz_sinks JOIN mz_kafka_sinks \
-        ON mz_sinks.id = mz_kafka_sinks.sink_id WHERE name = $1",
+        ON mz_sinks.id = mz_kafka_sinks.sink_id \
+        JOIN mz_schemas s ON s.id = mz_sinks.schema_id \
+        LEFT JOIN mz_databases d ON d.id = s.database_id \
+        WHERE d.name = $1 \
+        AND s.name = $2 \
+        AND mz_sinks.name = $3",
         topic_field
     );
+    let sink_fields: Vec<&str> = sink.split('.').collect();
     let result = state
         .pgclient
-        .query_one(query.as_str(), &[&sink])
+        .query_one(
+            query.as_str(),
+            &[&sink_fields[0], &sink_fields[1], &sink_fields[2]])
         .await
         .context("retrieving topic name")?
         .get(topic_field);
