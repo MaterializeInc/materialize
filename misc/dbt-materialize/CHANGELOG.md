@@ -35,7 +35,8 @@
   ```
 
   * A new `cluster` option for indexes on view, materializedview, or source
-    materializations
+    materializations. If 'cluster' is not supplied, indexes will be created
+    in the cluster used to create the materialization.
 
   ```sql
   {{ config(materialized='view',

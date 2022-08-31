@@ -18,14 +18,26 @@
 -- See: https://github.com/dbt-labs/dbt-core/blob/13b18654f/plugins/postgres/dbt/include/postgres/macros/adapters.sql
 
 {% macro materialize__create_view_as(relation, sql) -%}
+  {%- set default_cluster = config.get('credentials.cluster', None) -%}
+  {%- set cluster = config.get('cluster', default_cluster) -%}
+
   create view {{ relation }}
+  {% if cluster %}
+    in cluster {{ cluster }}
+  {% endif %}
   as (
     {{ sql }}
   );
 {%- endmacro %}
 
 {% macro materialize__create_materialized_view_as(relation, sql) -%}
+  {%- set default_cluster = config.get('credentials.cluster', None) -%}
+  {%- set cluster = config.get('cluster', default_cluster) -%}
+
   create materialized view {{ relation }}
+  {% if cluster %}
+    in cluster {{ cluster }}
+  {% endif %}
   as (
     {{ sql }}
   );
@@ -64,6 +76,9 @@
 
 {% macro materialize__get_create_index_sql(relation, index_dict) -%}
   {%- set index_config = adapter.parse_index(index_dict) -%}
+  {%- set default_cluster = config.get('credentials.cluster', None) -%}
+  {%- set cluster = index_config.cluster or config.get('cluster', default_cluster) -%}
+
     create
     {% if index_config.default -%}
       default
@@ -72,14 +87,15 @@
     {% if index_config.name -%}
       if not exists "{{ index_config.name }}"
     {%- endif %}
-    {% if index_config.cluster -%}
-      in cluster {{ index_config.cluster }}
+    {% if cluster -%}
+      in cluster {{ cluster }}
     {%- endif %}
     on {{ relation }}
     {% if index_config.columns -%}
       ({{ ", ".join(index_config.columns) }})
     {%- endif %};
 {%- endmacro %}
+
 
 -- In the dbt-adapter we extend the Relation class to include sinks and indexes
 {% macro materialize__list_relations_without_caching(schema_relation) %}

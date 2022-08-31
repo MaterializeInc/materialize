@@ -15,8 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, List, Mapping, Optional
+from typing import Any, List, Optional
 
 import dbt.exceptions
 from dbt.adapters.base.impl import AdapterConfig
@@ -25,7 +24,6 @@ from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
 from dbt.dataclass_schema import ValidationError, dbtClassMixin
-from dbt.exceptions import RuntimeException
 
 
 @dataclass
@@ -110,27 +108,3 @@ class MaterializeAdapter(PostgresAdapter):
             )
 
         return relations
-
-    def _get_cluster(self) -> str:
-        _, table = self.execute("SHOW CLUSTER", fetch=True)
-        if len(table) == 0 or len(table[0]) == 0:
-            raise RuntimeException("Could not get current cluster: no results")
-        return str(table[0][0])
-
-    def _set_cluster(self, cluster: str):
-        self.execute("SET CLUSTER = %s" % cluster)
-
-    def pre_model_hook(self, config: Mapping[str, Any]) -> Optional[str]:
-        default_cluster = self.config.credentials.cluster
-        cluster = config.get("cluster", default_cluster)
-        if cluster == default_cluster or cluster is None:
-            return None
-        previous = self._get_cluster()
-        self._set_cluster(cluster)
-        return previous
-
-    def post_model_hook(
-        self, config: Mapping[str, Any], context: Optional[str]
-    ) -> None:
-        if context is not None:
-            self._set_cluster(context)

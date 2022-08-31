@@ -21,10 +21,19 @@ models__override_cluster_sql = """
 select 1 as col_1
 """
 
+models__override_cluster_and_index_sql = """
+{{ config(
+    cluster='not_default',
+    materialized='materializedview',
+    indexes=[{'columns': ['col_1'], 'name':'c_i_col_1_idx'}]
+) }}
+select 1 as col_1
+"""
+
 models__override_index_cluster_sql = """
 {{ config(
     materialized='materializedview',
-    indexes=[{'columns': ['col_1'], 'cluster': 'not_default', 'name':'col_1_idx'}]
+    indexes=[{'columns': ['col_1'], 'cluster': 'not_default', 'name':'i_col_1_idx'}]
 ) }}
 select 1 as col_1
 """
@@ -34,7 +43,7 @@ models__invalid_cluster_sql = """
 select 1 as col_1
 """
 
-project_config_models__override_cluster_sql = """
+project_override_cluster_sql = """
 {{ config(materialized='materializedview') }}
 select 1 as col_1
 """
@@ -56,10 +65,11 @@ models_expected_clusters = """
 materialized_view_name,cluster_name,index_name,index_cluster_name
 expected_clusters,default,,
 override_cluster,not_default,,
-override_index_cluster,default,col_1_idx,not_default
+override_index_cluster,default,i_col_1_idx,not_default
+override_cluster_and_index,not_default,c_i_col_1_idx,not_default
 """.lstrip()
 
-project_expected_clusters = """
+project_actual_clusters = """
 select
 c.name as cluster
 from mz_materialized_views v
@@ -79,6 +89,7 @@ class TestModelCluster:
     def models(self):
         return {
             "override_cluster.sql": models__override_cluster_sql,
+            "override_cluster_and_index.sql": models__override_cluster_and_index_sql,
             "override_index_cluster.sql": models__override_index_cluster_sql,
             "invalid_cluster.sql": models__invalid_cluster_sql,
             "actual_clusters.sql": models_actual_clusters,
@@ -99,11 +110,11 @@ class TestModelCluster:
 
 
 @pytest.mark.skip_profile("materialize_binary")
-class TestConfigCluster:
+class TestProjectConfigCluster:
     @pytest.fixture(scope="class")
     def models(self):
         return {
-            "override_cluster.sql": project_config_models__override_cluster_sql,
+            "override_cluster.sql": project_override_cluster_sql,
         }
 
     @pytest.fixture(scope="class")
@@ -120,5 +131,5 @@ class TestConfigCluster:
 
         run_dbt(["run", "--models", "override_cluster"])
 
-        results = project.run_sql(project_expected_clusters, fetch="one")
+        results = project.run_sql(project_actual_clusters, fetch="one")
         assert results[0] == "not_default"
