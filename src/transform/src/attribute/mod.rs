@@ -51,11 +51,14 @@ pub trait Attribute: 'static + Default + Send + Sync {
     where
         Self: Sized;
 
-    /// Attributes for each subexpression, visited in post-order
+    /// Attributes for each subexpression, visited in post-order.
     fn get_results(&self) -> &Vec<Self::Value>;
 
-    /// Mutable attributes for each subexpression, visited in post-order
+    /// Mutable attributes for each subexpression, visited in post-order.
     fn get_results_mut(&mut self) -> &mut Vec<Self::Value>;
+
+    /// Consume self and return the attributes for each subexpression.
+    fn take(self) -> Vec<Self::Value>;
 }
 
 #[allow(missing_debug_implementations)]
@@ -322,6 +325,13 @@ impl DerivedAttributes {
             .get_results_mut()
     }
 
+    /// Extract the vector of attributes derived so far
+    ///
+    /// After this call, no further attributes of this type will be derived.
+    pub fn remove_results<A: Attribute>(&mut self) -> Vec<A::Value> {
+        self.attributes.remove::<AsKey<A>>().unwrap().take()
+   }
+
     fn trim_attr<T: TypeMapKey>(&mut self)
     where
         T::Value: Attribute,
@@ -330,6 +340,7 @@ impl DerivedAttributes {
             a.get_results_mut().pop();
         });
     }
+
     /// Call when the most recently exited node of the [MirRelationExpr]
     /// has been deleted.
     ///
@@ -345,11 +356,6 @@ impl DerivedAttributes {
                 None => {}
             }
         }
-    }
-
-    /// Consumes `self`, returning the inner map of attributes.
-    pub fn take(self) -> TypeMap {
-        *self.attributes
     }
 }
 

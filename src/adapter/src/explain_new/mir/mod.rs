@@ -153,16 +153,12 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             // get the annotation values
             let mut explain_attrs = ExplainAttributes::from(config);
             plan.visit(&mut explain_attrs.deriver)?;
-            let mut attribute_map = explain_attrs.deriver.take();
+            let mut attribute_map = explain_attrs.deriver;
 
             if config.subtree_size {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map
-                        .remove::<SubtreeSize>()
-                        .unwrap()
-                        .results
-                        .into_iter(),
+                    attribute_map.remove_results::<SubtreeSize>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.subtree_size = Some(attr);
@@ -171,11 +167,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.non_negative {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map
-                        .remove::<NonNegative>()
-                        .unwrap()
-                        .results
-                        .into_iter(),
+                    attribute_map.remove_results::<NonNegative>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.non_negative = Some(attr);
@@ -185,11 +177,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.arity {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map
-                        .remove::<AsKey<Arity>>()
-                        .unwrap()
-                        .results
-                        .into_iter(),
+                    attribute_map.remove_results::<Arity>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.arity = Some(attr);
@@ -199,11 +187,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.types {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map
-                        .remove::<AsKey<RelationType>>()
-                        .unwrap()
-                        .results
-                        .into_iter(),
+                    attribute_map.remove_results::<RelationType>().into_iter(),
                 ) {
                     let humanized_columns = types
                         .into_iter()
@@ -218,11 +202,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.keys {
                 for (expr, keys) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map
-                        .remove::<AsKey<UniqueKeys>>()
-                        .unwrap()
-                        .results
-                        .into_iter(),
+                    attribute_map.remove_results::<UniqueKeys>().into_iter(),
                 ) {
                     let formatted_keys = keys
                         .into_iter()

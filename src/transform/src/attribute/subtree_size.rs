@@ -109,4 +109,8 @@ impl Attribute for SubtreeSize {
     fn get_results_mut(&mut self) -> &mut Vec<Self::Value> {
         &mut self.results
     }
+
+    fn take(self) -> Vec<Self::Value> {
+        self.results
+    }
 }
