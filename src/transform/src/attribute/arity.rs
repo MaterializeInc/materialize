@@ -11,7 +11,7 @@
 
 use mz_expr::MirRelationExpr;
 
-use super::{subtree_size::SubtreeSize, AsKey, Attribute, DerivedAttributes, RequiredAttributes};
+use super::{subtree_size::SubtreeSize, Attribute, DerivedAttributes, RequiredAttributes};
 
 /// Compute the column types of each subtree of a [MirRelationExpr] from the
 /// bottom-up.
@@ -32,7 +32,7 @@ impl Attribute for Arity {
         let mut offset = 1;
         for _ in 0..expr.num_inputs() {
             offsets.push(n - offset);
-            offset += &deps.get_results::<AsKey<SubtreeSize>>()[n - offset];
+            offset += &deps.get_results::<SubtreeSize>()[n - offset];
         }
         let subtree_arity =
             expr.arity_with_input_arities(offsets.into_iter().rev().map(|o| &self.results[o]));
@@ -43,7 +43,7 @@ impl Attribute for Arity {
     where
         Self: Sized,
     {
-        builder.require::<AsKey<SubtreeSize>>();
+        builder.require::<SubtreeSize>();
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {

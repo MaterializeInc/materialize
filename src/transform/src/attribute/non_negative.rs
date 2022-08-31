@@ -13,7 +13,6 @@ use mz_expr::Id;
 use mz_expr::MirRelationExpr;
 
 use super::subtree_size::SubtreeSize;
-use super::AsKey;
 use super::DerivedAttributes;
 use super::RequiredAttributes;
 use super::{Attribute, Env};
@@ -92,7 +91,7 @@ impl Attribute for NonNegative {
                 let mut offset = 1;
                 for _ in 0..inputs.len() {
                     result &= &self.results[n - offset];
-                    offset += &deps.get_results::<AsKey<SubtreeSize>>()[n - offset];
+                    offset += &deps.get_results::<SubtreeSize>()[n - offset];
                 }
                 self.results.push(result); // can be refined
             }
@@ -115,7 +114,7 @@ impl Attribute for NonNegative {
                 let mut offset = 1;
                 for _ in 0..inputs.len() {
                     result &= &self.results[n - offset];
-                    offset += &deps.get_results::<AsKey<SubtreeSize>>()[n - offset];
+                    offset += &deps.get_results::<SubtreeSize>()[n - offset];
                 }
                 result &= &self.results[n - offset]; // include the base result
                 self.results.push(result); // can be refined
@@ -139,7 +138,7 @@ impl Attribute for NonNegative {
     where
         Self: Sized,
     {
-        builder.require::<AsKey<SubtreeSize>>();
+        builder.require::<SubtreeSize>();
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {

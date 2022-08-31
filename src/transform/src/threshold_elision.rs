@@ -15,7 +15,7 @@
 //! The Subset(X) notation means that the collection is a multiset subset of X:
 //! multiplicities of each record in Subset(X) are at most that of X.
 
-use crate::attribute::{AsKey, DerivedAttributes, RequiredAttributes};
+use crate::attribute::{DerivedAttributes, RequiredAttributes};
 use crate::attribute::{NonNegative, SubtreeSize};
 use crate::TransformArgs;
 
@@ -44,8 +44,8 @@ struct ThresholdElisionAction {
 impl Default for ThresholdElisionAction {
     fn default() -> Self {
         let mut builder = RequiredAttributes::default();
-        builder.require::<AsKey<NonNegative>>();
-        builder.require::<AsKey<SubtreeSize>>();
+        builder.require::<NonNegative>();
+        builder.require::<SubtreeSize>();
         Self {
             deriver: builder.finish(),
         }
@@ -68,8 +68,8 @@ impl ThresholdElisionAction {
     pub fn action(&mut self, expr: &mut MirRelationExpr) {
         // The results vectors or all attributes should be equal after each step.
         debug_assert_eq!(
-            self.deriver.get_results::<AsKey<NonNegative>>().len(),
-            self.deriver.get_results::<AsKey<SubtreeSize>>().len()
+            self.deriver.get_results::<NonNegative>().len(),
+            self.deriver.get_results::<SubtreeSize>().len()
         );
 
         if let MirRelationExpr::Threshold { input } = expr {
@@ -83,9 +83,9 @@ impl ThresholdElisionAction {
                         // - the Union (i.e., the Threshold input) is n - 2,
                         // - the Union input[0] is at position n - 3 and its subtree size is m,
                         // - the Union base therefore is at position n - m - 3
-                        let n = self.deriver.get_results::<AsKey<NonNegative>>().len();
-                        let m = self.deriver.get_results::<AsKey<SubtreeSize>>()[n - 3];
-                        if self.deriver.get_results::<AsKey<NonNegative>>()[n - m - 3]
+                        let n = self.deriver.get_results::<NonNegative>().len();
+                        let m = self.deriver.get_results::<SubtreeSize>()[n - 3];
+                        if self.deriver.get_results::<NonNegative>()[n - m - 3]
                             && is_superset_of(base, &*input)
                         {
                             should_replace = true;
@@ -101,11 +101,7 @@ impl ThresholdElisionAction {
                 // We can be a bit smarter when adjusting the NonNegative result. Since the Threshold
                 // at the root can only be safely elided iff its input is non-negative, we can overwrite
                 // the new last value to be `true`.
-                if let Some(result) = self
-                    .deriver
-                    .get_results_mut::<AsKey<NonNegative>>()
-                    .last_mut()
-                {
+                if let Some(result) = self.deriver.get_results_mut::<NonNegative>().last_mut() {
                     *result = true;
                 }
             }

@@ -12,8 +12,7 @@
 use mz_expr::MirRelationExpr;
 
 use super::{
-    arity::Arity, subtree_size::SubtreeSize, AsKey, Attribute, DerivedAttributes,
-    RequiredAttributes,
+    arity::Arity, subtree_size::SubtreeSize, Attribute, DerivedAttributes, RequiredAttributes,
 };
 
 /// Compute the unique keys of each subtree of a [MirRelationExpr] from the
@@ -36,14 +35,14 @@ impl Attribute for UniqueKeys {
         let mut offset = 1;
         for _ in 0..expr.num_inputs() {
             offsets.push(n - offset);
-            offset += &deps.get_results::<AsKey<SubtreeSize>>()[n - offset];
+            offset += &deps.get_results::<SubtreeSize>()[n - offset];
         }
 
         let subtree_keys = expr.keys_with_input_keys(
             offsets
                 .iter()
                 .rev()
-                .map(|o| deps.get_results::<AsKey<Arity>>()[*o]),
+                .map(|o| deps.get_results::<Arity>()[*o]),
             offsets.iter().rev().map(|o| &self.results[*o]),
         );
 
@@ -54,8 +53,8 @@ impl Attribute for UniqueKeys {
     where
         Self: Sized,
     {
-        builder.require::<AsKey<Arity>>();
-        builder.require::<AsKey<SubtreeSize>>();
+        builder.require::<Arity>();
+        builder.require::<SubtreeSize>();
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {

@@ -29,7 +29,7 @@ mod unique_keys;
 pub use unique_keys::UniqueKeys;
 
 /// A common interface to be implemented by all derived attributes.
-pub trait Attribute: Send + Sync {
+pub trait Attribute: 'static + Default + Send + Sync {
     /// The domain of the attribute values.
     type Value: Clone + Eq + PartialEq;
 
@@ -60,7 +60,7 @@ pub trait Attribute: Send + Sync {
 
 #[allow(missing_debug_implementations)]
 /// Converts an Attribute into a Key that can be looked up in [DerivedAttributes]
-pub struct AsKey<A: Attribute>(PhantomData<A>);
+struct AsKey<A: Attribute>(PhantomData<A>);
 
 impl<A: Attribute + 'static> TypeMapKey for AsKey<A> {
     type Value = A;
@@ -191,13 +191,10 @@ pub struct RequiredAttributes {
 
 impl RequiredAttributes {
     /// Add an attribute that [DerivedAttributes] should derive
-    pub fn require<T: TypeMapKey>(&mut self)
-    where
-        T::Value: Attribute + Default,
-    {
-        if !self.attributes.contains_key::<T>() {
-            T::Value::add_dependencies(self);
-            self.attributes.insert::<T>(T::Value::default());
+    pub fn require<A: Attribute>(&mut self) {
+        if !self.attributes.contains_key::<AsKey<A>>() {
+            A::add_dependencies(self);
+            self.attributes.insert::<AsKey<A>>(A::default());
         }
     }
 
@@ -310,24 +307,19 @@ impl DerivedAttributes {
     }
 
     /// Get a reference to the attributes derived so far.
-    pub fn get_results<T: TypeMapKey>(&self) -> &Vec<<<T as TypeMapKey>::Value as Attribute>::Value>
-    where
-        T::Value: Attribute,
-    {
-        self.attributes.get::<T>().unwrap().get_results()
+    pub fn get_results<A: Attribute>(&self) -> &Vec<A::Value> {
+        self.attributes.get::<AsKey<A>>().unwrap().get_results()
     }
 
     /// Get a mutable reference to the attributes derived so far.
     ///
     /// Calling this and modifying the result risks messing up subsequent
     /// derivations.
-    pub fn get_results_mut<T: TypeMapKey>(
-        &mut self,
-    ) -> &mut Vec<<<T as TypeMapKey>::Value as Attribute>::Value>
-    where
-        T::Value: Attribute,
-    {
-        self.attributes.get_mut::<T>().unwrap().get_results_mut()
+    pub fn get_results_mut<A: Attribute>(&mut self) -> &mut Vec<A::Value> {
+        self.attributes
+            .get_mut::<AsKey<A>>()
+            .unwrap()
+            .get_results_mut()
     }
 
     fn trim_attr<T: TypeMapKey>(&mut self)

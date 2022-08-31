@@ -19,7 +19,7 @@ use mz_expr::{visit::Visit, MirRelationExpr, OptimizedMirRelationExpr};
 use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::{
-    Arity, AsKey, DerivedAttributes, NonNegative, RelationType, RequiredAttributes, SubtreeSize,
+    Arity, DerivedAttributes, NonNegative, RelationType, RequiredAttributes, SubtreeSize,
     UniqueKeys,
 };
 
@@ -119,19 +119,19 @@ impl From<&ExplainConfig> for ExplainAttributes {
     fn from(config: &ExplainConfig) -> ExplainAttributes {
         let mut builder = RequiredAttributes::default();
         if config.subtree_size {
-            builder.require::<AsKey<SubtreeSize>>();
+            builder.require::<SubtreeSize>();
         }
         if config.non_negative {
-            builder.require::<AsKey<NonNegative>>();
+            builder.require::<NonNegative>();
         }
         if config.types {
-            builder.require::<AsKey<RelationType>>();
+            builder.require::<RelationType>();
         }
         if config.arity {
-            builder.require::<AsKey<Arity>>();
+            builder.require::<Arity>();
         }
         if config.keys {
-            builder.require::<AsKey<UniqueKeys>>();
+            builder.require::<UniqueKeys>();
         }
         ExplainAttributes {
             deriver: builder.finish(),
@@ -159,7 +159,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
                     attribute_map
-                        .remove::<AsKey<SubtreeSize>>()
+                        .remove::<SubtreeSize>()
                         .unwrap()
                         .results
                         .into_iter(),
@@ -172,7 +172,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
                     attribute_map
-                        .remove::<AsKey<NonNegative>>()
+                        .remove::<NonNegative>()
                         .unwrap()
                         .results
                         .into_iter(),
