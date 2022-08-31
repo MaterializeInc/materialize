@@ -3115,7 +3115,6 @@ pub fn plan_create_connection(
             Connection::Aws(connection)
         }
         CreateConnection::Ssh { with_options } => {
-            scx.require_unsafe_mode("CREATE CONNECTION ... SSH")?;
             let c = SshConnectionOptionExtracted::try_from(with_options)?;
             let connection = mz_storage::types::connections::SshConnection::try_from(c)?;
             Connection::Ssh(connection)
