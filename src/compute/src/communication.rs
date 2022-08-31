@@ -16,13 +16,12 @@
 
 use std::any::Any;
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
 
-use mz_ore::collections::CollectionExt;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
 use tracing::{info, trace, warn};
@@ -120,62 +119,39 @@ fn start_connections(
     addresses: Arc<Vec<String>>,
     my_index: usize,
 ) -> Result<Vec<Option<TcpStream>>, io::Error> {
-    let addresses = loop {
-        match addresses
-            .iter()
-            .take(my_index)
-            .map(|address| {
-                address
-                    .as_str()
-                    .to_socket_addrs()
-                    .map(|addrs| addrs.into_first()) // `man getaddrinfo` claims it returns at least one element
-                    .map_err(|e| (e, address.clone()))
-            })
-            .collect::<Result<Vec<_>, _>>()
-        {
-            Ok(addresses) => break addresses,
-            Err((e, addr)) => {
-                warn!("Failed to resolve {addr}: {e}, will retry");
-                sleep(Duration::from_secs(1));
-            }
-        }
-    };
+    let addresses: Vec<_> = addresses.iter().cloned().take(my_index).collect();
     let mut results: Vec<_> = (0..my_index).map(|_| None).collect();
 
     // We do not want to provide opportunities for the startup
     // sequence to hang waiting for one of its peers, not noticing that another has gone down;
     // empirically, we have found it difficult to reason
     // about whether this results in crash loops and global deadlocks.
-    // Thus, every second, check whether a previously-established connection has
+    // Thus, in between connection attempts, check whether a previously-established connection has
     // gone away; if so, we clear it and retry it again later.
     let mut i = 0;
     while results.iter().any(|r| r.is_none()) {
         if results[i].is_none() {
-            match TcpStream::connect_timeout(&addresses[i], Duration::from_secs(1)) {
+            match TcpStream::connect(&addresses[i]) {
                 Ok(mut s) => {
                     s.set_nodelay(true).expect("set_nodelay call failed");
 
                     s.write_all(&my_index.to_ne_bytes())
                         .expect("failed to send worker index");
 
+                    // This is necessary for `gc_broken_connections`; it will be unset
+                    // before actually trying to use the sockets.
                     s.set_nonblocking(true)
                         .expect("set_nonblocking(true) call failed");
+
                     info!(worker = my_index, "Connected to process {i}");
                     results[i] = Some(s);
                 }
                 Err(err) => {
-                    if err.kind() == std::io::ErrorKind::TimedOut {
-                        info!(
-                            worker = my_index,
-                            "Can't yet connect to process {i}; will retry"
-                        );
-                    } else {
-                        info!(
-                            worker = my_index,
-                            "error connecting to process {i}: {err}; will retry"
-                        );
-                        sleep(Duration::from_secs(1));
-                    }
+                    info!(
+                        worker = my_index,
+                        "error connecting to process {i}: {err}; will retry"
+                    );
+                    sleep(Duration::from_secs(1));
                 }
             }
         }
