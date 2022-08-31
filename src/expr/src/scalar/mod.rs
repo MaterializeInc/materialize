@@ -1372,12 +1372,17 @@ impl MirScalarExpr {
                     .collect();
                 // Find an inner operand that occurs more than once, and get a vector of its positions
                 all_inner_operands.sort();
-                let indexes_to_undistribute = all_inner_operands
+                let mut indexes_to_undistribute = all_inner_operands
                     .iter()
                     .group_by(|(a, _i)| a)
                     .into_iter()
                     .map(|(_a, g)| g.map(|(_a, i)| *i).collect_vec())
                     .find(|g| g.len() > 1);
+                // `swap_remove_multiple` cannot handle duplicates
+                indexes_to_undistribute.as_mut().map(|vec| {
+                    vec.sort();
+                    vec.dedup();
+                });
 
                 // In any case, undo the 1-arg wrapping that we did at the beginning.
                 outer_operands
@@ -1402,6 +1407,11 @@ impl MirScalarExpr {
         }
     }
 
+    /// Remove the elements from `v` at the positions indicated by `indexes`, and return the removed
+    /// elements in a new vector.
+    ///
+    /// `indexes` shouldn't have duplicates. (Might panic or behave incorrectly in case of
+    /// duplicates.)
     fn swap_remove_multiple(
         v: &mut Vec<MirScalarExpr>,
         mut indexes: Vec<usize>,

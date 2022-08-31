@@ -369,6 +369,24 @@ WHERE (a,b) IN ((1, 4*a), (2, 5*a), (3, a+20))
 1  4  7
 3  23  33
 
+# Regression test for https://github.com/MaterializeInc/materialize/issues/14532
+# Copied from test/sqllogictest/sqlite/test/index/orderby_nosort/100/slt_good_3.test
+
+statement ok
+CREATE TABLE tab0(pk INTEGER PRIMARY KEY, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT)
+
+statement ok
+INSERT INTO tab0 VALUES(0,146,632.63,'shwwd',703,412.47,'xsppr')
+
+statement ok
+INSERT INTO tab0 VALUES(1,81,536.29,'trhdh',49,726.3,'chuxv')
+
+query I rowsort
+SELECT pk FROM tab0 WHERE (((col4 >= 660.98) AND ((col4 IN (724.71,445.29,441.2,606.49) AND ((col0 > 523)) AND (((col3 > 975 OR (col3 IS NULL) AND (col1 > 259.62 OR col0 >= 896 OR col1 <= 947.3 OR col3 IS NULL OR (col3 > 788) AND ((col3 < 264)) AND col0 < 823 AND ((col0 < 164) AND col1 > 95.85) AND (col0 > 534) AND col4 > 922.46 AND col3 >= 528 AND col3 > 762 AND col0 <= 903) AND col3 IS NULL))) OR col1 < 760.15 OR ((((((col0 >= 551)))))) OR col0 IN (425,98,842,550))) OR col0 < 397 AND col4 > 32.43 AND col3 >= 13 OR col3 > 474 OR ((col1 < 746.36)) AND col1 >= 499.2 AND col0 < 362 OR ((col0 <= 979) AND ((col0 IS NULL) AND (col1 > 251.48) AND (col3 > 838 OR col3 > 529 AND col0 IN (627,345,774,557) OR ((col0 <= 992 OR (((col3 BETWEEN 277 AND 34)))) AND (col0 > 561))) AND col1 >= 912.45 OR (col0 < 4 AND (col3 <= 996 AND (col0 <= 364))) OR ((col0 < 979)) OR col1 > 599.0 OR (col4 <= 26.30 AND ((col3 = 547 AND col3 >= 799) OR (col1 BETWEEN 841.6 AND 776.13)) AND col1 > 614.41 OR col4 = 581.12))) AND col0 < 480 OR (col3 = 763 AND (col3 IS NULL)))) ORDER BY 1 DESC
+----
+0
+1
+
 # In the following query, we would be able to detect literal constraints if we called `canonicalize_equivalences`
 
 query T multiline
