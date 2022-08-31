@@ -156,8 +156,10 @@ impl fmt::Display for StartupMessage {
     }
 }
 
+#[derive(Debug, Serialize)]
 pub struct ExecuteResponsePartialError {
     pub severity: ClientSeverity,
+    #[serde(skip)]
     pub code: SqlState,
     pub message: String,
 }
@@ -420,6 +422,9 @@ impl ExecuteResponse {
     /// When an appropriate error response can be totally determined by the
     /// `ExecuteResponse`, generate it if it is non-terminal, i.e. should not be
     /// returned as an error instead of the value.
+    ///
+    /// # Panics
+    /// - If returns an error with [`ClientSeverity::Error`].
     pub fn partial_err(&self) -> Option<ExecuteResponsePartialError> {
         use ExecuteResponse::*;
 
@@ -437,7 +442,7 @@ impl ExecuteResponse {
             }};
         }
 
-        match self {
+        let r = match self {
             CreatedConnection { existed } => {
                 existed!(*existed, SqlState::DUPLICATE_OBJECT, "connection")
             }
@@ -572,7 +577,20 @@ impl ExecuteResponse {
             | SetVariable { .. }
             | Tailing { .. }
             | Updated(..) => None,
-        }
+        };
+
+        assert!(
+            !matches!(
+                r,
+                Some(ExecuteResponsePartialError {
+                    severity: ClientSeverity::Error,
+                    ..
+                })
+            ),
+            "partial_err cannot generate errors"
+        );
+
+        r
     }
 }
 
@@ -594,7 +612,11 @@ pub enum SimpleResult {
         col_names: Vec<String>,
     },
     /// The query executed successfully but did not return rows.
-    Ok,
+    Ok {
+        ok: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        partial_err: Option<ExecuteResponsePartialError>,
+    },
     /// The query returned an error.
     Err { error: String },
 }
@@ -604,6 +626,17 @@ impl SimpleResult {
         SimpleResult::Err {
             error: msg.to_string(),
         }
+    }
+
+    /// Generates a `SimpleResult::Ok` based on an `ExecuteResponse`.
+    ///
+    /// # Panics
+    /// - If [`ExecuteResponse::partial_err`] returns an error with
+    ///   [`ClientSeverity::Error`].
+    pub(crate) fn ok(res: ExecuteResponse) -> SimpleResult {
+        let ok = res.tag();
+        let partial_err = res.partial_err();
+        SimpleResult::Ok { ok, partial_err }
     }
 }
 

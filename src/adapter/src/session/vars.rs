@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use const_format::concatcp;
 use once_cell::sync::Lazy;
+use serde::Serialize;
 use uncased::UncasedStr;
 
 use mz_ore::cast;
@@ -1465,6 +1466,15 @@ pub enum ClientSeverity {
     /// Sends only NOTICE, WARNING, INFO, ERROR, FATAL and PANIC level messages.
     /// Not listed as a valid value, but accepted by Postgres
     Info,
+}
+
+impl Serialize for ClientSeverity {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
 }
 
 impl ClientSeverity {
