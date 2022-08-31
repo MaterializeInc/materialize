@@ -77,6 +77,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         /// The identifiers of the peek requests to cancel.
         uuids: BTreeSet<Uuid>,
     },
+    UpdateMaxResultSize(u32),
 }
 
 impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
@@ -102,6 +103,9 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
                     uuids: uuids.into_proto(),
                 }),
+                ComputeCommand::UpdateMaxResultSize(max_result_size) => {
+                    UpdateMaxResultSize(max_result_size.into_proto())
+                }
             }),
         }
     }
@@ -123,6 +127,9 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
                 uuids: uuids.into_rust()?,
             }),
+            Some(UpdateMaxResultSize(ProtoUpdateMaxResultSize { max_result_size })) => {
+                Ok(ComputeCommand::UpdateMaxResultSize(max_result_size))
+            }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeCommand::kind",
             )),
@@ -216,6 +223,8 @@ pub struct InstanceConfig {
     pub replica_id: ReplicaId,
     /// Optionally, request the installation of logging sources.
     pub logging: Option<LoggingConfig>,
+    /// Max size in bytes of any result.
+    pub max_result_size: u32,
 }
 
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
@@ -223,6 +232,7 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
         ProtoInstanceConfig {
             replica_id: self.replica_id,
             logging: self.logging.into_proto(),
+            max_result_size: self.max_result_size,
         }
     }
 
@@ -230,6 +240,7 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
         Ok(Self {
             replica_id: proto.replica_id,
             logging: proto.logging.into_rust()?,
+            max_result_size: proto.max_result_size,
         })
     }
 }
@@ -896,6 +907,18 @@ impl RustType<ProtoPeek> for Peek {
     }
 }
 
+impl RustType<ProtoUpdateMaxResultSize> for u32 {
+    fn into_proto(&self) -> ProtoUpdateMaxResultSize {
+        ProtoUpdateMaxResultSize {
+            max_result_size: *self,
+        }
+    }
+
+    fn from_proto(proto: ProtoUpdateMaxResultSize) -> Result<Self, TryFromProtoError> {
+        Ok(proto.max_result_size)
+    }
+}
+
 fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
 }
@@ -938,6 +961,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
 
         let mut create_command = None;
         let mut drop_command = None;
+        let mut update_max_result_size_command = None;
 
         let mut initialization_complete = false;
 
@@ -968,6 +992,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                 }
                 ComputeCommand::CancelPeeks { uuids } => {
                     live_cancels.extend(uuids);
+                }
+                update @ ComputeCommand::UpdateMaxResultSize(_) => {
+                    update_max_result_size_command = Some(update);
                 }
             }
         }
@@ -1023,6 +1050,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if drop_command.is_some() {
             command_count += 1;
         }
+        if update_max_result_size_command.is_some() {
+            command_count += 1;
+        }
 
         // Reconstitute the commands as a compact history.
         if let Some(create_command) = create_command {
@@ -1050,6 +1080,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         }
         if let Some(drop_command) = drop_command {
             self.commands.push(drop_command);
+        }
+        if let Some(update_max_result_size_command) = update_max_result_size_command {
+            self.commands.push(update_max_result_size_command)
         }
 
         self.reduced_count = command_count;

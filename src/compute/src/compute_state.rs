@@ -31,6 +31,7 @@ use mz_compute_client::command::{
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::response::{ComputeResponse, PeekResponse, TailResponse};
+use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -75,6 +76,8 @@ pub struct ComputeState {
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory,
+    /// Max size in bytes of any result.
+    pub max_result_size: u32,
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
@@ -112,6 +115,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 self.handle_peek(peek)
             }
             CancelPeeks { uuids } => self.handle_cancel_peeks(uuids),
+            UpdateMaxResultSize(max_result_size) => {
+                self.compute_state.max_result_size = max_result_size
+            }
         }
     }
 
@@ -232,7 +238,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             logger.log(ComputeEvent::Peek(peek.as_log_event(), true));
         }
         // Attempt to fulfill the peek.
-        if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
+        if let Some(response) =
+            peek.seek_fulfillment(&mut Antichain::new(), self.compute_state.max_result_size)
+        {
             self.send_peek_response(peek, response);
         } else {
             peek.span = span!(parent: &peek.span, Level::DEBUG, "pending peek");
@@ -576,7 +584,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             Vec::with_capacity(pending_peeks_len),
         );
         for mut peek in pending_peeks.drain(..) {
-            if let Some(response) = peek.seek_fulfillment(&mut upper) {
+            if let Some(response) =
+                peek.seek_fulfillment(&mut upper, self.compute_state.max_result_size)
+            {
                 let _span = tracing::info_span!(parent: &peek.span,  "process_peek").entered();
                 self.send_peek_response(peek, response);
             } else {
@@ -651,7 +661,11 @@ impl PendingPeek {
     /// then for any time `t` less or equal to `peek.timestamp` it is
     /// not the case that `upper` is less or equal to that timestamp,
     /// and so the result cannot further evolve.
-    fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> Option<PeekResponse> {
+    fn seek_fulfillment(
+        &mut self,
+        upper: &mut Antichain<Timestamp>,
+        max_result_size: u32,
+    ) -> Option<PeekResponse> {
         self.trace_bundle.oks_mut().read_upper(upper);
         if upper.less_equal(&self.peek.timestamp) {
             return None;
@@ -660,7 +674,7 @@ impl PendingPeek {
         if upper.less_equal(&self.peek.timestamp) {
             return None;
         }
-        let response = match self.collect_finished_data() {
+        let response = match self.collect_finished_data(max_result_size) {
             Ok(rows) => PeekResponse::Rows(rows),
             Err(text) => PeekResponse::Error(text),
         };
@@ -668,7 +682,12 @@ impl PendingPeek {
     }
 
     /// Collects data for a known-complete peek.
-    fn collect_finished_data(&mut self) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+    fn collect_finished_data(
+        &mut self,
+        max_result_size: u32,
+    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+        let max_result_size = usize::cast_from(max_result_size);
+        let count_byte_size = std::mem::size_of::<NonZeroUsize>();
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -696,6 +715,7 @@ impl PendingPeek {
         let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
         // Accumulated `Vec<(row, count)>` results that we are likely to return.
         let mut results = Vec::new();
+        let mut total_size: usize = 0;
 
         // When set, a bound on the number of records we need to return.
         // The requirements on the records are driven by the finishing's
@@ -797,6 +817,14 @@ impl PendingPeek {
                     };
                     // if copies > 0 ... otherwise skip
                     if let Some(copies) = NonZeroUsize::new(copies) {
+                        total_size = total_size
+                            .saturating_add(result.byte_len())
+                            .saturating_add(count_byte_size);
+                        if total_size > max_result_size {
+                            return Err(format!(
+                                "result exceeds max size of {max_result_size} bytes"
+                            ));
+                        }
                         results.push((result, copies));
                     }
 
@@ -829,7 +857,14 @@ impl PendingPeek {
                                         || left.0.cmp(&right.0),
                                     )
                                 });
-                                results.truncate(max_results);
+                                let dropped = results.drain(max_results..);
+                                let dropped_size =
+                                    dropped.into_iter().fold(0, |acc: usize, (row, _count)| {
+                                        acc.saturating_add(
+                                            row.byte_len().saturating_add(count_byte_size),
+                                        )
+                                    });
+                                total_size = total_size.saturating_sub(dropped_size);
                             }
                         }
                     }

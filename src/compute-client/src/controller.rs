@@ -175,7 +175,11 @@ where
     T: Timestamp + Lattice + Debug + Copy,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    pub async fn new(build_info: &'static BuildInfo, logging: &Option<LoggingConfig>) -> Self {
+    pub async fn new(
+        build_info: &'static BuildInfo,
+        logging: &Option<LoggingConfig>,
+        max_result_size: u32,
+    ) -> Self {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
@@ -193,6 +197,7 @@ where
         replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
             logging: logging.clone(),
+            max_result_size,
         }));
 
         Self {
@@ -649,6 +654,13 @@ where
                 .await?;
         }
         Ok(())
+    }
+
+    /// Update the max size in bytes of any result.
+    pub async fn update_max_result_size(&mut self, max_result_size: u32) {
+        self.compute
+            .replicas
+            .send(ComputeCommand::UpdateMaxResultSize(max_result_size))
     }
 
     /// Processes the work queued by [`ComputeControllerState::ready`].

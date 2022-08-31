@@ -45,12 +45,14 @@ message ProtoComputeCommand {
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;
+        ProtoUpdateMaxResultSize update_max_result_size = 8;
     }
 }
 
 message ProtoInstanceConfig {
     mz_compute_client.logging.ProtoLoggingConfig logging = 1;
     uint64 replica_id = 2;
+    uint32 max_result_size = 3;
 }
 
 message ProtoDataflowDescription {
@@ -118,4 +120,8 @@ message ProtoPeek {
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
     optional uint64 target_replica = 7;
     map<string, string> otel_ctx = 8;
+}
+
+message ProtoUpdateMaxResultSize {
+    uint32 max_result_size = 1;
 }

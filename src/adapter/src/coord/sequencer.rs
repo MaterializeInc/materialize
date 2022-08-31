@@ -79,11 +79,12 @@ use crate::error::AdapterError;
 use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
 use crate::session::vars::IsolationLevel;
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
+    WriteOp,
 };
 use crate::tail::PendingTail;
 use crate::util::{duration_to_timestamp_millis, send_immediate_rows, ClientTransmitter};
-use crate::{guard_write_critical_section, sink_connection, PeekResponseUnary};
+use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -757,7 +758,11 @@ impl<S: Append + 'static> Coordinator<S> {
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
         self.controller
-            .create_instance(instance.id, instance.logging.clone())
+            .create_instance(
+                instance.id,
+                instance.logging.clone(),
+                self.catalog.system_config().max_result_size(),
+            )
             .await;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
@@ -3257,6 +3262,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
+        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = match value {
             SetVariableValue::Literal(Value::String(value)) => {
                 catalog::Op::UpdateSystemConfiguration { name, value }
@@ -3273,6 +3279,9 @@ impl<S: Append + 'static> Coordinator<S> {
         };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        if update_max_result_size {
+            self.update_max_result_size().await;
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3282,9 +3291,13 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
+        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        if update_max_result_size {
+            self.update_max_result_size().await;
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3297,6 +3310,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        self.update_max_result_size().await;
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3307,6 +3321,15 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(AdapterError::Unauthorized(format!(
                 "only user '{SYSTEM_USER}' is allowed to execute 'ALTER SYSTEM ...'"
             )))
+        }
+    }
+
+    async fn update_max_result_size(&mut self) {
+        for compute_instance in self.catalog.compute_instances() {
+            let mut compute = self.controller.compute_mut(compute_instance.id).unwrap();
+            compute
+                .update_max_result_size(self.catalog.system_config().max_result_size())
+                .await;
         }
     }
 
