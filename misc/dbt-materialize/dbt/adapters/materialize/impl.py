@@ -14,17 +14,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Any, List, Optional
 
+import dbt.exceptions
+from dbt.adapters.base.impl import AdapterConfig
 from dbt.adapters.materialize import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
+from dbt.dataclass_schema import ValidationError, dbtClassMixin
+
+
+@dataclass
+class MaterializeIndexConfig(dbtClassMixin):
+    columns: Optional[List[str]] = None
+    default: Optional[bool] = False
+    name: Optional[str] = None
+    cluster: Optional[str] = None
+
+    @classmethod
+    def parse(cls, raw_index) -> Optional["MaterializeIndexConfig"]:
+        if raw_index is None:
+            return None
+        try:
+            cls.validate(raw_index)
+            return cls.from_dict(raw_index)
+        except ValidationError as exc:
+            msg = dbt.exceptions.validator_error_message(exc)
+            dbt.exceptions.raise_compiler_error(f"Could not parse index config: {msg}")
+        except TypeError:
+            dbt.exceptions.raise_compiler_error(
+                f"Invalid index config:\n"
+                f"  Got: {raw_index}\n"
+                f'  Expected a dictionary with at minimum a "columns" key'
+            )
+
+
+@dataclass
+class MaterializeConfig(AdapterConfig):
+    cluster: Optional[str] = None
 
 
 class MaterializeAdapter(PostgresAdapter):
     ConnectionManager = MaterializeConnectionManager
     Relation = MaterializeRelation
+
+    AdapterSpecificConfigs = MaterializeConfig
 
     @classmethod
     def is_cancelable(cls) -> bool:
@@ -42,6 +78,9 @@ class MaterializeAdapter(PostgresAdapter):
 
     def verify_database(self, database):
         pass
+
+    def parse_index(self, raw_index: Any) -> Optional[MaterializeIndexConfig]:
+        return MaterializeIndexConfig.parse(raw_index)
 
     def list_relations_without_caching(
         self, schema_relation: MaterializeRelation
