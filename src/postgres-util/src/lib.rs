@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use async_ssh2_lite::{AsyncChannel, AsyncSession, SessionConfiguration};
+use mz_ore::ssh_key::SshKeypair;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
@@ -223,14 +224,8 @@ pub enum SshTunnelConfig {
         port: u16,
         /// Username to be used in the SSH connection
         user: String,
-        /// Public SSH key used for authentication, in OpenSSH format.
-        /// Stored as a string (instead of `Vec<u8>`) because that is how
-        /// the SSH library expects it.
-        public_key: String,
-        /// Private SSH key used for authentication, in OpenSSH format.
-        /// Stored as a string (instead of `Vec<u8>`) because that is how
-        /// the SSH library expects it.
-        private_key: String,
+        /// SSH keypair used for authentication.
+        keypair: SshKeypair,
     },
 }
 
@@ -251,6 +246,14 @@ impl std::fmt::Debug for SshTunnelConfig {
     }
 }
 
+/// Configuration for Postgres connections.
+///
+/// This is a wrapper around [`tokio_postgres`] configuration struct
+/// which also includes:
+///  - Information about whether to use SSH tunnels or not, with associated
+///    configuration.
+///  - Exposed relevant parameters in the format we specify them, as we only
+///    allow a subset of valid values (e.g. no Unix-domain sockets).
 #[derive(Debug, PartialEq, Clone)]
 pub struct Config {
     postgres_config: PostgresConfig,
@@ -332,16 +335,22 @@ impl Config {
                 host,
                 port,
                 user,
-                public_key,
-                private_key,
+                keypair,
             } => {
                 let tcp_stream = TokioTcpStream::connect((host.as_str(), *port)).await?;
                 let mut session = AsyncSession::new(tcp_stream, Some(SessionConfiguration::new()))?;
                 session.handshake().await?;
 
+                let private_key = keypair.ssh_private_key();
                 session
-                    .userauth_pubkey_memory(user, Some(public_key), private_key, None)
+                    .userauth_pubkey_memory(
+                        user,
+                        Some(&keypair.ssh_public_key()),
+                        private_key.as_ref(),
+                        None,
+                    )
                     .await?;
+                drop(private_key);
 
                 if !session.authenticated() {
                     bail!("failed SSH authentication")
