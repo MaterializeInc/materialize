@@ -73,13 +73,13 @@ use crate::ast::{
     CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
     CreateSourceOptionName, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnection, CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName,
-    CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode, DbzTxMetadataOption,
-    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
-    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName, KafkaConnectionOption,
-    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
+    CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
+    CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
+    DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
+    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
+    KafkaConnectionOption, KafkaConnectionOptionName, KafkaConsistency, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
     PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
@@ -1281,16 +1281,28 @@ fn get_encoding_inner(
         }
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr {
-                csr_connection: CsrConnectionProtobuf { connection, seed },
+                csr_connection:
+                    CsrConnectionProtobuf {
+                        connection:
+                            CsrConnection {
+                                connection,
+                                options,
+                            },
+                        seed,
+                    },
             } => {
                 if let Some(CsrSeedProtobuf { key, value }) = seed {
-                    let item = scx.get_item_by_resolved_name(&connection.connection)?;
+                    let item = scx.get_item_by_resolved_name(&connection)?;
                     let _ = match item.connection()? {
                         Connection::Csr(connection) => connection,
                         _ => {
                             sql_bail!("{} is not a schema registry connection", item.name())
                         }
                     };
+
+                    if !options.is_empty() {
+                        sql_bail!("Protobuf CSR connections do not support any options");
+                    }
 
                     let value = DataEncodingInner::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
@@ -1839,7 +1851,7 @@ fn get_kafka_sink_consistency_config(
             Some(Format::Avro(AvroSchema::Csr {
                 csr_connection:
                     CsrConnectionAvro {
-                        connection: CsrConnection { connection },
+                        connection: CsrConnection { connection, options },
                         seed,
                         key_strategy,
                         value_strategy,
@@ -1862,6 +1874,10 @@ fn get_kafka_sink_consistency_config(
                         sql_bail!("{} is not a schema registry connection", item.name())
                     }
                 };
+
+                if !options.is_empty() {
+                    sql_bail!("CSR CONNECTIONs for CONSISTENCY topics do not support any options");
+                }
 
                 Some((
                     topic,
@@ -2105,6 +2121,12 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
     )
 }
 
+generate_extracted_config!(
+    CsrConfigOption,
+    (AvroKeyFullname, String),
+    (AvroValueFullname, String)
+);
+
 fn kafka_sink_builder(
     scx: &StatementContext,
     connection: mz_sql_parser::ast::KafkaConnection<Aug>,
@@ -2120,8 +2142,6 @@ fn kafka_sink_builder(
         connection,
         config_options,
         KafkaConfigOptionExtracted {
-            avro_key_full_name,
-            avro_value_full_name,
             partition_count,
             replication_factor,
             retention_ms,
@@ -2156,21 +2176,15 @@ fn kafka_sink_builder(
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
     };
 
-    if key_desc_and_indices.is_none() && avro_key_full_name.is_some() {
-        sql_bail!("Cannot specify AVRO KEY FULL NAME without a corresponding KEY field");
-    }
-
-    if key_desc_and_indices.is_some()
-        && (avro_key_full_name.is_some() ^ avro_value_full_name.is_some())
-    {
-        sql_bail!("Must specify both AVRO KEY FULL NAME and AVRO VALUE FULL NAME when specifying generated schema names");
-    }
-
     let format = match format {
         Some(Format::Avro(AvroSchema::Csr {
             csr_connection:
                 CsrConnectionAvro {
-                    connection,
+                    connection:
+                        CsrConnection {
+                            connection,
+                            options,
+                        },
                     seed,
                     key_strategy,
                     value_strategy,
@@ -2186,16 +2200,32 @@ fn kafka_sink_builder(
                 sql_bail!("VALUE STRATEGY option does not make sense with sinks");
             }
 
-            let item = scx.get_item_by_resolved_name(&connection.connection)?;
+            let item = scx.get_item_by_resolved_name(&connection)?;
             let csr_connection = match item.connection()? {
                 Connection::Csr(connection) => connection.clone(),
                 _ => {
                     sql_bail!("{} is not a schema registry connection", item.name())
                 }
             };
+            let CsrConfigOptionExtracted {
+                avro_key_fullname,
+                avro_value_fullname,
+                ..
+            } = options.try_into()?;
+
+            if key_desc_and_indices.is_none() && avro_key_fullname.is_some() {
+                sql_bail!("Cannot specify AVRO KEY FULLNAME without a corresponding KEY field");
+            }
+
+            if key_desc_and_indices.is_some()
+                && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
+            {
+                sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
+            }
+
             let schema_generator = AvroSchemaGenerator::new(
-                avro_key_full_name.as_deref(),
-                avro_value_full_name.as_deref(),
+                avro_key_fullname.as_deref(),
+                avro_value_fullname.as_deref(),
                 key_desc_and_indices
                     .as_ref()
                     .map(|(desc, _indices)| desc.clone()),

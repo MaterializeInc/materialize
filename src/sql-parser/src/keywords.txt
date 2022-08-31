@@ -137,6 +137,7 @@ Format
 Forward
 From
 Full
+Fullname
 Generator
 Graph
 Greatest
@@ -208,7 +209,6 @@ Mode
 Month
 Months
 Ms
-Name
 Names
 Natural
 Next

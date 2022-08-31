@@ -103,9 +103,10 @@ $ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
 > CREATE MATERIALIZED VIEW namespace_value_data (namespace) AS SELECT 1;
 
 > CREATE SINK namespace_value_sink FROM namespace_value_data
-  INTO KAFKA CONNECTION kafka_conn (AVRO VALUE FULL NAME = 'abc.def.ghi')
+  INTO KAFKA CONNECTION kafka_conn
   TOPIC 'namespace-value-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  FORMAT AVRO USING
+    CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'abc.def.ghi')
 
 $ kafka-verify-schema format=avro sink=materialize.public.namespace_value_sink
 {"type":"record","name":"ghi","namespace":"abc.def","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"namespace","type":"int"}]}]},{"name":"after","type":["null","row"]},{"name":"transaction","type":{"type":"record","name":"transaction","fields":[{"name":"id","type":"string"}]}}]}
@@ -117,10 +118,10 @@ $ kafka-verify format=avro sink=materialize.public.namespace_value_sink sort-mes
 > CREATE MATERIALIZED VIEW namespace_key_value_data (a, b) AS SELECT * FROM (VALUES (1, 2));
 
 > CREATE SINK namespace_key_value_sink FROM namespace_key_value_data
-  INTO KAFKA CONNECTION kafka_conn (AVRO KEY FULL NAME = 'some.neat.class.foo', AVRO VALUE FULL NAME = 'some.neat.class.bar')
+  INTO KAFKA CONNECTION kafka_conn
   TOPIC 'namespace-key-value-sink'
   KEY (b)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.foo', AVRO VALUE FULLNAME = 'some.neat.class.bar')
 
 $ kafka-verify-schema format=avro sink=materialize.public.namespace_key_value_sink
 {"type":"record","name":"foo","namespace":"some.neat.class","fields":[{"name":"b","type":"int"}]}
@@ -140,25 +141,25 @@ $ kafka-verify format=avro sink=materialize.public.namespace_key_value_sink sort
 contains:Repeated column name in sink key: a
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn (AVRO VALUE FULL NAME = 'some.neat.class.foo', AVRO KEY FULL NAME = 'some.neat.class.bar')
+  INTO KAFKA CONNECTION kafka_conn
   TOPIC 'input-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Cannot specify AVRO KEY FULL NAME without a corresponding KEY field
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'some.neat.class.foo', AVRO KEY FULLNAME = 'some.neat.class.bar')
+contains:Cannot specify AVRO KEY FULLNAME without a corresponding KEY field
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn (AVRO KEY FULL NAME = 'some.neat.class.bar')
+  INTO KAFKA CONNECTION kafka_conn
   TOPIC 'input-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Cannot specify AVRO KEY FULL NAME without a corresponding KEY field
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.bar')
+contains:Cannot specify AVRO KEY FULLNAME without a corresponding KEY field
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn (AVRO KEY FULL NAME = 'some.neat.class.bar')
+  INTO KAFKA CONNECTION kafka_conn
   TOPIC 'input-sink' KEY (a)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Must specify both AVRO KEY FULL NAME and AVRO VALUE FULL NAME when specifying generated schema names
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.bar')
+contains:Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn (AVRO VALUE FULL NAME = 'some.neat.class.bar')
+  INTO KAFKA CONNECTION kafka_conn
   TOPIC 'input-sink' KEY (a)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Must specify both AVRO KEY FULL NAME and AVRO VALUE FULL NAME when specifying generated schema names
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'some.neat.class.bar')
+contains:Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names

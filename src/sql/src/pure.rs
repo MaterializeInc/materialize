@@ -358,7 +358,10 @@ async fn purify_csr_connection_proto(
 
     let CsrConnectionProtobuf {
         seed,
-        connection: CsrConnection { connection },
+        connection: CsrConnection {
+            connection,
+            options: _,
+        },
     } = csr_connection;
     match seed {
         None => {
@@ -405,7 +408,10 @@ async fn purify_csr_connection_avro(
         };
 
     let CsrConnectionAvro {
-        connection: CsrConnection { connection },
+        connection: CsrConnection {
+            connection,
+            options: _,
+        },
         seed,
         key_strategy,
         value_strategy,

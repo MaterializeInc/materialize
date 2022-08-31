@@ -79,7 +79,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
         validate_postgres_stash=True,
-        default_timeout="10s",
     )
 
     with c.override(testdrive):

@@ -149,9 +149,57 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CsrConfigOptionName {
+    AvroKeyFullname,
+    AvroValueFullname,
+}
+
+impl AstDisplay for CsrConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CsrConfigOptionName::AvroKeyFullname => "AVRO KEY FULLNAME",
+            CsrConfigOptionName::AvroValueFullname => "AVRO VALUE FULLNAME",
+        })
+    }
+}
+impl_display!(CsrConfigOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `{FROM|INTO} CONNECTION ...` statement.
+pub struct CsrConfigOption<T: AstInfo> {
+    pub name: CsrConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CsrConfigOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(CsrConfigOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnection<T: AstInfo> {
     pub connection: T::ObjectName,
+    pub options: Vec<CsrConfigOption<T>>,
 }
+
+impl<T: AstInfo> AstDisplay for CsrConnection<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CONNECTION ");
+        f.write_node(&self.connection);
+        if !self.options.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(CsrConnection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ReaderSchemaSelectionStrategy {
@@ -176,8 +224,8 @@ pub struct CsrConnectionAvro<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION ");
-        f.write_node(&self.connection.connection);
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
+        f.write_node(&self.connection);
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
@@ -194,8 +242,8 @@ pub struct CsrConnectionProtobuf<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for CsrConnectionProtobuf<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("USING CONFLUENT SCHEMA REGISTRY CONNECTION ");
-        f.write_node(&self.connection.connection);
+        f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
+        f.write_node(&self.connection);
 
         if let Some(seed) = &self.seed {
             f.write_str(" ");
@@ -787,8 +835,6 @@ pub enum KafkaConfigOptionName {
     TransactionTimeoutMs,
     StartTimestamp,
     StartOffset,
-    AvroKeyFullName,
-    AvroValueFullName,
     PartitionCount,
     ReplicationFactor,
     RetentionMs,
@@ -812,8 +858,6 @@ impl AstDisplay for KafkaConfigOptionName {
             KafkaConfigOptionName::TransactionTimeoutMs => "TRANSACTION TIMEOUT MS",
             KafkaConfigOptionName::StartOffset => "START OFFSET",
             KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",
-            KafkaConfigOptionName::AvroKeyFullName => "AVRO KEY FULL NAME",
-            KafkaConfigOptionName::AvroValueFullName => "AVRO VALUE FULL NAME",
             KafkaConfigOptionName::PartitionCount => "PARTITION COUNT",
             KafkaConfigOptionName::ReplicationFactor => "REPLICATION FACTOR",
             KafkaConfigOptionName::RetentionBytes => "RETENTION BYTES",

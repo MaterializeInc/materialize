@@ -1755,12 +1755,46 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_csr_connection_avro(&mut self) -> Result<CsrConnectionAvro<Raw>, ParserError> {
+    fn parse_csr_connection_reference(&mut self) -> Result<CsrConnection<Raw>, ParserError> {
         self.expect_keyword(CONNECTION)?;
-        let connection = CsrConnection {
-            connection: self.parse_raw_name()?,
+        let connection = self.parse_raw_name()?;
+
+        let options = if self.consume_token(&Token::LParen) {
+            let options = self.parse_comma_separated(Parser::parse_csr_config_options)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
         };
 
+        Ok(CsrConnection {
+            connection,
+            options,
+        })
+    }
+
+    fn parse_csr_config_options(&mut self) -> Result<CsrConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[AVRO])? {
+            AVRO => {
+                let name = match self.expect_one_of_keywords(&[KEY, VALUE])? {
+                    KEY => CsrConfigOptionName::AvroKeyFullname,
+                    VALUE => CsrConfigOptionName::AvroValueFullname,
+                    _ => unreachable!(),
+                };
+                self.expect_keyword(FULLNAME)?;
+                name
+            }
+            _ => unreachable!(),
+        };
+        let _ = self.consume_token(&Token::Eq);
+        Ok(CsrConfigOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
+    fn parse_csr_connection_avro(&mut self) -> Result<CsrConnectionAvro<Raw>, ParserError> {
+        let connection = self.parse_csr_connection_reference()?;
         let seed = if self.parse_keyword(SEED) {
             let key_schema = if self.parse_keyword(KEY) {
                 self.expect_keyword(SCHEMA)?;
@@ -1815,11 +1849,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_connection_proto(&mut self) -> Result<CsrConnectionProtobuf<Raw>, ParserError> {
-        self.expect_keyword(CONNECTION)?;
-
-        let connection = CsrConnection {
-            connection: self.parse_raw_name()?,
-        };
+        let connection = self.parse_csr_connection_reference()?;
 
         let seed = if self.parse_keyword(SEED) {
             let key = if self.parse_keyword(KEY) {
@@ -2016,7 +2046,6 @@ impl<'a> Parser<'a> {
     fn parse_kafka_config_options(&mut self) -> Result<KafkaConfigOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
             ACKS,
-            AVRO,
             CLIENT,
             ENABLE,
             FETCH,
@@ -2032,15 +2061,6 @@ impl<'a> Parser<'a> {
             TRANSACTION,
         ])? {
             ACKS => KafkaConfigOptionName::Acks,
-            AVRO => {
-                let name = match self.expect_one_of_keywords(&[KEY, VALUE])? {
-                    KEY => KafkaConfigOptionName::AvroKeyFullName,
-                    VALUE => KafkaConfigOptionName::AvroValueFullName,
-                    _ => unreachable!(),
-                };
-                self.expect_keywords(&[FULL, NAME])?;
-                name
-            }
             CLIENT => {
                 self.expect_keyword(ID)?;
                 KafkaConfigOptionName::ClientId

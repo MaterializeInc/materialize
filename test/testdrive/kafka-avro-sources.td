@@ -299,7 +299,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 # Erroneously adds START OFFSET for non-existent partitions.
 > CREATE SOURCE non_dbz_data_varying_partition_2
   FROM KAFKA CONNECTION kafka_conn
-    WITH(
+    (
       TOPIC METADATA REFRESH INTERVAL MS=10,
       START OFFSET=[0,1]
     )
