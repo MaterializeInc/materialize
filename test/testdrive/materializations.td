@@ -24,6 +24,10 @@ $ kafka-create-topic topic=data
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE data
   FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
@@ -145,7 +149,7 @@ a  b
 # Cannot create sink from unmaterialized view.
 ! CREATE SINK not_mat_sink2 FROM data_view
   INTO KAFKA CONNECTION kafka_conn TOPIC 'data-view2-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:data_view is a view, which cannot be exported as a sink
 
 # Can create indexed view from unmaterialized view.
@@ -156,7 +160,7 @@ contains:data_view is a view, which cannot be exported as a sink
 # or from an indexed unmaterialized view
 ! CREATE SINK not_mat_sink2 FROM test5
   INTO KAFKA CONNECTION kafka_conn TOPIC 'data-view2-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:test5 is a view, which cannot be exported as a sink
 
 $ set-regex match=(\s\(u\d+\)|\n) replacement=

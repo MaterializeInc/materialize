@@ -26,7 +26,7 @@ $ set schema={
 > SELECT COUNT(*) FROM topic_compaction WHERE f2 LIKE 'C%';
 1000
 
-$ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=1000
+$ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${keyschema} schema=${schema} repeat=1000
 {"f1": ${kafka-ingest.iteration}} {"f2": "D${kafka-ingest.iteration}"}
 
 > SELECT COUNT(*) FROM topic_compaction WHERE f2 LIKE 'D%';

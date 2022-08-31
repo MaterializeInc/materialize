@@ -18,10 +18,10 @@ $ set schema={
 > SELECT COUNT(*) FROM envelope_none;
 10000
 
-$ kafka-ingest format=avro topic=envelope-none schema=${schema} publish=true repeat=5000
+$ kafka-ingest format=avro topic=envelope-none schema=${schema} repeat=5000
 {"f1": ${kafka-ingest.iteration}}
 
-$ kafka-ingest format=avro topic=envelope-none key-format=avro key-schema=${schema} schema=${schema} publish=true repeat=5000
+$ kafka-ingest format=avro topic=envelope-none key-format=avro key-schema=${schema} schema=${schema} repeat=5000
 {"f1": ${kafka-ingest.iteration}} {"f1": ${kafka-ingest.iteration}}
 
 > SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM envelope_none;

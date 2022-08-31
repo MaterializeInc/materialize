@@ -140,18 +140,25 @@ class KafkaTopics(Generator):
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
         )
 
+        print(
+            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+                FOR CONFLUENT SCHEMA REGISTRY
+                URL '${{testdrive.schema-registry-url}}';
+                """
+        )
+
         for i in cls.all():
             topic = f"kafka-sources-{i}"
             print(f"$ kafka-create-topic topic={topic}")
             print(
-                f"$ kafka-ingest format=avro topic={topic} key-format=avro key-schema=${{key-schema}} schema=${{value-schema}} publish=true"
+                f"$ kafka-ingest format=avro topic={topic} key-format=avro key-schema=${{key-schema}} schema=${{value-schema}}"
             )
             print(f'"{i}" {{"f1": "{i}"}}')
 
             print(
                 f"""> CREATE SOURCE s{i}
                   FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-{topic}-${{testdrive.seed}}'
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE;
                   """
             )
@@ -177,15 +184,22 @@ class KafkaSourcesSameTopic(Generator):
         )
         print("$ kafka-create-topic topic=topic")
         print(
-            "$ kafka-ingest format=avro topic=topic key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true"
+            "$ kafka-ingest format=avro topic=topic key-format=avro key-schema=${key-schema} schema=${value-schema}"
         )
         print('"123" {"f1": "123"}')
+
+        print(
+            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            FOR CONFLUENT SCHEMA REGISTRY
+            URL '${{testdrive.schema-registry-url}}';
+            """
+        )
 
         for i in cls.all():
             print(
                 f"""> CREATE SOURCE s{i}
               FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-topic-${{testdrive.seed}}'
-              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
               """
             )
@@ -215,15 +229,22 @@ class KafkaPartitions(Generator):
             f"$ kafka-create-topic topic=kafka-partitions partitions={round(cls.COUNT/2)}"
         )
         print(
-            "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true partition=-1"
+            "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} partition=-1"
         )
         for i in cls.all():
             print(f'"{i}" {{"f1": "{i}"}}')
 
         print(
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            FOR CONFLUENT SCHEMA REGISTRY
+            URL '${{testdrive.schema-registry-url}}';
+            """
+        )
+
+        print(
             """> CREATE SOURCE s1
             FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-partitions-${testdrive.seed}'
-            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
             ENVELOPE NONE;
             """
         )
@@ -235,7 +256,7 @@ class KafkaPartitions(Generator):
         )
 
         print(
-            "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true partition=-1"
+            "$ kafka-ingest format=avro topic=kafka-partitions key-format=avro key-schema=${key-schema} schema=${value-schema} partition=-1"
         )
         for i in cls.all():
             print(f'"{i}" {{"f1": "{i}"}}')
@@ -259,14 +280,21 @@ class KafkaRecordsEnvelopeNone(Generator):
         )
         print("$ kafka-create-topic topic=kafka-records-envelope-none")
         print(
-            f"$ kafka-ingest format=avro topic=kafka-records-envelope-none schema=${{kafka-records-envelope-none}} publish=true repeat={cls.COUNT}"
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-none schema=${{kafka-records-envelope-none}} repeat={cls.COUNT}"
         )
         print('{"f1": "123"}')
 
         print(
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            FOR CONFLUENT SCHEMA REGISTRY
+            URL '${{testdrive.schema-registry-url}}';
+            """
+        )
+
+        print(
             f"""> CREATE SOURCE kafka_records_envelope_none
               FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-none-${{testdrive.seed}}'
-              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
               """
         )
@@ -295,14 +323,21 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         )
         print("$ kafka-create-topic topic=kafka-records-envelope-upsert-same")
         print(
-            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-same key-format=avro key-schema=${{kafka-records-envelope-upsert-same-key}} schema=${{kafka-records-envelope-upsert-same-value}} publish=true repeat={cls.COUNT}"
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-same key-format=avro key-schema=${{kafka-records-envelope-upsert-same-key}} schema=${{kafka-records-envelope-upsert-same-value}} repeat={cls.COUNT}"
         )
         print('{"key": "fish"} {"f1": "fish"}')
 
         print(
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            FOR CONFLUENT SCHEMA REGISTRY
+            URL '${{testdrive.schema-registry-url}}';
+            """
+        )
+
+        print(
             f"""> CREATE SOURCE kafka_records_envelope_upsert_same
               FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-upsert-same-${{testdrive.seed}}'
-              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
               """
         )
@@ -332,16 +367,23 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         )
         print("$ kafka-create-topic topic=kafka-records-envelope-upsert-distinct")
         print(
-            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} publish=true repeat={cls.COUNT}"
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} repeat={cls.COUNT}"
         )
         print(
             '{"key": "${kafka-ingest.iteration}"} {"f1": "${kafka-ingest.iteration}"}'
         )
 
         print(
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            FOR CONFLUENT SCHEMA REGISTRY
+            URL '${{testdrive.schema-registry-url}}';
+            """
+        )
+
+        print(
             f"""> CREATE SOURCE kafka_records_envelope_upsert_distinct
               FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-upsert-distinct-${{testdrive.seed}}'
-              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
               """
         )
@@ -351,7 +393,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         )
 
         print(
-            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} publish=true repeat={cls.COUNT}"
+            f"$ kafka-ingest format=avro topic=kafka-records-envelope-upsert-distinct key-format=avro key-schema=${{kafka-records-envelope-upsert-distinct-key}} schema=${{kafka-records-envelope-upsert-distinct-value}} repeat={cls.COUNT}"
         )
         print('{"key": "${kafka-ingest.iteration}"}')
 
@@ -373,14 +415,23 @@ class KafkaSinks(Generator):
         print(f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinks.COUNT * 10};")
         for i in cls.all():
             print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
+
+        print(
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            FOR CONFLUENT SCHEMA REGISTRY
+            URL '${{testdrive.schema-registry-url}}';
+            """
+        )
+
         for i in cls.all():
             print(
                 dedent(
                     f"""
                      > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+                     > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
                      > CREATE SINK s{i} FROM v{i}
                        INTO KAFKA CONNECTION kafka_conn TOPIC 'kafka-sink-same-source-{i}'
-                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}';
+                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
                      """
                 )
             )
@@ -403,14 +454,22 @@ class KafkaSinksSameSource(Generator):
             f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinksSameSource.COUNT * 10};"
         )
         print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
+        print(
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';"""
+        )
+        print(
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';"""
+        )
+
         for i in cls.all():
             print(
                 dedent(
                     f"""
                      > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+                     > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
                      > CREATE SINK s{i} FROM v1
                        INTO KAFKA CONNECTION kafka_conn TOPIC 'kafka-sink-same-source-{i}'
-                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}';
+                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
                      """
                 )
             )
@@ -1299,7 +1358,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
                     $ kafka-create-topic topic=instance-size
 
-                    $ kafka-ingest format=avro topic=instance-size schema=${schema} publish=true repeat=10000
+                    $ kafka-ingest format=avro topic=instance-size schema=${schema} repeat=10000
                     {"f1": "fish"}
                     """
                 )
@@ -1342,10 +1401,14 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                          > CREATE MATERIALIZED VIEW v_{cluster_name} AS
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
+                        > CREATE CONNECTION IF NOT EXISTS csr_conn
+                          FOR CONFLUENT SCHEMA REGISTRY
+                          URL '${{testdrive.schema-registry-url}}';
+
                          > CREATE SOURCE s_{cluster_name}
                            FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC
                            'testdrive-instance-size-${{testdrive.seed}}'
-                           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+                           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                            ENVELOPE NONE
                      """
                     )

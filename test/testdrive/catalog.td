@@ -254,24 +254,31 @@ $ set schema={
     ]
   }
 $ kafka-create-topic topic=data
-$ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 1}
 
 > CREATE TABLE tbl (a int, b text);
 > CREATE SECRET pass_secret AS 'pass';
+
 > CREATE CONNECTION kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE MATERIALIZED VIEW mv AS SELECT (1);
 > CREATE SOURCE source_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}';
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 > CREATE SINK snk FROM source_data
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-catalog-sink-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}';
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 
 > SHOW FULL OBJECTS
 name            type
 --------------------------
 bool            user
+csr_conn        user
 int_list        user
 v1              user
 v2              user
@@ -637,8 +644,8 @@ mz_arrangement_sizes
 mz_arrangement_sizes_1
 mz_catalog_names
 mz_cluster_replicas
-mz_dataflow_names
-mz_dataflow_names_1
+mz_dataflows
+mz_dataflows_1
 mz_dataflow_operator_dataflows
 mz_dataflow_operator_dataflows_1
 mz_dataflow_operator_reachability
@@ -672,8 +679,8 @@ mz_arrangement_sizes                 system
 mz_arrangement_sizes_1               system
 mz_catalog_names                     system
 mz_cluster_replicas                  system
-mz_dataflow_names                    system
-mz_dataflow_names_1                  system
+mz_dataflows                         system
+mz_dataflows_1                       system
 mz_dataflow_operator_dataflows       system
 mz_dataflow_operator_dataflows_1     system
 mz_dataflow_operator_reachability    system

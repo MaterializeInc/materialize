@@ -865,6 +865,7 @@ pub async fn serve<S: Append + 'static>(
             storage_host_sizes,
             default_storage_host_size,
             availability_zones,
+            secrets_reader: secrets_controller.reader(),
         })
         .await?;
     let cluster_id = catalog.config().cluster_id;

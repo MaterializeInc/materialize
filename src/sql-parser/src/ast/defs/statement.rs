@@ -59,6 +59,7 @@ pub enum Statement<T: AstInfo> {
     AlterSystemSet(AlterSystemSetStatement),
     AlterSystemReset(AlterSystemResetStatement),
     AlterSystemResetAll(AlterSystemResetAllStatement),
+    AlterConnection(AlterConnectionStatement),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropSchema(DropSchemaStatement),
@@ -126,6 +127,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterSystemSet(stmt) => f.write_node(stmt),
             Statement::AlterSystemReset(stmt) => f.write_node(stmt),
             Statement::AlterSystemResetAll(stmt) => f.write_node(stmt),
+            Statement::AlterConnection(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
@@ -1232,6 +1234,26 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
 
 impl_display_t!(AlterSecretStatement);
 
+/// `ALTER CONNECTION ... ROTATE KEYS`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterConnectionStatement {
+    pub name: UnresolvedObjectName,
+    pub if_exists: bool,
+}
+
+impl AstDisplay for AlterConnectionStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER CONNECTION ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" ROTATE KEYS");
+    }
+}
+
+impl_display!(AlterConnectionStatement);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
     pub target: DiscardTarget,
@@ -2056,6 +2078,7 @@ pub enum WithOptionValue<T: AstInfo> {
     // Temporary variant until we have support for connections, which will use
     // explicit fields for each secret reference.
     Secret(T::ObjectName),
+    Object(T::ObjectName),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -2068,6 +2091,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str("SECRET ");
                 f.write_node(name)
             }
+            WithOptionValue::Object(obj) => f.write_node(obj),
         }
     }
 }

@@ -48,7 +48,7 @@ $ set schema={
 # TODO - we should verify here that the topic is not being re-read from the beginning,
 # but I don't know of any way to do that in Testdrive today.
 
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "Tyrannosaurus rex"}}}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "dragon"}}}
 
@@ -65,7 +65,7 @@ broken-key:
 contains: Value error
 
 # Update the bad value
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "cow"}}}
 
 > SELECT * FROM upsert

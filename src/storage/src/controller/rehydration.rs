@@ -22,10 +22,8 @@ use std::time::Duration;
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_types::Codec64;
-use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
@@ -35,6 +33,8 @@ use tracing::warn;
 use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_types::Codec64;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 
@@ -114,7 +114,7 @@ struct RehydrationTask<T> {
     /// The exports that have been observed.
     exports: BTreeMap<GlobalId, ExportSinkCommand<T>>,
     /// The upper frontier information received.
-    uppers: HashMap<GlobalId, (Antichain<T>, MutableAntichain<T>)>,
+    uppers: HashMap<GlobalId, Antichain<T>>,
     /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
     /// observed.
     initialized: bool,
@@ -150,11 +150,6 @@ where
     }
 
     async fn step_rehydrate(&mut self) -> RehydrationTaskState {
-        // Zero out frontiers.
-        for (_id, (_, frontiers)) in self.uppers.iter_mut() {
-            *frontiers = MutableAntichain::new_bottom(T::minimum());
-        }
-
         // Reconnect to the storage host.
         let client = Retry::default()
             .clamp_backoff(Duration::from_secs(32))
@@ -264,26 +259,16 @@ where
                 for ingestion in ingestions {
                     self.ingestions.insert(ingestion.id, ingestion.clone());
                     // Initialize the uppers we are tracking
-                    self.uppers.insert(
-                        ingestion.id,
-                        (
-                            Antichain::from_elem(T::minimum()),
-                            MutableAntichain::new_bottom(T::minimum()),
-                        ),
-                    );
+                    self.uppers
+                        .insert(ingestion.id, Antichain::from_elem(T::minimum()));
                 }
             }
             StorageCommand::ExportSinks(exports) => {
                 for export in exports {
                     self.exports.insert(export.id, export.clone());
                     // Initialize the uppers we are tracking
-                    self.uppers.insert(
-                        export.id,
-                        (
-                            Antichain::from_elem(T::minimum()),
-                            MutableAntichain::new_bottom(T::minimum()),
-                        ),
-                    );
+                    self.uppers
+                        .insert(export.id, Antichain::from_elem(T::minimum()));
                 }
             }
             StorageCommand::AllowCompaction(frontiers) => {
@@ -299,21 +284,15 @@ where
 
     fn absorb_response(&mut self, response: StorageResponse<T>) -> Option<StorageResponse<T>> {
         match response {
-            StorageResponse::FrontierUppers(mut list) => {
-                for (id, changes) in list.iter_mut() {
-                    if let Some((reported, tracked)) = self.uppers.get_mut(id) {
-                        // Apply changes to `tracked` frontier.
-                        tracked.update_iter(changes.drain());
-                        // We can swap `reported` into `changes`, negated, and then use that to repopulate `reported`.
-                        changes.extend(reported.iter().map(|t| (t.clone(), -1)));
-                        reported.clear();
-                        for (time1, _neg_one) in changes.iter() {
-                            for time2 in tracked.frontier().iter() {
-                                reported.insert(time1.join(time2));
-                            }
+            StorageResponse::FrontierUppers(list) => {
+                let mut new_uppers = Vec::new();
+
+                for (id, new_upper) in list {
+                    if let Some(reported) = self.uppers.get_mut(&id) {
+                        if PartialOrder::less_than(reported, &new_upper) {
+                            reported.clone_from(&new_upper);
+                            new_uppers.push((id, new_upper));
                         }
-                        changes.extend(reported.iter().map(|t| (t.clone(), 1)));
-                        changes.compact();
                     } else {
                         // We should have initialized the uppers when we first absorbed
                         // a command, if storaged has restarted since then.
@@ -323,8 +302,8 @@ where
                         panic!("RehydratingStorageClient received FrontierUppers response for absent identifier {id}");
                     }
                 }
-                if !list.is_empty() {
-                    Some(StorageResponse::FrontierUppers(list))
+                if !new_uppers.is_empty() {
+                    Some(StorageResponse::FrontierUppers(new_uppers))
                 } else {
                     None
                 }

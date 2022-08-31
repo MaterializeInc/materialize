@@ -49,7 +49,7 @@ impl Attribute for NonNegative {
             Constant { rows, .. } => {
                 if let Ok(rows) = rows {
                     let has_negative_rows = rows.iter().any(|(_data, diff)| diff < &0);
-                    self.results.push(has_negative_rows);
+                    self.results.push(!has_negative_rows);
                 } else {
                     self.results.push(true); // constant errors are considered "non-negative"
                 }

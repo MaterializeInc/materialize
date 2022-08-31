@@ -16,15 +16,19 @@ $ set map-int={"type": "record", "name": "schema_map", "fields": [ {"name": "f1"
 
 $ kafka-create-topic topic=resolution-maps
 
-$ kafka-ingest format=avro topic=resolution-maps schema=${map-int} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-maps schema=${map-int} timestamp=1
 {"f1": { "key1": 123 } }
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE resolution_maps
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-maps-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=resolution-maps schema=${map-double} publish=true timestamp=2
+$ kafka-ingest format=avro topic=resolution-maps schema=${map-double} timestamp=2
 {"f1": { "key1": 234.345 } }
 
 ! SELECT f1 -> 'key1' FROM resolution_maps

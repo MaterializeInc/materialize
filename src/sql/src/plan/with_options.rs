@@ -52,6 +52,36 @@ impl ImpliedValue for Secret {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct Object(GlobalId);
+
+impl From<Object> for GlobalId {
+    fn from(obj: Object) -> Self {
+        obj.0
+    }
+}
+
+impl From<&Object> for GlobalId {
+    fn from(obj: &Object) -> Self {
+        obj.0
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for Object {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        Ok(match v {
+            WithOptionValue::Object(ResolvedObjectName::Object { id, .. }) => Object(id),
+            _ => sql_bail!("must provide an object"),
+        })
+    }
+}
+
+impl ImpliedValue for Object {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an object")
+    }
+}
+
 impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
@@ -240,7 +270,9 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
         match v {
             WithOptionValue::Value(v) => V::try_from_value(v),
             WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.to_string())),
-            _ => sql_bail!("incompatible value types"),
+            WithOptionValue::Object(_)
+            | WithOptionValue::Secret(_)
+            | WithOptionValue::DataType(_) => sql_bail!("incompatible value types"),
         }
     }
 }

@@ -26,7 +26,7 @@ $ set schema={
 
 # Delete 5K records post-restart
 
-$ kafka-ingest format=avro topic=include-key key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=5000
+$ kafka-ingest format=avro topic=include-key key-format=avro key-schema=${keyschema} schema=${schema} repeat=5000
 {"f1": ${kafka-ingest.iteration}, "key2": 1}
 
 > SELECT COUNT(*), MIN((named).f1), MAX((named).f1), MIN(f2) , MAX(f2) FROM include_key;

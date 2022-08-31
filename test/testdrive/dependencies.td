@@ -24,6 +24,10 @@ $ set schema={
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE s
   FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
@@ -107,20 +111,20 @@ contains:unknown catalog item 'test4'
 
 > CREATE SINK s1 FROM s
   INTO KAFKA CONNECTION kafka_conn TOPIC 'v'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 ! CREATE SINK s1 FROM s
   INTO KAFKA CONNECTION kafka_conn TOPIC 'v'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:catalog item 's1' already exists
 
 > CREATE SINK IF NOT EXISTS s1 FROM s
   INTO KAFKA CONNECTION kafka_conn TOPIC 'v2'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK s2 FROM s
   INTO KAFKA CONNECTION kafka_conn TOPIC 'v3'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # Test that sinks cannot be depended upon.
 ! CREATE VIEW v2 AS SELECT * FROM s1;
