@@ -312,6 +312,7 @@ pub enum ExplainError {
     FormatError(fmt::Error),
     AnyhowError(anyhow::Error),
     RecursionLimitError(RecursionLimitError),
+    SerdeJsonError(serde_json::Error),
     UnknownError(String),
 }
 
@@ -329,6 +330,9 @@ impl fmt::Display for ExplainError {
                 write!(f, "{}", error)
             }
             ExplainError::RecursionLimitError(error) => {
+                write!(f, "{}", error)
+            }
+            ExplainError::SerdeJsonError(error) => {
                 write!(f, "{}", error)
             }
             ExplainError::UnknownError(error) => {
@@ -353,6 +357,12 @@ impl From<anyhow::Error> for ExplainError {
 impl From<RecursionLimitError> for ExplainError {
     fn from(error: RecursionLimitError) -> Self {
         ExplainError::RecursionLimitError(error)
+    }
+}
+
+impl From<serde_json::Error> for ExplainError {
+    fn from(error: serde_json::Error) -> Self {
+        ExplainError::SerdeJsonError(error)
     }
 }
 
