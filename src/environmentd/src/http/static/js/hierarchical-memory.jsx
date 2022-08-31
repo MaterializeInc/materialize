@@ -60,12 +60,12 @@ function Dataflows() {
                     mz_catalog.mz_dataflow_operators;
 
                 SELECT
-                    id, source_node, target_node, source_port, target_port, sum(sent) as sent
+                    id, source_node_id, target_node_id, source_port, target_port, sum(sent) as sent
                 FROM
                     mz_catalog.mz_dataflow_channels AS channels
                     LEFT JOIN mz_catalog.mz_message_counts AS counts
                         ON channels.id = counts.channel_id AND channels.worker = counts.source_worker
-                GROUP BY id, source_node, target_node, source_port, target_port;
+                GROUP BY id, source_node_id, target_node_id, source_port, target_port;
 
                 SELECT
                     operator as id, sum(records)

@@ -132,14 +132,14 @@ The `mz_dataflow_channels` source describes the communication channels between
 [dataflow] operators. A communication channel connects one of the outputs of a
 source operator to one of the inputs of a target operator.
 
-Field         | Type       | Meaning
---------------|------------|--------
-`id`          | [`bigint`] | The ID of the channel.
-`worker_id`   | [`bigint`] | The ID of the worker thread hosting the channel.
-`source_node` | [`bigint`] | The ID of the source operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`source_port` | [`bigint`] | The source operator's output port.
-`target_node` | [`bigint`] | The ID of the target operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`target_port` | [`bigint`] | The target operator's input port.
+Field           | Type       | Meaning
+----------------|------------|--------
+`id`            | [`bigint`] | The ID of the channel.
+`worker_id`     | [`bigint`] | The ID of the worker thread hosting the channel.
+`source_node_id`| [`bigint`] | The ID of the source operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`source_port`   | [`bigint`] | The source operator's output port.
+`target_node_id`| [`bigint`] | The ID of the target operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`target_port`   | [`bigint`] | The target operator's input port.
 
 ### `mz_dataflows`
 

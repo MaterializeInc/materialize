@@ -571,9 +571,9 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
                 .with_column("id", ScalarType::Int64.nullable(false))
                 .with_column("worker_id", ScalarType::Int64.nullable(false))
-                .with_column("source_node", ScalarType::Int64.nullable(false))
+                .with_column("source_node_id", ScalarType::Int64.nullable(false))
                 .with_column("source_port", ScalarType::Int64.nullable(false))
-                .with_column("target_node", ScalarType::Int64.nullable(false))
+                .with_column("target_node_id", ScalarType::Int64.nullable(false))
                 .with_column("target_port", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 

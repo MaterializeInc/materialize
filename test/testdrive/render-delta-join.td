@@ -59,7 +59,7 @@ count
                   (SELECT DISTINCT id
                    FROM mz_catalog.mz_dataflows
                    WHERE name LIKE '%.delta_join%')))
-  GROUP BY id, source_node, target_node, source_port, target_port
+  GROUP BY id, source_node_id, target_node_id, source_port, target_port
   HAVING sum(sent) > 100
   ORDER BY sent;
 sent
