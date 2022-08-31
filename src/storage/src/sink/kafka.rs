@@ -44,10 +44,7 @@ use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
-use mz_avro::types::Value;
-use mz_interchange::avro::{
-    self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
-};
+use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
@@ -67,8 +64,7 @@ use crate::storage_state::StorageState;
 use crate::types::connections::{ConnectionContext, PopulateClientConfig};
 use crate::types::errors::DataflowError;
 use crate::types::sinks::{
-    KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf,
-    SinkEnvelope, StorageSinkDesc,
+    KafkaSinkConnection, PublishedSchemaInfo, SinkAsOf, SinkEnvelope, StorageSinkDesc,
 };
 
 use serde_json;
@@ -358,7 +354,7 @@ impl KafkaTxProducer {
 #[derive(Debug, Clone)]
 struct KafkaConsistencyInitState {
     topic: String,
-    schema_id: Option<i32>,
+    key: String,
     consistency_client_config: rdkafka::ClientConfig,
 }
 
@@ -366,7 +362,7 @@ impl KafkaConsistencyInitState {
     fn to_running(self, gate_ts: Rc<Cell<Option<Timestamp>>>) -> KafkaConsistencyRunningState {
         KafkaConsistencyRunningState {
             topic: self.topic,
-            schema_id: self.schema_id,
+            key: self.key,
             gate_ts,
         }
     }
@@ -375,7 +371,7 @@ impl KafkaConsistencyInitState {
 #[derive(Debug, Clone)]
 struct KafkaConsistencyRunningState {
     topic: String,
-    schema_id: Option<i32>,
+    key: String,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
 }
 
@@ -405,7 +401,6 @@ impl KafkaSinkStateEnum {
 }
 
 struct KafkaSinkState {
-    id: GlobalId,
     name: String,
     topic: String,
     shutdown_flag: Arc<AtomicBool>,
@@ -452,7 +447,7 @@ impl KafkaSinkState {
         let config =
             Self::create_producer_config(&connection, connection_context, transactional_id);
         let consistency_client_config =
-            Self::create_consistency_client_config(&connection, connection_context);
+            Self::create_consistency_client_config(&connection, connection_context, *sink_id);
 
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -476,16 +471,13 @@ impl KafkaSinkState {
             timeout: Duration::from_secs(5),
         };
 
-        let sink_state = KafkaSinkStateEnum::Init(connection.consistency.map(
-            |KafkaSinkConsistencyConnection { topic, schema_id }| KafkaConsistencyInitState {
-                topic,
-                schema_id,
-                consistency_client_config,
-            },
-        ));
+        let sink_state = KafkaSinkStateEnum::Init(Some(KafkaConsistencyInitState {
+            topic: connection.consistency.topic,
+            key: format!("sink-{sink_id}"),
+            consistency_client_config,
+        }));
 
         KafkaSinkState {
-            id: *sink_id,
             name: sink_name,
             topic: connection.topic.clone(),
             shutdown_flag,
@@ -545,6 +537,7 @@ impl KafkaSinkState {
     fn create_consistency_client_config(
         connection: &KafkaSinkConnection,
         connection_context: &ConnectionContext,
+        id: GlobalId,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
         TokioHandle::current().block_on(
@@ -552,17 +545,7 @@ impl KafkaSinkState {
         );
 
         config
-            .set(
-                "group.id",
-                format!(
-                    "materialize-bootstrap-{}",
-                    connection
-                        .consistency
-                        .as_ref()
-                        .map(|c| c.topic.clone())
-                        .unwrap_or_else(String::new)
-                ),
-            )
+            .set("group.id", format!("materialize-bootstrap-sink-{id}"))
             .set("isolation.level", "read_committed")
             .set("enable.auto.commit", "false")
             .set("auto.offset.reset", "earliest")
@@ -715,7 +698,6 @@ impl KafkaSinkState {
 
     async fn determine_latest_consistency_record(
         &self,
-        progress_topic_key: Option<&str>,
     ) -> Result<Option<Timestamp>, anyhow::Error> {
         // Polls a message from a Kafka Source.  Blocking so should always be called on background
         // thread.
@@ -745,9 +727,9 @@ impl KafkaSinkState {
         // always be called on background thread
         fn get_latest_ts(
             consistency_topic: &str,
+            consistency_key: &str,
             config: &ClientConfig,
             timeout: Duration,
-            progress_topic_key: Option<&str>,
         ) -> Result<Option<Timestamp>, anyhow::Error> {
             let mut consumer = config
                 .create::<BaseConsumer>()
@@ -815,16 +797,14 @@ impl KafkaSinkState {
                 debug_assert!(offset >= latest_offset.unwrap_or(0));
                 latest_offset = Some(offset);
 
-                let timestamp_opt = if let Some(source_key) = progress_topic_key {
+                let timestamp_opt = {
                     match std::str::from_utf8(&key) {
-                        Ok(id) if id == source_key => {
+                        Ok(str_key) if str_key == consistency_key => {
                             let what: ProgressRecord = serde_json::from_slice(&message)?;
                             Some(what.timestamp)
                         }
                         _ => None,
                     }
-                } else {
-                    maybe_decode_consistency_end_record(&message, consistency_topic)?
                 };
 
                 if let Some(ts) = timestamp_opt {
@@ -845,64 +825,27 @@ impl KafkaSinkState {
             Ok(latest_ts)
         }
 
-        // There may be arbitrary messages in this topic that we cannot decode.  We only
-        // return an error when we know we've found an END message but cannot decode it.
-        fn maybe_decode_consistency_end_record(
-            bytes: &[u8],
-            consistency_topic: &str,
-        ) -> Result<Option<Timestamp>, anyhow::Error> {
-            // The first 5 bytes are reserved for the schema id/schema registry information
-            let mut bytes = bytes.get(5..).ok_or_else(|| {
-                anyhow!("Malformed consistency topic message.  Shorter than 5 bytes.")
-            })?;
-
-            let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
-                .context("Failed to decode consistency topic message")?;
-
-            if let Value::Record(ref r) = record {
-                let m: HashMap<String, Value> = r.clone().into_iter().collect();
-                let status = m.get("status");
-                let id = m.get("id");
-                match (status, id) {
-                    (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
-                        if let Ok(ts) = id.parse::<u64>() {
-                            Ok(Some(ts))
-                        } else {
-                            bail!(
-                        "Malformed consistency record, failed to parse timestamp {} in topic {}",
-                        id,
-                        consistency_topic
-                    );
-                        }
-                    }
-                    _ => Ok(None),
-                }
-            } else {
-                Ok(None)
-            }
-        }
-
         if let KafkaSinkStateEnum::Init(Some(KafkaConsistencyInitState {
-            ref topic,
-            ref consistency_client_config,
-            ..
-        })) = self.sink_state
+            topic,
+            key,
+            consistency_client_config,
+        })) = &self.sink_state
         {
             // Only actually used for retriable errors.
             return Retry::default()
                 .clamp_backoff(Duration::from_secs(60 * 10))
                 .retry_async(|_| async {
                     let topic = topic.clone();
-                    let progress_topic_key = progress_topic_key.map(String::from);
+                    let key = key.clone();
                     let consistency_client_config = consistency_client_config.clone();
                     task::spawn_blocking(
                         || format!("get_latest_ts:{}", self.name),
                         move || {
                             get_latest_ts(
                                 &topic,
+                                &key,
                                 &consistency_client_config,
                                 Duration::from_secs(10),
-                                progress_topic_key.as_deref(),
                             )
                         },
                     )
@@ -918,36 +861,19 @@ impl KafkaSinkState {
         &self,
         transaction_id: Timestamp,
         status: &str,
-        message_count: Option<i64>,
         consistency: &KafkaConsistencyRunningState,
     ) -> Result<(), anyhow::Error> {
-        if let Some(schema_id) = consistency.schema_id {
-            let encoded = avro::encode_debezium_transaction_unchecked(
-                schema_id,
-                &self.topic,
-                &transaction_id.to_string(),
-                status,
-                message_count,
-            );
-
-            let record = BaseRecord::to(&consistency.topic)
-                .payload(&encoded)
-                .key(&self.topic);
-            self.send(record).await?;
-        } else {
-            if status != "END" {
-                // We only keep track of end-of-batch messages in the progress topic.
-                return Ok(());
-            }
-            let encoded = serde_json::to_vec(&ProgressRecord {
-                timestamp: transaction_id,
-            })?;
-            let key = format!("sink-{}", self.id);
-            let record = BaseRecord::to(&consistency.topic)
-                .payload(&encoded)
-                .key(&key);
-            self.send(record).await?;
-        };
+        if status != "END" {
+            // We only keep track of end-of-batch messages in the progress topic.
+            return Ok(());
+        }
+        let encoded = serde_json::to_vec(&ProgressRecord {
+            timestamp: transaction_id,
+        })?;
+        let record = BaseRecord::to(&consistency.topic)
+            .payload(&encoded)
+            .key(&consistency.key);
+        self.send(record).await?;
 
         Ok(())
     }
@@ -1013,7 +939,7 @@ impl KafkaSinkState {
                         self.retry_on_txn_error(|p| p.begin_transaction()).await?;
                     }
 
-                    self.send_consistency_record(min_frontier, "END", None, consistency_state)
+                    self.send_consistency_record(min_frontier, "END", consistency_state)
                         .await
                         .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
 
@@ -1085,7 +1011,7 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                connection.consistency.is_some(),
+                true,
             );
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
@@ -1102,7 +1028,7 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                connection.consistency.is_some(),
+                true,
             );
             encode_stream(
                 stream,
@@ -1158,13 +1084,6 @@ where
     let activator = scope.activator_for(&builder.operator_info().address[..]);
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
-
-    let progress_topic_key = match &connection.consistency {
-        Some(KafkaSinkConsistencyConnection {
-            schema_id: None, ..
-        }) => Some(format!("sink-{id}")),
-        _ => None,
-    };
 
     let mut s = KafkaSinkState::new(
         connection,
@@ -1232,10 +1151,7 @@ where
                         bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
                     }
 
-                    let latest_ts = match s
-                        .determine_latest_consistency_record(progress_topic_key.as_deref())
-                        .await
-                    {
+                    let latest_ts = match s.determine_latest_consistency_record().await {
                         Ok(ts) => ts,
                         Err(e) => {
                             s.shutdown_flag.store(true, Ordering::SeqCst);
@@ -1314,13 +1230,12 @@ where
 
                 if let Some(ref consistency_state) = s.sink_state.unwrap_running() {
                     bail_err!(
-                        s.send_consistency_record(*ts, "BEGIN", None, consistency_state)
+                        s.send_consistency_record(*ts, "BEGIN", consistency_state)
                             .await
                     );
                 }
 
                 let mut repeat_counter = 0;
-                let mut total_sent = 0;
                 for encoded_row in rows {
                     let record = BaseRecord::to(&s.topic);
                     let record = match encoded_row.value.as_ref() {
@@ -1337,7 +1252,6 @@ where
 
                     // advance to the next repetition of this row, or the next row if all
                     // repetitions are exhausted
-                    total_sent += 1;
                     repeat_counter += 1;
                     if repeat_counter == encoded_row.count {
                         repeat_counter = 0;
@@ -1351,7 +1265,7 @@ where
 
                 if let Some(ref consistency_state) = s.sink_state.unwrap_running() {
                     bail_err!(
-                        s.send_consistency_record(*ts, "END", Some(total_sent), consistency_state)
+                        s.send_consistency_record(*ts, "END", consistency_state)
                             .await
                     );
                 }

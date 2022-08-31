@@ -242,48 +242,6 @@ async fn build_kafka(
     };
 
     let consistency = match builder.consistency_config {
-        KafkaConsistencyConfig::Classic {
-            topic: consistency_topic,
-            format:
-                mz_storage::types::sinks::KafkaSinkFormat::Avro {
-                    value_schema,
-                    csr_connection,
-                    ..
-                },
-        } => {
-            // create consistency topic/schema and retrieve schema id
-            ensure_kafka_topic(
-                &client,
-                &consistency_topic,
-                1,
-                builder.replication_factor,
-                KafkaSinkConnectionRetention::default(),
-            )
-            .await
-            .context("error registering kafka consistency topic for sink")?;
-
-            let ccsr = csr_connection
-                .connect(&*connection_context.secrets_reader)
-                .await?;
-            let (_, consistency_schema_id) = publish_kafka_schemas(
-                &ccsr,
-                &consistency_topic,
-                None,
-                None,
-                &value_schema,
-                mz_ccsr::SchemaType::Avro,
-            )
-            .await
-            .context("error publishing kafka consistency schemas for sink")?;
-
-            Some(KafkaSinkConsistencyConnection {
-                topic: consistency_topic,
-                schema_id: Some(consistency_schema_id),
-            })
-        }
-        KafkaConsistencyConfig::Classic { topic: other, .. } => {
-            unreachable!("non-Avro consistency format for Kafka sink {:#?}", &other)
-        }
         KafkaConsistencyConfig::Progress { topic } => {
             ensure_kafka_topic(
                 &client,
@@ -295,12 +253,8 @@ async fn build_kafka(
             .await
             .context("error registering kafka consistency topic for sink")?;
 
-            Some(KafkaSinkConsistencyConnection {
-                topic,
-                schema_id: None,
-            })
+            KafkaSinkConsistencyConnection { topic }
         }
-        KafkaConsistencyConfig::Yolo => None,
     };
 
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
