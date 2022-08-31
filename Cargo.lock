@@ -1552,7 +1552,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#78e7319000d2873f70292ea404abe13922dd33af"
+source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=columnation#84de25222f9c047a3d45e0979d7b1f625fe8952d"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1629,7 +1629,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#78e7319000d2873f70292ea404abe13922dd33af"
+source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=columnation#84de25222f9c047a3d45e0979d7b1f625fe8952d"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3939,6 +3939,7 @@ dependencies = [
  "bytes",
  "chrono",
  "chrono-tz",
+ "columnation",
  "criterion",
  "dec",
  "enum-kinds",
