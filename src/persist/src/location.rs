@@ -48,6 +48,20 @@ impl timely::PartialOrder for SeqNo {
     }
 }
 
+impl std::str::FromStr for SeqNo {
+    type Err = String;
+
+    fn from_str(encoded: &str) -> Result<Self, Self::Err> {
+        let encoded = match encoded.strip_prefix('v') {
+            Some(x) => x,
+            None => return Err(format!("invalid SeqNo {}: incorrect prefix", encoded)),
+        };
+        let seqno =
+            u64::from_str(&encoded).map_err(|err| format!("invalid SeqNo {}: {}", encoded, err))?;
+        Ok(SeqNo(seqno))
+    }
+}
+
 impl SeqNo {
     /// Returns the next SeqNo in the sequence.
     pub fn next(self) -> SeqNo {
@@ -314,33 +328,34 @@ impl<T: Codec> TryFrom<&VersionedData> for (SeqNo, T) {
 pub trait Consensus: std::fmt::Debug {
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
+    ///
+    /// TODO: This is no longer used. Remove it?
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError>;
 
-    /// Update the [VersionedData] stored at this location to `new`, iff the current
-    /// sequence number is exactly `expected` and `new`'s sequence number > the current
-    /// sequence number.
+    /// Update the [VersionedData] stored at this location to `new`, iff the
+    /// current sequence number is exactly `expected` and `new`'s sequence
+    /// number > the current sequence number.
     ///
-    /// Returns a recent version and data from this location iff the current sequence
-    /// number does not equal `expected` or if `new`'s sequence number is less than or
-    /// equal to the current sequence number. It is invalid to call this function with
-    /// a `new` and `expected` such that `new`'s sequence number is <= `expected`.
-    /// It is invalid to call this function with a sequence number outside of the range
-    /// [0, i64::MAX].
+    /// If the current seqno does not equal `expected`, returns all versions >
+    /// `expected` and <= current. It is invalid to call this function with a
+    /// `new` and `expected` such that `new`'s sequence number is <= `expected`.
+    /// It is invalid to call this function with a sequence number outside of
+    /// the range `[0, i64::MAX]`.
     ///
-    /// This data is initialized to None, and the first call to compare_and_set needs to
-    /// happen with None as the expected value to set the state.
+    /// This data is initialized to None, and the first call to compare_and_set
+    /// needs to happen with None as the expected value to set the state.
     async fn compare_and_set(
         &self,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Option<VersionedData>>, ExternalError>;
+    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError>;
 
     /// Return all versions of data stored for this `key` at sequence numbers
     /// >= `from`, in ascending order of sequence number.
     ///
-    /// Returns an error if `from` is greater than the current sequence number
-    /// or if there is no data at this key.
+    /// Returns an empty vec if `from` is greater than the current sequence
+    /// number or if there is no data at this key.
     async fn scan(&self, key: &str, from: SeqNo) -> Result<Vec<VersionedData>, ExternalError>;
 
     /// Deletes all historical versions of the data stored at `key` that are <
@@ -590,8 +605,8 @@ pub mod tests {
         // Starting value of consensus data is None.
         assert_eq!(consensus.head(&key).await, Ok(None));
 
-        // Cannot scan a key that has no data.
-        assert!(consensus.scan(&key, SeqNo(0)).await.is_err());
+        // Can scan a key that has no data.
+        assert_eq!(consensus.scan(&key, SeqNo(0)).await, Ok(vec![]));
 
         // Cannot truncate data from a key that doesn't have any data
         assert!(consensus.truncate(&key, SeqNo(0)).await.is_err(),);
@@ -606,7 +621,7 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(SeqNo(0)), state.clone())
                 .await,
-            Ok(Err(None))
+            Ok(Err(vec![]))
         );
 
         // Correctly updating the state with the correct expected value should succeed.
@@ -630,8 +645,9 @@ pub mod tests {
             Ok(vec![state.clone()])
         );
 
-        // Cannot scan a key that has data with a lower bound sequence number > head.
-        assert!(consensus.scan(&key, SeqNo(6)).await.is_err());
+        // Can scan a key that has data with a lower bound sequence number >
+        // head.
+        assert_eq!(consensus.scan(&key, SeqNo(6)).await, Ok(vec![]));
 
         // Can truncate data with an upper bound <= head, even if there is no data in the
         // range [0, upper).
@@ -651,7 +667,7 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(SeqNo(7)), new_state.clone())
                 .await,
-            Ok(Err(Some(state.clone())))
+            Ok(Err(vec![]))
         );
 
         // Trying to update without the correct expected seqno fails, (even if expected < current)
@@ -659,7 +675,7 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(SeqNo(3)), new_state.clone())
                 .await,
-            Ok(Err(Some(state.clone())))
+            Ok(Err(vec![state.clone()]))
         );
 
         let invalid_constant_seqno = VersionedData {
@@ -701,6 +717,36 @@ pub mod tests {
         // We can observe the a recent value on successful update.
         assert_eq!(consensus.head(&key).await, Ok(Some(new_state.clone())));
 
+        // We get both versions back if our expected is < both of them
+        assert_eq!(
+            consensus
+                .compare_and_set(
+                    &key,
+                    Some(SeqNo(0)),
+                    VersionedData {
+                        seqno: SeqNo(3),
+                        data: Bytes::from(""),
+                    }
+                )
+                .await,
+            Ok(Err(vec![state.clone(), new_state.clone()]))
+        );
+
+        // We only get the greater back if our expected == the lesser one
+        assert_eq!(
+            consensus
+                .compare_and_set(
+                    &key,
+                    Some(state.seqno),
+                    VersionedData {
+                        seqno: SeqNo(20),
+                        data: Bytes::from(""),
+                    }
+                )
+                .await,
+            Ok(Err(vec![new_state.clone()]))
+        );
+
         // We can observe both states in the correct order with scan if pass
         // in a suitable lower bound.
         assert_eq!(
@@ -722,8 +768,8 @@ pub mod tests {
             Ok(vec![new_state.clone()])
         );
 
-        // We cannot scan if the provided lower bound > head's sequence number.
-        assert!(consensus.scan(&key, SeqNo(11)).await.is_err());
+        // We can scan if the provided lower bound > head's sequence number.
+        assert_eq!(consensus.scan(&key, SeqNo(11)).await, Ok(vec![]));
 
         // Can remove the previous write with the appropriate truncation.
         assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(1));
@@ -769,7 +815,7 @@ pub mod tests {
             consensus
                 .compare_and_set(&key, Some(state.seqno), invalid_jump_forward)
                 .await,
-            Ok(Err(Some(new_state.clone())))
+            Ok(Err(vec![new_state.clone()]))
         );
 
         // Writing a large (~10 KiB) amount of data works fine.

@@ -66,9 +66,8 @@ EXPLAIN PLAN FOR VIEW foo3
 
 %2 =
 | Join %0 %1 (= #0 #1)
-| | implementation = IndexedFilter #0 = 6
+| | implementation = IndexedFilter (#0 = 6)
 | Project (#0)
-| Filter (#0 = 6)
 
 EOF
 
@@ -78,7 +77,6 @@ EXPLAIN PLAN FOR SELECT * from foo3
 %0 =
 | ReadExistingIndex materialize.public.foo2_primary_idx
 | | Lookup value (6)
-| Filter (#0 = 6)
 | Project (#0)
 
 EOF

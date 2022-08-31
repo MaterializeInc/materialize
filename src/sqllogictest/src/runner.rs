@@ -39,7 +39,7 @@ use std::sync::Arc;
 use std::thread;
 
 use anyhow::{anyhow, bail};
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
@@ -67,7 +67,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_persist_client::{PersistConfig, PersistLocation};
-use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
+use mz_pgrepr::{oid, Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
@@ -392,13 +392,40 @@ impl<'a> FromSql<'a> for Slt {
                         elements,
                     })
                 }
-                _ => unreachable!(),
+                _ => match ty.oid() {
+                    oid::TYPE_UINT2_OID => {
+                        let v = raw.get_u16();
+                        if !raw.is_empty() {
+                            return Err("invalid buffer size".into());
+                        }
+                        Self(Value::UInt2(v))
+                    }
+                    oid::TYPE_UINT4_OID => {
+                        let v = raw.get_u32();
+                        if !raw.is_empty() {
+                            return Err("invalid buffer size".into());
+                        }
+                        Self(Value::UInt4(v))
+                    }
+                    oid::TYPE_UINT8_OID => {
+                        let v = raw.get_u64();
+                        if !raw.is_empty() {
+                            return Err("invalid buffer size".into());
+                        }
+                        Self(Value::UInt8(v))
+                    }
+                    _ => unreachable!(),
+                },
             },
         })
     }
     fn accepts(ty: &PgType) -> bool {
         match ty.kind() {
             PgKind::Array(_) | PgKind::Composite(_) => return true,
+            _ => {}
+        }
+        match ty.oid() {
+            oid::TYPE_UINT2_OID | oid::TYPE_UINT4_OID | oid::TYPE_UINT8_OID => return true,
             _ => {}
         }
         matches!(
@@ -468,6 +495,9 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Int2(i)) => i.to_string(),
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
+        (Type::Integer, Value::UInt2(u)) => u.to_string(),
+        (Type::Integer, Value::UInt4(u)) => u.to_string(),
+        (Type::Integer, Value::UInt8(u)) => u.to_string(),
         (Type::Integer, Value::Oid(i)) => i.to_string(),
         (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
         (Type::Integer, Value::Float8(f)) => format!("{}", f as i64),

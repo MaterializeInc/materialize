@@ -18,9 +18,13 @@ INSERT INTO alter_allow_nullability VALUES (123),(234);
 
 $ schema-registry-wait-schema schema=postgres.public.alter_allow_nullability-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE alter_allow_nullability
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_allow_nullability'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > SELECT * FROM alter_allow_nullability;

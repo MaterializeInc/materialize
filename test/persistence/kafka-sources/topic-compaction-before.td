@@ -25,14 +25,18 @@ $ set schema={
 
 $ kafka-create-topic topic=topic-compaction compaction=true
 
-$ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=1000
+$ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${keyschema} schema=${schema} repeat=1000
 {"f1": ${kafka-ingest.iteration}} {"f2": "A${kafka-ingest.iteration}"}
 {"f1": ${kafka-ingest.iteration}} {"f2": "B${kafka-ingest.iteration}"}
 {"f1": ${kafka-ingest.iteration}} {"f2": "C${kafka-ingest.iteration}"}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE topic_compaction
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-topic-compaction-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
 > SELECT COUNT(*) > 0 FROM topic_compaction;

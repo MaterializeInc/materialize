@@ -24,93 +24,97 @@ $ set count=100000
 
 $ kafka-create-topic topic=multi-topic-0
 
-$ kafka-ingest format=avro topic=multi-topic-0 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-0 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-1
 
-$ kafka-ingest format=avro topic=multi-topic-1 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-1 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-2
 
-$ kafka-ingest format=avro topic=multi-topic-2 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-2 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-3
 
-$ kafka-ingest format=avro topic=multi-topic-3 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-3 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-4
 
-$ kafka-ingest format=avro topic=multi-topic-4 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-4 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-5
 
-$ kafka-ingest format=avro topic=multi-topic-5 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-5 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-6
 
-$ kafka-ingest format=avro topic=multi-topic-6 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-6 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-7
 
-$ kafka-ingest format=avro topic=multi-topic-7 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-7 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-8
 
-$ kafka-ingest format=avro topic=multi-topic-8 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-8 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
 
 $ kafka-create-topic topic=multi-topic-9
 
-$ kafka-ingest format=avro topic=multi-topic-9 schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=multi-topic-9 schema=${schema} repeat=${count}
 {"f2": ${kafka-ingest.iteration} }
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE s0 FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-multi-topic-0-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE NONE;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE SOURCE s1 FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-multi-topic-1-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE NONE;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE SOURCE s2 FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-multi-topic-2-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE NONE;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE SOURCE s3 FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-multi-topic-3-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE NONE;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE SOURCE s4 FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-multi-topic-4-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE NONE;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE SOURCE s5 FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-multi-topic-5-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE NONE;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE SOURCE s6 FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-multi-topic-6-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE NONE;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE SOURCE s7 FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-multi-topic-7-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE NONE;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE SOURCE s8 FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-multi-topic-8-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE NONE;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE SOURCE s9 FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-multi-topic-9-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE NONE;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE MATERIALIZED VIEW v1 AS
   SELECT SUM(f1) AS f1 FROM

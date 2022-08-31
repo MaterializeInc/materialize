@@ -24,7 +24,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 /// Logging configuration.
 #[derive(Arbitrary, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
-    pub granularity_ns: u128,
+    pub interval_ns: u128,
     /// Logs to keep in an arrangement
     pub active_logs: BTreeMap<LogVariant, GlobalId>,
     /// Whether we should report logs for the log-processing dataflows
@@ -45,7 +45,7 @@ impl LoggingConfig {
 impl RustType<ProtoLoggingConfig> for LoggingConfig {
     fn into_proto(&self) -> ProtoLoggingConfig {
         ProtoLoggingConfig {
-            granularity_ns: Some(self.granularity_ns.into_proto()),
+            interval_ns: Some(self.interval_ns.into_proto()),
             active_logs: self.active_logs.into_proto(),
             log_logging: self.log_logging,
             sink_logs: self.sink_logs.into_proto(),
@@ -54,9 +54,9 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
 
     fn from_proto(proto: ProtoLoggingConfig) -> Result<Self, TryFromProtoError> {
         Ok(LoggingConfig {
-            granularity_ns: proto
-                .granularity_ns
-                .into_rust_if_some("ProtoLoggingConfig::granularity_ns")?,
+            interval_ns: proto
+                .interval_ns
+                .into_rust_if_some("ProtoLoggingConfig::interval_ns")?,
             active_logs: proto.active_logs.into_rust()?,
             log_logging: proto.log_logging,
             sink_logs: proto.sink_logs.into_rust()?,
@@ -285,7 +285,7 @@ pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
 
 /// Create a VIEW over the postfixed introspection sources. These views are created and torn down
 /// with replicas.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum LogView {
     MzArrangementSharing,
     MzArrangementSizes,
@@ -376,7 +376,7 @@ impl LogView {
                         mz_dataflow_addresses_{}.id = mz_dataflow_operators_{}.id AND
                         mz_dataflow_addresses_{}.worker = mz_dataflow_operators_{}.worker AND
                         mz_catalog.list_length(mz_dataflow_addresses_{}.address) = 1",
-                "mz_dataflow_names_{}",
+                "mz_dataflows_{}",
             ),
 
             LogView::MzDataflowOperatorDataflows => (
@@ -384,17 +384,17 @@ impl LogView {
                     mz_dataflow_operators_{}.id,
                     mz_dataflow_operators_{}.name,
                     mz_dataflow_operators_{}.worker,
-                    mz_dataflow_names_{}.id as dataflow_id,
-                    mz_dataflow_names_{}.name as dataflow_name
+                    mz_dataflows_{}.id as dataflow_id,
+                    mz_dataflows_{}.name as dataflow_name
                 FROM
                     mz_catalog.mz_dataflow_operators_{},
                     mz_catalog.mz_dataflow_addresses_{},
-                    mz_catalog.mz_dataflow_names_{}
+                    mz_catalog.mz_dataflows_{}
                 WHERE
                     mz_dataflow_operators_{}.id = mz_dataflow_addresses_{}.id AND
                     mz_dataflow_operators_{}.worker = mz_dataflow_addresses_{}.worker AND
-                    mz_dataflow_names_{}.local_id = mz_dataflow_addresses_{}.address[1] AND
-                    mz_dataflow_names_{}.worker = mz_dataflow_addresses_{}.worker",
+                    mz_dataflows_{}.local_id = mz_dataflow_addresses_{}.address[1] AND
+                    mz_dataflows_{}.worker = mz_dataflow_addresses_{}.worker",
                 "mz_dataflow_operator_dataflows_{}",
             ),
 
@@ -482,18 +482,18 @@ impl LogView {
             LogView::MzRecordsPerDataflow => (
                 "SELECT
                     mz_records_per_dataflow_operator_{}.dataflow_id as id,
-                    mz_dataflow_names_{}.name,
+                    mz_dataflows_{}.name,
                     mz_records_per_dataflow_operator_{}.worker,
                     pg_catalog.SUM(mz_records_per_dataflow_operator_{}.records) as records
                 FROM
                     mz_catalog.mz_records_per_dataflow_operator_{},
-                    mz_catalog.mz_dataflow_names_{}
+                    mz_catalog.mz_dataflows_{}
                 WHERE
-                    mz_records_per_dataflow_operator_{}.dataflow_id = mz_dataflow_names_{}.id AND
-                    mz_records_per_dataflow_operator_{}.worker = mz_dataflow_names_{}.worker
+                    mz_records_per_dataflow_operator_{}.dataflow_id = mz_dataflows_{}.id AND
+                    mz_records_per_dataflow_operator_{}.worker = mz_dataflows_{}.worker
                 GROUP BY
                     mz_records_per_dataflow_operator_{}.dataflow_id,
-                    mz_dataflow_names_{}.name,
+                    mz_dataflows_{}.name,
                     mz_records_per_dataflow_operator_{}.worker",
                 "mz_records_per_dataflow_{}",
             ),

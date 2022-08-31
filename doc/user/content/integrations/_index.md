@@ -2,6 +2,7 @@
 title: Tools and integrations
 description: "Get details about third-party tools and integrations supported by Materialize"
 disable_list: true
+make_table_row_headers_searchable: true
 aliases:
   - /third-party/supported-tools/
   - /third-party/

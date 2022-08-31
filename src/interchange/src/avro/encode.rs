@@ -279,13 +279,16 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 }
                 ScalarType::Int16 => Value::Int(i32::from(datum.unwrap_int16())),
                 ScalarType::Int32 => Value::Int(datum.unwrap_int32()),
+                ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
+                ScalarType::UInt16 => Value::Fixed(2, datum.unwrap_uint16().to_le_bytes().into()),
+                ScalarType::UInt32 => Value::Fixed(4, datum.unwrap_uint32().to_le_bytes().into()),
+                ScalarType::UInt64 => Value::Fixed(8, datum.unwrap_uint64().to_le_bytes().into()),
                 ScalarType::Oid
                 | ScalarType::RegClass
                 | ScalarType::RegProc
                 | ScalarType::RegType => {
                     Value::Fixed(4, datum.unwrap_uint32().to_le_bytes().into())
                 }
-                ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
                 ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
                 ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
                 ScalarType::Numeric { max_scale } => {

@@ -18,7 +18,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc, MIN_DATETIME};
+use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
@@ -213,8 +213,8 @@ pub struct CatalogConfig {
     pub unsafe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// Default timestamp frequency for CREATE SOURCE
-    pub timestamp_frequency: Duration,
+    /// Default timestamp interval.
+    pub timestamp_interval: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
@@ -432,6 +432,9 @@ pub enum CatalogType<T: TypeReference> {
     Int16,
     Int32,
     Int64,
+    UInt16,
+    UInt32,
+    UInt64,
     Interval,
     Jsonb,
     List {
@@ -597,14 +600,14 @@ impl Error for CatalogError {}
 pub struct DummyCatalog;
 
 static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
-    start_time: MIN_DATETIME,
+    start_time: DateTime::<Utc>::MIN_UTC,
     start_instant: Instant::now(),
     nonce: 0,
     cluster_id: Uuid::from_u128(0),
     session_id: Uuid::from_u128(0),
     unsafe_mode: true,
     build_info: &DUMMY_BUILD_INFO,
-    timestamp_frequency: Duration::from_secs(1),
+    timestamp_interval: Duration::from_secs(1),
     now: NOW_ZERO.clone(),
 });
 

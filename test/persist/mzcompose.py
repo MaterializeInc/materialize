@@ -20,4 +20,16 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     """Run the nemesis for 5 seconds as a smoke test."""
-    c.run("maelstrom-persist", "--time-limit=5", "--", "maelstrom")
+    c.run(
+        "maelstrom-persist",
+        "--time-limit=5",
+        "--node-count=1",
+        "--concurrency=2",
+        "--rate=100",
+        "--",
+        "maelstrom",
+        "--blob-uri=mem://",
+        "--consensus-uri=mem://",
+    )
+    # TODO: Reenable this when we un-break MaelstromConsensus
+    # c.run("maelstrom-persist", "--time-limit=5", "--", "maelstrom")

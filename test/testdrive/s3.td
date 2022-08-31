@@ -29,7 +29,7 @@ b3
 > CREATE SOURCE s3_all
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -46,7 +46,7 @@ b3
 > CREATE SOURCE s3_glob_a
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING '**/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -60,7 +60,7 @@ a3
 > CREATE SOURCE s3_just_a
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'short/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -79,7 +79,7 @@ c,9
 > CREATE SOURCE csv_example (name, counts)
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING '*.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -118,7 +118,7 @@ $ s3-put-object bucket=test key=logs/2021/01/01/frontend.log
 > CREATE SOURCE frontend_logs
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'logs/**/*.log' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -144,7 +144,7 @@ c3
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'short/*'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}', BUCKET SCAN 'testdrive-other-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -182,7 +182,7 @@ id,value
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'csv/*'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )

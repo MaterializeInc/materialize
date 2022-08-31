@@ -18,9 +18,13 @@ INSERT INTO bytea_type VALUES (NULL), (''), (E'\\x00'), (E'\\xABCDEF1234');
 
 $ schema-registry-wait-schema schema=postgres.public.bytea_type-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE bytea_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.bytea_type'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 # There is \\x124 below instead of \x1234 but apparently this is outside of Mz

@@ -61,9 +61,13 @@ $ kafka-ingest format=avro topic=linearizability key-format=avro key-schema=${ke
 $ kafka-ingest format=avro topic=linearizability key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=100000
 {"f1": "j${kafka-ingest.iteration}"} {"f2": "j${kafka-ingest.iteration}"}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+FOR CONFLUENT SCHEMA REGISTRY
+URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE linearizability
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-linearizability-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE MATERIALIZED VIEW linearizability_count AS SELECT COUNT(*) FROM linearizability;

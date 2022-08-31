@@ -35,10 +35,10 @@ true
 
 # Make sure that ingestion can continue
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "k${kafka-ingest.iteration}"} {"f2": "k${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "l${kafka-ingest.iteration}"} {"f2": "l${kafka-ingest.iteration}"}
 
 > SELECT COUNT(*), COUNT(DISTINCT f1), COUNT(DISTINCT f2) FROM failpoint;
@@ -47,10 +47,14 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 
 # Validate the output of the sink as well
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE failpoint_from_sink
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-failpoint-sink-${testdrive.seed}'
-  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS f1
   ENVELOPE UPSERT
 
@@ -58,10 +62,10 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 120000 120000 120000
 
 # Delete some values inserted pre-restart
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "a${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "b${kafka-ingest.iteration}"}
 
 # And validate again

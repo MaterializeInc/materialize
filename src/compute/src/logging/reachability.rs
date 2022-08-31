@@ -61,14 +61,14 @@ pub fn construct<A: Allocate>(
     >,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
+    let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000) as Timestamp;
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
         let (logs, token) = Some(linked).mz_replay(
             scope,
             "reachability logs",
-            Duration::from_nanos(config.granularity_ns as u64),
+            Duration::from_nanos(config.interval_ns as u64),
             activator,
         );
 
@@ -111,8 +111,8 @@ pub fn construct<A: Allocate>(
                         data.swap(&mut buffer);
 
                         for (time, worker, (addr, massaged)) in buffer.drain(..) {
-                            let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
-                                * granularity_ms)
+                            let time_ms = (((time.as_millis() as Timestamp / interval_ms) + 1)
+                                * interval_ms)
                                 as Timestamp;
                             for (source, port, update_type, ts, diff) in massaged {
                                 updates_session.give(

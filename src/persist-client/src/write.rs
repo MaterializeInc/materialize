@@ -37,7 +37,7 @@ use crate::internal::state::{HollowBatch, Upper};
 use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WriterId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for WriterId {
@@ -93,7 +93,7 @@ where
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
-    pub(crate) gc: GarbageCollector,
+    pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) compact: Option<Compactor>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,

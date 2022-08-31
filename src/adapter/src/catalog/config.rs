@@ -9,12 +9,14 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
 use mz_controller::ComputeInstanceReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
+use mz_secrets::SecretsReader;
 use mz_storage::types::hosts::StorageHostResourceAllocation;
 
 use crate::catalog::storage;
@@ -42,6 +44,8 @@ pub struct Config<'a, S> {
     pub default_storage_host_size: Option<String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
+    /// A handle to a secrets manager that can only read secrets.
+    pub secrets_reader: Arc<dyn SecretsReader>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,9 +61,12 @@ impl Default for ClusterReplicaSizeMap {
         //     "32": {"scale": 1, "workers": 32}
         //     /// Testing with multiple processes on a single machine is a novelty, so
         //     /// we don't bother providing many options.
-        //     "2-1": {"scale": 2, "workers": 1},
         //     "2-2": {"scale": 2, "workers": 2},
         //     "2-4": {"scale": 2, "workers": 4},
+        //     /// Used in the shared_fate cloudtest tests
+        //     "1-1": {"scale": 1, "workers": 1},
+        //     ...
+        //     "16-1": {"scale": 16, "workers": 1},
         // }
         let mut inner = (0..=5)
             .map(|i| {
@@ -75,15 +82,20 @@ impl Default for ClusterReplicaSizeMap {
                 )
             })
             .collect::<HashMap<_, _>>();
-        inner.insert(
-            "2-1".to_string(),
-            ComputeInstanceReplicaAllocation {
-                memory_limit: None,
-                cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(1).unwrap(),
-            },
-        );
+
+        for i in 1..=5 {
+            let scale = 1 << i;
+            inner.insert(
+                format!("{scale}-1"),
+                ComputeInstanceReplicaAllocation {
+                    memory_limit: None,
+                    cpu_limit: None,
+                    scale: NonZeroUsize::new(scale).unwrap(),
+                    workers: NonZeroUsize::new(1).unwrap(),
+                },
+            );
+        }
+
         inner.insert(
             "2-2".to_string(),
             ComputeInstanceReplicaAllocation {

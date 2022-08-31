@@ -359,6 +359,8 @@ impl From<RecursionLimitError> for ExplainError {
 /// A set of options for controlling the output of [`Explain`] implementations.
 #[derive(Debug)]
 pub struct ExplainConfig {
+    /// Show the number of columns.
+    pub arity: bool,
     /// Render implemented MIR `Join` nodes in a way which reflects the implementation.
     pub join_impls: bool,
     /// Show the `non_negative` in the explanation if it is supported by the backing IR.
@@ -373,13 +375,13 @@ pub struct ExplainConfig {
     pub subtree_size: bool,
     /// Print optimization timings (currently unsupported).
     pub timing: bool,
-    /// Show the `type` attribute in the explanation (currently unsupported by all IRs).
+    /// Show the `type` attribute in the explanation.
     pub types: bool,
 }
 
 impl ExplainConfig {
     pub fn requires_attributes(&self) -> bool {
-        self.subtree_size || self.non_negative
+        self.subtree_size || self.non_negative || self.arity || self.types
     }
 }
 
@@ -393,6 +395,7 @@ impl TryFrom<HashSet<String>> for ExplainConfig {
             config_flags.insert("raw_syntax".into());
         }
         let result = ExplainConfig {
+            arity: config_flags.remove("arity"),
             join_impls: config_flags.remove("join_impls"),
             non_negative: config_flags.remove("non_negative"),
             no_fast_path: config_flags.remove("no_fast_path"),
@@ -754,6 +757,7 @@ mod tests {
 
         let format = ExplainFormat::Text;
         let config = ExplainConfig {
+            arity: false,
             join_impls: false,
             non_negative: false,
             no_fast_path: false,

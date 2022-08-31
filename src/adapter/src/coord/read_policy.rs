@@ -151,8 +151,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                         .unwrap()
                         .collection(*id)
                         .unwrap()
-                        .read_capabilities
-                        .frontier()
+                        .read_frontier()
                         .to_owned();
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(timeline).await;
@@ -288,13 +287,12 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             for id in compute_ids.iter() {
                 let collection = compute.as_ref().collection(*id).unwrap();
                 assert!(collection
-                    .read_capabilities
-                    .frontier()
+                    .read_frontier()
                     .less_equal(&read_holds.time),
                     "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal desired time {:?}",
                     id,
                     compute_instance,
-                    collection.read_capabilities.frontier(),
+                    collection.read_frontier(),
                     read_holds.time,
                 );
                 let read_needs = self.read_capability.get_mut(id).unwrap();
@@ -352,13 +350,12 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             for id in compute_ids.iter() {
                 let collection = compute.as_ref().collection(*id).unwrap();
                 assert!(collection
-                    .read_capabilities
-                    .frontier()
+                    .read_frontier()
                     .less_equal(&new_time),
                     "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                     id,
                     compute_instance,
-                    collection.read_capabilities.frontier(),
+                    collection.read_frontier(),
                     new_time,
                     old_time,
                 );

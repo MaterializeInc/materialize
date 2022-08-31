@@ -108,8 +108,8 @@ test_sink = {
 actual_indexes = """
 SELECT
     o.name as object_name,
-    ic.index_position,
-    ic.on_position,
+    ic.index_position::int8,
+    ic.on_position::int8,
     ic.on_expression,
     i.name as index_name
 FROM mz_indexes i

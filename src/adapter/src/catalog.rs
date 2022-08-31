@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -44,6 +43,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::{explain_new::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
+use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
@@ -57,12 +57,13 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
+    AlterSourceItem, ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
     StorageHostConfig as PlanStorageHostConfig,
 };
-use mz_sql::DEFAULT_SCHEMA;
+use mz_sql::{plan, DEFAULT_SCHEMA};
+use mz_sql_parser::ast::{CreateSourceOption, Statement, WithOptionValue};
 use mz_stash::{Append, Postgres, Sqlite};
 use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
@@ -650,7 +651,7 @@ impl CatalogState {
                     active_logs.insert(log.variant.clone(), index_id);
                 }
                 Some(DataflowLoggingConfig {
-                    granularity_ns: introspection.granularity.as_nanos(),
+                    interval_ns: introspection.interval.as_nanos(),
                     log_logging: introspection.debugging,
                     active_logs,
                     sink_logs: BTreeMap::new(),
@@ -1772,7 +1773,7 @@ impl<S: Append> Catalog<S> {
                     cluster_id: config.storage.cluster_id(),
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
-                    timestamp_frequency: Duration::from_secs(1),
+                    timestamp_interval: Duration::from_secs(1),
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
@@ -2100,6 +2101,20 @@ impl<S: Append> Catalog<S> {
             .apply_persisted_builtin_migration(&mut builtin_migration_metadata)
             .await?;
 
+        // Load public keys for SSH connections from the secrets store to the catalog
+        for (id, entry) in catalog.state.entry_by_id.iter_mut() {
+            if let CatalogItem::Connection(ref mut connection) = entry.item {
+                if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) =
+                    connection.connection
+                {
+                    let secret = config.secrets_reader.read(*id).await?;
+                    let keyset = mz_ore::ssh_key::SshKeyset::from_bytes(&secret)?;
+                    let public_keypair = keyset.public_keys();
+                    ssh.public_keys = Some(public_keypair);
+                }
+            }
+        }
+
         let mut builtin_table_updates = vec![];
         for (schema_id, schema) in &catalog.state.ambient_schemas_by_id {
             let db_spec = ResolvedDatabaseSpecifier::Ambient;
@@ -2141,13 +2156,11 @@ impl<S: Append> Catalog<S> {
         }
         let audit_logs = catalog.storage().await.load_audit_log().await?;
         for event in audit_logs {
-            let event = VersionedEvent::deserialize(&event).unwrap();
             builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
         }
 
         let storage_usage_events = catalog.storage().await.storage_usage().await?;
         for event in storage_usage_events {
-            let event = VersionedStorageUsage::deserialize(&event).unwrap();
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
         }
 
@@ -2274,6 +2287,9 @@ impl<S: Append> Catalog<S> {
             CatalogType::Int16 => CatalogType::Int16,
             CatalogType::Int32 => CatalogType::Int32,
             CatalogType::Int64 => CatalogType::Int64,
+            CatalogType::UInt16 => CatalogType::UInt16,
+            CatalogType::UInt32 => CatalogType::UInt32,
+            CatalogType::UInt64 => CatalogType::UInt64,
             CatalogType::Interval => CatalogType::Interval,
             CatalogType::Jsonb => CatalogType::Jsonb,
             CatalogType::Numeric => CatalogType::Numeric,
@@ -2484,7 +2500,7 @@ impl<S: Append> Catalog<S> {
         for (id, schema_id, name) in migration_metadata.user_create_ops.drain(..) {
             let item = self.get_entry(&id).item();
             let serialized_item = self.serialize_item(item);
-            tx.insert_item(id, schema_id, &name, &serialized_item)?;
+            tx.insert_item(id, schema_id, &name, serialized_item)?;
         }
         tx.update_system_object_mappings(
             &migration_metadata
@@ -2566,6 +2582,7 @@ impl<S: Append> Catalog<S> {
             },
         )
         .await?;
+        let secrets_reader = Arc::new(InMemorySecretsController::new());
         let (catalog, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
@@ -2577,6 +2594,7 @@ impl<S: Append> Catalog<S> {
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
             availability_zones: vec![],
+            secrets_reader,
         })
         .await?;
         Ok(catalog)
@@ -3240,6 +3258,10 @@ impl<S: Append> Catalog<S> {
                 name: String,
             },
             ResetAllSystemConfiguration,
+            UpdateRotatedKeys {
+                id: GlobalId,
+                new_item: CatalogItem,
+            },
         }
 
         let drop_ids: HashSet<_> = ops
@@ -3278,6 +3300,90 @@ impl<S: Append> Catalog<S> {
 
         for op in ops {
             actions.extend(match op {
+                Op::AlterSource { id, size, remote } => {
+                    use mz_sql::ast::Value;
+                    use mz_sql_parser::ast::CreateSourceOptionName::*;
+                    use AlterSourceItem::*;
+
+                    let entry = self.get_entry(&id);
+                    let name = entry.name().clone();
+                    let old_source = match entry.item() {
+                        CatalogItem::Source(source) => source.clone(),
+                        other => {
+                            coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ())
+                        }
+                    };
+
+                    // Since the catalog serializes the items using only their creation statement
+                    // and context, we need to parse and rewrite the with options in that statement.
+                    // (And then make any other changes to the source definition to match.)
+                    let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
+                        .unwrap()
+                        .into_element();
+
+                    let create_stmt = match &mut stmt {
+                        Statement::CreateSource(s) => s,
+                        _ => coord_bail!(
+                            "source {id} was not created with a CREATE SOURCE statement"
+                        ),
+                    };
+
+                    let new_config = match (&old_source.host_config, size, remote) {
+                        (_, Set(_), Set(_)) => {
+                            coord_bail!("Can't set both SIZE and REMOTE on source")
+                        }
+                        (_, Set(size), _) => Some(plan::StorageHostConfig::Managed { size }),
+                        (_, _, Set(addr)) => Some(plan::StorageHostConfig::Remote { addr }),
+                        (StorageHostConfig::Remote { .. }, _, Reset)
+                        | (StorageHostConfig::Managed { .. }, Reset, _) => {
+                            Some(plan::StorageHostConfig::Undefined)
+                        }
+                        (_, _, _) => None,
+                    };
+
+                    if let Some(config) = new_config {
+                        create_stmt
+                            .with_options
+                            .retain(|x| ![Size, Remote].contains(&x.name));
+
+                        let new_host_option = match &config {
+                            plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
+                            plan::StorageHostConfig::Remote { addr } => {
+                                Some((Remote, addr.clone()))
+                            }
+                            plan::StorageHostConfig::Undefined => None,
+                        };
+
+                        if let Some((name, value)) = new_host_option {
+                            create_stmt.with_options.push(CreateSourceOption {
+                                name,
+                                value: Some(WithOptionValue::Value(Value::String(value))),
+                            });
+                        }
+
+                        let host_config = self.resolve_storage_host_config(config)?;
+                        let create_sql = stmt.to_ast_string_stable();
+                        let source = CatalogItem::Source(Source {
+                            create_sql,
+                            host_config: host_config.clone(),
+                            ..old_source
+                        });
+
+                        let ser = self.serialize_item(&source);
+                        tx.update_item(id, &name.item, &ser)?;
+
+                        // NB: this will be re-incremented by the action below.
+                        builtin_table_updates.extend(self.state.pack_item_update(id, -1));
+
+                        vec![Action::UpdateItem {
+                            id,
+                            to_name: entry.name().clone(),
+                            to_item: source,
+                        }]
+                    } else {
+                        vec![]
+                    }
+                }
                 Op::CreateDatabase {
                     name,
                     oid,
@@ -3440,7 +3546,7 @@ impl<S: Append> Catalog<S> {
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = self.serialize_item(&item);
-                        tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
+                        tx.insert_item(id, schema_id, &name.item, serialized_item)?;
                     }
 
                     if Self::should_audit_log_item(&item) {
@@ -3703,6 +3809,16 @@ impl<S: Append> Catalog<S> {
 
                     vec![Action::UpdateComputeInstanceStatus { event }]
                 }
+                Op::UpdateItem { id, name, to_item } => {
+                    let ser = self.serialize_item(&to_item);
+                    tx.update_item(id, &name.item, &ser)?;
+                    builtin_table_updates.extend(self.state.pack_item_update(id, -1));
+                    vec![Action::UpdateItem {
+                        id,
+                        to_name: name,
+                        to_item,
+                    }]
+                }
                 Op::UpdateStorageUsage {
                     object_id,
                     size_bytes,
@@ -3726,6 +3842,38 @@ impl<S: Append> Catalog<S> {
                 Op::ResetAllSystemConfiguration {} => {
                     tx.clear_system_configs().await;
                     vec![Action::ResetAllSystemConfiguration]
+                }
+                Op::UpdateRotatedKeys {
+                    id,
+                    previous_public_keypair,
+                    new_public_keypair,
+                } => {
+                    let entry = self.get_entry(&id);
+                    let name = &entry.name().item;
+                    // Retract old keys
+                    builtin_table_updates.extend(self.state.pack_ssh_tunnel_connection_update(
+                        id,
+                        name,
+                        &previous_public_keypair,
+                        -1,
+                    ));
+                    // Assert the new rotated keys
+                    builtin_table_updates.extend(self.state.pack_ssh_tunnel_connection_update(
+                        id,
+                        name,
+                        &new_public_keypair,
+                        1,
+                    ));
+
+                    let mut connection = entry.connection()?.clone();
+                    if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) =
+                        connection.connection
+                    {
+                        ssh.public_keys = Some(new_public_keypair)
+                    }
+                    let new_item = CatalogItem::Connection(connection);
+
+                    vec![Action::UpdateRotatedKeys { id, new_item }]
                 }
             });
         }
@@ -3975,6 +4123,19 @@ impl<S: Append> Catalog<S> {
                 Action::ResetAllSystemConfiguration {} => {
                     state.clear_system_configuration();
                 }
+
+                Action::UpdateRotatedKeys { id, new_item } => {
+                    let old_entry = state.entry_by_id.remove(&id).unwrap();
+                    info!(
+                        "update {} {} ({})",
+                        old_entry.item_type(),
+                        state.resolve_full_name(&old_entry.name, old_entry.conn_id()),
+                        id
+                    );
+                    let mut new_entry = old_entry.clone();
+                    new_entry.item = new_item;
+                    state.entry_by_id.insert(id, new_entry);
+                }
             }
         }
 
@@ -3999,58 +4160,47 @@ impl<S: Append> Catalog<S> {
         Ok(self.storage().await.confirm_leadership().await?)
     }
 
-    fn serialize_item(&self, item: &CatalogItem) -> Vec<u8> {
-        let item = match item {
+    fn serialize_item(&self, item: &CatalogItem) -> SerializedCatalogItem {
+        match item {
             CatalogItem::Table(table) => SerializedCatalogItem::V1 {
                 create_sql: table.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::View(view) => SerializedCatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::MaterializedView(mview) => SerializedCatalogItem::V1 {
                 create_sql: mview.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
                 create_sql: index.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
                 create_sql: sink.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Type(typ) => SerializedCatalogItem::V1 {
                 create_sql: typ.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Secret(secret) => SerializedCatalogItem::V1 {
                 create_sql: secret.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
                 create_sql: connection.create_sql.clone(),
-                eval_env: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::StorageCollection(_) => {
                 unreachable!("builtin storage collections cannot be serialized")
             }
-        };
-        serde_json::to_vec(&item).expect("catalog serialization cannot fail")
+        }
     }
 
-    fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
-        let SerializedCatalogItem::V1 {
-            create_sql,
-            eval_env: _,
-        } = serde_json::from_slice(&bytes)?;
+    fn deserialize_item(
+        &self,
+        SerializedCatalogItem::V1 { create_sql }: SerializedCatalogItem,
+    ) -> Result<CatalogItem, anyhow::Error> {
         self.parse_item(create_sql, Some(&PlanContext::zero()))
     }
 
@@ -4300,6 +4450,11 @@ pub fn is_reserved_name(name: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    AlterSource {
+        id: GlobalId,
+        size: AlterSourceItem,
+        remote: AlterSourceItem,
+    },
     CreateDatabase {
         name: String,
         oid: u32,
@@ -4360,6 +4515,11 @@ pub enum Op {
     UpdateComputeInstanceStatus {
         event: ComputeInstanceEvent,
     },
+    UpdateItem {
+        id: GlobalId,
+        name: QualifiedObjectName,
+        to_item: CatalogItem,
+    },
     UpdateStorageUsage {
         object_id: Option<String>,
         size_bytes: u64,
@@ -4372,44 +4532,21 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration {},
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum SerializedCatalogItem {
-    V1 {
-        create_sql: String,
-        // The name "eval_env" is historical.
-        eval_env: Option<SerializedPlanContext>,
+    UpdateRotatedKeys {
+        id: GlobalId,
+        previous_public_keypair: (String, String),
+        new_public_keypair: (String, String),
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SerializedPlanContext {
-    pub logical_time: Option<u64>,
-    pub wall_time: Option<DateTime<Utc>>,
-}
-
-impl From<SerializedPlanContext> for PlanContext {
-    fn from(cx: SerializedPlanContext) -> PlanContext {
-        PlanContext {
-            wall_time: cx.wall_time.unwrap_or_else(|| Utc.timestamp(0, 0)),
-            qgm_optimizations: false,
-        }
-    }
-}
-
-impl From<PlanContext> for SerializedPlanContext {
-    fn from(cx: PlanContext) -> SerializedPlanContext {
-        SerializedPlanContext {
-            logical_time: None,
-            wall_time: Some(cx.wall_time),
-        }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SerializedCatalogItem {
+    V1 { create_sql: String },
 }
 
 /// Serialized (stored alongside the replica) logging configuration of
 /// a replica. Serialized variant of ConcreteComputeInstanceReplicaLogging.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SerializedComputeInstanceReplicaLogging {
     /// Instantiate default logging configuration upon system start.
     /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
@@ -4430,7 +4567,7 @@ impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceRe
 /// A [`mz_sql::plan::ComputeInstanceReplicaConfig`] that is serialized as JSON and persisted
 /// to the catalog stash. This is a separate type to allow us to evolve the
 /// on-disk format independently from the SQL layer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedComputeInstanceReplicaConfig {
     pub persisted_logs: SerializedComputeInstanceReplicaLogging,
     pub location: SerializedComputeInstanceReplicaLocation,
@@ -4450,7 +4587,7 @@ impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceRep
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SerializedComputeInstanceReplicaLocation {
     Remote {
         addrs: BTreeSet<String>,
@@ -4580,6 +4717,9 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .join(",")
             ),
             PgLegacyChar => "\"char\"".into(),
+            UInt16 => "uint2".into(),
+            UInt32 => "uint4".into(),
+            UInt64 => "uint8".into(),
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let pg_catalog_schema =

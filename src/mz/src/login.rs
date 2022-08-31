@@ -58,7 +58,7 @@ async fn request(
     (StatusCode::OK, "You can now close the tab.")
 }
 
-pub(crate) async fn login_with_browser(profile_name: String) -> Result<(), std::io::Error> {
+pub(crate) async fn login_with_browser(profile_name: &str) -> Result<(), std::io::Error> {
     /*
      * Open the browser to login user
      */
@@ -116,8 +116,8 @@ async fn generate_api_token(
 
 async fn authenticate_user(
     client: &Client,
-    email: String,
-    password: String,
+    email: &str,
+    password: &str,
 ) -> Result<FronteggAuthUser, reqwest::Error> {
     let mut access_token_request_body = HashMap::new();
     access_token_request_body.insert("email", email);
@@ -137,7 +137,7 @@ async fn authenticate_user(
         .await
 }
 
-pub(crate) async fn login_with_console(profile_name: String) -> Result<(), reqwest::Error> {
+pub(crate) async fn login_with_console(profile_name: &String) -> Result<(), reqwest::Error> {
     // Handle user input
     let mut email = String::new();
 
@@ -154,12 +154,12 @@ pub(crate) async fn login_with_console(profile_name: String) -> Result<(), reqwe
 
     // Check if there is a secret somewhere.
     // If there is none save the api token someone on the root folder.
-    let auth_user = authenticate_user(&client, email.clone(), password).await?;
+    let auth_user = authenticate_user(&client, &email, &password).await?;
     let api_token = generate_api_token(&client, auth_user).await?;
 
     let profile = Profile {
-        name: profile_name,
-        email: email.to_string(),
+        name: profile_name.to_string(),
+        email,
         secret: api_token.secret,
         client_id: api_token.client_id,
         region: None,

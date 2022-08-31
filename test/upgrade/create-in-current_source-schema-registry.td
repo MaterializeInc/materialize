@@ -17,12 +17,16 @@ $ set schema={
 
 $ kafka-create-topic topic=data
 
-$ kafka-ingest format=avro topic=data schema=${schema} publish=true
+$ kafka-ingest format=avro topic=data schema=${schema}
 {"a": 1}
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 > SELECT * FROM data

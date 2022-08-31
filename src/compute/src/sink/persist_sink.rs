@@ -37,38 +37,21 @@ impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn uses_keys(&self) -> bool {
-        false
-    }
-
-    fn get_key_indices(&self) -> Option<&[usize]> {
-        None
-    }
-
-    fn get_relation_key_indices(&self) -> Option<&[usize]> {
-        None
-    }
-
     fn render_continuous_sink(
         &self,
         compute_state: &mut ComputeState,
         _sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
-        sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        let ok_collection = sinked_collection.map(|(key, value)| {
-            assert!(key.is_none(), "persist_source does not support keys");
-            value.expect("persist_source must have values")
-        });
-
         persist_sink(
             sink_id,
             &self.storage_metadata,
-            ok_collection,
+            sinked_collection,
             err_collection,
             compute_state,
             false,

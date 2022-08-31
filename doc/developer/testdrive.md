@@ -421,7 +421,7 @@ $ set schema={
 A variable can be referenced in both the arguments and the body of a command.
 
 ```
-$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${schema} publish=true repeat=2
+$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${schema} repeat=2
 {"f1": "${schema}"}
 ```
 
@@ -493,15 +493,11 @@ The environment variables are available uppercase, with an the `env.` prefix:
 
 # Dealing with variable output
 
-Certain tests produce variable output and testdrive provides a way to mask that via regular expression substitution
+Certain tests produce variable output and testdrive provides a way to mask that via regular expression substitution.
 
 #### `$ set-regex match=regular_expression replacement=replacement_str`
 
-All matches of the regular expression in the entire test will be converted to ```replacement_str```.
-
-> :warning: **only one regular expression and replacement string can be used for the entire test**
->
-> The place where the regular expression is declared within the script does not matter, it will be applied to all lines of the test.
+All matches of the regular expression in the rest of the test will be converted to ```replacement_str```.
 
 For example, this will convert all UNIX-like timestamps to the fixed string `<TIMESTAMP>`and this test will pass:
 
@@ -510,6 +506,8 @@ $ set-regex match=\d{10} replacement=<TIMESTAMP>
 > SELECT round(extract(epoch FROM now()));
 <TIMESTAMP>
 ```
+
+Note that only one regex can be active at a time: additional calls to `set-regex` will unset the previous regex. If you want to unset the regex without setting a new one, `unset-regex` will do that for you.
 
 ## Useful regular expressions
 
@@ -688,10 +686,6 @@ The schema to use
 ##### `key-schema`
 
 For data that contains a key, the schema of the key
-
-##### `publish=true`
-
-Publish the schema and key schema provided to the schema registry.
 
 ##### `key-terminator=str`
 

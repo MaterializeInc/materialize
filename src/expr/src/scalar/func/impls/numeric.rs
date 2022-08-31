@@ -229,6 +229,37 @@ sqlfunc!(
     }
 );
 
+sqlfunc!(
+    #[sqlname = "numeric_to_uint2"]
+    fn cast_numeric_to_uint16(mut a: Numeric) -> Result<u16, EvalError> {
+        let mut cx = numeric::cx_datum();
+        cx.round(&mut a);
+        cx.clear_status();
+        let u = cx.try_into_u32(a).or(Err(EvalError::UInt16OutOfRange))?;
+        u16::try_from(u).or(Err(EvalError::UInt16OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "numeric_to_uint4"]
+    fn cast_numeric_to_uint32(mut a: Numeric) -> Result<u32, EvalError> {
+        let mut cx = numeric::cx_datum();
+        cx.round(&mut a);
+        cx.clear_status();
+        cx.try_into_u32(a).or(Err(EvalError::UInt32OutOfRange))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "numeric_to_uint8"]
+    fn cast_numeric_to_uint64(mut a: Numeric) -> Result<u64, EvalError> {
+        let mut cx = numeric::cx_datum();
+        cx.round(&mut a);
+        cx.clear_status();
+        cx.try_into_u64(a).or(Err(EvalError::UInt64OutOfRange))
+    }
+);
+
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]

@@ -1,5 +1,5 @@
 # dbt-materialize Changelog
-## 1.1.4 - 2022-08-24
+## 1.2.0 - 2022-08-31
 
 * Enable additional configuration for indexes created on view,
   materializedview, or source materializations. Fix to use Materialize's
@@ -43,6 +43,7 @@
     indexes=[{'columns': ['col_1'], 'cluster': 'not_default', 'name':'col_1_idx'}]) }}
     SELECT ...
   ```
+* Upgrade to `dbt-postgres` v1.2.0.
 
 ## 1.1.3 - 2022-08-17
 

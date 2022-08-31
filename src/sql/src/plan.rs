@@ -133,6 +133,7 @@ pub enum Plan {
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
+    RotateKeys(RotateKeysPlan),
 }
 
 #[derive(Debug)]
@@ -174,12 +175,12 @@ pub struct CreateComputeInstanceReplicaPlan {
 }
 
 /// Configuration of introspection for a compute instance.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
 pub struct ComputeInstanceIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
     /// The interval at which to introspect.
-    pub granularity: Duration,
+    pub interval: Duration,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -456,10 +457,18 @@ pub struct AlterIndexResetOptionsPlan {
     pub options: HashSet<IndexOptionName>,
 }
 
+#[derive(Debug, Clone)]
+pub enum AlterSourceItem {
+    Set(String),
+    Reset,
+    Unchanged,
+}
+
 #[derive(Debug)]
 pub struct AlterSourcePlan {
     pub id: GlobalId,
-    pub config: Option<StorageHostConfig>,
+    pub size: AlterSourceItem,
+    pub remote: AlterSourceItem,
 }
 
 #[derive(Debug)]
@@ -489,6 +498,11 @@ pub struct AlterSystemResetPlan {
 
 #[derive(Debug)]
 pub struct AlterSystemResetAllPlan {}
+
+#[derive(Debug)]
+pub struct RotateKeysPlan {
+    pub id: GlobalId,
+}
 
 #[derive(Debug)]
 pub struct DeclarePlan {

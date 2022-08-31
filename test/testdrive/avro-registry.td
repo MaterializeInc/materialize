@@ -9,12 +9,16 @@
 
 # Tests that hit the Confluent Schema Registry.
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 # Verify the error message is useful when a schema is not present in the
 # registry.
 
 ! CREATE SOURCE noexist
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-noexist-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 contains:No value schema found
 
@@ -133,12 +137,12 @@ $ set schema-v2={
 
 $ kafka-create-topic topic=data
 
-$ kafka-ingest format=avro topic=data schema=${schema-v1} publish=true timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema-v1} timestamp=1
 {"before": null, "after": {"row": {"a": 1}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
 > CREATE SOURCE data_v1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM data_v1
@@ -146,12 +150,12 @@ a
 ---
 1
 
-$ kafka-ingest format=avro topic=data schema=${schema-v2} publish=true timestamp=3
+$ kafka-ingest format=avro topic=data schema=${schema-v2} timestamp=3
 {"before": null, "after": {"row": {"a": 2, "b": -1}}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
 > CREATE SOURCE data_v2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM data_v1
@@ -174,13 +178,13 @@ $ set valid-key-schema={
     ]
   }
 
-$ kafka-ingest topic=data publish=true timestamp=5
+$ kafka-ingest topic=data timestamp=5
   format=avro schema=${schema-v1} key-format=avro key-schema=${valid-key-schema}
 {"a": 1} {"before": null, "after": {"row": {"a": 1}}, "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
 > CREATE SOURCE data_v3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM data_v3
@@ -207,9 +211,9 @@ a count
 
 > CREATE SOURCE data_v4
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (ignore_source_keys = true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+  WITH (IGNORE KEYS)
 
 > SELECT a, count(*) FROM data_v4
   GROUP BY a

@@ -59,6 +59,7 @@ pub enum Statement<T: AstInfo> {
     AlterSystemSet(AlterSystemSetStatement),
     AlterSystemReset(AlterSystemResetStatement),
     AlterSystemResetAll(AlterSystemResetAllStatement),
+    AlterConnection(AlterConnectionStatement),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropSchema(DropSchemaStatement),
@@ -126,6 +127,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterSystemSet(stmt) => f.write_node(stmt),
             Statement::AlterSystemReset(stmt) => f.write_node(stmt),
             Statement::AlterSystemResetAll(stmt) => f.write_node(stmt),
+            Statement::AlterConnection(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
@@ -502,7 +504,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         f.write_str("FROM ");
         f.write_node(&self.connection);
         if !self.legacy_with_options.is_empty() {
-            f.write_str(" WITH (");
+            f.write_str(" LEGACYWITH (");
             f.write_node(&display::comma_separated(&self.legacy_with_options));
             f.write_str(")");
         }
@@ -540,7 +542,6 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope<T>>,
     pub with_snapshot: bool,
-    pub as_of: Option<AsOf<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
@@ -571,11 +572,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
             f.write_str(" WITH SNAPSHOT");
         } else {
             f.write_str(" WITHOUT SNAPSHOT");
-        }
-
-        if let Some(as_of) = &self.as_of {
-            f.write_str(" ");
-            f.write_node(as_of);
         }
     }
 }
@@ -988,8 +984,8 @@ impl_display_t!(CreateClusterStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClusterOption<T: AstInfo> {
-    /// The `INTROSPECTION GRANULARITY [[=] <interval>] option.
-    IntrospectionGranularity(WithOptionValue<T>),
+    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
+    IntrospectionInterval(WithOptionValue<T>),
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
     IntrospectionDebugging(WithOptionValue<T>),
     /// The `REPLICAS` option.
@@ -999,9 +995,9 @@ pub enum ClusterOption<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterOption::IntrospectionGranularity(granularity) => {
-                f.write_str("INTROSPECTION GRANULARITY ");
-                f.write_node(granularity);
+            ClusterOption::IntrospectionInterval(interval) => {
+                f.write_str("INTROSPECTION INTERVAL ");
+                f.write_node(interval);
             }
             ClusterOption::IntrospectionDebugging(debugging) => {
                 f.write_str("INTROSPECTION DEBUGGING ");
@@ -1237,6 +1233,26 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
 }
 
 impl_display_t!(AlterSecretStatement);
+
+/// `ALTER CONNECTION ... ROTATE KEYS`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterConnectionStatement {
+    pub name: UnresolvedObjectName,
+    pub if_exists: bool,
+}
+
+impl AstDisplay for AlterConnectionStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER CONNECTION ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" ROTATE KEYS");
+    }
+}
+
+impl_display!(AlterConnectionStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
@@ -2062,6 +2078,7 @@ pub enum WithOptionValue<T: AstInfo> {
     // Temporary variant until we have support for connections, which will use
     // explicit fields for each secret reference.
     Secret(T::ObjectName),
+    Object(T::ObjectName),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -2074,6 +2091,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str("SECRET ");
                 f.write_node(name)
             }
+            WithOptionValue::Object(obj) => f.write_node(obj),
         }
     }
 }

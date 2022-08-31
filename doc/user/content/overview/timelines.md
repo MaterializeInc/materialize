@@ -36,29 +36,32 @@ For example, to create two CDC sources that are joinable:
 ```sql
 CREATE SOURCE source_1
   FROM KAFKA BROKER 'broker' TOPIC 'topic-1'
-    WITH (timeline='user')
   FORMAT AVRO USING SCHEMA 'schema-1'
-  ENVELOPE MATERIALIZE;
+  ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'my_user_timeline');
 
 CREATE SOURCE source_2
   FROM KAFKA BROKER 'broker' TOPIC 'topic-2'
-    WITH (timeline='user')
   FORMAT AVRO USING SCHEMA 'schema-2'
-  ENVELOPE MATERIALIZE;
+  ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'my_user_timeline');
 ```
 
 ## CDC Sources
 
-[CDC sources][cdc-sources] supports a `epoch_ms_timeline` `WITH` option that moves it to the system timeline, making the CDC source joinable to tables and other system timeline sources.
-Users **must** ensure that the `time` field's units are milliseconds since the Unix epoch.
+You can assign a [CDC sources][cdc-sources] to the system timeline to make it
+joinable to tables and other system timeline sources by creating the source in
+the `mz_epoch_ms` timeline.
+
+You **must** ensure that the `time` field's units are milliseconds since the Unix epoch.
 Joining this source to other system time sources will result in query delays until the timestamps being received are close to wall-clock `now()`.
 
 ```sql
 CREATE SOURCE source_3
   FROM KAFKA BROKER 'broker' TOPIC 'topic-3'
-    WITH (epoch_ms_timeline=true)
   FORMAT AVRO USING SCHEMA 'schema'
   ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'mz_epoch_ms')
 ```
 
 [cdc-sources]: /connect/materialize-cdc

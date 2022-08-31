@@ -91,8 +91,8 @@ $ kafka-ingest format=avro topic=foo schema=${schema}
 
 > CREATE SOURCE data_foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
-    WITH (timeline='user')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'user')
 
 > CREATE MATERIALIZED VIEW foo AS SELECT a, b FROM data_foo
 

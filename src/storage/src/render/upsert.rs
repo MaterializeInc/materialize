@@ -30,7 +30,7 @@ use mz_expr::{EvalError, MirScalarExpr};
 use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::operator::StreamExt;
 
-use crate::source::DecodeResult;
+use crate::source::types::DecodeResult;
 use crate::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertValueError,
 };
@@ -185,7 +185,14 @@ where
             move |(row, time, diff)| {
                 let arena = mz_repr::RowArena::new();
                 let mut datums_local = datum_vec.borrow_with(&row);
-                plan.evaluate(&mut datums_local, &arena, time, diff, &mut row_builder)
+                plan.evaluate(
+                    &mut datums_local,
+                    &arena,
+                    time,
+                    diff,
+                    |_time| true,
+                    &mut row_builder,
+                )
             }
         });
 

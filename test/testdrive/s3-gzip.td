@@ -32,7 +32,7 @@ b3
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-no-compression-${testdrive.seed}'
   COMPRESSION NONE
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -67,7 +67,7 @@ b3
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-gzip-compression-${testdrive.seed}'
   COMPRESSION GZIP
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -99,7 +99,7 @@ b3
 # > CREATE SOURCE s3_all_auto
 #   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${bucket}'
 #   COMPRESSION AUTO
-#   WITH (
+#   LEGACYWITH (
 #     region = '${testdrive.aws-region}',
 #     endpoint = '${testdrive.aws-endpoint}',
 #     access_key_id = '${testdrive.aws-access-key-id}',

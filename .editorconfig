@@ -19,6 +19,9 @@ indent_size = 2
 [*.jsx]
 indent_size = 2
 
+[*.td]
+indent_size = 2
+
 [*.ts]
 indent_size = 2
 

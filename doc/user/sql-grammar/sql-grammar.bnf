@@ -91,7 +91,6 @@ create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   'PUBLICATION' publication_name
-  ('WITH timestamp_frequency_ms =' int)?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -281,8 +280,8 @@ select_stmt ::=
   ( 'OPTION' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
   ( 'HAVING' expr )?
   ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )?
-  ( 'LIMIT' expr )?
-  ( 'OFFSET' expr )?
+  ( 'LIMIT' integer )?
+  ( 'OFFSET' integer )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)

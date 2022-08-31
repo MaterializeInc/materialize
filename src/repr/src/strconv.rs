@@ -158,12 +158,57 @@ where
     Nestable::Yes
 }
 
-/// Writes an OID to `buf`.
-pub fn format_oid<F>(buf: &mut F, oid: u32) -> Nestable
+/// Parses an [`u16`] from `s`.
+///
+/// Valid values are whatever the [`std::str::FromStr`] implementation on `u16` accepts,
+/// plus leading and trailing whitespace.
+pub fn parse_uint16(s: &str) -> Result<u16, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("uint2", s).with_details(e))
+}
+
+/// Writes an `u16` to `buf`.
+pub fn format_uint16<F>(buf: &mut F, u: u16) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", oid);
+    write!(buf, "{}", u);
+    Nestable::Yes
+}
+
+/// Parses an [`u32`] from `s`.
+///
+/// Valid values are whatever the [`std::str::FromStr`] implementation on `u32` accepts,
+/// plus leading and trailing whitespace.
+pub fn parse_uint32(s: &str) -> Result<u32, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("uint4", s).with_details(e))
+}
+
+/// Writes an `u32` to `buf`.
+pub fn format_uint32<F>(buf: &mut F, u: u32) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", u);
+    Nestable::Yes
+}
+
+/// Parses an `u64` from `s`.
+pub fn parse_uint64(s: &str) -> Result<u64, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("uint8", s).with_details(e))
+}
+
+/// Writes an `u64` to `buf`.
+pub fn format_uint64<F>(buf: &mut F, u: u64) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", u);
     Nestable::Yes
 }
 

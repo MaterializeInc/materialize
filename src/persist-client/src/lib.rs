@@ -17,6 +17,7 @@
     clippy::cast_sign_loss
 )]
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -41,6 +42,7 @@ use crate::internal::compact::Compactor;
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
+use crate::internal::state_versions::StateVersions;
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
 
@@ -48,6 +50,7 @@ pub mod async_runtime;
 pub mod batch;
 pub mod cache;
 pub mod error;
+pub mod fetch;
 pub mod inspect;
 pub mod read;
 pub mod usage;
@@ -65,6 +68,8 @@ pub(crate) mod internal {
     pub mod metrics;
     pub mod paths;
     pub mod state;
+    pub mod state_diff;
+    pub mod state_versions;
     pub mod trace;
 }
 
@@ -256,6 +261,9 @@ impl PersistConfig {
 impl PersistConfig {
     // Move this to a PersistConfig field when we actually have read leases.
     pub(crate) const FAKE_READ_LEASE_DURATION: Duration = Duration::from_secs(60);
+
+    // Tuning notes: Picked arbitrarily.
+    pub(crate) const NEED_ROLLUP_THRESHOLD: u64 = 128;
 }
 
 /// A handle for interacting with the set of persist shard made durable at a
@@ -352,8 +360,8 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let gc = GarbageCollector::new(
-            shard_id,
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
             Arc::clone(&self.consensus),
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
@@ -361,10 +369,11 @@ impl PersistClient {
         let mut machine = Machine::new(
             self.cfg.clone(),
             shard_id,
-            Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
+            Arc::new(state_versions),
         )
         .await?;
+        let gc = GarbageCollector::new(machine.clone());
 
         let reader_id = ReaderId::new();
         let (_, read_cap) = machine.register_reader(&reader_id, (self.cfg.now)()).await;
@@ -378,6 +387,7 @@ impl PersistClient {
             since: read_cap.since,
             last_heartbeat: Instant::now(),
             explicitly_expired: false,
+            leased_seqnos: BTreeMap::new(),
         };
 
         Ok(reader)
@@ -398,8 +408,8 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let gc = GarbageCollector::new(
-            shard_id,
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
             Arc::clone(&self.consensus),
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
@@ -407,10 +417,11 @@ impl PersistClient {
         let mut machine = Machine::new(
             self.cfg.clone(),
             shard_id,
-            Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
+            Arc::new(state_versions),
         )
         .await?;
+        let gc = GarbageCollector::new(machine.clone());
         let writer_id = WriterId::new();
         let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
@@ -670,7 +681,7 @@ mod tests {
             .expect("invalid shard id");
         let client = new_test_client().await;
 
-        let (mut write0, read0) = client
+        let (mut write0, mut read0) = client
             .expect_open::<String, String, u64, i64>(shard_id0)
             .await;
 
@@ -750,7 +761,7 @@ mod tests {
 
         // InvalidUsage from ReadHandle methods.
         {
-            let mut snap = read0
+            let snap = read0
                 .snapshot(Antichain::from_elem(3))
                 .await
                 .expect("cannot serve requested as_of");
@@ -758,16 +769,21 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let (_, mut read1) = client
+            let (_, read1) = client
                 .expect_open::<String, String, u64, i64>(shard_id1)
                 .await;
-            assert_eq!(
-                read1.fetch_batch(snap.pop().unwrap()).await.unwrap_err(),
-                InvalidUsage::BatchNotFromThisShard {
-                    batch_shard: shard_id0,
-                    handle_shard: shard_id1,
-                }
-            );
+            let fetcher1 = read1.clone().await.batch_fetcher().await;
+            for batch in snap {
+                let (batch, res) = fetcher1.fetch_batch(batch).await;
+                read0.process_returned_leased_batch(batch);
+                assert_eq!(
+                    res.unwrap_err(),
+                    InvalidUsage::BatchNotFromThisShard {
+                        batch_shard: shard_id0,
+                        handle_shard: shard_id1,
+                    }
+                );
+            }
         }
 
         // InvalidUsage from WriteHandle methods.

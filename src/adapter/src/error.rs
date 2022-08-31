@@ -117,8 +117,8 @@ pub enum AdapterError {
     /// A query tried to create more resources than is allowed in the system configuration.
     ResourceExhaustion {
         resource_type: String,
-        limit: i32,
-        current_amount: i32,
+        limit: u32,
+        current_amount: usize,
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use mz_ore::now::EpochMillis;
 
 /// New version variants should be added if fields need to be added, changed, or removed.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub enum VersionedEvent {
     V1(EventV1),
 }
@@ -74,7 +74,7 @@ impl VersionedEvent {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum EventType {
     Create,
@@ -84,7 +84,7 @@ pub enum EventType {
 
 serde_plain::derive_display_from_serialize!(EventType);
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum ObjectType {
     Cluster,
@@ -98,7 +98,7 @@ pub enum ObjectType {
 
 serde_plain::derive_display_from_serialize!(ObjectType);
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub enum EventDetails {
     CreateComputeInstanceReplicaV1(CreateComputeInstanceReplicaV1),
     DropComputeInstanceReplicaV1(DropComputeInstanceReplicaV1),
@@ -107,31 +107,31 @@ pub enum EventDetails {
     RenameItemV1(RenameItemV1),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct FullNameV1 {
     pub database: String,
     pub schema: String,
     pub item: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct NameV1 {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct RenameItemV1 {
     pub previous_name: FullNameV1,
     pub new_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DropComputeInstanceReplicaV1 {
     pub cluster_name: String,
     pub replica_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct CreateComputeInstanceReplicaV1 {
     pub cluster_name: String,
     pub replica_name: String,
@@ -154,7 +154,7 @@ impl EventDetails {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct EventV1 {
     pub id: u64,
     pub event_type: EventType,
@@ -221,12 +221,12 @@ fn test_audit_log() -> Result<(), anyhow::Error> {
 ///
 /// This type is persisted in the catalog across restarts, so any updates to the
 /// schema will require a new version.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub enum VersionedStorageUsage {
     V1(StorageUsageV1),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageUsageV1 {
     pub id: u64,
     pub object_id: Option<String>,

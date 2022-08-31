@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
-use tracing::info;
+use tracing::{info, trace, warn};
 
 use crate::server::CommunicationConfig;
 
@@ -68,9 +68,52 @@ fn create_sockets(
     let to_extend = await_task.join().unwrap()?;
     results.extend(to_extend.into_iter());
 
+    for r in &mut results {
+        if let Some(sock) = r.as_mut() {
+            sock.set_nonblocking(false)
+                .expect("set_nonblocking(false) call failed");
+        }
+    }
+
     info!(worker = my_index, "initialization complete");
 
     Ok(results)
+}
+
+/// Garbage-collect broken connections.
+///
+/// Detect if any connection has gone away, by doing a short peek.
+/// Assuming the sockets are nonblocking, this should immediately either return data,
+/// or fail with EAGAIN or EWOULDBLOCK.
+///
+/// If an EOF or an error other than those two is signaled, the connection is broken
+/// and should be set to `None`.
+///
+/// `first_idx` is used only for error messages; it does not impact behavior otherwise.
+fn gc_broken_connections<'a, I>(conns: I, first_idx: usize)
+where
+    I: IntoIterator<Item = &'a mut Option<TcpStream>>,
+{
+    let mut buf = [0];
+    for (i, maybe_conn) in conns.into_iter().enumerate() {
+        trace!("peeking {} to detect whether it's broken", first_idx + i);
+        if let Some(conn) = maybe_conn {
+            let closed = match conn.peek(&mut buf) {
+                Ok(0) => true, // EOF
+                Ok(_) => false,
+                Err(err) => err.kind() != std::io::ErrorKind::WouldBlock,
+            };
+            if closed {
+                warn!(
+                    "Connection {} has gone down; we will try to establish it again.",
+                    i + first_idx
+                );
+                *maybe_conn = None;
+            } else {
+                trace!("Peek OK")
+            }
+        }
+    }
 }
 
 /// Result contains connections [0, my_index - 1].
@@ -78,36 +121,49 @@ fn start_connections(
     addresses: Arc<Vec<String>>,
     my_index: usize,
 ) -> Result<Vec<Option<TcpStream>>, io::Error> {
-    let results = addresses
-        .iter()
-        .take(my_index)
-        .enumerate()
-        .map(|(index, address)| loop {
-            match TcpStream::connect(address) {
-                Ok(mut stream) => {
-                    stream.set_nodelay(true).expect("set_nodelay call failed");
-                    stream
-                        .write_all(&my_index.to_ne_bytes())
-                        .expect("failed to send worker index");
-                    info!(worker = my_index, "connection to worker {}", index);
-                    break Some(stream);
-                }
-                Err(error) => {
-                    info!(
-                        worker = my_index,
-                        "error connecting to worker {index}: {error}; retrying"
-                    );
-                    sleep(Duration::from_secs(1));
-                }
+    let addresses: Vec<_> = addresses.iter().take(my_index).cloned().collect();
+    let mut results: Vec<_> = (0..my_index).map(|_| None).collect();
+
+    // We do not want to provide opportunities for the startup
+    // sequence to hang waiting for one of its peers, not noticing that another has gone down;
+    // empirically, we have found it difficult to reason
+    // about whether this results in crash loops and global deadlocks.
+    // Thus, in between connection attempts, check whether a previously-established connection has
+    // gone away; if so, we clear it and retry it again later.
+    while let Some(i) = results.iter().position(|r| r.is_none()) {
+        match TcpStream::connect(&addresses[i]) {
+            Ok(mut s) => {
+                s.set_nodelay(true).expect("set_nodelay call failed");
+
+                s.write_all(&my_index.to_ne_bytes())
+                    .expect("failed to send worker index");
+
+                // This is necessary for `gc_broken_connections`; it will be unset
+                // before actually trying to use the sockets.
+                s.set_nonblocking(true)
+                    .expect("set_nonblocking(true) call failed");
+
+                info!(worker = my_index, "Connected to process {i}");
+                results[i] = Some(s);
             }
-        })
-        .collect();
+            Err(err) => {
+                info!(
+                    worker = my_index,
+                    "error connecting to process {i}: {err}; will retry"
+                );
+                sleep(Duration::from_secs(1));
+            }
+        }
+        // If a peer failed, it's better that we detect it now than spin up Timely
+        // and immediately crash.
+        gc_broken_connections(&mut results, 0);
+    }
 
     Ok(results)
 }
 
 /// Result contains connections [my_index + 1, addresses.len() - 1].
-pub fn await_connections(
+fn await_connections(
     addresses: Arc<Vec<String>>,
     my_index: usize,
 ) -> Result<Vec<Option<TcpStream>>, io::Error> {
@@ -116,14 +172,30 @@ pub fn await_connections(
         .collect();
     let listener = TcpListener::bind(&addresses[my_index][..])?;
 
-    for _ in (my_index + 1)..addresses.len() {
+    while results.iter().any(|r| r.is_none()) {
         let mut stream = listener.accept()?.0;
         stream.set_nodelay(true).expect("set_nodelay call failed");
         let mut buffer = [0u8; 8];
         stream.read_exact(&mut buffer)?;
-        let identifier = u64::from_ne_bytes((&buffer[..]).try_into().unwrap());
-        results[identifier as usize - my_index - 1] = Some(stream);
-        info!(worker = my_index, "connection from worker {}", identifier);
+        let identifier: usize = u64::from_ne_bytes((&buffer[..]).try_into().unwrap())
+            .try_into()
+            .expect("Materialize must run on a 64-bit system");
+        // This is necessary for `gc_broken_connections`; it will be unset
+        // before actually trying to use the sockets.
+        stream
+            .set_nonblocking(true)
+            .expect("set_nonblocking(true) call failed");
+        assert!(identifier >= (my_index + 1));
+        assert!(identifier < addresses.len());
+        if results[identifier - my_index - 1].is_some() {
+            warn!(worker = my_index, "New incarnation of peer {identifier}");
+        }
+        results[identifier - my_index - 1] = Some(stream);
+        info!(worker = my_index, "connection from process {}", identifier);
+
+        // If a peer failed, it's better that we detect it now than spin up Timely
+        // and immediately crash.
+        gc_broken_connections(&mut results, my_index + 1);
     }
 
     Ok(results)

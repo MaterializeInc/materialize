@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 $ set schema={
     "name": "row",
     "type": "record",
@@ -17,7 +19,7 @@ $ set schema={
 
 $ kafka-create-topic topic=data
 
-$ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 1}
 
 > CREATE SECRET ssl_key_kafka AS '${arg.materialized-kafka-key}'
@@ -75,8 +77,8 @@ a
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
 
 $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
-{"before": null, "after": {"row":{"a": 1}}}
-{"before": null, "after": {"row":{"a": 2}}}
+{"before": null, "after": {"row":{"a": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"a": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
 
 > CREATE CONNECTION no_basic_auth_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -127,7 +129,7 @@ a
 ! CREATE SOURCE IF NOT EXISTS duplicate_option_specified
   FROM KAFKA CONNECTION kafka_ssl
   TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     security_protocol = 'ssl'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl

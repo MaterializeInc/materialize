@@ -70,6 +70,7 @@ pub enum PlanError {
     UpsertSinkWithoutKey,
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
+    InvalidObject(ResolvedObjectName),
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(ResolvedObjectName),
     InvalidTemporarySchema,
@@ -79,6 +80,7 @@ pub enum PlanError {
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
+    UnacceptableTimelineName(String),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -108,6 +110,9 @@ impl PlanError {
             }
             Self::ExplainViewOnMaterializedView(_) => {
                 Some("Use EXPLAIN [...] MATERIALIZED VIEW to explain a materialized view.".into())
+            }
+            Self::UnacceptableTimelineName(_) => {
+                Some("The prefix \"mz_\" is reserved for system timelines.".into())
             }
             _ => None,
         }
@@ -177,6 +182,9 @@ impl fmt::Display for PlanError {
                 "schema name '{}' cannot have more than two components",
                 name
             ),
+            Self::UnacceptableTimelineName(name) => {
+                write!(f, "unacceptable timeline name {}", name.quoted(),)
+            }
             Self::SubqueriesDisallowed { context } => {
                 write!(f, "{} does not allow subqueries", context)
             }
@@ -190,6 +198,7 @@ impl fmt::Display for PlanError {
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
             Self::Parser(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
+            Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::Qgm(e) => e.fmt(f),
             Self::InvalidTemporarySchema => {

@@ -19,12 +19,13 @@ use std::fmt::Debug;
 use std::iter;
 
 use async_trait::async_trait;
+use differential_dataflow::lattice::Lattice;
 use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
-use timely::progress::ChangeBatch;
+use timely::PartialOrder;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -32,7 +33,7 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
-use mz_timely_util::progress::any_change_batch;
+use mz_timely_util::progress::any_antichain;
 
 use crate::controller::CollectionMetadata;
 use crate::protocol::client::proto_storage_client::ProtoStorageClient;
@@ -276,8 +277,11 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageResponse<T = mz_repr::Timestamp> {
-    /// A list of identifiers of traces, with prior and new upper frontiers.
-    FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
+    /// A list of identifiers of traces, with new upper frontiers.
+    ///
+    /// TODO(teskje): Consider also reporting the previous upper frontier and using that
+    /// information to assert the correct implementation of our protocols at various places.
+    FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
@@ -309,7 +313,7 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4)
+            proptest::collection::vec((any::<GlobalId>(), any_antichain()), 1..4)
                 .prop_map(StorageResponse::FrontierUppers),
         ]
         .boxed()
@@ -324,14 +328,15 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
 pub struct PartitionedStorageState<T> {
     /// Number of partitions the state machine represents.
     parts: usize,
-    /// Upper frontiers for sources.
-    uppers: HashMap<GlobalId, MutableAntichain<T>>,
+    /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
+    /// individual partition.
+    uppers: HashMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
 }
 
 impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>
     for (StorageCommand<T>, StorageResponse<T>)
 where
-    T: timely::progress::Timestamp,
+    T: timely::progress::Timestamp + Lattice,
 {
     type PartitionedState = PartitionedStorageState<T>;
 
@@ -353,7 +358,8 @@ where
                 for ingestion in ingestions {
                     let mut frontier = MutableAntichain::new();
                     frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                    let previous = self.uppers.insert(ingestion.id, frontier);
+                    let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
+                    let previous = self.uppers.insert(ingestion.id, (frontier, part_frontiers));
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", ingestion.id, command);
                 }
             }
@@ -361,7 +367,8 @@ where
                 for export in exports {
                     let mut frontier = MutableAntichain::new();
                     frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                    let previous = self.uppers.insert(export.id, frontier);
+                    let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
+                    let previous = self.uppers.insert(export.id, (frontier, part_frontiers));
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
                 }
             }
@@ -374,7 +381,7 @@ where
 
 impl<T> PartitionedState<StorageCommand<T>, StorageResponse<T>> for PartitionedStorageState<T>
 where
-    T: timely::progress::Timestamp,
+    T: timely::progress::Timestamp + Lattice,
 {
     fn split_command(&mut self, command: StorageCommand<T>) -> Vec<StorageCommand<T>> {
         self.observe_command(&command);
@@ -384,36 +391,33 @@ where
 
     fn absorb_response(
         &mut self,
-        _shard_id: usize,
+        shard_id: usize,
         response: StorageResponse<T>,
     ) -> Option<Result<StorageResponse<T>, anyhow::Error>> {
         match response {
             // Avoid multiple retractions of minimum time, to present as updates from one worker.
-            StorageResponse::FrontierUppers(mut list) => {
-                for (id, changes) in list.iter_mut() {
-                    if let Some(frontier) = self.uppers.get_mut(id) {
-                        let iter = frontier.update_iter(changes.drain());
-                        changes.extend(iter);
-                    } else {
-                        changes.clear();
-                    }
-                }
-                // The following block implements a `list.retain()` of non-empty change batches.
-                // This is more verbose than `list.retain()` because that method cannot mutate
-                // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
-                let mut cursor = 0;
-                while let Some((_id, changes)) = list.get_mut(cursor) {
-                    if changes.is_empty() {
-                        list.swap_remove(cursor);
-                    } else {
-                        cursor += 1;
+            StorageResponse::FrontierUppers(list) => {
+                let mut new_uppers = Vec::new();
+
+                for (id, new_shard_upper) in list {
+                    if let Some((frontier, shard_frontiers)) = self.uppers.get_mut(&id) {
+                        let old_upper = frontier.frontier().to_owned();
+                        let shard_upper = &mut shard_frontiers[shard_id];
+                        frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
+                        frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
+                        shard_upper.join_assign(&new_shard_upper);
+
+                        let new_upper = frontier.frontier();
+                        if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
+                            new_uppers.push((id, new_upper.to_owned()));
+                        }
                     }
                 }
 
-                if list.is_empty() {
+                if new_uppers.is_empty() {
                     None
                 } else {
-                    Some(Ok(StorageResponse::FrontierUppers(list)))
+                    Some(Ok(StorageResponse::FrontierUppers(new_uppers)))
                 }
             }
         }
@@ -428,37 +432,26 @@ pub struct Update<T = mz_repr::Timestamp> {
     pub diff: Diff,
 }
 
-impl RustType<ProtoTrace> for (GlobalId, ChangeBatch<mz_repr::Timestamp>) {
+impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>) {
     fn into_proto(&self) -> ProtoTrace {
         ProtoTrace {
             id: Some(self.0.into_proto()),
-            updates: self
-                .1
-                // Clone because the `iter()` expects
-                // `trace` to be mutable.
-                .clone()
-                .iter()
-                .map(|(t, d)| ProtoUpdate {
-                    timestamp: *t,
-                    diff: *d,
-                })
-                .collect(),
+            upper: Some((&self.1).into()),
         }
     }
 
     fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
-        let mut batch = ChangeBatch::new();
-        batch.extend(
+        Ok((
+            proto.id.into_rust_if_some("ProtoTrace::id")?,
             proto
-                .updates
-                .into_iter()
-                .map(|update| (update.timestamp, update.diff)),
-        );
-        Ok((proto.id.into_rust_if_some("ProtoTrace::id")?, batch))
+                .upper
+                .map(Into::into)
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTrace::upper"))?,
+        ))
     }
 }
 
-impl RustType<ProtoFrontierUppersKind> for Vec<(GlobalId, ChangeBatch<mz_repr::Timestamp>)> {
+impl RustType<ProtoFrontierUppersKind> for Vec<(GlobalId, Antichain<mz_repr::Timestamp>)> {
     fn into_proto(&self) -> ProtoFrontierUppersKind {
         ProtoFrontierUppersKind {
             traces: self.into_proto(),
@@ -511,19 +504,7 @@ mod tests {
         fn storage_response_protobuf_roundtrip(expect in any::<StorageResponse<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoStorageResponse>(&expect);
             assert!(actual.is_ok());
-            let actual = actual.unwrap();
-            let StorageResponse::FrontierUppers(expected_traces) = expect;
-            let StorageResponse::FrontierUppers(actual_traces) = actual;
-            assert_eq!(actual_traces.len(), expected_traces.len());
-            for ((actual_id, mut actual_changes), (expected_id, mut expected_changes)) in actual_traces.into_iter().zip(expected_traces.into_iter()) {
-                assert_eq!(actual_id, expected_id);
-                // `ChangeBatch`es representing equivalent sets of
-                // changes could have different internal
-                // representations, so they need to be compacted before comparing.
-                actual_changes.compact();
-                expected_changes.compact();
-                assert_eq!(actual_changes, expected_changes);
-            }
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

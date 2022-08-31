@@ -31,6 +31,9 @@ mod regproc;
 mod string;
 mod time;
 mod timestamp;
+mod uint16;
+mod uint32;
+mod uint64;
 mod uuid;
 mod varchar;
 
@@ -59,4 +62,7 @@ pub use regproc::*;
 pub use string::*;
 pub use time::*;
 pub use timestamp::*;
+pub use uint16::*;
+pub use uint32::*;
+pub use uint64::*;
 pub use varchar::*;

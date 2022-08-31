@@ -47,6 +47,55 @@ def test_storaged_creation(mz: MaterializeApplication) -> None:
         storaged = f"pod/storage-{id}-0"
         wait(condition="condition=Ready", resource=storaged)
 
+        mz.environmentd.sql(f"DROP SOURCE {source}")
+        wait(condition="delete", resource=storaged)
+
+
+def test_storaged_resizing(mz: MaterializeApplication) -> None:
+    """Test that resizing a given source causes the storaged to be replaced."""
+    mz.testdrive.run_string(
+        dedent(
+            """
+            $ kafka-create-topic topic=test
+
+            $ kafka-ingest format=bytes topic=test
+            ABC
+
+            > CREATE SOURCE resize_storaged
+              FROM KAFKA BROKER '${testdrive.kafka-addr}'
+              TOPIC 'testdrive-test-${testdrive.seed}'
+              FORMAT BYTES
+              ENVELOPE NONE;
+            """
+        )
+    )
+    id = mz.environmentd.sql_query(
+        f"SELECT id FROM mz_sources WHERE name = 'resize_storaged'"
+    )[0][0]
+    assert id is not None
+    storaged = f"pod/storage-{id}-0"
+
+    wait(condition="condition=Ready", resource=storaged)
+
+    mz.testdrive.run_string(
+        dedent(
+            """
+            > ALTER SOURCE resize_storaged
+              SET (SIZE '16');
+            """
+        ),
+        no_reset=True,
+    )
+
+    wait(condition="condition=Ready", resource=storaged)
+
+    # NB: We'd like to do the following, but jsonpath gives us no way to express it!
+    # TODO: revisit or handroll a retry loop
+    # wait(condition=f"jsonpath=metadata.labels.storage.environmentd.materialize.cloud/size=16", resource=storaged)
+
+    mz.environmentd.sql("DROP SOURCE resize_storaged")
+    wait(condition="delete", resource=storaged)
+
 
 def test_storaged_shutdown(mz: MaterializeApplication) -> None:
     """Test that dropping a source causes its respective storaged to shut down."""
@@ -64,7 +113,7 @@ def test_storaged_shutdown(mz: MaterializeApplication) -> None:
               FORMAT BYTES
               ENVELOPE NONE;
 
-            # Those two objects do not currenly create storaged instances
+            # Those two objects do not currently create storaged instances
             # > CREATE MATERIALIZED VIEW view1 AS SELECT COUNT(*) FROM source1;
 
             # > CREATE SINK sink1

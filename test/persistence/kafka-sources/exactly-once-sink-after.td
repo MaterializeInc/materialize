@@ -23,7 +23,7 @@ $ set schema={
         ]
     }
 
-$ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=2 start-iteration=40
+$ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} repeat=2 start-iteration=40
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
 

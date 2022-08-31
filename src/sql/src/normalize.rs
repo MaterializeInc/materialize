@@ -157,6 +157,12 @@ pub fn options(
             Some(WithOptionValue::Secret(_)) => {
                 panic!("SECRET option {} must be Object", option.key)
             }
+            Some(WithOptionValue::Object(ResolvedObjectName::Object { id, .. })) => {
+                SqlValueOrSecret::Secret(*id)
+            }
+            Some(WithOptionValue::Object(_)) => {
+                panic!("Object option {} must be Object", option.key)
+            }
             None => {
                 sql_bail!("option {} requires a value", option.key);
             }
@@ -393,7 +399,6 @@ pub fn create_statement(
             format: _,
             envelope: _,
             with_snapshot: _,
-            as_of: _,
             if_not_exists,
             ..
         }) => {
@@ -559,7 +564,7 @@ macro_rules! generate_extracted_config {
             pub struct [<$option_ty Extracted>] {
                 seen: HashSet::<[<$option_ty Name>]>,
                 $(
-                    [<$option_name:snake>]: $t,
+                    pub(crate) [<$option_name:snake>]: $t,
                 )*
             }
 

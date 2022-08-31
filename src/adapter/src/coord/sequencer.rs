@@ -31,6 +31,7 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
+use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
@@ -39,6 +40,7 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Ti
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
+
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
@@ -50,10 +52,12 @@ use mz_sql::plan::{
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
+    RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
 };
+
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
+
 use mz_storage::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, StorageSinkConnectionBuilder,
     TailSinkConnection,
@@ -401,6 +405,9 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::Raise(RaisePlan { severity }) => {
                 tx.send(Ok(ExecuteResponse::Raise { severity }), session);
             }
+            Plan::RotateKeys(RotateKeysPlan { id }) => {
+                tx.send(self.sequence_rotate_keys(&session, id).await, session);
+            }
         }
     }
 
@@ -499,22 +506,58 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog.allocate_oid().await?;
         let connection_gid = self.catalog.allocate_user_id().await?;
+        let mut connection = plan.connection.connection.clone();
+
+        if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) = connection {
+            let keyset = SshKeyset::new()?;
+            self.secrets_controller
+                .ensure(connection_gid, &keyset.to_bytes())
+                .await?;
+
+            ssh.public_keys = Some(keyset.public_keys());
+        }
+
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
             oid: connection_oid,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                connection: plan.connection.connection,
+                connection,
                 depends_on,
             }),
         }];
+
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection { existed: false }),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_rotate_keys(
+        &mut self,
+        session: &Session,
+        id: GlobalId,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let secret = self.secrets_controller.reader().read(id).await?;
+        let previous_keyset = SshKeyset::from_bytes(&secret)?;
+        let new_keyset = previous_keyset.rotate()?;
+        self.secrets_controller
+            .ensure(id, &new_keyset.to_bytes())
+            .await?;
+
+        let ops = vec![catalog::Op::UpdateRotatedKeys {
+            id,
+            previous_public_keypair: previous_keyset.public_keys(),
+            new_public_keypair: new_keyset.public_keys(),
+        }];
+
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
             Err(err) => Err(err),
         }
     }
@@ -911,6 +954,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
+                // We must advance the timeline to `since_ts` so that the table is not invalid.
+                let timeline = self
+                    .get_timeline(table_id)
+                    .expect("Table not present in a timeline");
+                let old_read_holds = self
+                    .ensure_timeline_state(timeline.clone())
+                    .await
+                    .read_holds
+                    .clone();
+                let new_read_holds = self.update_read_hold(old_read_holds, since_ts).await;
+                self.ensure_timeline_state(timeline).await.read_holds = new_read_holds;
+
                 self.initialize_storage_read_policies(
                     vec![table_id],
                     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
@@ -1081,7 +1136,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         tx,
                         id,
                         oid,
-                        result: sink_connection::build(connection_builder, id, connection_context)
+                        result: sink_connection::build(connection_builder, connection_context)
                             .await,
                     }));
                 if let Err(e) = result {
@@ -2074,7 +2129,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 from,
                 from_desc,
                 connection: ComputeSinkConnection::Tail(TailSinkConnection::default()),
-                envelope: None,
                 as_of: SinkAsOf {
                     frontier: Antichain::from_elem(timestamp),
                     strict: !with_snapshot,
@@ -2503,12 +2557,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         sources.push(TimestampSource {
                             name: format!("{name} ({id}, storage)"),
                             read_frontier: state.implied_capability.elements().to_vec(),
-                            write_frontier: state
-                                .write_frontier
-                                .frontier()
-                                .to_owned()
-                                .elements()
-                                .to_vec(),
+                            write_frontier: state.write_frontier.elements().to_vec(),
                         });
                     }
                 }
@@ -2529,13 +2578,8 @@ impl<S: Append + 'static> Coordinator<S> {
                                 .unwrap_or_else(|| id.to_string());
                             sources.push(TimestampSource {
                                 name: format!("{name} ({id}, compute)"),
-                                read_frontier: state.implied_capability.elements().to_vec(),
-                                write_frontier: state
-                                    .write_frontier
-                                    .frontier()
-                                    .to_owned()
-                                    .elements()
-                                    .to_vec(),
+                                read_frontier: state.read_capability().elements().to_vec(),
+                                write_frontier: state.write_frontier().to_vec(),
                             });
                         }
                     }
@@ -3127,6 +3171,29 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
 
+    async fn sequence_alter_source(
+        &mut self,
+        session: &Session,
+        AlterSourcePlan { id, size, remote }: AlterSourcePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::AlterSource { id, size, remote };
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
+
+        // Re-fetch the updated item from the catalog
+        let entry = self.catalog.get_entry(&id);
+        let updated_source = entry.source().ok_or_else(|| {
+            CatalogError::UnexpectedType(entry.name().to_string(), CatalogItemType::Source)
+        })?;
+
+        self.controller
+            .storage_mut()
+            .alter_collections(vec![(id, updated_source.host_config.clone())])
+            .await?;
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
+    }
+
     fn extract_secret(
         &mut self,
         session: &Session,
@@ -3175,14 +3242,6 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         return Ok(Vec::from(payload));
-    }
-
-    async fn sequence_alter_source(
-        &mut self,
-        _: &Session,
-        _: AlterSourcePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        coord_bail!("ALTER SOURCE not yet implemented")
     }
 
     async fn sequence_alter_system_set(

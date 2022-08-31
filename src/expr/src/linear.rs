@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -121,6 +122,24 @@ impl RustType<ProtoPredicate> for (usize, MirScalarExpr) {
                 .predicate
                 .into_rust_if_some("ProtoPredicate::predicate")?,
         ))
+    }
+}
+
+impl Display for MapFilterProject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "MapFilterProject(")?;
+        writeln!(f, "  expressions:")?;
+        self.expressions
+            .iter()
+            .enumerate()
+            .try_for_each(|(i, e)| writeln!(f, "    #{} <- {},", i + self.input_arity, e))?;
+        writeln!(f, "  predicates:")?;
+        self.predicates
+            .iter()
+            .try_for_each(|(before, p)| write!(f, "    <before: {}> {},", before, p))?;
+        writeln!(f, "  projection: {:?}", self.projection)?;
+        writeln!(f, "  input_arity: {}", self.input_arity)?;
+        writeln!(f, ")")
     }
 }
 
@@ -1048,13 +1067,27 @@ impl MapFilterProject {
             }
         }
         // Inline expressions per `should_inline`.
+        self.perform_inlining(should_inline);
+        // We can only inline column references in `self.projection`, but we should.
+        for proj in self.projection.iter_mut() {
+            if *proj >= self.input_arity {
+                if let MirScalarExpr::Column(i) = self.expressions[*proj - self.input_arity] {
+                    *proj = i;
+                }
+            }
+        }
+    }
+
+    /// Inlines those expressions that are indicated by should_inline.
+    /// See `inline_expressions` for usage.
+    pub fn perform_inlining(&mut self, should_inline: Vec<bool>) {
         for index in 0..self.expressions.len() {
             let (prior, expr) = self.expressions.split_at_mut(index);
             #[allow(deprecated)]
             expr[0].visit_mut_post_nolimit(&mut |e| {
                 if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
-                        *e = prior[*i - input_arity].clone();
+                        *e = prior[*i - self.input_arity].clone();
                     }
                 }
             });
@@ -1065,18 +1098,10 @@ impl MapFilterProject {
             pred.visit_mut_post_nolimit(&mut |e| {
                 if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
-                        *e = expressions[*i - input_arity].clone();
+                        *e = expressions[*i - self.input_arity].clone();
                     }
                 }
             });
-        }
-        // We can only inline column references in `self.projection`, but we should.
-        for proj in self.projection.iter_mut() {
-            if *proj >= self.input_arity {
-                if let MirScalarExpr::Column(i) = self.expressions[*proj - self.input_arity] {
-                    *proj = i;
-                }
-            }
         }
     }
 
@@ -1629,12 +1654,13 @@ pub mod plan {
         ///
         /// The `row_builder` is not cleared first, but emptied if the function
         /// returns an iterator with any `Ok(_)` element.
-        pub fn evaluate<'b, 'a: 'b, E: From<EvalError>>(
+        pub fn evaluate<'b, 'a: 'b, E: From<EvalError>, V: Fn(&mz_repr::Timestamp) -> bool>(
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
             time: mz_repr::Timestamp,
             diff: Diff,
+            valid_time: V,
             row_builder: &mut Row,
         ) -> impl Iterator<Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>>
         {
@@ -1697,6 +1723,13 @@ pub mod plan {
                 }
             }
 
+            // If the lower bound exceeds our `until` frontier, it should not appear in the output.
+            if let Some(lower) = &mut lower_bound {
+                if !valid_time(lower) {
+                    lower_bound = None;
+                }
+            }
+
             // If the lower bound exceeds `u64::MAX` the update cannot appear in the output.
             if lower_bound.is_none() {
                 return None.into_iter().chain(None.into_iter());
@@ -1745,6 +1778,13 @@ pub mod plan {
                             panic!("Non-decimal value in temporal predicate: {:?}", x);
                         }
                     }
+                }
+            }
+
+            // If the upper bound exceeds our `until` frontier, it should not appear in the output.
+            if let Some(upper) = &mut upper_bound {
+                if !valid_time(upper) {
+                    upper_bound = None;
                 }
             }
 

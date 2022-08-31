@@ -330,7 +330,7 @@ impl Consensus for PostgresConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
+    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -378,13 +378,14 @@ impl Consensus for PostgresConsensus {
         if result == 1 {
             Ok(Ok(()))
         } else {
-            // It's safe to call head in a subsequent transaction rather than doing
+            // It's safe to call scan in a subsequent transaction rather than doing
             // so directly in the same transaction because, once a given (seqno, data)
             // pair exists for our shard, we enforce the invariants that
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(key).await?;
+            let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
+            let current = self.scan(key, from).await?;
             Ok(Err(current))
         }
     }
@@ -408,15 +409,7 @@ impl Consensus for PostgresConsensus {
                 data: Bytes::from(data),
             });
         }
-
-        if results.is_empty() {
-            Err(ExternalError::from(anyhow!(
-                "sequence number lower bound too high for scan: {:?}",
-                from
-            )))
-        } else {
-            Ok(results)
-        }
+        Ok(results)
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {

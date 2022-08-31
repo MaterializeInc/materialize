@@ -1,6 +1,7 @@
 ---
 title: "CREATE SOURCE: PostgreSQL"
 description: "Connecting Materialize to a PostgreSQL database"
+pagerank: 10
 menu:
   main:
     parent: 'create-source'
@@ -27,14 +28,6 @@ _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **CONNECTION** _connection_name_ | The name of the Postgres connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
 **PUBLICATION** _publication_name_ | Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
-
-### `WITH` options
-
-The following option is valid within the `WITH` clause.
-
-Field | Value type | Description
-------|------------|------------
-`timestamp_frequency_ms`  |  `int` |  Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently the source advances its timestamp. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
 
 ## Features
 
