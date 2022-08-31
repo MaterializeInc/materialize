@@ -119,7 +119,7 @@ fn start_connections(
     addresses: Arc<Vec<String>>,
     my_index: usize,
 ) -> Result<Vec<Option<TcpStream>>, io::Error> {
-    let addresses: Vec<_> = addresses.iter().cloned().take(my_index).collect();
+    let addresses: Vec<_> = addresses.iter().take(my_index).cloned().collect();
     let mut results: Vec<_> = (0..my_index).map(|_| None).collect();
 
     // We do not want to provide opportunities for the startup
