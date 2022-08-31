@@ -398,6 +398,50 @@ SELECT a FROM t1 WHERE b IN ('l1', 'l2') AND (a > 0 OR a < 5)
 1
 2
 
+# Impossible predicates (exercise `remove_impossible_or_args`)
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE a = 3 AND a = 5
+----
+%0 =
+| Constant
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE a IN (1,2) AND a IN (3,4,5)
+----
+%0 =
+| Constant
+
+EOF
+
+# Only some subexpressions of the predicates can be removed due to being impossible
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE (a = 4 AND a = 7) OR (a = 9)
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_a
+| | Lookup value (9)
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE a IN (1,2) AND a IN (2,3,4)
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_a
+| | Lookup value (2)
+| Project (#0)
+
+EOF
+
 # In the following query, we would be able to detect literal constraints if we called `canonicalize_equivalences`
 
 query T multiline
