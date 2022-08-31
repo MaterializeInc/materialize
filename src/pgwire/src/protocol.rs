@@ -1231,6 +1231,7 @@ where
             | ExecuteResponse::CreatedTable { .. }
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedView { .. }
+            | ExecuteResponse::CreatedViews { .. }
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
             | ExecuteResponse::DiscardedAll

@@ -1187,8 +1187,8 @@ impl<S: Append + 'static> Coordinator<S> {
             ops.append(&mut view_ops);
         }
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
-            Ok(()) => Ok(ExecuteResponse::CreatedView { existed: false }),
-            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            Ok(()) => Ok(ExecuteResponse::CreatedViews { existed: false }),
+            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedViews { existed: true }),
             Err(err) => Err(err),
         }
     }
