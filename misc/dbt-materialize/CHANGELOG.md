@@ -26,8 +26,11 @@
 
   * A new `cluster` connection parameter, which specifies the default cluster
     for the connection.
-  * A new `cluster` option for materializedview and view materializations,
-    which specifies the cluster for an individual view or materialized view.
+  * A new `cluster` option for materializedview and view materializations.
+    For materialized views, this determines the cluster in which the materialized view
+    is created. For both views and materializedviews, this also determines the cluster
+    in which any indexes are created by default. If unspecified, the default cluster for
+    the connection is used.
 
   ```sql
   {{ config(materialized='materializedview', cluster='not_default') }}
