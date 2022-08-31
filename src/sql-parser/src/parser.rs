@@ -2524,37 +2524,11 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-        let consistency = self.parse_kafka_consistency()?;
         Ok(CreateSinkConnection::Kafka {
             connection,
             topic,
             key,
-            consistency,
         })
-    }
-
-    fn parse_kafka_consistency(&mut self) -> Result<Option<KafkaConsistency<Raw>>, ParserError> {
-        if self.parse_keyword(CONSISTENCY) {
-            self.expect_token(&Token::LParen)?;
-
-            self.expect_keyword(TOPIC)?;
-            let topic = self.parse_literal_string()?;
-
-            let topic_format = if self.parse_keyword(FORMAT) {
-                Some(self.parse_format()?)
-            } else {
-                None
-            };
-
-            self.expect_token(&Token::RParen)?;
-
-            Ok(Some(KafkaConsistency {
-                topic,
-                topic_format,
-            }))
-        } else {
-            Ok(None)
-        }
     }
 
     fn parse_create_view(&mut self) -> Result<Statement<Raw>, ParserError> {

@@ -1032,7 +1032,6 @@ pub enum CreateSinkConnection<T: AstInfo> {
         connection: KafkaConnection<T>,
         topic: String,
         key: Option<KafkaSinkKey>,
-        consistency: Option<KafkaConsistency<T>>,
     },
 }
 
@@ -1043,7 +1042,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 connection,
                 topic,
                 key,
-                consistency,
             } => {
                 f.write_str("KAFKA ");
                 f.write_node(connection);
@@ -1053,35 +1051,11 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 if let Some(key) = key.as_ref() {
                     f.write_node(key);
                 }
-                if let Some(consistency) = consistency.as_ref() {
-                    f.write_node(consistency);
-                }
             }
         }
     }
 }
 impl_display_t!(CreateSinkConnection);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KafkaConsistency<T: AstInfo> {
-    pub topic: String,
-    pub topic_format: Option<Format<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for KafkaConsistency<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(" CONSISTENCY (TOPIC '");
-        f.write_node(&display::escape_single_quote_string(&self.topic));
-        f.write_str("'");
-
-        if let Some(format) = self.topic_format.as_ref() {
-            f.write_str(" FORMAT ");
-            f.write_node(format);
-        }
-        f.write_str(")");
-    }
-}
-impl_display_t!(KafkaConsistency);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaSinkKey {

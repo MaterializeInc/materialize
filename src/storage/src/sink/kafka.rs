@@ -800,8 +800,8 @@ impl KafkaSinkState {
                 let timestamp_opt = {
                     match std::str::from_utf8(&key) {
                         Ok(str_key) if str_key == consistency_key => {
-                            let what: ProgressRecord = serde_json::from_slice(&message)?;
-                            Some(what.timestamp)
+                            let progress: ProgressRecord = serde_json::from_slice(&message)?;
+                            Some(progress.timestamp)
                         }
                         _ => None,
                     }

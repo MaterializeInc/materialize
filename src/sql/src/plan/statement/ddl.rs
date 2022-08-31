@@ -78,8 +78,8 @@ use crate::ast::{
     DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
-    KafkaConnectionOption, KafkaConnectionOptionName, KafkaConsistency, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
+    KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
     PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
@@ -1819,7 +1819,6 @@ fn kafka_sink_builder(
     scx: &StatementContext,
     connection: mz_sql_parser::ast::KafkaConnection<Aug>,
     format: Option<Format<Aug>>,
-    _consistency: Option<KafkaConsistency<Aug>>,
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
     topic_name: String,
     relation_key_indices: Option<Vec<usize>>,
@@ -2126,15 +2125,11 @@ pub fn plan_create_sink(
 
     let connection_builder = match connection {
         CreateSinkConnection::Kafka {
-            connection,
-            topic,
-            consistency,
-            ..
+            connection, topic, ..
         } => kafka_sink_builder(
             scx,
             connection,
             format,
-            consistency,
             &mut with_options,
             topic,
             relation_key_indices,
