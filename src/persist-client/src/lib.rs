@@ -774,8 +774,8 @@ mod tests {
                 .await;
             let fetcher1 = read1.clone().await.batch_fetcher().await;
             for batch in snap {
-                let (batch, res) = fetcher1.fetch_batch(batch).await;
-                read0.process_returned_leased_batch(batch);
+                let (batch, res) = fetcher1.fetch_leased_part(batch).await;
+                read0.process_returned_leased_part(batch);
                 assert_eq!(
                     res.unwrap_err(),
                     InvalidUsage::BatchNotFromThisShard {

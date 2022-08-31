@@ -3735,6 +3735,7 @@ dependencies = [
  "prost-build",
  "protobuf-src",
  "rand",
+ "serde",
  "serde_json",
  "tempfile",
  "timely",
