@@ -385,7 +385,7 @@ pub fn plan_create_source(
                 }
                 mz_sql_parser::ast::KafkaConnection::Reference {
                     connection,
-                    with_options,
+                    options: with_options,
                 } => {
                     let item = scx.get_item_by_resolved_name(&connection)?;
                     let connection = match item.connection()? {
@@ -2131,7 +2131,7 @@ fn kafka_sink_builder(
     ) = match connection {
         mz_sql_parser::ast::KafkaConnection::Reference {
             connection,
-            with_options,
+            options: with_options,
         } => {
             let item = scx.get_item_by_resolved_name(&connection)?;
             // Get Kafka connection

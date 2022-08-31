@@ -21,35 +21,31 @@
   URL '${testdrive.schema-registry-url}';
 
 ! CREATE SINK invalid_partition_count FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  WITH (PARTITION COUNT = a)
+  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT = a)
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:invalid PARTITION COUNT: cannot use value as number
 
 ! CREATE SINK invalid_partition_count FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  WITH (PARTITION COUNT = -2)
+  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT = -2)
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:PARTION COUNT for sink topics must be a positive integer or -1 for broker default
 
 ! CREATE SINK invalid_replication_factor FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  WITH (REPLICATION FACTOR = a)
+  INTO KAFKA CONNECTION kafka_conn (REPLICATION FACTOR = a)
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:invalid REPLICATION FACTOR: cannot use value as number
 
 ! CREATE SINK invalid_replication_factor FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  WITH (REPLICATION FACTOR = -2)
+  INTO KAFKA CONNECTION kafka_conn (REPLICATION FACTOR = -2)
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:REPLICATION FACTOR for sink topics must be a positive integer or -1 for broker default
 
 ! CREATE SINK invalid_acks FROM v1
-  INTO KAFKA CONNECTION kafka_conn WITH (ACKS = foo)
+  INTO KAFKA CONNECTION kafka_conn (ACKS = foo)
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Invalid value for configuration property "request.required.acks" acks foo
@@ -65,29 +61,25 @@ contains:No such column: f2
 # Retention options
 #
 ! CREATE SINK invalid_retention_ms FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  WITH (RETENTION MS = a)
+  INTO KAFKA CONNECTION kafka_conn (RETENTION MS = a)
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:invalid RETENTION MS: cannot use value as number
 
 ! CREATE SINK invalid_retention_ms FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  WITH (RETENTION MS = -2)
+  INTO KAFKA CONNECTION kafka_conn (RETENTION MS = -2)
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:RETENTION MS for sink topics must be greater than or equal to -1
 
 ! CREATE SINK invalid_retention_bytes FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  WITH (RETENTION BYTES = a)
+  INTO KAFKA CONNECTION kafka_conn (RETENTION BYTES = a)
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:invalid RETENTION BYTES: cannot use value as number
 
 ! CREATE SINK invalid_retention_bytes FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  WITH (RETENTION BYTES = -2)
+  INTO KAFKA CONNECTION kafka_conn (RETENTION BYTES = -2)
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:RETENTION BYTES for sink topics must be greater than or equal to -1

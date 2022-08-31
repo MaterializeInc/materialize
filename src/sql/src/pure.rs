@@ -84,7 +84,7 @@ pub async fn purify_create_source(
             match connection {
                 KafkaConnection::Reference {
                     connection,
-                    with_options: base_with_options,
+                    options: base_with_options,
                 } => {
                     let scx = StatementContext::new(None, &*catalog);
                     let connection = {

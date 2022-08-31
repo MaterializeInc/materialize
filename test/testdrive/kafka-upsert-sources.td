@@ -313,8 +313,7 @@ water     <null>  crocodile      7
 
 # Ensure that Upsert sources work with START OFFSET
 > CREATE SOURCE realtimeavroavro_ff
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[1])
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1])
   TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -521,8 +520,7 @@ k1        k2
 librairie 10
 
 > CREATE SOURCE include_metadata
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[1])
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1])
   TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -537,8 +535,7 @@ air       qi        chicken      47    0         13
 earth     dao       rhinoceros   211   0         12
 
 > CREATE SOURCE include_metadata_ts
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[1])
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1])
   TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

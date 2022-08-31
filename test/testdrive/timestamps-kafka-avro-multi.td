@@ -30,8 +30,7 @@ $ kafka-create-topic topic=data2 partitions=2
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE SOURCE data_rt
-    FROM KAFKA CONNECTION kafka_conn
-      WITH (TOPIC METADATA REFRESH INTERVAL MS=50)
+    FROM KAFKA CONNECTION kafka_conn (TOPIC METADATA REFRESH INTERVAL MS=50)
     TOPIC 'testdrive-data-${testdrive.seed}'
     FORMAT AVRO USING SCHEMA '${schema}'
 

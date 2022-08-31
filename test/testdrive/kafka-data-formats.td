@@ -36,8 +36,7 @@ $ kafka-ingest format=bytes topic=input_csv_partitioned partition=1
 2,3
 
 > CREATE SOURCE input_csv_partitioned (first, second)
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[1,0])
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1,0])
   TOPIC 'testdrive-input_csv_partitioned-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS;
 

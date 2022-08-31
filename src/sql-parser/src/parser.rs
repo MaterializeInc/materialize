@@ -1999,8 +1999,7 @@ impl<'a> Parser<'a> {
 
     fn parse_kafka_connection_reference(&mut self) -> Result<KafkaConnection<Raw>, ParserError> {
         let connection = self.parse_raw_name()?;
-        let with_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
+        let options = if self.consume_token(&Token::LParen) {
             let options = self.parse_comma_separated(Parser::parse_kafka_config_options)?;
             self.expect_token(&Token::RParen)?;
             options
@@ -2010,7 +2009,7 @@ impl<'a> Parser<'a> {
 
         Ok(KafkaConnection::Reference {
             connection,
-            with_options,
+            options,
         })
     }
 

@@ -143,8 +143,7 @@ a  b  json                     c            d             e                   f
 -1  7 "[1,2,3]"                FileNotFound True          <null>              <null>
 
 ! CREATE SOURCE fast_forwarded
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[2])
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[2])
   TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
@@ -235,8 +234,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-multi-partition schema=${non-dbz-s
 {"a": 1, "b": 2}
 
 > CREATE SOURCE non_dbz_data_multi_partition
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[1])
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1])
   TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -247,8 +245,7 @@ a  b
 4  1
 
 > CREATE SOURCE non_dbz_data_multi_partition_2
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[0,0])
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[0,0])
   TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -260,8 +257,7 @@ a  b
 4  1
 
 > CREATE SOURCE non_dbz_data_multi_partition_fast_forwarded
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[0,1])
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[0,1])
   TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -272,8 +268,7 @@ a  b
 1  2
 
 > CREATE SOURCE non_dbz_data_multi_partition_fast_forwarded_2
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[1,0])
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1,0])
   TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -291,8 +286,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 {"a": 5, "b": 6}
 
 > CREATE SOURCE non_dbz_data_varying_partition
-  FROM KAFKA CONNECTION kafka_conn
-    WITH (
+  FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL MS=10,
       START OFFSET=[1]
     )
@@ -344,8 +338,7 @@ a  b
 9  10
 
 > CREATE SOURCE non_dbz_data_varying_partition_3
-  FROM KAFKA CONNECTION kafka_conn
-    WITH (
+  FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL MS=10,
       START OFFSET=[1,1]
     )
@@ -675,8 +668,7 @@ a b
 2 3
 
 > CREATE SOURCE ms_dbz_uncommitted
-  FROM KAFKA CONNECTION kafka_conn
-    WITH (ISOLATION LEVEL = 'read_uncommitted')
+  FROM KAFKA CONNECTION kafka_conn (ISOLATION LEVEL = 'read_uncommitted')
   TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
   ENVELOPE DEBEZIUM

@@ -848,7 +848,7 @@ pub enum KafkaConnection<T: AstInfo> {
     },
     Reference {
         connection: T::ObjectName,
-        with_options: Vec<KafkaConfigOption<T>>,
+        options: Vec<KafkaConfigOption<T>>,
     },
 }
 
@@ -862,13 +862,13 @@ impl<T: AstInfo> AstDisplay for KafkaConnection<T> {
             }
             KafkaConnection::Reference {
                 connection,
-                with_options,
+                options,
             } => {
                 f.write_str("CONNECTION ");
                 f.write_node(connection);
-                if !with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(with_options));
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
                     f.write_str(")");
                 }
             }
