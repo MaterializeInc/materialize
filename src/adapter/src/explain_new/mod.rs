@@ -30,7 +30,6 @@ use mz_storage::types::transforms::LinearOperator;
 
 use crate::coord::peek::{self, FastPathPlan};
 
-pub(crate) mod common;
 pub(crate) mod hir;
 pub(crate) mod lir;
 pub(crate) mod mir;
