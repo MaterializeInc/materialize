@@ -1,0 +1,177 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+)
+
+statement ok
+CREATE TABLE u (
+  c int,
+  d int
+)
+
+# A global aggregation has a key []
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR SELECT sum(a) FROM t
+----
+Explained Query
+  Let // { keys: "([])" }
+    Union // { keys: "([])" }
+      Get l0 // { keys: "([])" }
+      Map (null) // { keys: "()" }
+        Union // { keys: "()" }
+          Negate // { keys: "()" }
+            Project () // { keys: "([])" }
+              Get l0 // { keys: "([])" }
+          Constant // { keys: "([])" }
+            - ()
+    Where
+      l0 =
+        Reduce aggregates=[sum(#0)] // { keys: "([])" }
+          Project (#0) // { keys: "()" }
+            Get materialize.public.t // { keys: "()" }
+
+Source materialize.public.t
+  Demand (#0)
+
+EOF
+
+# all columns that have unique values are unique keys of an ok constant
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(keys, no_fast_path) AS TEXT FOR SELECT * FROM (VALUES (1, 2, 3), (4, 2, 4));
+----
+Explained Query
+  Constant // { keys: "([0], [2])" }
+    - (1, 2, 3)
+    - (4, 2, 4)
+
+EOF
+
+statement ok
+CREATE VIEW v as SELECT c, d FROM u GROUP BY c, d;
+
+statement ok
+CREATE DEFAULT INDEX on v;
+
+# join + unique key sets being split by a predicate `<column1> = <column2>`
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR
+SELECT * FROM
+(SELECT sum(a) as a, b FROM t GROUP BY b) t
+INNER JOIN
+(SELECT * FROM v WHERE c = d) u
+ON t.b = u.d;
+----
+Explained Query
+  Project (#1, #0, #2, #0) // { keys: "([1])" }
+    Join on=(#0 = #3) type=differential // { keys: "([0])" }
+      ArrangeBy keys=[[#0]] // { keys: "([0])" }
+        Reduce group_by=[#1] aggregates=[sum(#0)] // { keys: "([0])" }
+          Filter (#1) IS NOT NULL // { keys: "()" }
+            Get materialize.public.t // { keys: "()" }
+      Filter (#0 = #1) // { keys: "([0], [1])" }
+        Get materialize.public.v // { keys: "([0, 1])" }
+
+Source materialize.public.t
+  Demand (#0, #1)
+  Filter (#1) IS NOT NULL
+
+Used Indexes:
+  - materialize.public.v_primary_idx
+
+EOF
+
+# topk limit = 1 + filter column = constant
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR
+(SELECT a, c::double FROM
+    (SELECT DISTINCT c FROM u) grp,
+    LATERAL (
+        SELECT a FROM t
+        WHERE b = grp.c
+        LIMIT 1
+    ))
+EXCEPT ALL
+(SELECT c, d::double FROM v WHERE c = 1)
+----
+Explained Query
+  Threshold // { keys: "()" }
+    Union // { keys: "()" }
+      Project (#1, #2) // { keys: "([1])" }
+        Map (integer_to_double(#0)) // { keys: "([0], [2])" }
+          TopK group_by=[#0] limit=1 monotonic=false // { keys: "([0])" }
+            Project (#0, #1) // { keys: "()" }
+              Join on=(#0 = #2) type=differential // { keys: "()" }
+                ArrangeBy keys=[[#0]] // { keys: "([0])" }
+                  Distinct group_by=[#0] // { keys: "([0])" }
+                    Project (#0) // { keys: "()" }
+                      Filter (#0) IS NOT NULL // { keys: "()" }
+                        Get materialize.public.u // { keys: "()" }
+                Filter (#1) IS NOT NULL // { keys: "()" }
+                  Get materialize.public.t // { keys: "()" }
+      Negate // { keys: "()" }
+        Project (#0, #2) // { keys: "([1])" }
+          Filter (#0 = 1) // { keys: "([1], [2])" }
+            Map (integer_to_double(#1)) // { keys: "([0, 1], [0, 2])" }
+              Get materialize.public.v // { keys: "([0, 1])" }
+
+Source materialize.public.t
+  Demand (#0, #1)
+  Filter (#1) IS NOT NULL
+Source materialize.public.u
+  Demand (#0)
+  Filter (#0) IS NOT NULL
+
+Used Indexes:
+  - materialize.public.v_primary_idx
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR
+SELECT 1 = (Select * FROM generate_series(1, 100000) limit 3)
+----
+Explained Query
+  Let // { keys: "()" }
+    Project (#1) // { keys: "()" }
+      Map ((#0 = 1)) // { keys: "()" }
+        Union // { keys: "()" }
+          Get l1 // { keys: "()" }
+          Map (null) // { keys: "()" }
+            Union // { keys: "()" }
+              Negate // { keys: "()" }
+                Distinct // { keys: "([])" }
+                  Project () // { keys: "()" }
+                    Get l1 // { keys: "()" }
+              Constant // { keys: "([])" }
+                - ()
+    Where
+      l1 =
+        Union // { keys: "()" }
+          Get l0 // { keys: "()" }
+          Map (error("more than one record produced in subquery")) // { keys: "([])" }
+            Project () // { keys: "([])" }
+              Filter (#0 > 1) // { keys: "([])" }
+                Reduce aggregates=[count(true)] // { keys: "([])" }
+                  Project () // { keys: "()" }
+                    Get l0 // { keys: "()" }
+      l0 =
+        TopK limit=3 monotonic=true // { keys: "()" }
+          FlatMap generate_series(1, 100000, 1) // { keys: "()" }
+            Constant // { keys: "([])" }
+              - ()
+
+EOF
