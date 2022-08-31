@@ -124,7 +124,8 @@ async fn get_topic(
         .pgclient
         .query_one(
             query.as_str(),
-            &[&sink_fields[0], &sink_fields[1], &sink_fields[2]])
+            &[&sink_fields[0], &sink_fields[1], &sink_fields[2]],
+        )
         .await
         .context("retrieving topic name")?
         .get(topic_field);
