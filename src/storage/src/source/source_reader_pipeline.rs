@@ -158,9 +158,8 @@ where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
 {
-    let (resume_stream, downgrade_resume_token, shutdown_resume_token) =
+    let (resume_stream, downgrade_resume_token) =
         super::resumption::resumption_operator(config.clone());
-    let resume_stream = resume_stream.broadcast();
 
     let ((batches, source_upper_summaries), source_reader_token) = source_reader_operator::<G, S>(
         config.clone(),
@@ -176,7 +175,7 @@ where
     let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
         reclock_operator::<G, S>(config, batches, remap_stream);
 
-    let token = Rc::new((source_reader_token, remap_token, shutdown_resume_token));
+    let token = Rc::new((source_reader_token, remap_token));
 
     ((reclocked_stream, reclocked_err_stream), Some(token))
 }
@@ -437,6 +436,7 @@ where
                 &resumption_frontier.borrow(),
             ) {
                 tracing::trace!(
+                    %id,
                     resumption_frontier = ?input_resumption_frontier.unwrap().frontier(),
                     "received new resumption frontier"
                 );

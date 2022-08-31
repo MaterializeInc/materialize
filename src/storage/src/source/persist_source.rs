@@ -207,7 +207,7 @@ where
 
             let mut current_ts = timely::progress::Timestamp::minimum();
 
-            move |cap_set, output, _| {
+            move |cap_set, output, _optional_input| {
                 let mut context = Context::from_waker(&waker);
 
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {

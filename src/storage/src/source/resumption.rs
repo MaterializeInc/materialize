@@ -30,14 +30,9 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 /// Generates a timely `Stream` with no inputs that periodically
 /// downgrades its output `Capability` _to the "resumption frontier"
 /// of the source_. It does not produce meaningful data.
-///
-/// This source returns two tokens, dropping either of which signal
-/// shutdown. The first is called the "downgrade" token, and is used
-/// when a source needs to downgrade the operator, but full shutdown
-/// is not occurring.
 pub fn resumption_operator<G>(
     config: RawSourceCreationConfig<G>,
-) -> (timely::dataflow::Stream<G, ()>, Rc<dyn Any>, Rc<dyn Any>)
+) -> (timely::dataflow::Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -65,9 +60,6 @@ where
     let downgrade_token = Rc::new(());
     let downgrade_token_weak = Rc::downgrade(&downgrade_token);
 
-    let shutdown_token = Rc::new(());
-    let shutdown_token_weak = Rc::downgrade(&shutdown_token);
-
     let mut upper = Antichain::from_elem(Timestamp::minimum());
 
     resume_op.build_async(
@@ -88,9 +80,7 @@ where
                 storage_metadata.get_write_handles(&persist_clients).await;
 
             while scheduler.notified().await {
-                if shutdown_token_weak.upgrade().is_none()
-                    || downgrade_token_weak.upgrade().is_none()
-                {
+                if downgrade_token_weak.upgrade().is_none() {
                     return;
                 }
                 if !active_worker {
@@ -127,5 +117,5 @@ where
         },
     );
 
-    (resume_stream, downgrade_token, shutdown_token)
+    (resume_stream, downgrade_token)
 }
