@@ -138,6 +138,7 @@ where
         mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     ) = mpsc::unbounded_channel();
 
+    let until_clone = until.clone();
     // This is a generator that sets up an async `Stream` that can be continuously polled to get the
     // values that are `yield`-ed from it's body.
     let async_stream = async_stream::try_stream!({
@@ -165,13 +166,27 @@ where
             .await
             .expect("cannot serve requested as_of");
 
-        loop {
+        let mut done = false;
+        while !done {
             while let Ok(leased_part) = consumed_part_rx.try_recv() {
                 subscription.return_leased_part(leased_part.into());
             }
 
-            yield subscription.next().await;
+            let (parts, progress) = subscription.next().await;
+            if timely::PartialOrder::less_equal(&until_clone, &progress) {
+                // Cease yielding parts after this batch.
+                done = true;
+            }
+            yield (parts, progress);
         }
+
+        // Rather than simply end, we spawn a task that can continue to return leases.
+        // This keeps the `ReadHandle` alive until we have confirmed each lease as read.
+        mz_ore::task::spawn(|| "LeaseReturner", async move {
+            while let Some(leased_part) = consumed_part_rx.recv().await {
+                subscription.return_leased_part(leased_part.into());
+            }
+        });
     });
 
     let mut pinned_stream = Box::pin(async_stream);
