@@ -207,6 +207,14 @@ impl CanonicalizeMfp {
                 }
                 literal_values.push(row);
             }
+            // We should deduplicate, because a constraint can be duplicated by
+            // `distribute_and_over_or`. For example: `IN ('l1', 'l2') AND (a > 0 OR a < 5)`. Here,
+            // the 2 args of the OR will cause the IN constraints to be duplicated. This doesn't
+            // alter the meaning of the expression when evaluated as a filter, but if we extract
+            // those literals 2 times into `literal_values` then the Peek code will look up those
+            // keys from the index 2 times, leading to duplicate results.
+            literal_values.sort();
+            literal_values.dedup();
             Some(literal_values)
         }
 

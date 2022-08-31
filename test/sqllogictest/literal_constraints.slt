@@ -387,6 +387,17 @@ SELECT pk FROM tab0 WHERE (((col4 >= 660.98) AND ((col4 IN (724.71,445.29,441.2,
 0
 1
 
+# Regression test for https://github.com/MaterializeInc/materialize/issues/14548
+
+statement ok
+CREATE INDEX idx_t1_b ON t1(b)
+
+query I
+SELECT a FROM t1 WHERE b IN ('l1', 'l2') AND (a > 0 OR a < 5)
+----
+1
+2
+
 # In the following query, we would be able to detect literal constraints if we called `canonicalize_equivalences`
 
 query T multiline
