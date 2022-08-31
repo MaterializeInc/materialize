@@ -254,7 +254,7 @@ $ set schema={
     ]
   }
 $ kafka-create-topic topic=data
-$ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 1}
 
 > CREATE TABLE tbl (a int, b text);

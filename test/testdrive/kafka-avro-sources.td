@@ -468,7 +468,7 @@ $ set value-schema={"type": "record", "name": "r", "fields": [{"name": "a", "typ
 
 $ kafka-create-topic topic=non-subset-key
 
-$ kafka-ingest format=avro topic=non-subset-key key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true
+$ kafka-ingest format=avro topic=non-subset-key key-format=avro key-schema=${key-schema} schema=${value-schema}
 "asdf" {"a": "asdf"}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn

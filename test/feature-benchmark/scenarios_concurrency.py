@@ -28,7 +28,7 @@ class ParallelIngestion(Concurrency):
             + f"""
 $ kafka-create-topic topic=kafka-parallel-ingestion partitions=4
 
-$ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()} publish=true
+$ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
 """
         )

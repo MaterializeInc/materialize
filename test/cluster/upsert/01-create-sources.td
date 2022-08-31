@@ -48,7 +48,7 @@ $ set schema={
 
 $ kafka-create-topic topic=dbzupsert partitions=1
 
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "mudskipper"}}}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "salamander"}}}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "lizard"}}}
@@ -75,5 +75,5 @@ $ kafka-ingest format=bytes topic=dbzupsert key-format=bytes
 broken-key:bar
 
 # Ingest a broken value with a good key
-$ kafka-ingest format=bytes topic=dbzupsert key-format=avro key-schema=${keyschema} publish=true
+$ kafka-ingest format=bytes topic=dbzupsert key-format=avro key-schema=${keyschema}
 {"id": 2}bar2

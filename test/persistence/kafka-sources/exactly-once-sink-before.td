@@ -29,7 +29,7 @@ $ set schema={
 
 $ kafka-create-topic topic=exactly-once
 
-$ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=2
+$ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} repeat=2
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
 > CREATE CONNECTION kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
@@ -47,16 +47,16 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
   INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-exactly-once-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 
-$ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=2 start-iteration=10
+$ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} repeat=2 start-iteration=10
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
 > SELECT COUNT(*) FROM exactly_once;
 4
 
-$ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=2 start-iteration=20
+$ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} repeat=2 start-iteration=20
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
-$ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=2 start-iteration=30
+$ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keyschema} schema=${schema} repeat=2 start-iteration=30
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
 # Make sure that we have produced stuff to the sink before we restart

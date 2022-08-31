@@ -137,7 +137,7 @@ $ set schema-v2={
 
 $ kafka-create-topic topic=data
 
-$ kafka-ingest format=avro topic=data schema=${schema-v1} publish=true timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema-v1} timestamp=1
 {"before": null, "after": {"row": {"a": 1}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
 > CREATE SOURCE data_v1
@@ -150,7 +150,7 @@ a
 ---
 1
 
-$ kafka-ingest format=avro topic=data schema=${schema-v2} publish=true timestamp=3
+$ kafka-ingest format=avro topic=data schema=${schema-v2} timestamp=3
 {"before": null, "after": {"row": {"a": 2, "b": -1}}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
 > CREATE SOURCE data_v2
@@ -178,7 +178,7 @@ $ set valid-key-schema={
     ]
   }
 
-$ kafka-ingest topic=data publish=true timestamp=5
+$ kafka-ingest topic=data timestamp=5
   format=avro schema=${schema-v1} key-format=avro key-schema=${valid-key-schema}
 {"a": 1} {"before": null, "after": {"row": {"a": 1}}, "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 

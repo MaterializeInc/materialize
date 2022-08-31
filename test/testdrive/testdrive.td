@@ -126,7 +126,7 @@ $ set kafka-ingest-repeat={
 
 $ kafka-create-topic topic=kafka-ingest-repeat
 
-$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} publish=true repeat=2
+$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} repeat=2
 {"f1": "fish"}
 
 > CREATE SOURCE kafka_ingest_repeat_input
@@ -141,7 +141,7 @@ fish
 
 # kafka-ingest repeat with ${kafka-ingest.iteration}
 
-$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} publish=true repeat=2
+$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} repeat=2
 {"f1": "${kafka-ingest.iteration}"}
 
 > SELECT * FROM kafka_ingest_repeat_input;
@@ -157,7 +157,7 @@ $ set kafka-ingest-no-partition-value={"type": "record", "name": "r", "fields": 
 
 $ kafka-create-topic topic=kafka-ingest-no-partition partitions=2
 
-$ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-schema=${kafka-ingest-no-partition-key} schema=${kafka-ingest-no-partition-value} publish=true
+$ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-schema=${kafka-ingest-no-partition-key} schema=${kafka-ingest-no-partition-value}
 "a" {"a": "a"}
 "b" {"a": "b"}
 "c" {"a": "c"}

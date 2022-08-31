@@ -13,10 +13,10 @@ $ kafka-create-topic topic=topic0
 
 $ kafka-create-topic topic=topic1
 
-$ kafka-ingest format=avro topic=topic0 schema=${schema} publish=true repeat=1
+$ kafka-ingest format=avro topic=topic0 schema=${schema} repeat=1
 {"f2": 1}
 
-$ kafka-ingest format=avro topic=topic1 schema=${schema} publish=true repeat=1
+$ kafka-ingest format=avro topic=topic1 schema=${schema} repeat=1
 {"f2": 7}
 
 > CREATE CONNECTION kafka_conn

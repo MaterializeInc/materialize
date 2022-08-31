@@ -657,7 +657,7 @@ class KafkaRaw(ScenarioDisabled):
             + f"""
 $ kafka-create-topic topic=kafka-raw
 
-$ kafka-ingest format=avro topic=kafka-raw schema=${{schema}} publish=true repeat={self.n()}
+$ kafka-ingest format=avro topic=kafka-raw schema=${{schema}} repeat={self.n()}
 {{"f2": 1}}
 """
         )
@@ -739,10 +739,10 @@ class KafkaUpsert(Kafka):
             + f"""
 $ kafka-create-topic topic=kafka-upsert
 
-$ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}} publish=true repeat={self.n()}
+$ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": 1}} {{"f2": ${{kafka-ingest.iteration}} }}
 
-$ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}} publish=true
+$ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}}
 {{"f1": 2}} {{"f2": 2}}
 """
         )
@@ -782,7 +782,7 @@ class KafkaUpsertUnique(Kafka):
             + f"""
 $ kafka-create-topic topic=upsert-unique partitions=16
 
-$ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{keyschema}} schema=${{schema}} publish=true repeat={self.n()}
+$ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
 """
         )
@@ -824,7 +824,7 @@ class KafkaRestart(ScenarioDisabled):
             + f"""
 $ kafka-create-topic topic=kafka-recovery partitions=8
 
-$ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{keyschema}} schema=${{schema}} publish=true repeat={self.n()}
+$ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
 """
         )
@@ -1013,7 +1013,7 @@ class ExactlyOnce(Sink):
             + f"""
 $ kafka-create-topic topic=sink-input partitions=16
 
-$ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keyschema}} schema=${{schema}} publish=true repeat={self.n()}
+$ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
 """
         )
@@ -1273,7 +1273,7 @@ class StartupLoaded(ScenarioDisabled):
             + f"""
 $ kafka-create-topic topic=startup-time
 
-$ kafka-ingest format=avro topic=startup-time schema=${{schema}} publish=true repeat=1
+$ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
 {{"f2": 1}}
 """
         )

@@ -35,7 +35,7 @@ $ kafka-create-topic topic=avroavro
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
-$ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "fish", "f2": 1000}
 {"key": "bird1"} {"f1":"goose", "f2": 1}
 {"key": "birdmore"} {"f1":"geese", "f2": 2}
@@ -61,7 +61,7 @@ mammalmore    moose    2
 
 $ kafka-create-topic topic=textavro
 
-$ kafka-ingest format=avro topic=textavro key-format=bytes key-terminator=: schema=${schema} publish=true
+$ kafka-ingest format=avro topic=textavro key-format=bytes key-terminator=: schema=${schema}
 fish: {"f1": "fish", "f2": 1000}
 bìrd1: {"f1":"goose", "f2": 1}
 birdmore: {"f1":"geese", "f2": 2}
@@ -89,7 +89,7 @@ b\xc3\xacrd1  goose    1
 birdmore      geese    2
 mammal1       moose    1
 
-$ kafka-ingest format=avro topic=textavro key-format=bytes key-terminator=: schema=${schema} publish=true
+$ kafka-ingest format=avro topic=textavro key-format=bytes key-terminator=: schema=${schema}
 bìrd1:
 birdmore: {"f1":"geese", "f2": 56}
 mämmalmore: {"f1": "moose", "f2": 42}
@@ -285,7 +285,7 @@ $ set keyschema2={
     ]
   }
 
-$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema}
 {"f3": {"string": "fire"}, "f4": {"string": "yang"}} {"f1": "dog", "f2": 42}
 {"f3": null, "f4": {"string": "yin"}} {"f1": "sheep", "f2": 53}
 {"f3": {"string": "water"}, "f4": null} {"f1":"plesiosaur", "f2": 224}
@@ -327,7 +327,7 @@ f3        f4        f1           f2
 water     <null>    crocodile    7
 
 # ensure that having deletion on a key that never existed does not break anything
-$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema}
 {"f3": {"string": "fire"}, "f4": {"string": "yin"}}
 {"f3": {"string": "air"}, "f4":{"string": "qi"}} {"f1": "pigeon", "f2": 10}
 {"f3": {"string": "air"}, "f4":{"string": "qi"}} {"f1": "owl", "f2": 15}
@@ -365,7 +365,7 @@ $ set schema2={
     ]
   }
 
-$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": null, "k2": {"long": 2}} {"f1": {"string": "date"}, "f2": {"long": 5}}
 {"k1": {"string": "épicerie"}, "k2": {"long": 10}} {"f1": {"string": "melon"}, "f2": {"long": 2}}
 {"k1": {"string": "boucherie"}, "k2": {"long": 5}} {"f1": {"string": "apple"}, "f2": {"long": 7}}
@@ -420,7 +420,7 @@ k1       k2
 
 # add records that match the filter
 # make sure that rows that differ on unneeded key columns are treated as separate
-$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":null, "f2": {"long": 2}}
 {"k1": null, "k2": null} {"f1": {"string": "date"}, "f2": {"long": 5}}
 {"k1": {"string": "épicerie"}, "k2": {"long": 6}} {"f1": {"string": "pear"}, "f2": null}
@@ -451,7 +451,7 @@ k1        k2
 librairie 10
 
 # update records so that they don't match the filter
-$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":null, "f2": {"long": 6}}
 {"k1": null, "k2": null} {"f1": {"string": "grape"}, "f2": {"long": 5}}
 
@@ -471,7 +471,7 @@ k1        k2
 épicerie  10
 
 # update records so that they do match the filter
-$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":{"string": "melon"}, "f2": {"long": 2}}
 {"k1": null, "k2": null} {"f1": {"string": "date"}, "f2": {"long": 12}}
 
@@ -494,7 +494,7 @@ k1        k2
 librairie 10
 
 # delete records
-$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": {"string": "boucherie"}, "k2": {"long": 5}}
 {"k1": {"string": "épicerie"}, "k2": {"long": 10}}
 {"k1": {"string": "boulangerie"}, "k2": null}

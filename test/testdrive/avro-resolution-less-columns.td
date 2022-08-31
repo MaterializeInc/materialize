@@ -16,7 +16,7 @@ $ set 1column={"type": "record", "name": "schema_less_columns", "fields": [ {"na
 
 $ kafka-create-topic topic=resolution-2to1
 
-$ kafka-ingest format=avro topic=resolution-2to1 schema=${2columns} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-2to1 schema=${2columns} timestamp=1
 {"f1": "val_f1a", "f2": "val_f2a"}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -28,7 +28,7 @@ $ kafka-ingest format=avro topic=resolution-2to1 schema=${2columns} publish=true
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=resolution-2to1 schema=${1column} publish=true timestamp=2
+$ kafka-ingest format=avro topic=resolution-2to1 schema=${1column} timestamp=2
 {"f1": "val_f1b"}
 
 > SELECT * FROM resolution_2to1
