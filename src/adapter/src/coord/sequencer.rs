@@ -31,7 +31,6 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
-use mz_ore::cast::CastFrom;
 use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
@@ -1654,7 +1653,7 @@ impl<S: Append + 'static> Coordinator<S> {
             session
                 .vars()
                 .iter()
-                .chain(self.catalog.state().system_config().iter())
+                .chain(self.catalog.system_config().iter())
                 .filter(|v| !v.experimental())
                 .map(|v| {
                     Row::pack_slice(&[
@@ -1675,7 +1674,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let variable = session
             .vars()
             .get(&plan.name)
-            .or_else(|_| self.catalog.state().system_config().get(&plan.name))?;
+            .or_else(|_| self.catalog.system_config().get(&plan.name))?;
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
@@ -2687,13 +2686,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 offset: 0,
                 project: (0..plan.returning[0].0.iter().count()).collect(),
             };
-            return match finishing.finish(
-                plan.returning,
-                usize::cast_from(self.catalog.state().system_config().max_result_size()),
-            ) {
-                Ok(rows) => Ok(send_immediate_rows(rows)),
-                Err(e) => Err(AdapterError::ResultSize(e)),
-            };
+            return Ok(send_immediate_rows(finishing.finish(plan.returning)));
         }
         Ok(match plan.kind {
             MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),

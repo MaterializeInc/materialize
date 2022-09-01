@@ -683,7 +683,7 @@ impl<S: Append + 'static> Coordinator<S> {
     where
         F: Fn(&SystemVars) -> u32,
     {
-        let limit = resource_limit(self.catalog.state().system_config());
+        let limit = resource_limit(self.catalog.system_config());
         let exceeds_limit = match (u32::try_from(current_amount), u32::try_from(new_instances)) {
             // 0 new instances are always ok.
             (_, Ok(new_instances)) if new_instances == 0 => false,

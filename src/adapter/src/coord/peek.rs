@@ -442,14 +442,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                 }
             }
-            let results = match finishing.finish(
-                results,
-                usize::cast_from(self.catalog.state().system_config().max_result_size()),
-            ) {
-                Ok(rows) => rows,
-                Err(e) => return Err(AdapterError::ResultSize(e)),
-            };
-            return Ok(send_immediate_rows(results));
+            return Ok(send_immediate_rows(finishing.finish(results)));
         }
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
@@ -571,29 +564,45 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .unwrap();
 
         // Prepare the receiver to return as a response.
-        let max_result_size = self.catalog.state().system_config().max_result_size();
+        let max_result_size = usize::cast_from(self.catalog.system_config().max_result_size());
         let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
-            .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
-                match (memo, resp) {
-                    (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
-                        memo.extend(rows);
-                        PeekResponse::Rows(memo)
+            .fold(
+                (PeekResponse::Rows(vec![]), 0),
+                move |memo, resp| async move {
+                    match (memo, resp) {
+                        (
+                            (PeekResponse::Rows(mut memo), mut total_size),
+                            PeekResponse::Rows(rows),
+                        ) => {
+                            total_size += rows
+                                .iter()
+                                .fold(0, |acc, (row, count)| acc + row.byte_len() * count.get());
+                            // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
+                            if total_size > max_result_size {
+                                (
+                                    PeekResponse::Error(format!(
+                                        "result exceeds max size of {max_result_size} bytes"
+                                    )),
+                                    total_size,
+                                )
+                            } else {
+                                memo.extend(rows);
+                                (PeekResponse::Rows(memo), total_size)
+                            }
+                        }
+                        ((PeekResponse::Error(e), total_size), _)
+                        | ((_, total_size), PeekResponse::Error(e)) => {
+                            (PeekResponse::Error(e), total_size)
+                        }
+                        ((PeekResponse::Canceled, total_size), _)
+                        | ((_, total_size), PeekResponse::Canceled) => {
+                            (PeekResponse::Canceled, total_size)
+                        }
                     }
-                    (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
-                        PeekResponse::Error(e)
-                    }
-                    (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
-                        PeekResponse::Canceled
-                    }
-                }
-            })
-            .map(move |resp| match resp {
-                PeekResponse::Rows(rows) => {
-                    match finishing.finish(rows, usize::cast_from(max_result_size)) {
-                        Ok(rows) => PeekResponseUnary::Rows(rows),
-                        Err(e) => PeekResponseUnary::Error(e),
-                    }
-                }
+                },
+            )
+            .map(move |(resp, _)| match resp {
+                PeekResponse::Rows(rows) => PeekResponseUnary::Rows(finishing.finish(rows)),
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),
             });

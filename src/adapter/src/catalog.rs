@@ -4440,6 +4440,10 @@ impl<S: Append> Catalog<S> {
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         self.state.pack_item_update(id, diff)
     }
+
+    pub fn system_config(&self) -> &SystemVars {
+        self.state.system_config()
+    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {

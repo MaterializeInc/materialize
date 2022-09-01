@@ -2182,12 +2182,7 @@ impl RowSetFinishing {
     }
     /// Applies finishing actions to a row set,
     /// and unrolls it to a unary representation.
-    pub fn finish(
-        &self,
-        mut rows: Vec<(Row, NonZeroUsize)>,
-        // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
-        max_bytes: usize,
-    ) -> Result<Vec<Row>, String> {
+    pub fn finish(&self, mut rows: Vec<(Row, NonZeroUsize)>) -> Vec<Row> {
         let mut left_datum_vec = mz_repr::DatumVec::new();
         let mut right_datum_vec = mz_repr::DatumVec::new();
         let sort_by = |(left, _): &(Row, _), (right, _): &(Row, _)| {
@@ -2238,7 +2233,6 @@ impl RowSetFinishing {
         let mut remaining = limit;
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
-        let mut total_bytes = 0;
         for (row, count) in &rows[offset_nth_row..] {
             if remaining == 0 {
                 break;
@@ -2252,16 +2246,12 @@ impl RowSetFinishing {
                         .extend(self.project.iter().map(|i| &datums[*i]));
                     row_buf.clone()
                 };
-                total_bytes += new_row.data().len();
-                if total_bytes > max_bytes {
-                    return Err(format!("result exceeds max size of {max_bytes} bytes"));
-                }
                 ret.push(new_row);
             }
             remaining -= count;
         }
 
-        Ok(ret)
+        ret
     }
 }
 
