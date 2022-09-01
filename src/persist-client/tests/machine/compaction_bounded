@@ -27,7 +27,7 @@ dddd 5 1
 parts=3 len=3
 
 # compact b0 and b1 with enough memory and a large enough target size to hold all the keys
-compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=1000 memory_budget=3000
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=1000 memory_bound=10000
 ----
 parts=1 len=4
 
@@ -43,7 +43,7 @@ part 0
 
 # compact b0 and b1 with enough memory for both runs, but a target size that can only hold 2 keys in mem at a time.
 # most importantly, we expect there to be a single run, as each input has a single run of ordered parts
-compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=40 memory_budget=1000
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=40 memory_bound=1000
 ----
 parts=3 len=4
 
@@ -70,7 +70,7 @@ aaaa 8 1
 parts=3 len=3
 
 # compact b0, b1, b2 with enough memory for all runs and all keys. we expect a single part with a single run
-compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=1000 memory_budget=10000
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=1000 memory_bound=10000
 ----
 parts=1 len=6
 
@@ -89,7 +89,7 @@ part 0
 # compact b0, b1, b2 with enough memory for all keys, but only 2 runs at a time. this means
 # b0 and b1 will be physically compacted together, but b2 will be compacted in isolation.
 # we expect two part and two runs, one for (b0, b1) and (b2)
-compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=1000 memory_budget=3000
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=1000 memory_bound=4000
 ----
 parts=2 len=7
 
@@ -111,7 +111,7 @@ part 1
 
 # compact b0, b1, b2 with enough memory for all runs, but a target size that can only hold 2 keys in mem at a time.
 # because b2 is out of order, we expect its entry for `aaaa` to appear in a separate run
-compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=40 memory_budget=1000
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=40 memory_bound=1000
 ----
 parts=5 len=7
 
@@ -140,7 +140,7 @@ part 4
 # compact b0, b1, b2 with enough memory for only 2 runs at a time, and a target size that can only hold 2 keys in mem at a time.
 # this means b0 and b1 will be physically compacted together, and then b2 compacted in isolation. evaluating b2 should
 # produce a new run, and then because of its out-of-order `aaaa` key, a third run should be created
-compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=40 memory_budget=120
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=40 memory_bound=160
 ----
 parts=5 len=7
 

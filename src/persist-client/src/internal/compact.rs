@@ -335,29 +335,24 @@ impl Compactor {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let mut all_runs = vec![];
+        let total_number_of_runs = req.inputs.iter().map(|x| x.runs.len() + 1).sum::<usize>();
+
+        let mut batch_runs = Vec::with_capacity(req.inputs.len());
         for batch in &req.inputs {
-            all_runs.push((batch, batch.runs()));
+            batch_runs.push((batch, batch.runs()));
         }
 
-        // map our (Batch, [Runs]) to [(Batch, Run), ...] cycling through the input batches
-        let mut finished_iterators = vec![0; all_runs.len()];
-        let mut ordered_runs = vec![];
-        loop {
-            for (index, (batch, runs)) in all_runs.iter_mut().enumerate() {
-                match runs.next() {
-                    Some(run) => ordered_runs.push((*batch, run)),
-                    None => finished_iterators[index] = 1,
+        let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
+        while batch_runs.len() > 0 {
+            for (batch, runs) in batch_runs.iter_mut() {
+                if let Some(run) = runs.next() {
+                    ordered_runs.push((*batch, run));
                 }
             }
-
-            // WIP: this is really naive. should be a simpler way to tell if we've completed
-            //      every iterator and not reconsider it afterwards
-            if finished_iterators.iter().sum::<usize>() == all_runs.len() {
-                break;
-            }
+            batch_runs.retain_mut(|(_, iter)| iter.inner.peek().is_some());
         }
 
+        assert_eq!(total_number_of_runs, ordered_runs.len());
         ordered_runs
     }
 
