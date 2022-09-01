@@ -493,6 +493,11 @@ impl PostgresTaskInfo {
     /// After the initial snapshot has been produced it returns the name of the created slot and
     /// the LSN at which we should start the replication stream at.
     async fn produce_snapshot(&mut self) -> Result<(), ReplicationError> {
+        // Get all the relevant tables for this publication
+        let publication_tables = try_recoverable!(
+            mz_postgres_util::publication_info(&self.connection_config, &self.publication).await
+        );
+
         let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
 
         // We're initializing this source so any previously existing slot must be removed and
@@ -501,10 +506,6 @@ impl PostgresTaskInfo {
             .simple_query(&format!("DROP_REPLICATION_SLOT {:?}", &self.slot))
             .await;
 
-        // Get all the relevant tables for this publication
-        let publication_tables = try_recoverable!(
-            mz_postgres_util::publication_info(&self.connection_config, &self.publication).await
-        );
         // Validate publication tables against the state snapshot
         try_fatal!(self.validate_tables(publication_tables));
 
