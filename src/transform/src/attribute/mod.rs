@@ -11,6 +11,7 @@
 
 use std::{collections::HashMap, marker::PhantomData};
 
+use mz_repr::explain_new::ExplainConfig;
 use num_traits::FromPrimitive;
 use typemap_rev::{TypeMap, TypeMapKey};
 
@@ -221,6 +222,28 @@ pub struct DerivedAttributes {
     to_be_derived: Box<TypeMap>,
 }
 
+impl From<&ExplainConfig> for DerivedAttributes {
+    fn from(config: &ExplainConfig) -> DerivedAttributes {
+        let mut builder = RequiredAttributes::default();
+        if config.subtree_size {
+            builder.require::<SubtreeSize>();
+        }
+        if config.non_negative {
+            builder.require::<NonNegative>();
+        }
+        if config.types {
+            builder.require::<RelationType>();
+        }
+        if config.arity {
+            builder.require::<Arity>();
+        }
+        if config.keys {
+            builder.require::<UniqueKeys>();
+        }
+        builder.finish()
+    }
+}
+
 /// A topological sort of extant attributes.
 ///
 /// The attribute assigned value 0 depends on no other attributes.
@@ -330,7 +353,7 @@ impl DerivedAttributes {
     /// After this call, no further attributes of this type will be derived.
     pub fn remove_results<A: Attribute>(&mut self) -> Vec<A::Value> {
         self.attributes.remove::<AsKey<A>>().unwrap().take()
-   }
+    }
 
     fn trim_attr<T: TypeMapKey>(&mut self)
     where

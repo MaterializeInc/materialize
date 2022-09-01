@@ -19,8 +19,7 @@ use mz_expr::{visit::Visit, MirRelationExpr, OptimizedMirRelationExpr};
 use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::{
-    Arity, DerivedAttributes, NonNegative, RelationType, RequiredAttributes, SubtreeSize,
-    UniqueKeys,
+    Arity, DerivedAttributes, NonNegative, RelationType, SubtreeSize, UniqueKeys,
 };
 
 use super::{
@@ -111,33 +110,6 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
         })
     }
 }
-struct ExplainAttributes {
-    deriver: DerivedAttributes,
-}
-
-impl From<&ExplainConfig> for ExplainAttributes {
-    fn from(config: &ExplainConfig) -> ExplainAttributes {
-        let mut builder = RequiredAttributes::default();
-        if config.subtree_size {
-            builder.require::<SubtreeSize>();
-        }
-        if config.non_negative {
-            builder.require::<NonNegative>();
-        }
-        if config.types {
-            builder.require::<RelationType>();
-        }
-        if config.arity {
-            builder.require::<Arity>();
-        }
-        if config.keys {
-            builder.require::<UniqueKeys>();
-        }
-        ExplainAttributes {
-            deriver: builder.finish(),
-        }
-    }
-}
 
 impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
     fn try_from(
@@ -151,14 +123,13 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             // get the annotation keys
             let subtree_refs = plan.post_order_vec();
             // get the annotation values
-            let mut explain_attrs = ExplainAttributes::from(config);
-            plan.visit(&mut explain_attrs.deriver)?;
-            let mut attribute_map = explain_attrs.deriver;
+            let mut explain_attrs = DerivedAttributes::from(config);
+            plan.visit(&mut explain_attrs)?;
 
             if config.subtree_size {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map.remove_results::<SubtreeSize>().into_iter(),
+                    explain_attrs.remove_results::<SubtreeSize>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.subtree_size = Some(attr);
@@ -167,7 +138,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.non_negative {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map.remove_results::<NonNegative>().into_iter(),
+                    explain_attrs.remove_results::<NonNegative>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.non_negative = Some(attr);
@@ -177,7 +148,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.arity {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map.remove_results::<Arity>().into_iter(),
+                    explain_attrs.remove_results::<Arity>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.arity = Some(attr);
@@ -187,7 +158,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.types {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map.remove_results::<RelationType>().into_iter(),
+                    explain_attrs.remove_results::<RelationType>().into_iter(),
                 ) {
                     let humanized_columns = types
                         .into_iter()
@@ -202,7 +173,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.keys {
                 for (expr, keys) in std::iter::zip(
                     subtree_refs.iter(),
-                    attribute_map.remove_results::<UniqueKeys>().into_iter(),
+                    explain_attrs.remove_results::<UniqueKeys>().into_iter(),
                 ) {
                     let formatted_keys = keys
                         .into_iter()
