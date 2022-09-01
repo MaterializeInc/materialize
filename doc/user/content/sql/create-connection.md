@@ -145,7 +145,7 @@ Field                       | Value            | Required | Description
 ##### Example
 
 ```sql
-CREAT CONNECTION ssh_connection
+CREATE CONNECTION ssh_connection
   FOR SSH TUNNEL
     HOST '<SSH_BASTION_HOST>',
     USER '<SSH_BASTION_USER>',
