@@ -233,7 +233,9 @@ where
 
         if let Some(compactor) = compactor {
             for req in self.compaction {
-                if let Some(handle) = compactor.compact_and_apply_background(machine, req) {
+                if let Some(handle) =
+                    compactor.compact_and_apply_background(machine, req, usize::MAX)
+                {
                     futures.push(handle.map(|_| ()).boxed());
                 }
             }

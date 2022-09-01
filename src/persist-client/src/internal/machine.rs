@@ -784,10 +784,10 @@ mod tests {
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::fetch::fetch_batch_part;
-    use crate::internal::compact::{BoundedCompactor, CompactReq};
+    use crate::internal::compact::CompactReq;
     use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
-    use crate::{GarbageCollector, PersistConfig, ShardId};
+    use crate::{Compactor, GarbageCollector, PersistConfig, ShardId};
 
     use super::*;
 
@@ -1025,17 +1025,16 @@ mod tests {
                                 ),
                                 inputs,
                             };
-                            let compactor = BoundedCompactor::new(
+                            let res = Compactor::compact::<u64, i64>(
                                 cfg.clone(),
                                 Arc::clone(&client.blob),
                                 Arc::clone(&client.metrics),
                                 Arc::clone(&cpu_heavy_runtime),
-                                shard_id,
+                                req,
+                                memory_budget.unwrap_or(usize::MAX),
                                 WriterId::new(),
-                            );
-                            let res = compactor
-                                .compact::<u64, i64>(&req, memory_budget.unwrap_or(usize::MAX))
-                                .await;
+                            )
+                            .await;
                             match res {
                                 Ok(res) => {
                                     state.batches.insert(output.to_owned(), res.output.clone());
