@@ -569,15 +569,16 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
             .fold(
                 (PeekResponse::Rows(vec![]), 0),
-                move |memo, resp| async move {
+                move |memo: (_, usize), resp| async move {
                     match (memo, resp) {
                         (
                             (PeekResponse::Rows(mut memo), mut total_size),
                             PeekResponse::Rows(rows),
                         ) => {
-                            total_size += rows
-                                .iter()
-                                .fold(0, |acc, (row, count)| acc + row.byte_len() * count.get());
+                            let rows_size = rows.iter().fold(0, |acc: usize, (row, count)| {
+                                acc.saturating_add(row.byte_len().saturating_mul(count.get()))
+                            });
+                            total_size = total_size.saturating_add(rows_size);
                             // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
                             if total_size > max_result_size {
                                 (
