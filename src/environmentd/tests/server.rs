@@ -177,13 +177,31 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCase {
             query: "create view v1 as select 1; create view v2 as select 1",
             status: StatusCode::OK,
-            body: r#"{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block"},{"error":"CREATE VIEW v2 AS SELECT 1 cannot be run inside a transaction block"}]}"#,
+            body: r#"{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block"}]}"#,
         },
         // Syntax errors fail the request.
         TestCase {
             query: "'",
             status: StatusCode::BAD_REQUEST,
             body: r#"unterminated quoted string"#,
+        },
+        // Tables
+        TestCase {
+            query: "create table t (a int);",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"CREATE TABLE"}]}"#,
+        },
+        TestCase {
+            query: "insert into t values (1)",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"INSERT 0 1"}]}"#,
+        },
+        // n.b. this used to fail because the insert was treated as an
+        // uncommitted explicit transaction
+        TestCase {
+            query: "select * from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["a"]}]}"#,
         },
     ];
 
