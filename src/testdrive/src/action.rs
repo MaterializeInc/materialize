@@ -260,6 +260,16 @@ impl State {
     }
 
     pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
+        let (inner_client, _) = postgres_client(&format!(
+            "postgres://mz_system:materialize@{}",
+            self.materialize_sql_addr_internal
+        ))
+        .await?;
+        inner_client
+            .batch_execute("ALTER SYSTEM RESET ALL")
+            .await
+            .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
+
         for row in self
             .pgclient
             .query("SHOW DATABASES", &[])
