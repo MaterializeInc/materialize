@@ -173,8 +173,10 @@ where
             }
 
             let (parts, progress) = subscription.next().await;
+            // If `until.less_equal(progress)`, it means that all subsequent batches will
+            // contain only times greater or equal to `until`, which means they can be dropped
+            // in their entirety. The current batch must be emitted, but we can stop afterwards.
             if timely::PartialOrder::less_equal(&until_clone, &progress) {
-                // Cease yielding parts after this batch.
                 done = true;
             }
             yield (parts, progress);
@@ -325,11 +327,13 @@ where
                                         ) {
                                             match result {
                                                 Ok((row, time, diff)) => {
+                                                    // Additional `until` filtering due to temporal filters.
                                                     if !until.less_equal(&time) {
                                                         update_outputs.push((Ok(row), time, diff));
                                                     }
                                                 }
                                                 Err((err, time, diff)) => {
+                                                    // Additional `until` filtering due to temporal filters.
                                                     if !until.less_equal(&time) {
                                                         update_outputs.push((Err(err), time, diff));
                                                     }
