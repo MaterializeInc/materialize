@@ -4026,6 +4026,7 @@ dependencies = [
  "mz-secrets",
  "once_cell",
  "semver",
+ "timely",
  "tokio",
  "tokio-stream",
  "tonic",
