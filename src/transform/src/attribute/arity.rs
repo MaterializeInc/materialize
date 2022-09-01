@@ -11,7 +11,7 @@
 
 use mz_expr::MirRelationExpr;
 
-use super::{subtree_size::SubtreeSize, Attribute};
+use super::{subtree_size::SubtreeSize, Attribute, DerivedAttributes, RequiredAttributes};
 
 /// Compute the column types of each subtree of a [MirRelationExpr] from the
 /// bottom-up.
@@ -24,19 +24,37 @@ pub struct Arity {
 }
 
 impl Attribute for Arity {
-    type Value = Vec<usize>;
-    type Dependencies = SubtreeSize;
+    type Value = usize;
 
-    fn derive(&mut self, expr: &MirRelationExpr, subtree_size: &SubtreeSize) {
+    fn derive(&mut self, expr: &MirRelationExpr, deps: &DerivedAttributes) {
         let n = self.results.len();
         let mut offsets = Vec::new();
         let mut offset = 1;
         for _ in 0..expr.num_inputs() {
             offsets.push(n - offset);
-            offset += &subtree_size.results[n - offset];
+            offset += &deps.get_results::<SubtreeSize>()[n - offset];
         }
         let subtree_arity =
             expr.arity_with_input_arities(offsets.into_iter().rev().map(|o| &self.results[o]));
         self.results.push(subtree_arity);
+    }
+
+    fn add_dependencies(builder: &mut RequiredAttributes)
+    where
+        Self: Sized,
+    {
+        builder.require::<SubtreeSize>();
+    }
+
+    fn get_results(&self) -> &Vec<Self::Value> {
+        &self.results
+    }
+
+    fn get_results_mut(&mut self) -> &mut Vec<Self::Value> {
+        &mut self.results
+    }
+
+    fn take(self) -> Vec<Self::Value> {
+        self.results
     }
 }

@@ -9,7 +9,7 @@
 
 #![warn(missing_docs)]
 
-use std::cmp::Ordering;
+use std::cmp::{max, Ordering};
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -747,26 +747,22 @@ impl MirRelationExpr {
                         if let MirRelationExpr::Map { input, .. } = &inputs[0] {
                             if let MirRelationExpr::Union { base, inputs } = &**input {
                                 if inputs.len() == 1 {
-                                    if let MirRelationExpr::Project { input, outputs } = &**base {
-                                        if let MirRelationExpr::Negate { input } = &**input {
-                                            if let MirRelationExpr::Get {
-                                                id: second_id,
-                                                typ: _,
-                                            } = &**input
-                                            {
-                                                if first_id == second_id {
-                                                    result.extend(
-                                                        inputs[0].typ().keys.drain(..).filter(
-                                                            |key| {
-                                                                key.iter().all(|c| {
-                                                                    outputs.get(*c) == Some(c)
-                                                                        && base_projection.get(*c)
-                                                                            == Some(c)
-                                                                })
-                                                            },
-                                                        ),
-                                                    );
-                                                }
+                                    if let Some((input, outputs)) = base.is_negated_project() {
+                                        if let MirRelationExpr::Get {
+                                            id: second_id,
+                                            typ: _,
+                                        } = input
+                                        {
+                                            if first_id == second_id {
+                                                result.extend(
+                                                    inputs[0].typ().keys.drain(..).filter(|key| {
+                                                        key.iter().all(|c| {
+                                                            outputs.get(*c) == Some(c)
+                                                                && base_projection.get(*c)
+                                                                    == Some(c)
+                                                        })
+                                                    }),
+                                                );
                                             }
                                         }
                                     }
@@ -1146,6 +1142,21 @@ impl MirRelationExpr {
         }
     }
 
+    /// If the expression is a negated project, return the input and the projection.
+    pub fn is_negated_project(&self) -> Option<(&MirRelationExpr, &[usize])> {
+        if let MirRelationExpr::Negate { input } = self {
+            if let MirRelationExpr::Project { input, outputs } = &**input {
+                return Some((&**input, outputs));
+            }
+        }
+        if let MirRelationExpr::Project { input, outputs } = self {
+            if let MirRelationExpr::Negate { input } = &**input {
+                return Some((&**input, outputs));
+            }
+        }
+        None
+    }
+
     /// Pretty-print this MirRelationExpr to a string.
     ///
     /// This method allows an additional `ExprHumanizer` which can annotate
@@ -1383,6 +1394,34 @@ impl MirRelationExpr {
             Ok::<_, RecursionLimitError>(())
         })
         .expect("Unexpected error in `visit_scalars_mut` call");
+    }
+
+    /// Clears the contents of `self` even if it's so deep that simply dropping it would cause a
+    /// stack overflow in `drop_in_place`.
+    ///
+    /// Leaves `self` in an unusable state, so this should only be used if `self` is about to be
+    /// dropped or otherwise overwritten.
+    pub fn destroy_carefully(&mut self) {
+        #[allow(deprecated)] // Having `maybe_grow` and no limit is the point here
+        self.visit_mut_post_nolimit(&mut |e| {
+            e.take_dangerous();
+        });
+    }
+
+    /// Computes the size (total number of nodes) and maximum depth of a MirRelationExpr for
+    /// debug printing purposes. Might grow the stack to a size proportional to the maximum depth.
+    pub fn debug_size_and_depth(&self) -> (usize, usize) {
+        let mut size = 0;
+        let mut max_depth = 0;
+        fn dfs(expr: &MirRelationExpr, size: &mut usize, max_depth: &mut usize, cur_depth: usize) {
+            mz_ore::stack::maybe_grow(|| {
+                *size += 1;
+                *max_depth = max(*max_depth, cur_depth);
+                expr.visit_children(|child| dfs(child, size, max_depth, cur_depth + 1));
+            });
+        }
+        dfs(self, &mut size, &mut max_depth, 1);
+        (size, max_depth)
     }
 }
 

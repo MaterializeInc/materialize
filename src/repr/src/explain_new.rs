@@ -363,6 +363,8 @@ pub struct ExplainConfig {
     pub arity: bool,
     /// Render implemented MIR `Join` nodes in a way which reflects the implementation.
     pub join_impls: bool,
+    /// Show the sets of unique keys.
+    pub keys: bool,
     /// Show the `non_negative` in the explanation if it is supported by the backing IR.
     pub non_negative: bool,
     /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
@@ -381,7 +383,7 @@ pub struct ExplainConfig {
 
 impl ExplainConfig {
     pub fn requires_attributes(&self) -> bool {
-        self.subtree_size || self.non_negative || self.arity || self.types
+        self.subtree_size || self.non_negative || self.arity || self.types || self.keys
     }
 }
 
@@ -397,6 +399,7 @@ impl TryFrom<HashSet<String>> for ExplainConfig {
         let result = ExplainConfig {
             arity: config_flags.remove("arity"),
             join_impls: config_flags.remove("join_impls"),
+            keys: config_flags.remove("keys"),
             non_negative: config_flags.remove("non_negative"),
             no_fast_path: config_flags.remove("no_fast_path"),
             raw_plans: config_flags.remove("raw_plans"),
@@ -759,6 +762,7 @@ mod tests {
         let config = ExplainConfig {
             arity: false,
             join_impls: false,
+            keys: false,
             non_negative: false,
             no_fast_path: false,
             raw_plans: false,

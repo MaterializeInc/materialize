@@ -575,7 +575,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::StorageCollection(_) => {}
                     }
                 }
-                Op::DropTimeline(_)
+                Op::AlterSource { .. }
+                | Op::DropTimeline(_)
                 | Op::RenameItem { .. }
                 | Op::UpdateComputeInstanceStatus { .. }
                 | Op::UpdateStorageUsage { .. }
