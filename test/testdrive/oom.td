@@ -18,6 +18,7 @@ ALTER SYSTEM SET max_result_size = 20
 1
 1
 1
+1
 
 ! SELECT 1::int4 FROM generate_series(1, 5) as a;
 contains:result exceeds max size of 20 bytes
