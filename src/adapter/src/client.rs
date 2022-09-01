@@ -12,13 +12,14 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
+use itertools::izip;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
-use mz_repr::{GlobalId, Row, ScalarType};
+use mz_repr::{Datum, GlobalId, Row, RowArena, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
 use crate::catalog::SYSTEM_USER;
@@ -389,10 +390,62 @@ impl SessionClient {
         &mut self,
         stmt: Statement<Raw>,
     ) -> Result<SimpleResult, SimpleResult> {
+        let raw_params: Vec<Option<Vec<u8>>> = vec![];
+
         const EMPTY_PORTAL: &str = "";
 
-        if let Err(e) = self.declare(EMPTY_PORTAL.into(), stmt, vec![]).await {
+        if let Err(e) = self.describe(EMPTY_PORTAL.into(), Some(stmt), vec![]).await {
             return Err(SimpleResult::err(e));
+        }
+
+        let stmt = match self.get_prepared_statement(&EMPTY_PORTAL).await {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                return Err(SimpleResult::err(err));
+            }
+        };
+
+        let param_types = &stmt.desc().param_types;
+        let param_formats = vec![mz_pgrepr::Format::Text; param_types.len()];
+
+        let buf = RowArena::new();
+        let mut params = vec![];
+        for (raw_param, mz_typ, format) in izip!(raw_params.clone(), param_types, param_formats) {
+            let pg_typ = mz_pgrepr::Type::from(mz_typ);
+            let datum = match raw_param {
+                None => Datum::Null,
+                Some(bytes) => match mz_pgrepr::Value::decode(format, &pg_typ, &bytes) {
+                    Ok(param) => param.into_datum(&buf, &pg_typ),
+                    Err(err) => {
+                        let msg = format!("unable to decode parameter: {}", err);
+                        return Err(SimpleResult::err(msg));
+                    }
+                },
+            };
+            params.push((datum, mz_typ.clone()))
+        }
+
+        let result_formats = vec![
+            mz_pgrepr::Format::Text;
+            stmt.desc()
+                .relation_desc
+                .clone()
+                .map(|desc| desc.typ().column_types.len())
+                .unwrap_or(0)
+        ];
+
+        let desc = stmt.desc().clone();
+        let revision = stmt.catalog_revision;
+        let stmt = stmt.sql().cloned();
+        if let Err(err) = self.session().set_portal(
+            EMPTY_PORTAL.into(),
+            desc,
+            stmt,
+            params,
+            result_formats,
+            revision,
+        ) {
+            return Err(SimpleResult::err(err.to_string()));
         }
 
         let desc = self
@@ -401,9 +454,6 @@ impl SessionClient {
             .get_portal_unverified(EMPTY_PORTAL)
             .map(|portal| portal.desc.clone())
             .expect("unnamed portal should be present");
-        if !desc.param_types.is_empty() {
-            return Err(SimpleResult::err("query parameters are not supported"));
-        }
 
         let res = match self.execute(EMPTY_PORTAL.into()).await {
             Ok(res) => res,
