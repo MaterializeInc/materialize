@@ -268,7 +268,7 @@ where
         // - Batches written by compaction. These always have an inline desc
         //   that exactly matches the one they are registered with. The since
         //   can be anything.
-        let inline_desc = decode_inline_desc(&batch.desc);
+        let inline_desc = &batch.desc;
         let needs_truncation = inline_desc.lower() != registered_desc.lower()
             || inline_desc.upper() != registered_desc.upper();
         if needs_truncation {
@@ -300,7 +300,7 @@ where
             );
         } else {
             assert_eq!(
-                &inline_desc, registered_desc,
+                inline_desc, registered_desc,
                 "key={} inline={:?} registered={:?}",
                 key, inline_desc, registered_desc
             );
@@ -327,24 +327,6 @@ where
     });
 
     Ok(())
-}
-
-// TODO: This goes away the desc on BlobTraceBatchPart becomes a Description<T>,
-// which should be a straightforward refactor but it touches a decent bit.
-fn decode_inline_desc<T: Timestamp + Codec64>(desc: &Description<u64>) -> Description<T> {
-    fn decode_antichain<T: Timestamp + Codec64>(x: &Antichain<u64>) -> Antichain<T> {
-        Antichain::from(
-            x.elements()
-                .iter()
-                .map(|x| T::decode(x.to_le_bytes()))
-                .collect::<Vec<_>>(),
-        )
-    }
-    Description::new(
-        decode_antichain(desc.lower()),
-        decode_antichain(desc.upper()),
-        decode_antichain(desc.since()),
-    )
 }
 
 /// Propagates metadata from readers alongside a `HollowBatch` to apply the

@@ -19,6 +19,7 @@ use arrow2::datatypes::{DataType, Field, Schema};
 use arrow2::io::ipc::read::{read_file_metadata, FileMetadata, FileReader};
 use arrow2::io::ipc::write::{FileWriter, WriteOptions};
 use differential_dataflow::trace::Description;
+use mz_persist_types::Codec64;
 use once_cell::sync::Lazy;
 use timely::progress::{Antichain, Timestamp};
 
@@ -79,7 +80,10 @@ const INLINE_METADATA_KEY: &'static str = "MZ:inline";
 ///
 /// NB: This is currently unused, but it's here because we may want to use it
 /// for the local cache and so we can easily compare arrow vs parquet.
-pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> Result<(), Error> {
+pub fn encode_trace_arrow<W: Write, T: Timestamp + Codec64>(
+    w: &mut W,
+    batch: &BlobTraceBatchPart<T>,
+) -> Result<(), Error> {
     let mut metadata = BTreeMap::new();
     metadata.insert(
         INLINE_METADATA_KEY.into(),
@@ -99,7 +103,9 @@ pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> Re
 ///
 /// NB: This is currently unused, but it's here because we may want to use it
 /// for the local cache and so we can easily compare arrow vs parquet.
-pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatchPart, Error> {
+pub fn decode_trace_arrow<R: Read + Seek, T: Timestamp + Codec64>(
+    r: &mut R,
+) -> Result<BlobTraceBatchPart<T>, Error> {
     let file_meta = read_file_metadata(r)?;
     let (format, meta) =
         decode_trace_inline_meta(file_meta.schema.metadata.get(INLINE_METADATA_KEY))?;
@@ -116,9 +122,9 @@ pub fn decode_trace_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatchPar
         desc: meta.desc.map_or_else(
             || {
                 Description::new(
-                    Antichain::from_elem(u64::minimum()),
-                    Antichain::from_elem(u64::minimum()),
-                    Antichain::from_elem(u64::minimum()),
+                    Antichain::from_elem(T::minimum()),
+                    Antichain::from_elem(T::minimum()),
+                    Antichain::from_elem(T::minimum()),
                 )
             },
             |x| x.into(),
