@@ -240,6 +240,16 @@ const MAX_ROLES: ServerVar<u32> = ServerVar {
     description: "The maximum number of roles in the region (Materialize).",
 };
 
+// Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
+// query.
+// TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
+const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_result_size"),
+    // 1 GiB
+    value: &1_073_741_824,
+    description: "The maximum size in bytes for a single query's result (Materialize).",
+};
+
 /// Session variables.
 ///
 /// Materialize roughly follows the PostgreSQL configuration model, which works
@@ -758,6 +768,7 @@ pub struct SystemVars {
     max_objects_per_schema: SystemVar<u32>,
     max_secrets: SystemVar<u32>,
     max_roles: SystemVar<u32>,
+    max_result_size: SystemVar<u32>,
 }
 
 impl Default for SystemVars {
@@ -774,6 +785,7 @@ impl Default for SystemVars {
             max_objects_per_schema: SystemVar::new(&MAX_OBJECTS_PER_SCHEMA),
             max_secrets: SystemVar::new(&MAX_SECRETS),
             max_roles: SystemVar::new(&MAX_ROLES),
+            max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
         }
     }
 }
@@ -794,6 +806,7 @@ impl SystemVars {
             &self.max_objects_per_schema,
             &self.max_secrets,
             &self.max_roles,
+            &self.max_result_size,
         ]
         .into_iter()
     }
@@ -831,6 +844,8 @@ impl SystemVars {
             Ok(&self.max_secrets)
         } else if name == MAX_ROLES.name {
             Ok(&self.max_roles)
+        } else if name == MAX_RESULT_SIZE.name {
+            Ok(&self.max_result_size)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -866,6 +881,8 @@ impl SystemVars {
             self.max_secrets.set(value)
         } else if name == MAX_ROLES.name {
             self.max_roles.set(value)
+        } else if name == MAX_RESULT_SIZE.name {
+            self.max_result_size.set(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -899,6 +916,8 @@ impl SystemVars {
             self.max_secrets.reset()
         } else if name == MAX_ROLES.name {
             self.max_roles.reset()
+        } else if name == MAX_RESULT_SIZE.name {
+            self.max_result_size.reset()
         } else {
             return Err(AdapterError::UnknownParameter(name.into()));
         }
@@ -958,6 +977,11 @@ impl SystemVars {
     /// Returns the value of the `max_roles` configuration parameter.
     pub fn max_roles(&self) -> u32 {
         *self.max_roles.value()
+    }
+
+    /// Returns the value of the `max_result_size` configuration parameter.
+    pub fn max_result_size(&self) -> u32 {
+        *self.max_result_size.value()
     }
 }
 

@@ -17,9 +17,6 @@ use std::fmt;
 use std::{collections::HashMap, num::NonZeroUsize};
 
 use futures::{FutureExt, StreamExt};
-use mz_expr::explain::Indices;
-use mz_ore::str::{bracketed, separated, Indent};
-use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -27,9 +24,13 @@ use uuid::Uuid;
 use mz_compute_client::command::{DataflowDescription, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
+use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_ore::str::{bracketed, separated, Indent};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use mz_stash::Append;
 
@@ -441,8 +442,11 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                 }
             }
-            let results = finishing.finish(results);
-            return Ok(send_immediate_rows(results));
+            let results = finishing.finish(results, self.catalog.system_config().max_result_size());
+            return match results {
+                Ok(rows) => Ok(send_immediate_rows(rows)),
+                Err(e) => Err(AdapterError::ResultSize(e)),
+            };
         }
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
@@ -564,23 +568,50 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .unwrap();
 
         // Prepare the receiver to return as a response.
+        let max_result_size = self.catalog.system_config().max_result_size();
         let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
-            .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
-                match (memo, resp) {
-                    (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
-                        memo.extend(rows);
-                        PeekResponse::Rows(memo)
+            .fold(
+                (PeekResponse::Rows(vec![]), 0),
+                move |memo: (_, usize), resp| async move {
+                    let max_result_size = usize::cast_from(max_result_size.clone());
+                    match (memo, resp) {
+                        (
+                            (PeekResponse::Rows(mut memo), mut total_size),
+                            PeekResponse::Rows(rows),
+                        ) => {
+                            let rows_size = rows.iter().fold(0, |acc: usize, (row, count)| {
+                                acc.saturating_add(row.byte_len().saturating_mul(count.get()))
+                            });
+                            total_size = total_size.saturating_add(rows_size);
+                            // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
+                            if total_size > max_result_size {
+                                (
+                                    PeekResponse::Error(format!(
+                                        "result exceeds max size of {max_result_size} bytes"
+                                    )),
+                                    total_size,
+                                )
+                            } else {
+                                memo.extend(rows);
+                                (PeekResponse::Rows(memo), total_size)
+                            }
+                        }
+                        ((PeekResponse::Error(e), total_size), _)
+                        | ((_, total_size), PeekResponse::Error(e)) => {
+                            (PeekResponse::Error(e), total_size)
+                        }
+                        ((PeekResponse::Canceled, total_size), _)
+                        | ((_, total_size), PeekResponse::Canceled) => {
+                            (PeekResponse::Canceled, total_size)
+                        }
                     }
-                    (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
-                        PeekResponse::Error(e)
-                    }
-                    (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
-                        PeekResponse::Canceled
-                    }
-                }
-            })
-            .map(move |resp| match resp {
-                PeekResponse::Rows(rows) => PeekResponseUnary::Rows(finishing.finish(rows)),
+                },
+            )
+            .map(move |(resp, _)| match resp {
+                PeekResponse::Rows(rows) => match finishing.finish(rows, max_result_size) {
+                    Ok(rows) => PeekResponseUnary::Rows(rows),
+                    Err(e) => PeekResponseUnary::Error(e),
+                },
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),
             });
@@ -661,13 +692,14 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
     use mz_repr::{
         explain_new::{text_string_at, DummyHumanizer, RenderingContext},
         ColumnType, Datum, ScalarType,
     };
+
+    use super::*;
 
     #[test]
     fn test_fast_path_plan_as_text() {
