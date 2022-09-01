@@ -1509,7 +1509,7 @@ pub mod plan {
         ///
         /// If any unsupported expression is found, for example one that uses `mz_logical_timestamp`
         /// in an unsupported position, an error is returned.
-        pub(crate) fn create_from(mut mfp: MapFilterProject) -> Result<Self, String> {
+        pub fn create_from(mut mfp: MapFilterProject) -> Result<Self, String> {
             let mut lower_bounds = Vec::new();
             let mut upper_bounds = Vec::new();
 
