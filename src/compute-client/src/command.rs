@@ -660,8 +660,8 @@ impl RustType<ProtoDataflowDescription>
             objects_to_build: self.objects_to_build.into_proto(),
             index_exports: self.index_exports.into_proto(),
             sink_exports: self.sink_exports.into_proto(),
-            as_of: self.as_of.as_ref().map(Into::into),
-            until: Some((&self.until).into()),
+            as_of: self.as_of.into_proto(),
+            until: Some(self.until.into_proto()),
             debug_name: self.debug_name.clone(),
         }
     }
@@ -673,8 +673,12 @@ impl RustType<ProtoDataflowDescription>
             objects_to_build: proto.objects_to_build.into_rust()?,
             index_exports: proto.index_exports.into_rust()?,
             sink_exports: proto.sink_exports.into_rust()?,
-            as_of: proto.as_of.map(Into::into),
-            until: proto.until.map(Into::into).unwrap_or_else(Antichain::new),
+            as_of: proto.as_of.map(|x| x.into_rust()).transpose()?,
+            until: proto
+                .until
+                .map(|x| x.into_rust())
+                .transpose()?
+                .unwrap_or_else(Antichain::new),
             debug_name: proto.debug_name,
         })
     }
