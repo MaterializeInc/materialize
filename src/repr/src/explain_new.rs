@@ -170,12 +170,10 @@ where
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Json`].
-pub trait DisplayJson<C = ()>
+pub trait DisplayJson
 where
     Self: Sized,
 {
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
-
     fn to_serde_value(&self) -> serde_json::Result<serde_json::Value>;
 }
 
@@ -183,49 +181,14 @@ where
 ///
 /// # Panics
 ///
-/// Panics if the [`DisplayJson::fmt_json`] call returns a [`fmt::Error`].
-pub fn json_string<T: DisplayJson<()>>(t: &T) -> String {
-    struct JsonString<'a, T>(&'a T);
-
-    impl<'a, T: DisplayJson> fmt::Display for JsonString<'a, T> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            self.0.fmt_json(f, &mut ())
-        }
-    }
-
-    JsonString::<'_>(t).to_string()
+/// Panics if the [`DisplayJson::to_serde_value`] or the subsequent
+/// [`serde_json::to_string_pretty`] call return a [`serde_json::Error`].
+pub fn json_string<T: DisplayJson>(t: &T) -> String {
+    let value = t.to_serde_value().expect("serde_json::Value");
+    serde_json::to_string_pretty(&value).expect("JSON string")
 }
 
-/// Apply `f: F` to create a rendering context of type `C` and render the given
-/// tree `t: T` within that context.
-/// # Panics
-///
-/// Panics if the [`DisplayJson::fmt_json`] call returns a [`fmt::Error`].
-pub fn json_string_at<'a, T: DisplayJson<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
-    struct JsonStringAt<'a, T, C, F: Fn() -> C> {
-        t: &'a T,
-        f: F,
-    }
-
-    impl<T: DisplayJson<C>, C, F: Fn() -> C> DisplayJson<()> for JsonStringAt<'_, T, C, F> {
-        fn fmt_json(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-            let mut ctx = (self.f)();
-            self.t.fmt_json(f, &mut ctx)
-        }
-
-        fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
-            self.t.to_serde_value()
-        }
-    }
-
-    json_string(&JsonStringAt { t, f })
-}
-
-impl DisplayJson<()> for String {
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-        f.write_str(self)
-    }
-
+impl DisplayJson for String {
     fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
         Ok(serde_json::Value::String(self.clone()))
     }
@@ -314,10 +277,6 @@ impl DisplayText for UnsupportedFormat {
 }
 
 impl DisplayJson for UnsupportedFormat {
-    fn fmt_json(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-        unreachable!()
-    }
-
     fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
         unreachable!()
     }
