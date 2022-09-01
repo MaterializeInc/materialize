@@ -442,7 +442,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                 }
             }
-            return Ok(send_immediate_rows(finishing.finish(results)));
+            let results = finishing.finish(results);
+            return Ok(send_immediate_rows(results));
         }
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
