@@ -219,7 +219,11 @@ impl Healthchecker {
     /// Currently assumes that the collection only contains assertions (rows with diff = 1)
     fn process_collection_updates(
         &mut self,
-        mut updates: Vec<((Result<SourceData, String>, Result<(), String>), u64, i64)>,
+        mut updates: Vec<(
+            (Result<SourceData, String>, Result<(), String>),
+            Timestamp,
+            i64,
+        )>,
     ) {
         // Sort by timestamp and diff
         updates.sort_by(|(_, t1, d1), (_, t2, d2)| (t1, d1).cmp(&(t2, d2)));
@@ -246,7 +250,7 @@ impl Healthchecker {
         &self,
         status_update: &SourceStatusUpdate,
         ts: u64,
-    ) -> Vec<((SourceData, ()), u64, i64)> {
+    ) -> Vec<((SourceData, ()), Timestamp, i64)> {
         let timestamp = NaiveDateTime::from_timestamp(
             (ts / 1000)
                 .try_into()

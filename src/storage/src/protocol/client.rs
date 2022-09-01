@@ -259,7 +259,7 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
-                    proptest::collection::vec(any::<u64>(), 1..4)
+                    proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4)
                 ),
                 1..4
             )

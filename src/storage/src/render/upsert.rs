@@ -72,7 +72,7 @@ pub(crate) fn upsert<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    if as_of_frontier != Antichain::from_elem(0) {
+    if as_of_frontier != Antichain::from_elem(timely::progress::Timestamp::minimum()) {
         info!("upsert resuming from time {as_of_frontier:?}");
     }
     // Currently, the upsert-specific transformations run in the
@@ -552,7 +552,7 @@ fn process_new_data(
 fn process_pending_values_batch(
     // The time, capability, and map of data at that time we
     // are processing in this call.
-    time: &u64,
+    time: &Timestamp,
     cap: &mut Capability<Timestamp>,
     map: &mut HashMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
     // The current map of values we use to perform the upsert comparision
@@ -581,10 +581,10 @@ fn process_pending_values_batch(
     output: &mut timely::dataflow::operators::generic::OutputHandle<
         '_,
         Timestamp,
-        (Result<Row, DataflowError>, u64, Diff),
+        (Result<Row, DataflowError>, Timestamp, Diff),
         timely::dataflow::channels::pushers::tee::Tee<
             Timestamp,
-            (Result<Row, DataflowError>, u64, Diff),
+            (Result<Row, DataflowError>, Timestamp, Diff),
         >,
     >,
 ) {
