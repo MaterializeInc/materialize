@@ -548,6 +548,7 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_cloudtest_*.xml
     inputs: [test/cloudtest]
+    soft_fail: true
     plugins:
       - ./ci/plugins/cloudtest:
           args: [test/cloudtest/]
