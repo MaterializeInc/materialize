@@ -240,21 +240,32 @@ where
         let sync_activator = scope.sync_activator_for(&info.address[..]);
         let base_metrics = base_metrics.clone();
         let mut source_reader = Box::pin(async_stream::stream!({
-            let upper_ts = resume_upper.as_option().copied().unwrap();
-            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-            let timestamper = match ReclockOperator::new(
-                Arc::clone(&persist_clients),
-                storage_metadata.clone(),
-                now.clone(),
-                timestamp_interval.clone(),
-                as_of,
-            )
-            .await
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    panic!("Failed to create source {} timestamper: {:#}", name, e);
-                }
+            let mut source_upper = {
+                let upper_ts = resume_upper.as_option().copied().unwrap();
+                let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+                // This is a TEMPORARY instance of a `ReclockOperator` used to calculate
+                // a OFFSET `source_upper` for the SourceReader. It cannot be
+                // shared with the `remap_operator` because its initialization
+                // is async, which is not acceptable within dataflow creation.
+                // It cannot be a `ReclockFollower`, which is empty on
+                // initialization.
+                let timestamper = match ReclockOperator::new(
+                    Arc::clone(&persist_clients),
+                    storage_metadata.clone(),
+                    now.clone(),
+                    timestamp_interval.clone(),
+                    as_of,
+                )
+                .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        panic!("Failed to create source {} timestamper: {:#}", name, e);
+                    }
+                };
+                timestamper
+                    .source_upper_at_frontier(resume_upper.borrow())
+                    .expect("source_upper_at_frontier to be used correctly")
             };
 
             let mut healthchecker = if storage_metadata.status_shard.is_some() {
@@ -283,8 +294,6 @@ where
             } else {
                 None
             };
-
-            let mut source_upper = timestamper.source_upper_at(upper_ts.saturating_sub(1));
 
             // Send along an empty batch, so that the reclock operator knows
             // about the current frontier. Otherwise, if there are no new
@@ -487,7 +496,7 @@ where
 
                 // Pull the upper to `max` for partitions that we are not
                 // responsible for. That way, the downstream reclock operator
-                // can correcly decide when a reclocked timestamp is closed. We
+                // can correctly decide when a reclocked timestamp is closed. We
                 // basically take those partitions "out of the calculation".
                 let mut extended_source_upper = source_upper.clone();
                 extended_source_upper.extend(
@@ -646,7 +655,9 @@ where
             };
             // The global view of the source_upper, which we track by combining
             // summaries from the raw reader operators.
-            let mut global_source_upper = timestamper.source_upper_at(upper_ts.saturating_sub(1));
+            let mut global_source_upper = timestamper
+                .source_upper_at_frontier(resume_upper.borrow())
+                .expect("source_upper_at_frontier to be used correctly");
 
             if active_worker {
                 let new_ts_upper = timestamper
