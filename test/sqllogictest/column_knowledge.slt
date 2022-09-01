@@ -604,37 +604,14 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 2
 EOF
 
 #
-# Not all impossible conditions after propagation are currently not detected as such
+# The following impossible condition is removed by `CanonicalizeMfp::remove_impossible_or_args`
 #
 
 query T multiline
 EXPLAIN SELECT * FROM t1 FULL OUTER JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
 ----
-Source materialize.public.t1 (u1):
-| Filter (#0 = 123), (#0 = 234)
-| Project (#0, #1)
-
-Source materialize.public.t2 (u2):
-| Filter (#0 = 123), (#0 = 234)
-| Project (#0, #1)
-
-Query:
 %0 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123), (#0 = 234)
-| Project (#1)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.t2 (u2)
-| Filter (#0 = 123), (#0 = 234)
-| Project (#1)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| Map 123
-| Project (#2, #0, #1)
+| Constant
 
 EOF
 

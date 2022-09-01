@@ -10,8 +10,6 @@
 import subprocess
 from textwrap import dedent
 
-import pytest
-
 from materialize.cloudtest.application import MaterializeApplication
 
 CLUSTER_SIZE = 16
@@ -103,12 +101,7 @@ def kill_computed(mz: MaterializeApplication, compute_id: int) -> None:
         pass
 
 
-pytest.skip(
-    "Restart of multi-replica clusters is broken - gh#14301", allow_module_level=True
-)
-
-# mypy ignore required because of the 'pytest.skip' above
-def test_kill_all_computeds(mz: MaterializeApplication) -> None:  # type: ignore
+def test_kill_all_computeds(mz: MaterializeApplication) -> None:
     """Kill all computeds"""
     populate(mz, 1)
 

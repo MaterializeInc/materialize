@@ -6594,7 +6594,6 @@ mod test {
         let mut rti = mz_lowertest::ReflectedTypeInfo::default();
         UnaryFunc::add_to_reflected_type_info(&mut rti);
         for (variant, (_, f_types)) in rti.enum_dict["UnaryFunc"].iter() {
-            println!("f_types {:?}", f_types);
             if f_types.is_empty() {
                 let unary_unit_variant: UnaryFunc =
                     serde_json::from_str(&format!("\"{}\"", variant)).unwrap();

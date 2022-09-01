@@ -1,8 +1,54 @@
 # dbt-materialize Changelog
+## 1.2.0 - 2022-08-31
 
-## Unreleased
+* Enable additional configuration for indexes created on view,
+  materializedview, or source materializations. Fix to use Materialize's
+  internal naming convention when creating indexes without providing
+  explicit names.
 
+  * A new optional `name` parameter:
+  ```sql
+  {{ config(materialized='materializedview',
+  indexes=[{'columns': ['col_1'], 'name':'col_1_idx'}]) }}
+  SELECT ...
+  ```
+
+  * A new `default` parameter. Defaults to `False`. If set to `True`, will create
+    default primary indexes.
+  ```sql
+  {{ config(materialized='materializedview',
+    indexes=[{'default': True}]) }}
+    SELECT ...
+  ```
+
+* Enable configuration of [clusters](https://materialize.com/docs/unstable/sql/create-cluster/#conceptual-framework),
+  which are a feature in a forthcoming version of Materialize Cloud, via:
+
+  * A new `cluster` connection parameter, which specifies the default cluster
+    for the connection.
+  * A new `cluster` option for materializedview and view materializations.
+    For materialized views, this determines the cluster in which the materialized view
+    is created. For both views and materializedviews, this also determines the cluster
+    in which any indexes are created by default. If unspecified, the default cluster for
+    the connection is used.
+
+  ```sql
+  {{ config(materialized='materializedview', cluster='not_default') }}
+    SELECT ...
+  ```
+
+  * A new `cluster` option for indexes on view, materializedview, or source
+    materializations. If 'cluster' is not supplied, indexes will be created
+    in the cluster used to create the materialization.
+
+  ```sql
+  {{ config(materialized='view',
+    indexes=[{'columns': ['col_1'], 'cluster': 'not_default', 'name':'col_1_idx'}]) }}
+    SELECT ...
+  ```
 * Upgrade to `dbt-postgres` v1.2.0.
+
+* Fully deprecate the custom index materialization.
 
 ## 1.1.3 - 2022-08-17
 

@@ -22,6 +22,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::separated;
+use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::InvalidArrayError;
@@ -324,6 +325,8 @@ impl MirScalarExpr {
         }
     }
 
+    /// For a given `expr`, if `self` is `<expr> = <literal>` or `<literal> = <expr>` then
+    /// return `<literal>`.
     pub fn expr_eq_literal(&self, expr: &MirScalarExpr) -> Option<Datum> {
         if let MirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
@@ -340,6 +343,25 @@ impl MirScalarExpr {
                 if &**expr1 == expr {
                     return Some(datum2);
                 }
+            }
+        }
+        None
+    }
+
+    /// If `self` is `<expr> = <literal>` or `<literal> = <expr>` then
+    /// return `<expr>`.
+    pub fn any_expr_eq_literal(&self) -> Option<MirScalarExpr> {
+        if let MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1,
+            expr2,
+        } = self
+        {
+            if expr1.is_literal() {
+                return Some((**expr2).clone());
+            }
+            if expr2.is_literal() {
+                return Some((**expr1).clone());
             }
         }
         None
@@ -1395,34 +1417,13 @@ impl MirScalarExpr {
                     // then push back the result.
                     let mut undistribute_from = MirScalarExpr::CallVariadic {
                         func: (*outer_func).clone(),
-                        exprs: MirScalarExpr::swap_remove_multiple(
-                            outer_operands,
-                            indexes_to_undistribute,
-                        ),
+                        exprs: swap_remove_multiple(outer_operands, indexes_to_undistribute),
                     };
                     undistribute_from.undistribute_and_or();
                     outer_operands.push(undistribute_from);
                 }
             }
         }
-    }
-
-    /// Remove the elements from `v` at the positions indicated by `indexes`, and return the removed
-    /// elements in a new vector.
-    ///
-    /// `indexes` shouldn't have duplicates. (Might panic or behave incorrectly in case of
-    /// duplicates.)
-    fn swap_remove_multiple(
-        v: &mut Vec<MirScalarExpr>,
-        mut indexes: Vec<usize>,
-    ) -> Vec<MirScalarExpr> {
-        indexes.sort();
-        indexes.reverse();
-        let mut result = Vec::new();
-        for r in indexes {
-            result.push(v.swap_remove(r));
-        }
-        result
     }
 
     /* #endregion */

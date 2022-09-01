@@ -494,6 +494,9 @@ impl ErrorResponse {
             CreatedView { existed } => {
                 existed!(*existed, SqlState::DUPLICATE_OBJECT, "view")
             }
+            CreatedViews { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "views")
+            }
             CreatedMaterializedView { existed } => {
                 existed!(*existed, SqlState::DUPLICATE_OBJECT, "materialized view")
             }

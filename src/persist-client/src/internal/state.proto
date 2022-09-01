@@ -109,27 +109,3 @@ message ProtoStateDiff {
 
     ProtoStateFieldDiffs field_diffs = 5;
 }
-
-message ProtoLeasedBatchMetadata {
-    message ProtoLeasedBatchMetadataSnapshot {
-        ProtoU64Antichain as_of = 1;
-    }
-
-    message ProtoLeasedBatchMetadataListen {
-        ProtoU64Antichain as_of = 1;
-        ProtoU64Antichain until = 2;
-    }
-
-    oneof kind {
-        ProtoLeasedBatchMetadataSnapshot snapshot = 1;
-        ProtoLeasedBatchMetadataListen listen = 2;
-    }
-}
-
-message ProtoLeasedBatch {
-    string shard_id = 1;
-    ProtoLeasedBatchMetadata reader_metadata = 2;
-    ProtoHollowBatch batch = 3;
-    optional uint64 leased_seqno = 4;
-    string reader_id = 5;
-}
