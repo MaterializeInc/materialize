@@ -28,7 +28,7 @@ use crate::command::{
 };
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
-use crate::session::{EndTransactionAction, PreparedStatement, Session};
+use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionStatus};
 
 /// An abstraction allowing us to name different connections.
 pub type ConnectionId = u32;
@@ -394,6 +394,9 @@ impl SessionClient {
     /// interface. The provided `stmts` are executed directly, and their results
     /// are returned as a vector of rows, where each row is a vector of JSON
     /// objects.
+    ///
+    /// n.b. To handle committing statements, this process requires breaking
+    /// after generating a `SimpleResult::err`.
     pub async fn simple_execute(
         &mut self,
         stmts: &str,
@@ -410,7 +413,7 @@ impl SessionClient {
 
             if let Err(e) = self.declare(EMPTY_PORTAL.into(), stmt, vec![]).await {
                 results.push(SimpleResult::err(e));
-                continue;
+                break;
             }
 
             let desc = self
@@ -421,20 +424,21 @@ impl SessionClient {
                 .expect("unnamed portal should be present");
             if !desc.param_types.is_empty() {
                 results.push(SimpleResult::err("query parameters are not supported"));
-                continue;
+                break;
             }
 
             let res = match self.execute(EMPTY_PORTAL.into()).await {
                 Ok(res) => res,
                 Err(e) => {
                     results.push(SimpleResult::err(e));
-                    continue;
+                    break;
                 }
             };
 
             match res {
                 ExecuteResponse::Canceled => {
                     results.push(SimpleResult::err("statement canceled due to user request"));
+                    break;
                 }
                 res @ (ExecuteResponse::CreatedConnection { existed: _ }
                 | ExecuteResponse::CreatedDatabase { existed: _ }
@@ -535,6 +539,14 @@ impl SessionClient {
                 }
             };
         }
+
+        let action = if matches!(results.last(), Some(SimpleResult::Err { .. })) {
+            EndTransactionAction::Rollback
+        } else {
+            EndTransactionAction::Commit
+        };
+        let _ = self.end_transaction(action).await?;
+
         Ok(SimpleExecuteResponse { results })
     }
 
