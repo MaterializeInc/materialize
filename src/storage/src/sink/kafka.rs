@@ -1441,7 +1441,15 @@ where
 }
 
 #[derive(Serialize, Deserialize)]
+/// This struct is emitted as part of a transactional produce, and captures the information we
+/// need to resume the Kafka sink at the correct place in the sunk collection. (Currently, all
+/// we need is the timestamp... this is a record to make it easier to add more metadata in the
+/// future if needed.) It's encoded as JSON to make it easier to introspect while debugging, and
+/// because we expect it to remain small.
 ///
+/// Unlike the old consistency topic, this is not intended to be a user-facing feature; it's there
+/// purely so the sink can maintain its transactional guarantees. Any future user-facing consistency
+/// information should be added elsewhere instead of overloading this record.
 struct ProgressRecord {
     timestamp: Timestamp,
 }
