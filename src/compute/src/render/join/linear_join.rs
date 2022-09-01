@@ -89,7 +89,6 @@ where
                 // In the current code this should always be `None`, but we have this here should
                 // we change that and want to know what we should be doing.
                 if let Some(closure) = initial_closure {
-                    let could_error = closure.could_error();
                     // If there is no starting arrangement, then we can run filters
                     // directly on the starting collection.
                     // If there is only one input, we are done joining, so run filters
@@ -108,9 +107,7 @@ where
                         }
                     });
                     joined = j;
-                    if could_error {
-                        errors.push(errs);
-                    }
+                    errors.push(errs);
                 }
 
                 JoinedFlavor::Collection(joined)
@@ -136,7 +133,6 @@ where
         // and projections that could not be applied (e.g. column repetition).
         if let JoinedFlavor::Collection(mut joined) = joined {
             if let Some(closure) = linear_plan.final_closure {
-                let could_error = closure.could_error();
                 let (updates, errs) = joined.flat_map_fallible("LinearJoinFinalization", {
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();
@@ -153,9 +149,7 @@ where
                 });
 
                 joined = updates;
-                if could_error {
-                    errors.push(errs);
-                }
+                errors.push(errs);
             }
 
             // Return joined results and all produced errors collected together.
@@ -186,7 +180,6 @@ where
     ) -> Collection<G, Row, Diff> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let could_error = stream_key.iter().any(|e| e.could_error());
             let mut row_buf = Row::default();
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
@@ -207,9 +200,8 @@ where
                     Ok((key, value))
                 }
             });
-            if could_error {
-                errors.push(errs);
-            }
+
+            errors.push(errs);
             let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
             joined = JoinedFlavor::Local(arranged);
         }
