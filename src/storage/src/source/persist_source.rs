@@ -195,7 +195,7 @@ where
 
     let (inner, token) = crate::source::util::source(
         scope,
-        format!("persist_source {:?}: part distribution", source_id),
+        format!("persist_source {}: part distribution", source_id),
         move |info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures::task::waker(waker_activator);
@@ -245,10 +245,7 @@ where
     );
 
     let mut fetcher_builder = OperatorBuilder::new(
-        format!(
-            "persist_source {:?}: part fetcher {}",
-            worker_index, source_id
-        ),
+        format!("persist_source {}: part fetcher", source_id),
         scope.clone(),
     );
 
@@ -365,7 +362,7 @@ where
     // This operator is meant to only run on the chosen worker. All workers will
     // exchange their fetched ("consumed") parts back to the leasor.
     let mut consumed_part_builder = OperatorBuilder::new(
-        format!("persist_source {:?}: consumed part collector", source_id),
+        format!("persist_source {}: consumed part collector", source_id),
         scope.clone(),
     );
 
