@@ -175,28 +175,8 @@ where
     Self: Sized,
 {
     fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
-}
 
-impl<A, C> DisplayJson<C> for Box<A>
-where
-    A: DisplayJson<C>,
-{
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        self.as_ref().fmt_json(f, ctx)
-    }
-}
-
-impl<A, C> DisplayJson<C> for Option<A>
-where
-    A: DisplayJson<C>,
-{
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        if let Some(val) = self {
-            val.fmt_json(f, ctx)
-        } else {
-            fmt::Result::Ok(())
-        }
-    }
+    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value>;
 }
 
 /// Render a type `t: T` as [`ExplainFormat::Json`].
@@ -232,6 +212,10 @@ pub fn json_string_at<'a, T: DisplayJson<C>, C, F: Fn() -> C>(t: &'a T, f: F) ->
             let mut ctx = (self.f)();
             self.t.fmt_json(f, &mut ctx)
         }
+
+        fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
+            self.t.to_serde_value()
+        }
     }
 
     json_string(&JsonStringAt { t, f })
@@ -240,6 +224,10 @@ pub fn json_string_at<'a, T: DisplayJson<C>, C, F: Fn() -> C>(t: &'a T, f: F) ->
 impl DisplayJson<()> for String {
     fn fmt_json(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         f.write_str(self)
+    }
+
+    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
+        Ok(serde_json::Value::String(self.clone()))
     }
 }
 
@@ -327,6 +315,10 @@ impl DisplayText for UnsupportedFormat {
 
 impl DisplayJson for UnsupportedFormat {
     fn fmt_json(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        unreachable!()
+    }
+
+    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
         unreachable!()
     }
 }
