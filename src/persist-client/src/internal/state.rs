@@ -10,10 +10,8 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
-use std::slice::Iter;
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
@@ -78,51 +76,11 @@ pub struct HollowBatch<T> {
     pub parts: Vec<HollowBatchPart>,
     /// The number of updates in the batch.
     pub len: usize,
-    /// Runs of sequential batch parts, stored as indices into [keys].
-    ///
-    /// ex. keys=[k1, k2, k3], runs=[]     --> all keys are part of a single run
+    /// Runs of sequential sorted batch parts, stored as indices into [keys].
+    /// ex. keys=[k1, k2, k3], runs=[]     --> run  is  [k1, k2, k2]
     ///     keys=[k1, k2, k3], runs=[1]    --> runs are [k1] and [k2, k3]
     ///     keys=[k1, k2, k3], runs=[1, 2] --> runs are [k1], [k2], [k3]
     pub runs: Vec<usize>,
-}
-
-impl<T> HollowBatch<T> {
-    pub(crate) fn runs(&self) -> HollowBatchRunIter<T> {
-        HollowBatchRunIter {
-            batch: self,
-            inner: self.runs.iter().peekable(),
-            emitted_implicit: false,
-        }
-    }
-}
-
-pub(crate) struct HollowBatchRunIter<'a, T> {
-    batch: &'a HollowBatch<T>,
-    inner: Peekable<Iter<'a, usize>>,
-    emitted_implicit: bool,
-}
-
-impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
-    type Item = &'a [PartialBatchKey];
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if !self.emitted_implicit {
-            self.emitted_implicit = true;
-            return Some(match self.inner.peek() {
-                None => &self.batch.keys,
-                Some(run_end) => &self.batch.keys[0..**run_end],
-            });
-        }
-
-        if let Some(run_start) = self.inner.next() {
-            return Some(match self.inner.peek() {
-                Some(run_end) => &self.batch.keys[*run_start..**run_end],
-                None => &self.batch.keys[*run_start..],
-            });
-        }
-
-        None
-    }
 }
 
 impl<T: Ord> PartialOrd for HollowBatch<T> {

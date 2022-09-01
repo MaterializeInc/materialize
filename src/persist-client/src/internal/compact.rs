@@ -10,6 +10,8 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fmt::Debug;
+use std::iter::Peekable;
+use std::slice::Iter;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -178,13 +180,36 @@ impl Compactor {
         ))
     }
 
+    /// Compacts input batches in bounded memory.
+    ///
+    /// The memory bound is broken into pieces:
+    ///     1. in-progress work
+    ///     2. fetching parts from runs
+    ///     3. additional in-flight requests to Blob
+    ///
+    /// 1. In-progress work is bounded by 2 * [crate::PersistConfig::blob_target_size]. This
+    ///    usage is met at two mutually exclusive moments:
+    ///   * When reading in a part, we hold the columnar format in memory while writing its
+    ///     contents into a heap.
+    ///   * When writing a part, we hold a temporary updates buffer while encoding/writing
+    ///     it into a columnar format for Blob.
+    ///
+    /// 2. When compacting runs, only 1 part from each one is held in memory at a time.
+    ///    Compaction will determine an appropriate number of runs to compact together
+    ///    given the memory bound and accounting for the reservation in (1). A minimum
+    ///    of 2 * [crate::PersistConfig::blob_target_size] of memory is expected, to be
+    ///    able to at least have the capacity to compact two runs together at a time,
+    ///    and more runs will be compacted together if more memory is available.
+    ///
+    /// 3. If there is excess memory after accounting for (1) and (2), we increase the
+    ///    number of outstanding parts we can keep in-flight to Blob.
     pub async fn compact<T, D>(
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         req: CompactReq<T>,
-        memory_budget_bytes: usize,
+        memory_bound_bytes: usize,
         writer_id: WriterId,
     ) -> Result<CompactRes<T>, anyhow::Error>
     where
@@ -194,25 +219,34 @@ impl Compactor {
         let parts_cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
         let compact_blocking = async move {
             let () = Compactor::validate_req(&req)?;
-            // compaction needs memory enough for at least 2 fetched parts + 1 in-progress part
-            assert!(memory_budget_bytes >= 3 * cfg.blob_target_size);
 
-            let mut ordered_runs = Self::order_runs::<T, D>(&req);
-
-            let fetched_batch_memory_budget = memory_budget_bytes - cfg.blob_target_size;
-
-            // for now: assume each part is always blob_target_size. Given `memory_budget_bytes`
-            // this means we can carve off `memory_budget_bytes - blob_target_size` for pulling
-            // down parts from runs, leaving room for an in-progress part.
-            let run_chunk_size = fetched_batch_memory_budget / usize::max(cfg.blob_target_size, 1);
+            // compaction needs memory enough for at least 2 runs and 2 in-progress parts
+            assert!(memory_bound_bytes >= 4 * cfg.blob_target_size);
+            // reserve space for an in-progress part to be held in-mem representation and columnar
+            let in_progress_part_reserved_memory_bytes = 2 * cfg.blob_target_size;
+            // then remaining memory will go towards pulling down as many runs as we can
+            let run_reserved_memory_bytes =
+                memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
             let mut all_parts = vec![];
             let mut all_runs = vec![];
             let mut len = 0;
 
+            let mut ordered_runs = Self::order_runs::<T, D>(&req);
+            // for now: assume each part is always blob_target_size. in the future, we'll
+            // have a smarter way of deciding how many runs we can pull down at once
+            let run_chunk_size = run_reserved_memory_bytes / usize::max(cfg.blob_target_size, 1);
             for runs in ordered_runs.chunks_mut(run_chunk_size) {
+                // given the runs we actually have in our chunk, we might have extra memory
+                // available. we reserved enough space to always have 1 in-progress part in
+                // flight, but if we have excess, we can use it to increase our write parallelism
+                let actual_run_memory_requirement = runs.len() * cfg.blob_target_size;
+                let extra_outstanding_parts = (run_reserved_memory_bytes
+                    - actual_run_memory_requirement)
+                    / cfg.blob_target_size;
+
                 let batch_parts = BatchParts::new(
-                    cfg.batch_builder_max_outstanding_parts,
+                    1 + extra_outstanding_parts,
                     Arc::clone(&metrics),
                     req.shard_id,
                     writer_id.clone(),
@@ -283,7 +317,19 @@ impl Compactor {
             .await?
     }
 
-    /// WIP: grab the first run from each batch, then the second, etc.
+    /// With bounded memory where we cannot compact all runs/parts together, the groupings
+    /// in which we select runs to compact together will affect how much we're able to
+    /// consolidate updates.
+    ///
+    /// This approach orders the input runs by cycling through each batch, selecting the
+    /// head element until all are consumed. It assumes that it is generally more effective
+    /// to prioritize compacting runs from different batches, rather than runs from within
+    /// a single batch.
+    ///
+    /// ex.   inputs                                        output
+    ///     b0 runs=[A, B]
+    ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
+    ///     b2 runs=[D, E, F]
     fn order_runs<T, D>(req: &CompactReq<T>) -> Vec<(&HollowBatch<T>, &[PartialBatchKey])>
     where
         T: Timestamp + Lattice + Codec64,
@@ -295,17 +341,19 @@ impl Compactor {
         }
 
         // map our (Batch, [Runs]) to [(Batch, Run), ...] cycling through the input batches
-        let mut finished_iterators = 0;
+        let mut finished_iterators = vec![0; all_runs.len()];
         let mut ordered_runs = vec![];
         loop {
-            for (batch, runs) in &mut all_runs {
+            for (index, (batch, runs)) in all_runs.iter_mut().enumerate() {
                 match runs.next() {
                     Some(run) => ordered_runs.push((*batch, run)),
-                    None => finished_iterators += 1,
+                    None => finished_iterators[index] = 1,
                 }
             }
 
-            if finished_iterators >= all_runs.len() {
+            // WIP: this is really naive. should be a simpler way to tell if we've completed
+            //      every iterator and not reconsider it afterwards
+            if finished_iterators.iter().sum::<usize>() == all_runs.len() {
                 break;
             }
         }
@@ -313,9 +361,9 @@ impl Compactor {
         ordered_runs
     }
 
-    // WIP: Compacts runs together, pulling down one part at a time from each. If the runs are
-    //      already sorted, the result should be a single run. Memory is bounded by the # of
-    //      runs passed into this function, consuming at most (runs + 1) * blob_target_size
+    /// Compacts runs together. If the input runs are sorted, a single run will be created as output
+    ///
+    /// Maximum possible memory usage is `(# runs + 2) * [crate::PersistConfig::blob_target_size]`
     async fn compact_runs<'a, T, D>(
         cfg: &'a PersistConfig,
         shard_id: &'a ShardId,
@@ -338,7 +386,6 @@ impl Compactor {
         let mut update_buffer_size_bytes = 0;
         let mut greatest_kv: Option<(Vec<u8>, Vec<u8>)> = None;
 
-        // we'll reference our runs by their index order in the original `runs` vec
         let mut remaining_updates_by_run = vec![0; runs.len()];
         let mut runs: Vec<_> = runs
             .iter()
@@ -373,9 +420,8 @@ impl Compactor {
         // consumed.
         while let Some(Reverse((((k, v), t, d), index))) = heap.pop() {
             remaining_updates_by_run[index] -= 1;
-            // if we've pulled off all the updates from a particular part,
-            // fetch the next part from its originating run
             if remaining_updates_by_run[index] == 0 {
+                // repopulate from the originating run, if any parts remain
                 let (batch, parts) = &mut runs[index];
                 if let Some(key) = parts.next() {
                     fetch_batch_part(
@@ -446,6 +492,9 @@ impl Compactor {
         Ok((compaction_parts, compaction_runs, total_updates))
     }
 
+    /// Consolidates `updates`, and determines whether the updates should extend the
+    /// current run (if any).  A new run will be created if `updates` contains a key
+    /// that overlaps with the current or any previous run.
     fn consolidate_run<T, D>(
         updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
         compaction_runs: &mut Vec<usize>,
@@ -460,9 +509,9 @@ impl Compactor {
         *total_updates += updates.len();
 
         match (&greatest_kv, updates.last()) {
-            // if our updates contain a key that exists within the range of a run we've
+            // our updates contain a key that exists within the range of a run we've
             // already created, we should start a new run, as this part is no longer
-            // contiguous with the previous batch part and run
+            // contiguous with the previous run/part
             (Some(greatest_kv_seen), Some(greatest_kv_in_batch))
                 if *greatest_kv_seen > greatest_kv_in_batch.0 =>
             {
@@ -473,6 +522,7 @@ impl Compactor {
         }
     }
 
+    /// Encodes `updates` into columnar format and writes its parts out to blob
     async fn write_run<T, D>(
         cfg: &PersistConfig,
         batch_parts: &mut BatchParts<T>,
@@ -529,6 +579,45 @@ impl Compactor {
             ));
         }
         Ok(())
+    }
+}
+
+impl<T> HollowBatch<T> {
+    pub(crate) fn runs(&self) -> HollowBatchRunIter<T> {
+        HollowBatchRunIter {
+            batch: self,
+            inner: self.runs.iter().peekable(),
+            emitted_implicit: false,
+        }
+    }
+}
+
+pub(crate) struct HollowBatchRunIter<'a, T> {
+    batch: &'a HollowBatch<T>,
+    inner: Peekable<Iter<'a, usize>>,
+    emitted_implicit: bool,
+}
+
+impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
+    type Item = &'a [PartialBatchKey];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.emitted_implicit {
+            self.emitted_implicit = true;
+            return Some(match self.inner.peek() {
+                None => &self.batch.keys,
+                Some(run_end) => &self.batch.keys[0..**run_end],
+            });
+        }
+
+        if let Some(run_start) = self.inner.next() {
+            return Some(match self.inner.peek() {
+                Some(run_end) => &self.batch.keys[*run_start..**run_end],
+                None => &self.batch.keys[*run_start..],
+            });
+        }
+
+        None
     }
 }
 

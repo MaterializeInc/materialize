@@ -1091,6 +1091,7 @@ mod tests {
                         encoded_size_bytes: 0,
                     })
                     .collect(),
+                runs: vec![],
             }
         }
 

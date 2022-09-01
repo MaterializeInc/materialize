@@ -1003,8 +1003,8 @@ mod tests {
                             let since = get_u64(&tc.args, "since").expect("missing since");
                             let target_size = get_arg(&tc.args, "target_size")
                                 .map(|x| x.parse::<usize>().expect("invalid target_size"));
-                            let memory_budget = get_arg(&tc.args, "memory_budget")
-                                .map(|x| x.parse::<usize>().expect("invalid memory_budget"));
+                            let memory_bound = get_arg(&tc.args, "memory_bound")
+                                .map(|x| x.parse::<usize>().expect("invalid memory_bound"));
 
                             let mut inputs = Vec::new();
                             for input in tc.args.get("inputs").expect("missing inputs") {
@@ -1031,7 +1031,7 @@ mod tests {
                                 Arc::clone(&client.metrics),
                                 Arc::clone(&cpu_heavy_runtime),
                                 req,
-                                memory_budget.unwrap_or(usize::MAX),
+                                memory_bound.unwrap_or(usize::MAX),
                                 WriterId::new(),
                             )
                             .await;
