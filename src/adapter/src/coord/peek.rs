@@ -17,9 +17,6 @@ use std::fmt;
 use std::{collections::HashMap, num::NonZeroUsize};
 
 use futures::{FutureExt, StreamExt};
-use mz_expr::explain::Indices;
-use mz_ore::str::{bracketed, separated, Indent};
-use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -27,10 +24,13 @@ use uuid::Uuid;
 use mz_compute_client::command::{DataflowDescription, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
+use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_ore::str::{bracketed, separated, Indent};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use mz_stash::Append;
 
@@ -442,8 +442,11 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                 }
             }
-            let results = finishing.finish(results);
-            return Ok(send_immediate_rows(results));
+            let results = finishing.finish(results, self.catalog.system_config().max_result_size());
+            return match results {
+                Ok(rows) => Ok(send_immediate_rows(rows)),
+                Err(e) => Err(AdapterError::ResultSize(e)),
+            };
         }
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
@@ -565,11 +568,12 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .unwrap();
 
         // Prepare the receiver to return as a response.
-        let max_result_size = usize::cast_from(self.catalog.system_config().max_result_size());
+        let max_result_size = self.catalog.system_config().max_result_size();
         let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
             .fold(
                 (PeekResponse::Rows(vec![]), 0),
                 move |memo: (_, usize), resp| async move {
+                    let max_result_size = usize::cast_from(max_result_size.clone());
                     match (memo, resp) {
                         (
                             (PeekResponse::Rows(mut memo), mut total_size),
@@ -604,7 +608,10 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 },
             )
             .map(move |(resp, _)| match resp {
-                PeekResponse::Rows(rows) => PeekResponseUnary::Rows(finishing.finish(rows)),
+                PeekResponse::Rows(rows) => match finishing.finish(rows, max_result_size) {
+                    Ok(rows) => PeekResponseUnary::Rows(rows),
+                    Err(e) => PeekResponseUnary::Error(e),
+                },
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),
             });
@@ -685,13 +692,14 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
     use mz_repr::{
         explain_new::{text_string_at, DummyHumanizer, RenderingContext},
         ColumnType, Datum, ScalarType,
     };
+
+    use super::*;
 
     #[test]
     fn test_fast_path_plan_as_text() {

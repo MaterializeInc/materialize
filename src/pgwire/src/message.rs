@@ -403,6 +403,7 @@ impl ErrorResponse {
             AdapterError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
             AdapterError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
+            AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,

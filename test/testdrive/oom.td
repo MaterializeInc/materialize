@@ -11,6 +11,29 @@
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}
 
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_result_size = 20
+
+> SELECT 1::int4 FROM generate_series(1, 4) as a;
+1
+1
+1
+
+! SELECT 1::int4 FROM generate_series(1, 5) as a;
+contains:result exceeds max size of 20 bytes
+
+> CREATE TABLE t1 (a int4)
+
+> INSERT INTO t1 SELECT 1::int4 FROM generate_series(1, 4) as a;
+
+> INSERT INTO t1 VALUES (5);
+
+! SELECT * FROM t1
+contains:result exceeds max size of 20 bytes
+
+! INSERT INTO t1 SELECT * FROM t1;
+contains:result exceeds max size of 20 bytes
+
 # Constants with less than or equal to 10,000 rows will be evaluated in environmentd. Anything in excess of this will
 # be sent to computed to be executed. Therefore, we need to set the size high enough such that it will be evaluated by
 # computed to test the computed side of things.
@@ -31,19 +54,19 @@ contains:result exceeds max size of 50000 bytes
 ! SELECT 1::int4 FROM generate_series(1, 10001)
 contains:result exceeds max size of 50000 bytes
 
-> CREATE TABLE t (a int4)
+> CREATE TABLE t2 (a int4)
 
-! INSERT INTO t SELECT generate_series::int4 FROM generate_series(1, 10001);
+! INSERT INTO t2 SELECT generate_series::int4 FROM generate_series(1, 10001);
 contains:result exceeds max size of 50000 bytes
 
-> INSERT INTO t SELECT generate_series::int4 FROM generate_series(1, 10000);
+> INSERT INTO t2 SELECT generate_series::int4 FROM generate_series(1, 10000);
 
-> INSERT INTO t VALUES (10000);
+> INSERT INTO t2 VALUES (10000);
 
-! SELECT * FROM t
+! SELECT * FROM t2
 contains:result exceeds max size of 50000 bytes
 
-! INSERT INTO t SELECT * FROM t;
+! INSERT INTO t2 SELECT * FROM t2;
 contains:result exceeds max size of 50000 bytes
 
 $ postgres-execute connection=mz_system

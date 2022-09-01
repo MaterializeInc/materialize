@@ -2686,7 +2686,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 offset: 0,
                 project: (0..plan.returning[0].0.iter().count()).collect(),
             };
-            return Ok(send_immediate_rows(finishing.finish(plan.returning)));
+            return match finishing.finish(
+                plan.returning,
+                self.catalog.system_config().max_result_size(),
+            ) {
+                Ok(rows) => Ok(send_immediate_rows(rows)),
+                Err(e) => Err(AdapterError::ResultSize(e)),
+            };
         }
         Ok(match plan.kind {
             MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
