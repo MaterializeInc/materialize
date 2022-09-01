@@ -7,44 +7,53 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Definition and helper structs for the [`RelationType`] attribute.
+//! Definition and helper structs for the [`UniqueKeys`] attribute.
 
 use mz_expr::MirRelationExpr;
-use mz_repr::ColumnType;
 
-use super::subtree_size::SubtreeSize;
-use super::{Attribute, DerivedAttributes, RequiredAttributes};
+use super::{
+    arity::Arity, subtree_size::SubtreeSize, Attribute, DerivedAttributes, RequiredAttributes,
+};
 
-/// Compute the column types of each subtree of a [MirRelationExpr] from the
+/// Compute the unique keys of each subtree of a [MirRelationExpr] from the
 /// bottom-up.
 #[derive(Default)]
 #[allow(missing_debug_implementations)]
-pub struct RelationType {
+pub struct UniqueKeys {
     /// A vector of results for all nodes in the visited tree in
     /// post-visit order.
-    pub results: Vec<Vec<ColumnType>>,
+    pub results: Vec<Vec<Vec<usize>>>,
 }
 
-impl Attribute for RelationType {
-    type Value = Vec<ColumnType>;
+impl Attribute for UniqueKeys {
+    type Value = Vec<Vec<usize>>;
 
     fn derive(&mut self, expr: &MirRelationExpr, deps: &DerivedAttributes) {
         let n = self.results.len();
+
         let mut offsets = Vec::new();
         let mut offset = 1;
         for _ in 0..expr.num_inputs() {
             offsets.push(n - offset);
             offset += &deps.get_results::<SubtreeSize>()[n - offset];
         }
-        let subtree_column_types =
-            expr.col_with_input_cols(offsets.into_iter().rev().map(|o| &self.results[o]));
-        self.results.push(subtree_column_types);
+
+        let subtree_keys = expr.keys_with_input_keys(
+            offsets
+                .iter()
+                .rev()
+                .map(|o| deps.get_results::<Arity>()[*o]),
+            offsets.iter().rev().map(|o| &self.results[*o]),
+        );
+
+        self.results.push(subtree_keys);
     }
 
     fn add_dependencies(builder: &mut RequiredAttributes)
     where
         Self: Sized,
     {
+        builder.require::<Arity>();
         builder.require::<SubtreeSize>();
     }
 

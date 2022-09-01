@@ -747,26 +747,22 @@ impl MirRelationExpr {
                         if let MirRelationExpr::Map { input, .. } = &inputs[0] {
                             if let MirRelationExpr::Union { base, inputs } = &**input {
                                 if inputs.len() == 1 {
-                                    if let MirRelationExpr::Project { input, outputs } = &**base {
-                                        if let MirRelationExpr::Negate { input } = &**input {
-                                            if let MirRelationExpr::Get {
-                                                id: second_id,
-                                                typ: _,
-                                            } = &**input
-                                            {
-                                                if first_id == second_id {
-                                                    result.extend(
-                                                        inputs[0].typ().keys.drain(..).filter(
-                                                            |key| {
-                                                                key.iter().all(|c| {
-                                                                    outputs.get(*c) == Some(c)
-                                                                        && base_projection.get(*c)
-                                                                            == Some(c)
-                                                                })
-                                                            },
-                                                        ),
-                                                    );
-                                                }
+                                    if let Some((input, outputs)) = base.is_negated_project() {
+                                        if let MirRelationExpr::Get {
+                                            id: second_id,
+                                            typ: _,
+                                        } = input
+                                        {
+                                            if first_id == second_id {
+                                                result.extend(
+                                                    inputs[0].typ().keys.drain(..).filter(|key| {
+                                                        key.iter().all(|c| {
+                                                            outputs.get(*c) == Some(c)
+                                                                && base_projection.get(*c)
+                                                                    == Some(c)
+                                                        })
+                                                    }),
+                                                );
                                             }
                                         }
                                     }
@@ -1144,6 +1140,21 @@ impl MirRelationExpr {
         } else {
             false
         }
+    }
+
+    /// If the expression is a negated project, return the input and the projection.
+    pub fn is_negated_project(&self) -> Option<(&MirRelationExpr, &[usize])> {
+        if let MirRelationExpr::Negate { input } = self {
+            if let MirRelationExpr::Project { input, outputs } = &**input {
+                return Some((&**input, outputs));
+            }
+        }
+        if let MirRelationExpr::Project { input, outputs } = self {
+            if let MirRelationExpr::Negate { input } = &**input {
+                return Some((&**input, outputs));
+            }
+        }
+        None
     }
 
     /// Pretty-print this MirRelationExpr to a string.

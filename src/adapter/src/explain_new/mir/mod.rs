@@ -15,15 +15,11 @@ use std::collections::HashMap;
 use std::iter::once;
 
 use mz_compute_client::command::DataflowDescription;
-use mz_expr::{
-    visit::{Visit, Visitor},
-    MirRelationExpr, OptimizedMirRelationExpr,
-};
+use mz_expr::{visit::Visit, MirRelationExpr, OptimizedMirRelationExpr};
 use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::{
-    arity::Arity, non_negative::NonNegative, relation_type::RelationType,
-    subtree_size::SubtreeSize, Attribute,
+    Arity, DerivedAttributes, NonNegative, RelationType, SubtreeSize, UniqueKeys,
 };
 
 use super::{
@@ -114,25 +110,6 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
         })
     }
 }
-struct ExplainAttributes<'a> {
-    config: &'a ExplainConfig,
-    non_negative: NonNegative,
-    subtree_size: SubtreeSize,
-    arity: Arity,
-    types: RelationType,
-}
-
-impl<'a> From<&'a ExplainConfig> for ExplainAttributes<'a> {
-    fn from(config: &'a ExplainConfig) -> ExplainAttributes<'a> {
-        ExplainAttributes {
-            config,
-            non_negative: NonNegative::default(),
-            subtree_size: SubtreeSize::default(),
-            arity: Arity::default(),
-            types: RelationType::default(),
-        }
-    }
-}
 
 impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
     fn try_from(
@@ -146,13 +123,13 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             // get the annotation keys
             let subtree_refs = plan.post_order_vec();
             // get the annotation values
-            let mut explain_attrs = ExplainAttributes::from(config);
+            let mut explain_attrs = DerivedAttributes::from(config);
             plan.visit(&mut explain_attrs)?;
 
             if config.subtree_size {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    explain_attrs.subtree_size.results.into_iter(),
+                    explain_attrs.remove_results::<SubtreeSize>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.subtree_size = Some(attr);
@@ -161,7 +138,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.non_negative {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    explain_attrs.non_negative.results.into_iter(),
+                    explain_attrs.remove_results::<NonNegative>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.non_negative = Some(attr);
@@ -169,18 +146,20 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             }
 
             if config.arity {
-                for (expr, attr) in
-                    std::iter::zip(subtree_refs.iter(), explain_attrs.arity.results.into_iter())
-                {
+                for (expr, attr) in std::iter::zip(
+                    subtree_refs.iter(),
+                    explain_attrs.remove_results::<Arity>().into_iter(),
+                ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.arity = Some(attr);
                 }
             }
 
             if config.types {
-                for (expr, types) in
-                    std::iter::zip(subtree_refs.iter(), explain_attrs.types.results.into_iter())
-                {
+                for (expr, types) in std::iter::zip(
+                    subtree_refs.iter(),
+                    explain_attrs.remove_results::<RelationType>().into_iter(),
+                ) {
                     let humanized_columns = types
                         .into_iter()
                         .map(|c| context.humanizer.humanize_column_type(&c))
@@ -190,52 +169,23 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
                     attrs.types = Some(attr);
                 }
             }
+
+            if config.keys {
+                for (expr, keys) in std::iter::zip(
+                    subtree_refs.iter(),
+                    explain_attrs.remove_results::<UniqueKeys>().into_iter(),
+                ) {
+                    let formatted_keys = keys
+                        .into_iter()
+                        .map(|key_set| bracketed("[", "]", separated(", ", key_set)).to_string());
+                    let attr = bracketed("(", ")", separated(", ", formatted_keys)).to_string();
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.keys = Some(attr);
+                }
+            }
         }
 
         Ok(AnnotatedPlan { plan, annotations })
-    }
-}
-
-// TODO: Model dependencies as part of the core attributes framework.
-impl<'a> Visitor<MirRelationExpr> for ExplainAttributes<'a> {
-    fn pre_visit(&mut self, expr: &MirRelationExpr) {
-        if self.config.subtree_size || self.config.non_negative {
-            self.subtree_size.schedule_env_tasks(expr);
-        }
-        if self.config.non_negative {
-            self.non_negative.schedule_env_tasks(expr);
-        }
-        if self.config.arity {
-            self.arity.schedule_env_tasks(expr);
-        }
-        if self.config.types {
-            self.types.schedule_env_tasks(expr);
-        }
-    }
-
-    fn post_visit(&mut self, expr: &MirRelationExpr) {
-        // Derive attributes and handle environment maintenance tasks
-        // in reverse dependency order.
-        if self.config.subtree_size
-            || self.config.non_negative
-            || self.config.arity
-            || self.config.types
-        {
-            self.subtree_size.derive(expr, &());
-            self.subtree_size.handle_env_tasks();
-        }
-        if self.config.non_negative {
-            self.non_negative.derive(expr, &self.subtree_size);
-            self.non_negative.handle_env_tasks();
-        }
-        if self.config.arity {
-            self.arity.derive(expr, &self.subtree_size);
-            self.arity.handle_env_tasks();
-        }
-        if self.config.types {
-            self.types.derive(expr, &self.subtree_size);
-            self.types.handle_env_tasks();
-        }
     }
 }
 

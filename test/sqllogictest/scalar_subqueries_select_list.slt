@@ -534,7 +534,6 @@ Query:
 
 %12 =
 | Get materialize.public.t2 (u2)
-| ArrangeBy (#0)
 
 %13 =
 | Get %7 (l3)
@@ -560,10 +559,11 @@ Query:
 
 %18 =
 | Union %11 %17
+| ArrangeBy (#0)
 
 %19 =
 | Join %12 %15 %18 (= #0 #1 #3)
-| | implementation = Differential %18 %12.(#0) %15.(#0)
+| | implementation = Differential %12 %15.(#0) %18.(#0)
 | Project (#2, #4)
 
 EOF

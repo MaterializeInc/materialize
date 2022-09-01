@@ -290,8 +290,7 @@ Explained Query
   Let // { non_negative: false }
     Project (#2, #4) // { non_negative: false }
       Join on=(eq(#0, #1, #3)) type=differential // { non_negative: false }
-        ArrangeBy keys=[[#0]] // { non_negative: true }
-          Get l0 // { non_negative: true }
+        Get l0 // { non_negative: true }
         ArrangeBy keys=[[#0]] // { non_negative: false }
           Union // { non_negative: false }
             Get l3 // { non_negative: true }
@@ -301,14 +300,15 @@ Explained Query
                   Project (#0) // { non_negative: true }
                     Get l3 // { non_negative: true }
                 Get l1 // { non_negative: true }
-        Union // { non_negative: false }
-          Get l4 // { non_negative: true }
-          Map (null) // { non_negative: false }
-            Union // { non_negative: false }
-              Negate // { non_negative: false }
-                Project (#0) // { non_negative: true }
-                  Get l4 // { non_negative: true }
-              Get l1 // { non_negative: true }
+        ArrangeBy keys=[[#0]] // { non_negative: false }
+          Union // { non_negative: false }
+            Get l4 // { non_negative: true }
+            Map (null) // { non_negative: false }
+              Union // { non_negative: false }
+                Negate // { non_negative: false }
+                  Project (#0) // { non_negative: true }
+                    Get l4 // { non_negative: true }
+                Get l1 // { non_negative: true }
     Where
       l4 =
         TopK group_by=[#0] limit=1 monotonic=false // { non_negative: true }
