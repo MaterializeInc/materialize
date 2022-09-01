@@ -75,10 +75,10 @@ impl CanonicalizeMfp {
             let orig_mfp = mfp.clone();
 
             // Preparation for the literal constraints detection.
-            CanonicalizeMfp::inline_literal_constraints(&mut mfp)?;
-            CanonicalizeMfp::list_of_predicates_to_and_of_predicates(&mut mfp);
-            CanonicalizeMfp::distribute_and_over_or(&mut mfp)?;
-            CanonicalizeMfp::unary_and(&mut mfp);
+            Self::inline_literal_constraints(&mut mfp)?;
+            Self::list_of_predicates_to_and_of_predicates(&mut mfp);
+            Self::distribute_and_over_or(&mut mfp)?;
+            Self::unary_and(&mut mfp);
 
             /// The above preparation might make the MFP more complicated, so we'll later want to
             /// either undo the preparation transformations or get back to `orig_mfp`.
@@ -109,7 +109,7 @@ impl CanonicalizeMfp {
             // todo: We might want to also call `canonicalize_equivalences`,
             // see near the end of literal_constraints.slt.
 
-            let key_val = CanonicalizeMfp::detect_literal_constraints(&mfp, id, indexes);
+            let key_val = Self::detect_literal_constraints(&mfp, id, indexes);
 
             match key_val {
                 None => {
@@ -125,7 +125,7 @@ impl CanonicalizeMfp {
                 Some((key, possible_vals)) => {
                     // We found a usable index. We'll try to remove the corresponding literal
                     // constraints.
-                    if CanonicalizeMfp::remove_literal_constraints(&mut mfp, &key)
+                    if Self::remove_literal_constraints(&mut mfp, &key)
                         || removed_contradicting_or_args
                     {
                         // We were able to remove the literal constraints or contradicting OR args,
@@ -316,8 +316,8 @@ impl CanonicalizeMfp {
     }
 
     /// 1. Removes such OR args in which there are contradicting literal constraints.
-    /// 2. Also, if an OR arg doesn't have any contradiction, this fn just deduplicates the
-    /// AND arg list of that OR arg.
+    /// 2. Also, if an OR arg doesn't have any contradiction, this fn just deduplicates and sorts
+    /// the AND arg list of that OR arg.
     ///
     /// Example for 1:
     /// `<arg1> OR (a = 5 AND a = 5 AND a = 8) OR <arg3>`
@@ -341,10 +341,11 @@ impl CanonicalizeMfp {
                 exprs: and_args,
             } = or_arg
             {
-                if Self::has_duplicates(and_args.clone()) {
+                let and_args_orig = and_args.clone();
+                and_args.sort();
+                and_args.dedup();
+                if *and_args != and_args_orig {
                     changed = true;
-                    and_args.sort();
-                    and_args.dedup();
                 }
                 // Deduplicated, so we cannot have something like `a = 5 AND a = 5`.
                 // This means that if we now have `<expr1> = <literal1> AND <expr1> = <literal2>`,
@@ -362,7 +363,11 @@ impl CanonicalizeMfp {
                 unreachable!("OR arg was not an AND in remove_impossible_or_args");
             }
         });
+        // We remove the marked OR args.
+        // (If the OR has 0 or 1 args remaining, then `reduce_and_canonicalize_and_or` will later
+        // further simplify.)
         swap_remove_multiple(&mut or_args, to_remove);
+        // Rebuild the MFP if needed
         if changed {
             let new_predicates = vec![MirScalarExpr::CallVariadic {
                 func: VariadicFunc::Or,
