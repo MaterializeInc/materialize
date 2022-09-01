@@ -860,13 +860,8 @@ impl KafkaSinkState {
     async fn send_consistency_record(
         &self,
         transaction_id: Timestamp,
-        status: &str,
         consistency: &KafkaConsistencyRunningState,
     ) -> Result<(), anyhow::Error> {
-        if status != "END" {
-            // We only keep track of end-of-batch messages in the progress topic.
-            return Ok(());
-        }
         let encoded = serde_json::to_vec(&ProgressRecord {
             timestamp: transaction_id,
         })?;
@@ -939,7 +934,7 @@ impl KafkaSinkState {
                         self.retry_on_txn_error(|p| p.begin_transaction()).await?;
                     }
 
-                    self.send_consistency_record(min_frontier, "END", consistency_state)
+                    self.send_consistency_record(min_frontier, consistency_state)
                         .await
                         .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
 
@@ -1228,13 +1223,6 @@ where
                     bail_err!(s.retry_on_txn_error(|p| p.begin_transaction()).await);
                 }
 
-                if let Some(ref consistency_state) = s.sink_state.unwrap_running() {
-                    bail_err!(
-                        s.send_consistency_record(*ts, "BEGIN", consistency_state)
-                            .await
-                    );
-                }
-
                 let mut repeat_counter = 0;
                 for encoded_row in rows {
                     let record = BaseRecord::to(&s.topic);
@@ -1264,11 +1252,9 @@ where
                 bail_err!(s.flush().await);
 
                 if let Some(ref consistency_state) = s.sink_state.unwrap_running() {
-                    bail_err!(
-                        s.send_consistency_record(*ts, "END", consistency_state)
-                            .await
-                    );
+                    bail_err!(s.send_consistency_record(*ts, consistency_state).await);
                 }
+
                 if s.transactional {
                     bail_err!(s.retry_on_txn_error(|p| p.commit_transaction()).await);
                 };
