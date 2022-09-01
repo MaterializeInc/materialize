@@ -16,6 +16,7 @@ use arrow2::io::parquet::write::{
     CompressionOptions, Encoding, FileWriter, KeyValue, RowGroupIterator, Version, WriteOptions,
 };
 use differential_dataflow::trace::Description;
+use mz_persist_types::Codec64;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
@@ -31,7 +32,10 @@ use crate::indexed::encoding::{
 const INLINE_METADATA_KEY: &'static str = "MZ:inline";
 
 /// Encodes an BlobTraceBatchPart into the Parquet format.
-pub fn encode_trace_parquet<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> Result<(), Error> {
+pub fn encode_trace_parquet<W: Write, T: Timestamp + Codec64>(
+    w: &mut W,
+    batch: &BlobTraceBatchPart<T>,
+) -> Result<(), Error> {
     // Better to error now than write out an invalid batch.
     batch.validate()?;
     encode_parquet_kvtd(
@@ -42,7 +46,9 @@ pub fn encode_trace_parquet<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> 
 }
 
 /// Decodes a BlobTraceBatchPart from the Parquet format.
-pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatchPart, Error> {
+pub fn decode_trace_parquet<R: Read + Seek, T: Timestamp + Codec64>(
+    r: &mut R,
+) -> Result<BlobTraceBatchPart<T>, Error> {
     let metadata = read_metadata(r).map_err(|err| err.to_string())?;
     let metadata = metadata
         .key_value_metadata()
@@ -62,9 +68,9 @@ pub fn decode_trace_parquet<R: Read + Seek>(r: &mut R) -> Result<BlobTraceBatchP
         desc: meta.desc.map_or_else(
             || {
                 Description::new(
-                    Antichain::from_elem(u64::minimum()),
-                    Antichain::from_elem(u64::minimum()),
-                    Antichain::from_elem(u64::minimum()),
+                    Antichain::from_elem(T::minimum()),
+                    Antichain::from_elem(T::minimum()),
+                    Antichain::from_elem(T::minimum()),
                 )
             },
             |x| x.into(),
