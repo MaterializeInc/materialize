@@ -19,12 +19,13 @@ use differential_dataflow::Hashable;
 use futures::Stream as FuturesStream;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Map, OkErr};
+use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, Mutex};
 use tracing::trace;
 
+use mz_expr::MfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
@@ -41,6 +42,9 @@ use crate::types::sources::SourceData;
 /// of reading data to all timely workers.
 ///
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
+/// All updates at times greater or equal to `until` will be suppressed.
+/// The `map_filter_project` argument, if supplied, may be partially applied,
+/// and any un-applied part of the argument will be left behind in the argument.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn persist_source<G>(
@@ -49,6 +53,8 @@ pub fn persist_source<G>(
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
     as_of: Antichain<Timestamp>,
+    until: Antichain<Timestamp>,
+    map_filter_project: Option<&mut MfpPlan>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -57,7 +63,15 @@ pub fn persist_source<G>(
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
-    let (stream, token) = persist_source_core(scope, source_id, persist_clients, metadata, as_of);
+    let (stream, token) = persist_source_core(
+        scope,
+        source_id,
+        persist_clients,
+        metadata,
+        as_of,
+        until,
+        map_filter_project,
+    );
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((row, t, r)),
         Err(err) => Err((err, t, r)),
@@ -77,6 +91,8 @@ pub fn persist_source_core<G>(
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
     as_of: Antichain<Timestamp>,
+    until: Antichain<Timestamp>,
+    mut map_filter_project: Option<&mut MfpPlan>,
 ) -> (
     Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Rc<dyn Any>,
@@ -105,6 +121,9 @@ where
     let peers = scope.peers();
     let chosen_worker = usize::cast_from(source_id.hashed()) % peers;
 
+    // Extract the MFP if it exists; leave behind an identity MFP in that case.
+    let mut map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+
     // All of these need to be cloned out here because they're moved into the
     // `try_stream!` generator.
     let persist_clients_stream = Arc::<Mutex<PersistClientCache>>::clone(&persist_clients);
@@ -119,6 +138,7 @@ where
         mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     ) = mpsc::unbounded_channel();
 
+    let until_clone = until.clone();
     // This is a generator that sets up an async `Stream` that can be continuously polled to get the
     // values that are `yield`-ed from it's body.
     let async_stream = async_stream::try_stream!({
@@ -146,13 +166,29 @@ where
             .await
             .expect("cannot serve requested as_of");
 
-        loop {
+        let mut done = false;
+        while !done {
             while let Ok(leased_part) = consumed_part_rx.try_recv() {
                 subscription.return_leased_part(leased_part.into());
             }
 
-            yield subscription.next().await;
+            let (parts, progress) = subscription.next().await;
+            // If `until.less_equal(progress)`, it means that all subsequent batches will
+            // contain only times greater or equal to `until`, which means they can be dropped
+            // in their entirety. The current batch must be emitted, but we can stop afterwards.
+            if timely::PartialOrder::less_equal(&until_clone, &progress) {
+                done = true;
+            }
+            yield (parts, progress);
         }
+
+        // Rather than simply end, we spawn a task that can continue to return leases.
+        // This keeps the `ReadHandle` alive until we have confirmed each lease as read.
+        mz_ore::task::spawn(|| "LeaseReturner", async move {
+            while let Some(leased_part) = consumed_part_rx.recv().await {
+                subscription.return_leased_part(leased_part.into());
+            }
+        });
     });
 
     let mut pinned_stream = Box::pin(async_stream);
@@ -226,6 +262,10 @@ where
     let update_output_port = update_output_stream.name().port;
     let consumed_part_port = consumed_part_output_stream.name().port;
 
+    // Re-used state for processing and building rows.
+    let mut datum_vec = mz_repr::DatumVec::new();
+    let mut row_builder = Row::default();
+
     fetcher_builder.build_async(
         scope.clone(),
         async_op!(|initial_capabilities, _frontiers| {
@@ -265,10 +305,56 @@ where
                 for (_idx, part) in buffer.drain(..) {
                     let (consumed_part, updates) = fetcher.fetch_leased_part(part.into()).await;
 
-                    let mut updates = updates
+                    let updates = updates
                         .expect("shard_id generated for sources must match across all workers");
 
-                    update_session.give_vec(&mut updates);
+                    // Apply as much logic to `updates` as we can, before we emit anything.
+                    let mut update_outputs = Vec::with_capacity(updates.len());
+                    for ((key, val), time, diff) in updates {
+                        if !until.less_equal(&time) {
+                            match (key, val) {
+                                (Ok(SourceData(Ok(row))), Ok(())) => {
+                                    if let Some(mfp) = &mut map_filter_project {
+                                        let arena = mz_repr::RowArena::new();
+                                        let mut datums_local = datum_vec.borrow_with(&row);
+                                        for result in mfp.evaluate(
+                                            &mut datums_local,
+                                            &arena,
+                                            time,
+                                            diff,
+                                            |time| !until.less_equal(time),
+                                            &mut row_builder,
+                                        ) {
+                                            match result {
+                                                Ok((row, time, diff)) => {
+                                                    // Additional `until` filtering due to temporal filters.
+                                                    if !until.less_equal(&time) {
+                                                        update_outputs.push((Ok(row), time, diff));
+                                                    }
+                                                }
+                                                Err((err, time, diff)) => {
+                                                    // Additional `until` filtering due to temporal filters.
+                                                    if !until.less_equal(&time) {
+                                                        update_outputs.push((Err(err), time, diff));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        update_outputs.push((Ok(row), time, diff));
+                                    }
+                                }
+                                (Ok(SourceData(Err(err))), Ok(())) => {
+                                    update_outputs.push((Err(err), time, diff));
+                                }
+                                // TODO(petrosagg): error handling
+                                _ => panic!("decoding failed"),
+                            }
+                        }
+                    }
+                    differential_dataflow::consolidation::consolidate_updates(&mut update_outputs);
+
+                    update_session.give_vec(&mut update_outputs);
                     consumed_part_session.give(consumed_part.into_exchangeable_part());
                 }
             }
@@ -327,14 +413,7 @@ where
         }),
     );
 
-    let stream = update_output_stream.map(|x| match x {
-        ((Ok(SourceData(Ok(row))), Ok(())), ts, diff) => (Ok(row), ts, diff),
-        ((Ok(SourceData(Err(err))), Ok(())), ts, diff) => (Err(err), ts, diff),
-        // TODO(petrosagg): error handling
-        _ => panic!("decoding failed"),
-    });
-
     let token = Rc::new(token);
 
-    (stream, token)
+    (update_output_stream, token)
 }

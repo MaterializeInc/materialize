@@ -164,25 +164,28 @@ pub fn build_compute_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
+                // Convert any `LinearOperator` to a `MfpPlan`.
+                // TODO: remove the `LinearOperator` entirely in favor of a `MfpPlan`.
+                let mut mfp = source.arguments.operators.clone().map(|ops| {
+                    mz_expr::MfpPlan::create_from(ops.to_mfp(&source.typ))
+                        .expect("Linear operators should always be valid")
+                });
+
                 // Note: For correctness, we require that sources only emit times advanced by
                 // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                let (mut ok_stream, mut err_stream, token) = persist_source::persist_source(
+                let (mut ok_stream, err_stream, token) = persist_source::persist_source(
                     region,
                     *source_id,
                     Arc::clone(&compute_state.persist_clients),
                     source.storage_metadata.clone(),
                     dataflow.as_of.clone().unwrap(),
+                    dataflow.until.clone(),
+                    mfp.as_mut(),
                 );
 
-                // Restrict updates by `dataflow.until`, retaining those at times not greater or equal to it.
-                // TODO: Teach `persist_source` to accept `until` and drop its capabilities when it passes.
-                if !dataflow.until.is_empty() {
-                    use timely::dataflow::operators::Filter;
-                    let until1 = dataflow.until.clone();
-                    let until2 = dataflow.until.clone();
-                    ok_stream = ok_stream.filter(move |(_, time, _)| !until1.less_equal(time));
-                    err_stream = err_stream.filter(move |(_, time, _)| !until2.less_equal(time));
-                }
+                // If `mfp` is non-identity, we need to apply what remains.
+                // For the moment, assert that it is either trivial or `None`.
+                assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
 
                 // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
                 // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock

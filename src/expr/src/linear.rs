@@ -1509,7 +1509,7 @@ pub mod plan {
         ///
         /// If any unsupported expression is found, for example one that uses `mz_logical_timestamp`
         /// in an unsupported position, an error is returned.
-        pub(crate) fn create_from(mut mfp: MapFilterProject) -> Result<Self, String> {
+        pub fn create_from(mut mfp: MapFilterProject) -> Result<Self, String> {
             let mut lower_bounds = Vec::new();
             let mut upper_bounds = Vec::new();
 
@@ -1633,6 +1633,19 @@ pub mod plan {
             self.mfp.mfp.is_identity()
                 && self.lower_bounds.is_empty()
                 && self.upper_bounds.is_empty()
+        }
+
+        /// Returns `self`, and leaves behind an identity operator that acts on its output.
+        pub fn take(&mut self) -> Self {
+            let mut identity = Self {
+                mfp: SafeMfpPlan {
+                    mfp: MapFilterProject::new(self.mfp.projection.len()),
+                },
+                lower_bounds: Default::default(),
+                upper_bounds: Default::default(),
+            };
+            std::mem::swap(self, &mut identity);
+            identity
         }
 
         /// Attempt to convert self into a non-temporal MapFilterProject plan.

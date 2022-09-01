@@ -286,6 +286,8 @@ where
                                     persist_clients,
                                     tx_storage_metadata,
                                     as_of,
+                                    Antichain::new(),
+                                    None,
                                 );
                             let (tx_source_ok, tx_source_err) = (
                                 tx_source_ok_stream.as_collection(),
@@ -333,6 +335,8 @@ where
                                 persist_clients,
                                 description.storage_metadata.clone(),
                                 Antichain::from_elem(previous_as_of),
+                                Antichain::new(),
+                                None,
                             );
                             (stream, Some(tok))
                         } else {
