@@ -1322,6 +1322,13 @@ CREATE CONNECTION conn1 FOR KAFKA BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CE
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(Value(String("kafka:1234"))) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
 
 parse-statement
+CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', PROGRESS TOPIC 'my-materialize-progress-topic';
+----
+CREATE CONNECTION conn1 FOR KAFKA BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-materialize-progress-topic'
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(Value(String("kafka:1234"))) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
+
+parse-statement
 DROP CONNECTION conn1
 ----
 DROP CONNECTION conn1
