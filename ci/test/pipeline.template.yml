@@ -458,7 +458,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/persist]
-    artifact_paths: junit_mzcompose_*.xml
+    artifact_paths: [test/persist/maelstrom/**/*.log, junit_mzcompose_*.xml]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persist
