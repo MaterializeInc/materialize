@@ -20,13 +20,12 @@ use std::collections::HashMap;
 use std::fmt;
 
 use mz_expr::explain::Indices;
-use mz_expr::RowSetFinishing;
+use mz_expr::{MapFilterProject, RowSetFinishing};
 use mz_ore::str::{Indent, IndentLike};
 use mz_repr::explain_new::{
     separated_text, DisplayJson, DisplayText, ExplainConfig, ExprHumanizer, RenderingContext,
 };
 use mz_repr::GlobalId;
-use mz_storage::types::transforms::LinearOperator;
 
 use crate::coord::peek::{self, FastPathPlan};
 
@@ -217,8 +216,7 @@ pub(crate) struct ExplainMultiPlan<'a, T> {
     pub(crate) context: &'a ExplainContext<'a>,
     // Maps the names of the sources to the linear operators that will be
     // on them.
-    // There are plans to replace LinearOperator with MFP struct (#6657)
-    pub(crate) sources: Vec<(String, &'a LinearOperator)>,
+    pub(crate) sources: Vec<(String, &'a MapFilterProject)>,
     // elements of the vector are in topological order
     pub(crate) plans: Vec<(String, AnnotatedPlan<'a, T>)>,
 }
@@ -328,20 +326,18 @@ where
     }
 }
 
-impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, LinearOperator> {
+impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, MapFilterProject> {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut RenderingContext<'a>) -> fmt::Result {
-        let LinearOperator {
-            predicates,
-            projection,
-        } = self.0;
-        // handle projection
-        let outputs = Indices(projection);
-        writeln!(f, "{}Demand ({})", ctx.indent, outputs)?;
-        // handle predicates
-        if !predicates.is_empty() {
-            let predicates = separated_text(" AND ", predicates.iter().map(Displayable::from));
+        let (map, filter, project) = self.0.as_map_filter_project();
+        if !map.is_empty() {
+            let expressions = separated_text(" AND ", map.iter().map(Displayable::from));
+            writeln!(f, "{}Map {}", ctx.indent, expressions)?;
+        }
+        if !filter.is_empty() {
+            let predicates = separated_text(" AND ", filter.iter().map(Displayable::from));
             writeln!(f, "{}Filter {}", ctx.indent, predicates)?;
         }
+        writeln!(f, "{}Project {}", ctx.indent, Indices(&project))?;
         Ok(())
     }
 }

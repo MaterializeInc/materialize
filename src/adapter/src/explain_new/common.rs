@@ -29,15 +29,13 @@
 
 use std::fmt;
 
+use mz_compute_client::command::DataflowDescription;
 use mz_expr::explain::{Indices, ViewExplanation};
-use mz_expr::MapFilterProject;
-use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::result::ResultExt;
 use mz_ore::str::{bracketed, separated};
 use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::GlobalId;
-
-use crate::command::DataflowDescription;
 
 pub trait ViewFormatter<ViewExpr> {
     fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &MapFilterProject) -> fmt::Result;
@@ -56,7 +54,7 @@ where
     Formatter: ViewFormatter<ViewExpr>,
 {
     /// Determines how sources and views are formatted
-    formatter: &'a Formatter,
+    formatter: Formatter,
     expr_humanizer: &'a dyn ExprHumanizer,
     /// Each source that has some [`MapFilterProject`].
     sources: Vec<(GlobalId, &'a MapFilterProject)>,
@@ -70,24 +68,10 @@ impl<'a, Formatter, ViewExpr> Explanation<'a, Formatter, ViewExpr>
 where
     Formatter: ViewFormatter<ViewExpr>,
 {
-    pub fn new(
-        expr: &'a ViewExpr,
-        expr_humanizer: &'a dyn ExprHumanizer,
-        formatter: &'a Formatter,
-    ) -> Self {
-        Self {
-            formatter,
-            expr_humanizer,
-            sources: vec![],
-            views: vec![(GlobalId::Explain, expr)],
-            finishing: None,
-        }
-    }
-
     pub fn new_from_dataflow(
         dataflow: &'a DataflowDescription<ViewExpr>,
         expr_humanizer: &'a dyn ExprHumanizer,
-        formatter: &'a Formatter,
+        formatter: Formatter,
     ) -> Self {
         let sources = dataflow
             .source_imports
@@ -198,15 +182,6 @@ impl<ViewExpr: serde::Serialize> ViewFormatter<ViewExpr> for JsonViewFormatter {
 pub struct DataflowGraphFormatter<'a> {
     expr_humanizer: &'a dyn ExprHumanizer,
     typed: bool,
-}
-
-impl<'a> DataflowGraphFormatter<'a> {
-    pub fn new(expr_humanizer: &'a dyn ExprHumanizer, typed: bool) -> Self {
-        Self {
-            expr_humanizer,
-            typed,
-        }
-    }
 }
 
 impl<'a> ViewFormatter<OptimizedMirRelationExpr> for DataflowGraphFormatter<'a> {

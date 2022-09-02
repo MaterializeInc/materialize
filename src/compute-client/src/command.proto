@@ -106,7 +106,7 @@ message ProtoSourceInstanceDesc {
 }
 
 message ProtoSourceInstanceArguments {
-    optional mz_storage.types.transforms.ProtoLinearOperator operators = 1;
+    optional mz_expr.linear.ProtoMapFilterProject operators = 2;
 }
 
 message ProtoPeek {
