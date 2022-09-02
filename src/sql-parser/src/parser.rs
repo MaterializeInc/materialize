@@ -2101,8 +2101,12 @@ impl<'a> Parser<'a> {
                 KafkaConfigOptionName::StatisticsIntervalMs
             }
             TOPIC => {
-                self.expect_keywords(&[METADATA, REFRESH, INTERVAL, MS])?;
-                KafkaConfigOptionName::TopicMetadataRefreshIntervalMs
+                if self.parse_keyword(METADATA) {
+                    self.expect_keywords(&[REFRESH, INTERVAL, MS])?;
+                    KafkaConfigOptionName::TopicMetadataRefreshIntervalMs
+                } else {
+                    KafkaConfigOptionName::Topic
+                }
             }
             TRANSACTION => {
                 self.expect_keywords(&[TIMEOUT, MS])?;
@@ -2420,15 +2424,23 @@ impl<'a> Parser<'a> {
                 })
             }
             KAFKA => {
-                let connection = match self.expect_one_of_keywords(&[BROKER, CONNECTION])? {
-                    BROKER => KafkaConnection::Inline {
-                        broker: self.parse_literal_string()?,
-                    },
-                    CONNECTION => self.parse_kafka_connection_reference()?,
-                    _ => unreachable!(),
-                };
-                self.expect_keyword(TOPIC)?;
-                let topic = self.parse_literal_string()?;
+                let (connection, topic) =
+                    match self.expect_one_of_keywords(&[BROKER, CONNECTION])? {
+                        BROKER => {
+                            let conn = KafkaConnection::Inline {
+                                broker: self.parse_literal_string()?,
+                            };
+                            self.expect_keyword(TOPIC)?;
+                            let topic = self.parse_literal_string()?;
+                            (conn, Some(topic))
+                        }
+                        CONNECTION => {
+                            let conn = self.parse_kafka_connection_reference()?;
+                            // TOPIC defined in options on `conn`
+                            (conn, None)
+                        }
+                        _ => unreachable!(),
+                    };
                 // one token of lookahead:
                 // * `KEY (` means we're parsing a list of columns for the key
                 // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
@@ -2543,8 +2555,6 @@ impl<'a> Parser<'a> {
 
         let connection = self.parse_kafka_connection_reference()?;
 
-        self.expect_keyword(TOPIC)?;
-        let topic = self.parse_literal_string()?;
         // one token of lookahead:
         // * `KEY (` means we're parsing a list of columns for the key
         // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
@@ -2569,7 +2579,6 @@ impl<'a> Parser<'a> {
         let consistency = self.parse_kafka_consistency()?;
         Ok(CreateSinkConnection::Kafka {
             connection,
-            topic,
             key,
             consistency,
         })

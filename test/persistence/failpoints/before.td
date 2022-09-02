@@ -44,14 +44,14 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE failpoint
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-failpoint-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-failpoint-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS f1
   ENVELOPE UPSERT
 
 > CREATE SINK failpoint_sink FROM failpoint
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-failpoint-sink-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-failpoint-sink-${testdrive.seed}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 

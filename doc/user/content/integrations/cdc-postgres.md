@@ -226,7 +226,7 @@ Debezium emits change events using an envelope that contains detailed informatio
 
 ```sql
 CREATE SOURCE kafka_repl
-    FROM KAFKA CONNECTION kafka_connection TOPIC 'pg_repl.public.table1'
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
     ENVELOPE DEBEZIUM UPSERT;
 ```
@@ -237,7 +237,7 @@ If the original Postgres table uses `REPLICA IDENTITY FULL`:
 
 ```sql
 CREATE SOURCE kafka_repl
-    FROM KAFKA CONNECTION kafka_connection TOPIC 'pg_repl.public.table1'
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
     ENVELOPE DEBEZIUM;
 ```

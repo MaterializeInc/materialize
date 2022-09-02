@@ -79,7 +79,7 @@ pub async fn create_kafka_sink(
     mz_client::execute(&mz_client, &query).await?;
 
     let query = format!(
-            "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA CONNECTION {sink}_kafka_conn TOPIC '{topic}' \
+            "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA CONNECTION {sink}_kafka_conn (TOPIC '{topic}') \
              CONSISTENCY (TOPIC '{topic}-consistency' )
              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {sink}_csr_conn",
              sink = sink_name,

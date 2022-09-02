@@ -78,9 +78,7 @@ pub async fn purify_create_source(
     let mut with_options_map = normalize::options(with_options)?;
 
     match connection {
-        CreateSourceConnection::Kafka(KafkaSourceConnection {
-            connection, topic, ..
-        }) => {
+        CreateSourceConnection::Kafka(KafkaSourceConnection { connection, .. }) => {
             match connection {
                 KafkaConnection::Reference {
                     connection,
@@ -103,6 +101,8 @@ pub async fn purify_create_source(
                         Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
                     let config_options =
                         kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+                    let topic = extracted_options.topic.expect("validated topic exists");
 
                     let consumer = kafka_util::create_consumer(
                         &topic,
@@ -350,8 +350,20 @@ async fn purify_csr_connection_proto(
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let topic =
-        if let CreateSourceConnection::Kafka(KafkaSourceConnection { topic, .. }) = connection {
-            topic
+        if let CreateSourceConnection::Kafka(KafkaSourceConnection {
+            connection, topic, ..
+        }) = connection
+        {
+            match connection {
+                KafkaConnection::Inline { .. } => topic.clone().unwrap(),
+                KafkaConnection::Reference { options, .. } => {
+                    let KafkaConfigOptionExtracted { topic, .. } = options
+                        .clone()
+                        .try_into()
+                        .expect("already verified options valid provided");
+                    topic.expect("already validated topic provided")
+                }
+            }
         } else {
             bail!("Confluent Schema Registry is only supported with Kafka sources")
         };
@@ -401,17 +413,26 @@ async fn purify_csr_connection_avro(
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let topic =
-        if let CreateSourceConnection::Kafka(KafkaSourceConnection { topic, .. }) = connection {
-            topic
+        if let CreateSourceConnection::Kafka(KafkaSourceConnection {
+            connection, topic, ..
+        }) = connection
+        {
+            match connection {
+                KafkaConnection::Inline { .. } => topic.clone().unwrap(),
+                KafkaConnection::Reference { options, .. } => {
+                    let KafkaConfigOptionExtracted { topic, .. } = options
+                        .clone()
+                        .try_into()
+                        .expect("already verified options valid provided");
+                    topic.expect("already validated topic provided")
+                }
+            }
         } else {
             bail!("Confluent Schema Registry is only supported with Kafka sources")
         };
 
     let CsrConnectionAvro {
-        connection: CsrConnection {
-            connection,
-            options: _,
-        },
+        connection: CsrConnection { connection, .. },
         seed,
         key_strategy,
         value_strategy,
@@ -425,6 +446,7 @@ async fn purify_csr_connection_avro(
         let ccsr_client = csr_connection
             .connect(&*connection_context.secrets_reader)
             .await?;
+
         let Schema {
             key_schema,
             value_schema,
@@ -432,7 +454,7 @@ async fn purify_csr_connection_avro(
             &ccsr_client,
             key_strategy.clone().unwrap_or_default(),
             value_strategy.clone().unwrap_or_default(),
-            topic.clone(),
+            topic,
         )
         .await?;
         if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key_schema.is_none() {

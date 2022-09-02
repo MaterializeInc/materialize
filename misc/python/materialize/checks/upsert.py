@@ -53,8 +53,7 @@ class UpsertInsert(Check):
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE upsert_insert
-                  FROM KAFKA CONNECTION kafka_conn
-                  TOPIC 'testdrive-upsert-insert-${testdrive.seed}'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-insert-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -106,8 +105,7 @@ class UpsertUpdate(Check):
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
                 > CREATE SOURCE upsert_update
-                  FROM KAFKA CONNECTION kafka_conn
-                  TOPIC 'testdrive-upsert-update-${testdrive.seed}'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-update-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -156,8 +154,7 @@ class UpsertDelete(Check):
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
                 > CREATE SOURCE upsert_delete
-                  FROM KAFKA CONNECTION kafka_conn
-                  TOPIC 'testdrive-upsert-delete-${testdrive.seed}'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-delete-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 

@@ -22,14 +22,12 @@ goofus,gallant
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE src (a, b)
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-test-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
 
 > CREATE SOURCE src_materialized (a, b)
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-test-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
 
@@ -45,7 +43,7 @@ goofus,gallant
 # We should refuse to create a sink with invalid WITH options
 
 ! CREATE SINK invalid_with_option FROM src
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1')
   WITH (badoption=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Expected one of SNAPSHOT
@@ -58,30 +56,30 @@ name
 #
 # # Invalid in that the address is not well formed
 # ! CREATE SINK bad_schema_registry FROM v3
-#   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
+#   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.kafka-addr}'
 # contains:cannot construct a CCSR client with a cannot-be-a-base URL
 #
 # # Invalid in that the address points to an invalid host
 # ! CREATE SINK bad_schema_registry FROM v3
-#   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
+#   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://no-such-host'
 # contains:unable to publish value schema to registry in kafka sink
 #
 # # Invalid in that the address is not for a schema registry
 # ! CREATE SINK bad_schema_registry FROM v3
-#   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
+#   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://materialized:6875'
 # contains:unable to publish value schema to registry in kafka sink
 #
 # ! CREATE SINK bad_view FROM v1
-#   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
+#   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 # contains:v1 is a view, which cannot be exported as a sink
 #
 # # ...Even if that view is based on a materialized source
 # ! CREATE SINK bad_view2 FROM v2
-#   INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
+#   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1')
 #   WITH (retention_ms=1000000)
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 # contains:v2 is a view, which cannot be exported as a sink
@@ -94,16 +92,15 @@ name
 # that depend on views, as the code paths are different.
 
 > CREATE SINK snk1 FROM src
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK snk2 FROM src_materialized
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk2'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk2')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK snk3 FROM v3
-  INTO KAFKA CONNECTION kafka_conn (RETENTION BYTES = 1000000000000)
-  TOPIC 'snk3'
+  INTO KAFKA CONNECTION kafka_conn (RETENTION BYTES = 1000000000000, TOPIC 'snk3')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > SHOW SINKS
@@ -138,7 +135,7 @@ $ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
   SELECT true AS c FROM src
 
 > CREATE SINK snk4 FROM v4
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk4'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk4')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.snk4
@@ -153,12 +150,12 @@ $ kafka-verify format=avro sink=materialize.public.snk4
 # exclude the old rows.
 
 > CREATE SINK snk5 FROM src_materialized
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk5'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk5')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   WITH (SNAPSHOT = false)
 
 > CREATE SINK snk6 FROM src_materialized
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk6'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk6')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   WITH (SNAPSHOT = true)
 
@@ -178,12 +175,12 @@ $ kafka-verify format=avro sink=materialize.public.snk6 sort-messages=true
 > CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);
 
 > CREATE SINK snk7 FROM foo
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk7'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk7')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   WITH (SNAPSHOT = false)
 
 > CREATE SINK snk8 FROM foo
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk8'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk8')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   WITH (SNAPSHOT)
 
@@ -206,27 +203,25 @@ snk8        user
 
 # test explicit partition count
 > CREATE SINK snk9 FROM foo
-  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=1)
-  TOPIC 'snk9'
+  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=1, TOPIC 'snk9')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # test explicit replication factor
 > CREATE SINK snk10 FROM foo
-  INTO KAFKA CONNECTION kafka_conn (REPLICATION FACTOR=1) TOPIC 'snk10'
+  INTO KAFKA CONNECTION kafka_conn (REPLICATION FACTOR=1, TOPIC 'snk10')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # test explicit partition count and replication factor
 > CREATE SINK snk11 FROM foo
-  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=1, REPLICATION FACTOR=1)
-  TOPIC 'snk11'
+  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=1, REPLICATION FACTOR=1, TOPIC 'snk11')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # test broker defaulted partition count and replication factor
 > CREATE SINK snk12 FROM foo
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk12'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk12')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # test explicit request for broker defaulted partition count and replication factor
 > CREATE SINK snk13 FROM foo
-  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=-1, REPLICATION FACTOR=-1) TOPIC 'snk13'
+  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=-1, REPLICATION FACTOR=-1, TOPIC 'snk13')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

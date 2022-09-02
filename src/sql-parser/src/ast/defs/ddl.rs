@@ -831,6 +831,7 @@ pub enum KafkaConfigOptionName {
     GroupIdPrefix,
     IsolationLevel,
     StatisticsIntervalMs,
+    Topic,
     TopicMetadataRefreshIntervalMs,
     TransactionTimeoutMs,
     StartTimestamp,
@@ -852,6 +853,7 @@ impl AstDisplay for KafkaConfigOptionName {
             KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
             KafkaConfigOptionName::IsolationLevel => "ISOLATION LEVEL",
             KafkaConfigOptionName::StatisticsIntervalMs => "STATISTICS INTERVAL MS",
+            KafkaConfigOptionName::Topic => "TOPIC",
             KafkaConfigOptionName::TopicMetadataRefreshIntervalMs => {
                 "TOPIC METADATA REFRESH INTERVAL MS"
             }
@@ -924,7 +926,7 @@ impl_display_t!(KafkaConnection);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaSourceConnection<T: AstInfo> {
     pub connection: KafkaConnection<T>,
-    pub topic: String,
+    pub topic: Option<String>,
     pub key: Option<Vec<Ident>>,
 }
 
@@ -969,9 +971,11 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
             }) => {
                 f.write_str("KAFKA ");
                 f.write_node(connection);
-                f.write_str(" TOPIC '");
-                f.write_node(&display::escape_single_quote_string(topic));
-                f.write_str("'");
+                if let Some(topic) = topic {
+                    f.write_str(" TOPIC '");
+                    f.write_node(&display::escape_single_quote_string(topic));
+                    f.write_str("'");
+                }
                 if let Some(key) = key.as_ref() {
                     f.write_str(" KEY (");
                     f.write_node(&display::comma_separated(&key));
@@ -1084,7 +1088,6 @@ impl_display_t!(LoadGeneratorOption);
 pub enum CreateSinkConnection<T: AstInfo> {
     Kafka {
         connection: KafkaConnection<T>,
-        topic: String,
         key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
     },
@@ -1095,15 +1098,11 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
         match self {
             CreateSinkConnection::Kafka {
                 connection,
-                topic,
                 key,
                 consistency,
             } => {
                 f.write_str("KAFKA ");
                 f.write_node(connection);
-                f.write_str(" TOPIC '");
-                f.write_node(&display::escape_single_quote_string(topic));
-                f.write_str("'");
                 if let Some(key) = key.as_ref() {
                     f.write_node(key);
                 }

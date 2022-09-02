@@ -185,7 +185,7 @@ $ kafka-ingest format=bytes topic=source1
 A
 
 > CREATE SOURCE source1
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-source1-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source1-${testdrive.seed}')
   FORMAT BYTES
 
 > SELECT * FROM source1
@@ -193,7 +193,7 @@ A
 
 # Sinks
 > CREATE SINK sink1 FROM v1mat
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'sink1'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
