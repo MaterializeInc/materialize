@@ -562,7 +562,7 @@ impl CanonicalizeMfp {
                     }
                 })?;
                 p.visit_mut_post(&mut |e: &mut MirScalarExpr| {
-                    e.flatten_and_or();
+                    e.flatten_associative();
                 })?;
             }
             Ok(())

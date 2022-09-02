@@ -6253,6 +6253,37 @@ impl VariadicFunc {
         }
     }
 
+    pub fn is_associative(&self) -> bool {
+        match self {
+            VariadicFunc::Coalesce => true,
+            VariadicFunc::Greatest => true,
+            VariadicFunc::Least => true,
+            VariadicFunc::Concat => true,
+            VariadicFunc::MakeTimestamp => false,
+            VariadicFunc::PadLeading => false,
+            VariadicFunc::Substr => false,
+            VariadicFunc::Replace => false,
+            VariadicFunc::JsonbBuildArray => false,
+            VariadicFunc::JsonbBuildObject => false,
+            VariadicFunc::ArrayCreate { elem_type: _ } => false,
+            VariadicFunc::ArrayToString { elem_type: _ } => false,
+            VariadicFunc::ArrayIndex { offset: _ } => false,
+            VariadicFunc::ListCreate { elem_type: _ } => false,
+            VariadicFunc::RecordCreate { field_names: _ } => false,
+            VariadicFunc::ListIndex => false,
+            VariadicFunc::ListSliceLinear => false,
+            VariadicFunc::SplitPart => false,
+            VariadicFunc::RegexpMatch => false,
+            VariadicFunc::HmacString => false,
+            VariadicFunc::HmacBytes => false,
+            VariadicFunc::ErrorIfNull => false,
+            VariadicFunc::DateBinTimestamp => false,
+            VariadicFunc::DateBinTimestampTz => false,
+            VariadicFunc::And => true,
+            VariadicFunc::Or => true,
+        }
+    }
+
     pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
         use VariadicFunc::*;
         let in_nullable = input_types.iter().any(|t| t.nullable);

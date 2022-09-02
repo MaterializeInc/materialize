@@ -957,7 +957,7 @@ impl MirScalarExpr {
                             let top_list_create = exprs.swap_remove(0);
                             *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
                         } else if *func == VariadicFunc::Or || *func == VariadicFunc::And {
-                            e.flatten_and_or();
+                            e.flatten_associative();
                             e.undistribute_and_or();
                             e.reduce_and_canonicalize_and_or();
                         }
@@ -1199,32 +1199,34 @@ impl MirScalarExpr {
         None
     }
 
-    /// Flattens a chain of ORs or a chain of ANDs
-    /// todo: We could do this for any associative function
-    pub fn flatten_and_or(&mut self) {
-        if let MirScalarExpr::CallVariadic {
-            exprs: outer_operands,
-            func: outer_func @ (VariadicFunc::Or | VariadicFunc::And),
-        } = self
-        {
-            *outer_operands = outer_operands
-                .into_iter()
-                .flat_map(|o| {
-                    if let MirScalarExpr::CallVariadic {
-                        exprs: inner_operands,
-                        func: inner_func,
-                    } = o
-                    {
-                        if *inner_func == *outer_func {
-                            mem::take(inner_operands)
+    /// Flattens a chain of calls to associative variadic functions
+    /// (For example: ORs or ANDs)
+    pub fn flatten_associative(&mut self) {
+        match self {
+            MirScalarExpr::CallVariadic {
+                exprs: outer_operands,
+                func: outer_func,
+            } if outer_func.is_associative() => {
+                *outer_operands = outer_operands
+                    .into_iter()
+                    .flat_map(|o| {
+                        if let MirScalarExpr::CallVariadic {
+                            exprs: inner_operands,
+                            func: inner_func,
+                        } = o
+                        {
+                            if *inner_func == *outer_func {
+                                mem::take(inner_operands)
+                            } else {
+                                vec![o.take()]
+                            }
                         } else {
                             vec![o.take()]
                         }
-                    } else {
-                        vec![o.take()]
-                    }
-                })
-                .collect();
+                    })
+                    .collect();
+            }
+            _ => {},
         }
     }
 
@@ -1278,7 +1280,7 @@ impl MirScalarExpr {
             func: UnaryFunc::Not(func::Not),
         } = self
         {
-            inner.flatten_and_or();
+            inner.flatten_associative();
             match &mut **inner {
                 MirScalarExpr::CallVariadic {
                     func: inner_func @ (VariadicFunc::And | VariadicFunc::Or),
