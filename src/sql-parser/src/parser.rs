@@ -1705,7 +1705,7 @@ impl<'a> Parser<'a> {
             self.prev_token();
             let schema = self.parse_schema()?;
             let with_options = if self.consume_token(&Token::LParen) {
-                let with_options = self.parse_comma_separated(Parser::parse_avro_schema_options)?;
+                let with_options = self.parse_comma_separated(Parser::parse_avro_schema_option)?;
                 self.expect_token(&Token::RParen)?;
                 with_options
             } else {
@@ -1725,7 +1725,7 @@ impl<'a> Parser<'a> {
         Ok(avro_schema)
     }
 
-    fn parse_avro_schema_options(&mut self) -> Result<AvroSchemaOption<Raw>, ParserError> {
+    fn parse_avro_schema_option(&mut self) -> Result<AvroSchemaOption<Raw>, ParserError> {
         self.expect_keywords(&[CONFLUENT, WIRE, FORMAT])?;
         let _ = self.consume_token(&Token::Eq);
         Ok(AvroSchemaOption {
@@ -1760,7 +1760,7 @@ impl<'a> Parser<'a> {
         let connection = self.parse_raw_name()?;
 
         let options = if self.consume_token(&Token::LParen) {
-            let options = self.parse_comma_separated(Parser::parse_csr_config_options)?;
+            let options = self.parse_comma_separated(Parser::parse_csr_config_option)?;
             self.expect_token(&Token::RParen)?;
             options
         } else {
@@ -1773,7 +1773,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_csr_config_options(&mut self) -> Result<CsrConfigOption<Raw>, ParserError> {
+    fn parse_csr_config_option(&mut self) -> Result<CsrConfigOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[AVRO])? {
             AVRO => {
                 let name = match self.expect_one_of_keywords(&[KEY, VALUE])? {
@@ -1960,29 +1960,29 @@ impl<'a> Parser<'a> {
             match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])? {
                 AWS => {
                     let with_options =
-                        self.parse_comma_separated(Parser::parse_aws_connection_options)?;
+                        self.parse_comma_separated(Parser::parse_aws_connection_option)?;
                     CreateConnection::Aws { with_options }
                 }
                 KAFKA => {
                     let with_options =
-                        self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
+                        self.parse_comma_separated(Parser::parse_kafka_connection_option)?;
                     CreateConnection::Kafka { with_options }
                 }
                 CONFLUENT => {
                     self.expect_keywords(&[SCHEMA, REGISTRY])?;
                     let with_options =
-                        self.parse_comma_separated(Parser::parse_csr_connection_options)?;
+                        self.parse_comma_separated(Parser::parse_csr_connection_option)?;
                     CreateConnection::Csr { with_options }
                 }
                 POSTGRES => {
                     let with_options =
-                        self.parse_comma_separated(Parser::parse_postgres_connection_options)?;
+                        self.parse_comma_separated(Parser::parse_postgres_connection_option)?;
                     CreateConnection::Postgres { with_options }
                 }
                 SSH => {
                     self.expect_keyword(TUNNEL)?;
                     let with_options =
-                        self.parse_comma_separated(Parser::parse_ssh_connection_options)?;
+                        self.parse_comma_separated(Parser::parse_ssh_connection_option)?;
                     CreateConnection::Ssh { with_options }
                 }
                 _ => unreachable!(),
@@ -1994,9 +1994,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_kafka_connection_options(
-        &mut self,
-    ) -> Result<KafkaConnectionOption<Raw>, ParserError> {
+    fn parse_kafka_connection_option(&mut self) -> Result<KafkaConnectionOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, SASL, SSL])? {
             BROKER => KafkaConnectionOptionName::Broker,
             BROKERS => KafkaConnectionOptionName::Brokers,
@@ -2030,7 +2028,7 @@ impl<'a> Parser<'a> {
     fn parse_kafka_connection_reference(&mut self) -> Result<KafkaConnection<Raw>, ParserError> {
         let connection = self.parse_raw_name()?;
         let options = if self.consume_token(&Token::LParen) {
-            let options = self.parse_comma_separated(Parser::parse_kafka_config_options)?;
+            let options = self.parse_comma_separated(Parser::parse_kafka_config_option)?;
             self.expect_token(&Token::RParen)?;
             options
         } else {
@@ -2043,7 +2041,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_kafka_config_options(&mut self) -> Result<KafkaConfigOption<Raw>, ParserError> {
+    fn parse_kafka_config_option(&mut self) -> Result<KafkaConfigOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
             ACKS,
             CLIENT,
@@ -2124,7 +2122,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_csr_connection_options(&mut self) -> Result<CsrConnectionOption<Raw>, ParserError> {
+    fn parse_csr_connection_option(&mut self) -> Result<CsrConnectionOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[SSL, URL, USERNAME, PASSWORD])? {
             SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
                 KEY => CsrConnectionOptionName::SslKey,
@@ -2150,7 +2148,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_postgres_connection_options(
+    fn parse_postgres_connection_option(
         &mut self,
     ) -> Result<PostgresConnectionOption<Raw>, ParserError> {
         let name = match self
@@ -2189,7 +2187,7 @@ impl<'a> Parser<'a> {
         Ok(PostgresConnectionOption { name, value })
     }
 
-    fn parse_aws_connection_options(&mut self) -> Result<AwsConnectionOption<Raw>, ParserError> {
+    fn parse_aws_connection_option(&mut self) -> Result<AwsConnectionOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[ACCESS, SECRET, TOKEN])? {
             ACCESS => {
                 self.expect_keywords(&[KEY, ID])?;
@@ -2210,7 +2208,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_ssh_connection_options(&mut self) -> Result<SshConnectionOption<Raw>, ParserError> {
+    fn parse_ssh_connection_option(&mut self) -> Result<SshConnectionOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[HOST, PORT, USER])? {
             HOST => SshConnectionOptionName::Host,
             PORT => SshConnectionOptionName::Port,
@@ -2369,7 +2367,7 @@ impl<'a> Parser<'a> {
 
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_create_sink_options)?;
+            let options = self.parse_comma_separated(Parser::parse_create_sink_option)?;
             self.expect_token(&Token::RParen)?;
             options
         } else {
@@ -2387,7 +2385,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_create_sink_options(&mut self) -> Result<CreateSinkOption<Raw>, ParserError> {
+    fn parse_create_sink_option(&mut self) -> Result<CreateSinkOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[SNAPSHOT])? {
             SNAPSHOT => CreateSinkOptionName::Snapshot,
             _ => unreachable!(),
@@ -2515,7 +2513,7 @@ impl<'a> Parser<'a> {
                 let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
                     vec![]
                 } else {
-                    self.parse_comma_separated(Parser::parse_load_generator_options)?
+                    self.parse_comma_separated(Parser::parse_load_generator_option)?
                 };
                 Ok(CreateSourceConnection::LoadGenerator { generator, options })
             }
@@ -2523,7 +2521,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_load_generator_options(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
+    fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[TICK])? {
             TICK => {
                 self.expect_keyword(INTERVAL)?;
@@ -3671,7 +3669,7 @@ impl<'a> Parser<'a> {
             self.consume_token(&Token::LParen)
         };
         let options = if has_options {
-            let o = self.parse_comma_separated(Parser::parse_copy_options)?;
+            let o = self.parse_comma_separated(Parser::parse_copy_option)?;
             self.expect_token(&Token::RParen)?;
             o
         } else {
@@ -3685,7 +3683,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_copy_options(&mut self) -> Result<CopyOption<Raw>, ParserError> {
+    fn parse_copy_option(&mut self) -> Result<CopyOption<Raw>, ParserError> {
         let name =
             match self.expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER])? {
                 FORMAT => CopyOptionName::Format,
@@ -5291,7 +5289,7 @@ impl<'a> Parser<'a> {
         } else {
             TailRelation::Name(self.parse_raw_name()?)
         };
-        let options = self.parse_kw_options(Parser::parse_tail_options)?;
+        let options = self.parse_kw_options(Parser::parse_tail_option)?;
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::Tail(TailStatement {
             relation,
@@ -5300,7 +5298,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_tail_options(&mut self) -> Result<TailOption<Raw>, ParserError> {
+    fn parse_tail_option(&mut self) -> Result<TailOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[PROGRESS, SNAPSHOT])? {
             PROGRESS => TailOptionName::Progress,
             SNAPSHOT => TailOptionName::Snapshot,
