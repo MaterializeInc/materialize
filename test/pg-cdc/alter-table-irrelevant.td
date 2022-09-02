@@ -32,8 +32,7 @@ INSERT INTO base_table VALUES (1);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE VIEWS FROM SOURCE mz_source;
 
@@ -66,8 +65,7 @@ INSERT INTO irrelevant_table VALUES (2, 'ab');
 > DROP VIEW base_table;
 > DROP SOURCE mz_source;
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE VIEWS FROM SOURCE mz_source;
 

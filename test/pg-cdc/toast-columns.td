@@ -36,8 +36,7 @@ INSERT INTO t1 SELECT 2, string_agg(md5(random()::text), '') FROM generate_serie
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > SELECT COUNT(*) > 0 FROM mz_source;
 true

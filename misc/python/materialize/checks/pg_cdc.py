@@ -50,7 +50,7 @@ class PgCdc(Check):
                 """
                 > CREATE SOURCE postgres_source1
                   FROM POSTGRES CONNECTION pg1
-                  PUBLICATION 'postgres_source';
+                  (PUBLICATION 'postgres_source');
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO postgres_source_table SELECT 'B', 1, REPEAT('X', 1024) FROM generate_series(1,100);
@@ -80,7 +80,7 @@ class PgCdc(Check):
 
                 > CREATE SOURCE postgres_source2
                   FROM POSTGRES CONNECTION pg2
-                  PUBLICATION 'postgres_source';
+                  (PUBLICATION 'postgres_source');
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO postgres_source_table SELECT 'E', 1, REPEAT('X', 1024) FROM generate_series(1,100);
@@ -102,7 +102,7 @@ class PgCdc(Check):
 
                 > CREATE SOURCE postgres_source3
                   FROM POSTGRES CONNECTION pg3
-                  PUBLICATION 'postgres_source';
+                  (PUBLICATION 'postgres_source');
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO postgres_source_table SELECT 'G', 1, REPEAT('X', 1024) FROM generate_series(1,100);

@@ -79,11 +79,12 @@ use crate::ast::{
     DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName, KafkaConnectionOption,
     KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
-    ObjectType, Op, PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema,
-    QualifiedReplica, Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select,
-    SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName,
-    Statement, SubscriptPosition, TableConstraint, TableFactor, TableWithJoins,
-    UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition, WithOptionValue,
+    ObjectType, Op, PgConfigOption, PgConfigOptionName, PostgresConnectionOption,
+    PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
+    SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
+    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
+    Value, ViewDefinition, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
@@ -316,6 +317,8 @@ generate_extracted_config!(
     (Timeline, String),
     (TimestampInterval, Interval)
 );
+
+generate_extracted_config!(PgConfigOption, (Details, String), (Publication, String));
 
 pub fn plan_create_source(
     scx: &StatementContext,
@@ -582,14 +585,19 @@ pub fn plan_create_source(
         }
         CreateSourceConnection::Postgres {
             connection,
-            publication,
-            details,
+            options,
         } => {
             let item = scx.get_item_by_resolved_name(&connection)?;
             let connection = match item.connection()? {
                 Connection::Postgres(connection) => connection.clone(),
                 _ => sql_bail!("{} is not a postgres connection", item.name()),
             };
+            let PgConfigOptionExtracted {
+                details,
+                publication,
+                seen: _,
+            } = options.clone().try_into()?;
+
             let details = details
                 .as_ref()
                 .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
@@ -598,7 +606,7 @@ pub fn plan_create_source(
                 ProtoPostgresSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
             let connection = SourceConnection::Postgres(PostgresSourceConnection {
                 connection,
-                publication: publication.clone(),
+                publication: publication.expect("validated exists during purification"),
                 details: PostgresSourceDetails::from_proto(details)
                     .map_err(|e| sql_err!("{}", e))?,
             });

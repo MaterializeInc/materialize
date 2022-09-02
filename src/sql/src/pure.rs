@@ -22,7 +22,7 @@ use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{
     CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, Envelope,
     KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
-    ReaderSchemaSelectionStrategy,
+    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -197,8 +197,7 @@ pub async fn purify_create_source(
         }
         CreateSourceConnection::Postgres {
             connection,
-            publication,
-            details: details_ast,
+            options,
         } => {
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
@@ -208,12 +207,19 @@ pub async fn purify_create_source(
                     _ => bail!("{} is not a postgres connection", item.name()),
                 }
             };
+            let crate::plan::statement::PgConfigOptionExtracted { publication, .. } =
+                options.clone().try_into()?;
+            let publication = publication
+                .ok_or_else(|| sql_err!("POSTGRES CONNECTION must specify PUBLICATION"))?;
+
             // verify that we can connect upstream and snapshot publication metadata
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
             let tables = mz_postgres_util::publication_info(&config, &publication).await?;
 
+            // Remove any old detail references
+            options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
             let details = PostgresSourceDetails {
                 tables,
                 slot: format!(
@@ -221,7 +227,12 @@ pub async fn purify_create_source(
                     Uuid::new_v4().to_string().replace('-', "")
                 ),
             };
-            *details_ast = Some(hex::encode(details.into_proto().encode_to_vec()));
+            options.push(PgConfigOption {
+                name: PgConfigOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            })
         }
         CreateSourceConnection::LoadGenerator { .. } => (),
     }

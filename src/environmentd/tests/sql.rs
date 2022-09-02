@@ -1700,7 +1700,7 @@ fn create_postgres_source_with_table(
         "CREATE SOURCE {source_name}
             FROM POSTGRES
             CONNECTION pgconn
-            PUBLICATION '{source_name}';"
+            (PUBLICATION '{source_name}');"
     ))?;
     mz_client.batch_execute(&format!(
         "CREATE VIEWS FROM SOURCE {source_name} ({table_name});"

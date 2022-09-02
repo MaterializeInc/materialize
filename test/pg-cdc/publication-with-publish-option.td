@@ -34,16 +34,13 @@ CREATE PUBLICATION mz_source_update FOR TABLE t1 WITH ( publish = 'update') ;
 CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
 
 > CREATE SOURCE mz_source_insert
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source_insert';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_insert');
 
 > CREATE SOURCE mz_source_update
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source_update';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_update');
 
 > CREATE SOURCE mz_source_delete
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source_delete';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_delete');
 
 # Make sure that the above sources are fully instantiated
 # (that is, we have finished absorbing their snapshots),
