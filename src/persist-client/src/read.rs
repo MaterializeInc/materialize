@@ -118,6 +118,24 @@ where
     }
 }
 
+impl<K, V, T, D> Drop for Subscribe<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    fn drop(&mut self) {
+        // Return all leased parts from the snapshot to ensure they don't panic
+        // if dropped.
+        if let Some((parts, _)) = self.snapshot.take() {
+            for part in parts {
+                self.return_leased_part(part)
+            }
+        }
+    }
+}
+
 /// Data and progress events of a shard subscription.
 ///
 /// TODO: Unify this with [timely::dataflow::operators::to_stream::Event] or
@@ -730,6 +748,35 @@ where
 #[cfg(test)]
 mod tests {
     use crate::tests::new_test_client;
+
+    // Verifies `Subscribe` can be dropped while holding snapshot batches.
+    #[tokio::test]
+    async fn drop_unused_subscribe() {
+        let data = vec![
+            (("0".to_owned(), "zero".to_owned()), 0, 1),
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+        ];
+
+        let (mut write, read) = new_test_client()
+            .await
+            .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+            .await;
+
+        write.expect_compare_and_append(&data[0..1], 0, 1).await;
+        write.expect_compare_and_append(&data[1..2], 1, 2).await;
+        write.expect_compare_and_append(&data[2..3], 2, 3).await;
+
+        let subscribe = read
+            .subscribe(timely::progress::Antichain::from_elem(2))
+            .await
+            .unwrap();
+        assert!(
+            !subscribe.snapshot.as_ref().unwrap().0.is_empty(),
+            "snapshot must have batches for test to be meaningful"
+        );
+        drop(subscribe);
+    }
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
     #[tokio::test]
