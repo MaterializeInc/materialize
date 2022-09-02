@@ -33,13 +33,17 @@
 //! said predicates from "Filter".
 
 use crate::{IndexOracle, TransformArgs};
+use itertools::Itertools;
 use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{BinaryFunc, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, VariadicFunc};
+use mz_ore::collections::CollectionExt;
+use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
 use mz_repr::{GlobalId, Row};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Canonicalizes MFPs and performs common sub-expression elimination.
 #[derive(Debug)]
@@ -272,37 +276,69 @@ impl CanonicalizeMfp {
         if or_args.len() == 0 {
             return false;
         }
-        let or_args_residual = or_args
-            .iter()
-            .map(|or_arg| {
-                let mut and_args = or_arg.and_or_args(VariadicFunc::And);
-                // Note that `remove_impossible_or_args` made sure that inside each or_arg, each
-                // expression can have only one literal constraint. So if we find one of the
-                // key fields being literal constrained, then it's definitely that literal
-                // constraint that detect_literal_constraints based it's return values on.
-                //
-                // This is important, because without `remove_impossible_or_args`, we might
-                // have the situation here that or_arg would be something like
-                // `a = 5 AND a = 8`, of which `detect_literal_constraints` found only the `a = 5`,
-                // but here we would remove both the `a = 5` and the `a = 8`.
-                and_args.retain(|and_arg| {
-                    !key.iter()
+
+        // In simple situations it would be enough to check here that if we remove the detected
+        // literal constraints from each OR arg, then the residual OR args are all equal.
+        // However, this wouldn't be able to perform the removal when the expression that should
+        // remain in the end has an OR. This is because conversion to DNF makes duplicates of
+        // every literal constraint, with different residuals. To also handle this case, we collect
+        // the possible residuals for every literal constraint row, and check that all sets are
+        // equal. Example: The user wrote
+        // `WHERE ((a=1 AND b=1) OR (a=2 AND b=2)) AND (c OR (d AND e))`.
+        // The DNF of this is
+        // `(a=1 AND b=1 AND c) OR (a=1 AND b=1 AND d AND e) OR (a=2 AND b=2 AND c) OR (a=2 AND b=2 AND d AND e)`.
+        // Then `constraints_to_residual_sets` will be:
+        // [
+        //   [`a=1`, `b=1`]  ->  {[`c`], [`d`, `e`]},
+        //   [`a=2`, `b=2`]  ->  {[`c`], [`d`, `e`]}
+        // ]
+        // After removing the literal constraints we have
+        // `c OR (d AND e)`
+        let mut constraints_to_residual_sets = BTreeMap::new();
+        or_args.iter().for_each(|or_arg| {
+            let and_args = or_arg.and_or_args(VariadicFunc::And);
+            let (mut constraints, mut residual): (Vec<_>, Vec<_>) =
+                and_args.iter().cloned().partition(|and_arg| {
+                    key.iter()
                         .any(|key_field| matches!(and_arg.expr_eq_literal(key_field), Some(..)))
                 });
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::And,
-                    exprs: and_args,
-                }
-            })
+            // In every or_arg there has to be some literal constraints, otherwise
+            // `detect_literal_constraints` would have returned None.
+            assert!(constraints.len() >= 1);
+            // `remove_impossible_or_args` made sure that inside each or_arg, each
+            // expression can be literal constrained only once. So if we find one of the
+            // key fields being literal constrained, then it's definitely that literal
+            // constraint that detect_literal_constraints based one of its return values on.
+            //
+            // This is important, because without `remove_impossible_or_args`, we might
+            // have the situation here that or_arg would be something like
+            // `a = 5 AND a = 8`, of which `detect_literal_constraints` found only the `a = 5`,
+            // but here we would remove both the `a = 5` and the `a = 8`.
+            constraints.sort();
+            residual.sort();
+            let entry = constraints_to_residual_sets
+                .entry(constraints)
+                .or_insert_with(BTreeSet::new);
+            entry.insert(residual);
+        });
+        let residual_sets = constraints_to_residual_sets
+            .into_iter()
+            .map(|(_constraints, residual_set)| residual_set)
             .collect::<Vec<_>>();
-        assert!(or_args_residual.len() >= 1); // We already checked `or_args.len() == 0` above
-        let or_args_residual_first = or_args_residual.get(0).unwrap();
-        if or_args_residual
-            .iter()
-            .all(|or_arg| or_arg == or_args_residual_first)
-        {
+        if residual_sets.iter().all_equal() {
             // We can remove the literal constraint
-            let new_pred = or_args_residual_first.clone();
+            assert!(residual_sets.len() >= 1); // We already checked `or_args.len() == 0` above
+            let residual_set = residual_sets.into_iter().into_first();
+            let new_pred = MirScalarExpr::CallVariadic {
+                func: VariadicFunc::Or,
+                exprs: residual_set
+                    .into_iter()
+                    .map(|residual| MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::And,
+                        exprs: residual,
+                    })
+                    .collect::<Vec<_>>(),
+            };
             let (map, _predicates, project) = mfp.as_map_filter_project();
             *mfp = MapFilterProject::new(mfp.input_arity)
                 .map(map)
@@ -351,10 +387,10 @@ impl CanonicalizeMfp {
                 // This means that if we now have `<expr1> = <literal1> AND <expr1> = <literal2>`,
                 // then `literal1` is definitely not the same as `literal2`. This means that this
                 // whole or_arg is a contradiction, because it's something like `a = 5 AND a = 8`.
-                let literal_constrained_exprs = and_args
+                let mut literal_constrained_exprs = and_args
                     .iter()
                     .filter_map(|and_arg| and_arg.any_expr_eq_literal());
-                if Self::has_duplicates(literal_constrained_exprs) {
+                if !literal_constrained_exprs.all_unique() {
                     changed = true;
                     to_remove.push(i);
                 }
@@ -382,17 +418,6 @@ impl CanonicalizeMfp {
         } else {
             Ok(false)
         }
-    }
-
-    /// Determines whether the given iterable has any duplicates.
-    fn has_duplicates<T>(iter: T) -> bool
-    where
-        T: IntoIterator,
-        T::Item: std::hash::Hash + Eq,
-    {
-        let mut seen = std::collections::HashSet::new();
-        // Insert each element. If any are not newly inserted then it's a duplicate.
-        iter.into_iter().any(move |x| !seen.insert(x))
     }
 
     /// Returns the arguments of the predicate's top-level OR as a Vec.
