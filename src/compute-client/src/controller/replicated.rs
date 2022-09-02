@@ -263,8 +263,6 @@ where
                             reported.clone_from(&new_upper);
                             new_uppers.push((id, new_upper));
                         }
-                    } else {
-                        tracing::error!("received `FrontierUppers` for untracked ID: {id}");
                     }
                 }
                 if !new_uppers.is_empty() {
