@@ -52,7 +52,8 @@ Source materialize.public.t1 (u1):
 | Project (#0)
 
 Source materialize.public.t2 (u2):
-| Project ()
+| Map dummy
+| Project (#1)
 
 Query:
 %0 =

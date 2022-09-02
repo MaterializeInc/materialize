@@ -713,7 +713,8 @@ query T multiline
 EXPLAIN PLAN FOR SELECT a IS NULL FROM t
 ----
 Source materialize.public.t (u7):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -727,7 +728,8 @@ query T multiline
 EXPLAIN PLAN FOR SELECT a + a + a + a + a IS NULL FROM t
 ----
 Source materialize.public.t (u7):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -741,7 +743,8 @@ query T multiline
 EXPLAIN PLAN FOR SELECT a + b IS NULL FROM t
 ----
 Source materialize.public.t (u7):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =

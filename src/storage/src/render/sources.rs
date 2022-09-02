@@ -34,7 +34,6 @@ use crate::source::{
 };
 use crate::types::errors::{DataflowError, DecodeError, EnvelopeError};
 use crate::types::sources::{encoding::*, *};
-use crate::types::transforms::LinearOperator;
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -70,7 +69,6 @@ pub fn render_source<G>(
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<G::Timestamp>,
-    mut linear_operators: Option<LinearOperator>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
@@ -79,13 +77,6 @@ pub fn render_source<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    // Blank out trivial linear operators.
-    if let Some(operator) = &linear_operators {
-        if operator.is_trivial(description.typ.arity()) {
-            linear_operators = None;
-        }
-    }
-
     // Tokens that we should return from the method.
     let mut needed_tokens: Vec<Rc<dyn Any>> = Vec::new();
 
@@ -237,7 +228,6 @@ where
                     value_encoding,
                     dataflow_debug_name,
                     metadata_columns,
-                    &mut linear_operators,
                     storage_state.decode_metrics.clone(),
                     &storage_state.connection_context,
                 ),
@@ -246,7 +236,6 @@ where
                     value_encoding,
                     dataflow_debug_name,
                     metadata_columns,
-                    &mut linear_operators,
                     storage_state.decode_metrics.clone(),
                     &storage_state.connection_context,
                 ),
@@ -345,7 +334,6 @@ where
                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                         &transformed_results,
                         resume_upper,
-                        &mut linear_operators,
                         description.typ.arity(),
                         upsert_envelope.clone(),
                         previous_stream,
@@ -398,42 +386,7 @@ where
     // Perform various additional transformations on the collection.
 
     // Force a shuffling of data in case sources are not uniformly distributed.
-    let mut collection = stream.inner.exchange(|x| x.hashed()).as_collection();
-
-    // Implement source filtering and projection.
-    // At the moment this is strictly optional, but we perform it anyhow
-    // to demonstrate the intended use.
-    if let Some(operators) = linear_operators {
-        // Apply predicates and insert dummy values into undemanded columns.
-        let (collection2, errors) = collection
-            .inner
-            .flat_map_fallible("SourceLinearOperators", {
-                // Produce an executable plan reflecting the linear operators.
-                let linear_op_mfp = operators
-                    .to_mfp(&description.typ)
-                    .into_plan()
-                    .unwrap_or_else(|e| panic!("{}", e));
-                // Reusable allocation for unpacking datums.
-                let mut datum_vec = mz_repr::DatumVec::new();
-                let mut row_builder = Row::default();
-                // Closure that applies the linear operators to each `input_row`.
-                move |(input_row, time, diff)| {
-                    let arena = mz_repr::RowArena::new();
-                    let mut datums_local = datum_vec.borrow_with(&input_row);
-                    linear_op_mfp.evaluate(
-                        &mut datums_local,
-                        &arena,
-                        time,
-                        diff,
-                        |_time| true,
-                        &mut row_builder,
-                    )
-                }
-            });
-
-        collection = collection2.as_collection();
-        error_collections.push(errors.as_collection());
-    };
+    let collection = stream.inner.exchange(|x| x.hashed()).as_collection();
 
     // Flatten the error collections.
     let err_collection = match error_collections.len() {

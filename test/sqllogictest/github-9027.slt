@@ -61,21 +61,367 @@ WHERE
 ----
 Source materialize.public.orders (u1):
 {
+  "expressions": [
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "Int32",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "String",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": {
+            "Numeric": {
+              "max_scale": 2
+            }
+          },
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "String",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "String",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "Int32",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "String",
+          "nullable": false
+        }
+      ]
+    }
+  ],
   "predicates": [],
   "projection": [
     0,
-    4
-  ]
+    9,
+    10,
+    11,
+    4,
+    12,
+    13,
+    14,
+    15
+  ],
+  "input_arity": 9
 }
 
 Source materialize.public.lineitem (u2):
 {
+  "expressions": [
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "Int32",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "Int32",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "Int32",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": {
+            "Numeric": {
+              "max_scale": 2
+            }
+          },
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": {
+            "Numeric": {
+              "max_scale": 2
+            }
+          },
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": {
+            "Numeric": {
+              "max_scale": 2
+            }
+          },
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": {
+            "Numeric": {
+              "max_scale": 2
+            }
+          },
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "String",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "String",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "Date",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "String",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "String",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "Literal": [
+        {
+          "Ok": {
+            "data": [
+              28
+            ]
+          }
+        },
+        {
+          "scalar_type": "String",
+          "nullable": false
+        }
+      ]
+    }
+  ],
   "predicates": [],
   "projection": [
     0,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
     11,
-    12
-  ]
+    12,
+    26,
+    27,
+    28
+  ],
+  "input_arity": 16
 }
 
 Query:

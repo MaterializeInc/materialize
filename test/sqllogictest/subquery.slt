@@ -250,7 +250,8 @@ Source materialize.public.t1 (u9):
 | Project (#0)
 
 Source materialize.public.t2 (u10):
-| Project ()
+| Map dummy
+| Project (#1)
 
 Query:
 %0 =
@@ -275,7 +276,8 @@ Source materialize.public.t1 (u9):
 | Project (#0)
 
 Source materialize.public.t2 (u10):
-| Project ()
+| Map dummy
+| Project (#1)
 
 Source materialize.public.t3 (u11):
 | Project (#0, #1)
@@ -741,10 +743,12 @@ WHERE a IN (9, 0)
   GROUP BY TRUE;
 ----
 Source materialize.public.x (u13):
-| Project ()
+| Map dummy
+| Project (#1)
 
 Source materialize.public.y (u14):
-| Project ()
+| Map dummy
+| Project (#1)
 
 Query:
 %0 =
