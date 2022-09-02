@@ -16,20 +16,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::{collections::HashMap, num::NonZeroUsize};
 
-use futures::{FutureExt, StreamExt};
-use mz_expr::explain::Indices;
-use mz_ore::str::{bracketed, separated, Indent};
-use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
+use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use mz_compute_client::command::{DataflowDescription, ReplicaId};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
+use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::str::StrExt;
+use mz_ore::str::{bracketed, separated, Indent};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use mz_stash::Append;
 
@@ -39,7 +39,7 @@ use crate::util::send_immediate_rows;
 use crate::AdapterError;
 
 pub(crate) struct PendingPeek {
-    pub(crate) sender: mpsc::UnboundedSender<PeekResponse>,
+    pub(crate) sender: oneshot::Sender<PeekResponse>,
     pub(crate) conn_id: ConnectionId,
 }
 
@@ -441,8 +441,11 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                 }
             }
-            let results = finishing.finish(results);
-            return Ok(send_immediate_rows(results));
+            let results = finishing.finish(results, self.catalog.system_config().max_result_size());
+            return match results {
+                Ok(rows) => Ok(send_immediate_rows(rows)),
+                Err(e) => Err(AdapterError::ResultSize(e)),
+            };
         }
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
@@ -524,7 +527,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         };
 
         // Endpoints for sending and receiving peek responses.
-        let (rows_tx, rows_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (rows_tx, rows_rx) = tokio::sync::oneshot::channel();
 
         // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
         // small but unlikely chance that it's not unique to completed peeks.
@@ -564,26 +567,18 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .unwrap();
 
         // Prepare the receiver to return as a response.
-        let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
-            .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
-                match (memo, resp) {
-                    (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
-                        memo.extend(rows);
-                        PeekResponse::Rows(memo)
-                    }
-                    (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
-                        PeekResponse::Error(e)
-                    }
-                    (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
-                        PeekResponse::Canceled
-                    }
-                }
-            })
-            .map(move |resp| match resp {
-                PeekResponse::Rows(rows) => PeekResponseUnary::Rows(finishing.finish(rows)),
+        let max_result_size = self.catalog.system_config().max_result_size();
+        let rows_rx = rows_rx.map_ok_or_else(
+            |e| PeekResponseUnary::Error(e.to_string()),
+            move |resp| match resp {
+                PeekResponse::Rows(rows) => match finishing.finish(rows, max_result_size) {
+                    Ok(rows) => PeekResponseUnary::Rows(rows),
+                    Err(e) => PeekResponseUnary::Error(e),
+                },
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),
-            });
+            },
+        );
 
         // If it was created, drop the dataflow once the peek command is sent.
         if let Some(index_id) = drop_dataflow {
@@ -661,13 +656,14 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
     use mz_repr::{
         explain_new::{text_string_at, DummyHumanizer, RenderingContext},
         ColumnType, Datum, ScalarType,
     };
+
+    use super::*;
 
     #[test]
     fn test_fast_path_plan_as_text() {

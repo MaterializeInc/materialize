@@ -203,6 +203,17 @@ where
             states.len()
         );
 
+        // Fast-path: Someone already GC'd past `req.new_seqno_since`, don't
+        // bother running any of the below logic.
+        //
+        // Also a fix for #14580.
+        if states
+            .peek_seqno()
+            .map_or(true, |x| x > req.new_seqno_since)
+        {
+            return;
+        }
+
         let mut deleteable_batch_blobs = HashSet::new();
         let mut deleteable_rollup_blobs = Vec::new();
         while let Some(state) = states.next() {

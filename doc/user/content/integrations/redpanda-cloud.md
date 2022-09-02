@@ -96,7 +96,7 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
           SASL PASSWORD = SECRET redpanda_password,
           SSL CERTIFICATE AUTHORITY = SECRET redpanda_ca_cert;
       CREATE SOURCE <topic-name>
-        FROM KAFKA CONNECTION redpanda_cloud TOPIC '<topic-name>'
+        FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
         FORMAT BYTES;
     ```
 

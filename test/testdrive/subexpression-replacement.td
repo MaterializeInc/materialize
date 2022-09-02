@@ -100,7 +100,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (2, 3);
 "%0 =| ReadExistingIndex t1_primary_idx| Filter ((#1 = 2) OR (#1 = 3))"
 
-# Partial matches are not optimized
+# Partial matches
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (3, 4);
 "%0 =| ReadExistingIndex t1_primary_idx| Filter (#1 = 3)"

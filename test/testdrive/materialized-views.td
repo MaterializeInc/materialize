@@ -40,8 +40,7 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION kafka_conn TOPIC
-  'testdrive-materialized-views-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-materialized-views-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
@@ -60,13 +59,13 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 3
 
 > CREATE SINK sink1 FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SOURCE sink1_check
-  FROM KAFKA CONNECTION kafka_conn TOPIC
-  'testdrive-materialized-views-sink-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}'
+  )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 

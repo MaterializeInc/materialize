@@ -278,6 +278,15 @@ impl JoinClosure {
     pub fn is_identity(&self) -> bool {
         self.ready_equivalences.is_empty() && self.before.is_identity()
     }
+
+    /// Returns true if evaluation could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        self.before.could_error()
+            || self
+                .ready_equivalences
+                .iter()
+                .any(|es| es.iter().any(|e| e.could_error()))
+    }
 }
 
 /// Maintained state as we construct join dataflows.

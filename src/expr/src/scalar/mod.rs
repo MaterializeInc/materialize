@@ -1547,6 +1547,27 @@ impl MirScalarExpr {
     }
 }
 
+impl MirScalarExpr {
+    /// True iff evaluation could possibly error on non-error input `Datum`.
+    pub fn could_error(&self) -> bool {
+        match self {
+            MirScalarExpr::Column(_col) => false,
+            MirScalarExpr::Literal(row, ..) => row.is_err(),
+            MirScalarExpr::CallUnmaterializable(_) => true,
+            MirScalarExpr::CallUnary { func, expr } => func.could_error() || expr.could_error(),
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                func.could_error() || expr1.could_error() || expr2.could_error()
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                func.could_error() || exprs.iter().any(|e| e.could_error())
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                cond.could_error() || then.could_error() || els.could_error()
+            }
+        }
+    }
+}
+
 impl fmt::Display for MirScalarExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         use MirScalarExpr::*;

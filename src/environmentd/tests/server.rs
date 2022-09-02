@@ -165,7 +165,13 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCase {
             query: "create view v as select 1",
             status: StatusCode::OK,
-            body: r#"{"results":[null]}"#,
+            body: r#"{"results":[{"ok":"CREATE VIEW"}]}"#,
+        },
+        // Partial errors make it to the client.
+        TestCase {
+            query: "create view if not exists v as select 1",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"CREATE VIEW","partial_err":{"severity":"notice","message":"view already exists, skipping"}}]}"#,
         },
         // Multiple CREATEs do not work.
         TestCase {

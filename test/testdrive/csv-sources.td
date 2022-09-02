@@ -155,7 +155,7 @@ $ kafka-create-topic topic=dynamic
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE SOURCE dynamic_csv (city, state, zip)
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-dynamic-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dynamic-${testdrive.seed}')
   FORMAT CSV WITH 3 COLUMNS
 
 > SELECT * FROM dynamic_csv
@@ -232,7 +232,7 @@ $ kafka-create-topic topic=static-csv-pkne-sink
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SINK static_csv_pkne_sink FROM static_csv_pkne
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'static-csv-pkne-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'static-csv-pkne-sink')
   KEY (zip)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 

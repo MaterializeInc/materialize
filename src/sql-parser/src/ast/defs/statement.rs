@@ -531,6 +531,38 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
 }
 impl_display_t!(CreateSourceStatement);
 
+/// An option in a `CREATE SINK` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateSinkOptionName {
+    Snapshot,
+}
+
+impl AstDisplay for CreateSinkOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CreateSinkOptionName::Snapshot => {
+                f.write_str("SNAPSHOT");
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSinkOption<T: AstInfo> {
+    pub name: CreateSinkOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateSinkOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
@@ -538,10 +570,9 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub from: T::ObjectName,
     pub connection: CreateSinkConnection<T>,
-    pub with_options: Vec<WithOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope<T>>,
-    pub with_snapshot: bool,
+    pub with_options: Vec<CreateSinkOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
@@ -555,11 +586,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         f.write_node(&self.from);
         f.write_str(" INTO ");
         f.write_node(&self.connection);
-        if !self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
-        }
         if let Some(format) = &self.format {
             f.write_str(" FORMAT ");
             f.write_node(format);
@@ -568,10 +594,11 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
             f.write_str(" ENVELOPE ");
             f.write_node(envelope);
         }
-        if self.with_snapshot {
-            f.write_str(" WITH SNAPSHOT");
-        } else {
-            f.write_str(" WITHOUT SNAPSHOT");
+
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
         }
     }
 }

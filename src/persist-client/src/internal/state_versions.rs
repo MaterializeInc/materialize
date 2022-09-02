@@ -561,6 +561,11 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> StateVersionsIter<K, V, T, D> {
         self.diffs.len()
     }
 
+    /// Returns the SeqNo of the next state returned by `next`.
+    pub fn peek_seqno(&self) -> Option<SeqNo> {
+        self.diffs.last().map(|x| x.seqno)
+    }
+
     pub fn next(&mut self) -> Option<&State<K, V, T, D>> {
         let diff = match self.diffs.pop() {
             Some(x) => x,

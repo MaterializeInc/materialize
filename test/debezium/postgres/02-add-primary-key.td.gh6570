@@ -23,7 +23,7 @@ INSERT INTO alter_add_primary_key VALUES (123), (234);
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE alter_add_primary_key
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'postgres.public.alter_add_primary_key'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_primary_key')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

@@ -413,34 +413,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let handle = mz_ore::task::spawn(
             || "batch::write_part",
             async move {
-                // TODO: Get rid of the from_le_bytes.
-                let encoded_desc = Description::new(
-                    Antichain::from(
-                        desc.lower()
-                            .elements()
-                            .iter()
-                            .map(|x| u64::from_le_bytes(T::encode(x)))
-                            .collect::<Vec<_>>(),
-                    ),
-                    Antichain::from(
-                        desc.upper()
-                            .elements()
-                            .iter()
-                            .map(|x| u64::from_le_bytes(T::encode(x)))
-                            .collect::<Vec<_>>(),
-                    ),
-                    Antichain::from(
-                        desc.since()
-                            .elements()
-                            .iter()
-                            .map(|x| u64::from_le_bytes(T::encode(x)))
-                            .collect::<Vec<_>>(),
-                    ),
-                );
-
                 let goodbytes = updates.goodbytes();
                 let batch = BlobTraceBatchPart {
-                    desc: encoded_desc.clone(),
+                    desc,
                     updates: vec![updates],
                     index,
                 };

@@ -1,0 +1,39 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for #14580, a bug where an over-aggressive internal
+# validation would fire if a GC request was behind the actual set of live
+# states.
+
+# Generate some new state versions
+write-batch output=b0 lower=0 upper=1
+k1 0 1
+----
+parts=1 len=1
+
+compare-and-append input=b0
+----
+ok
+
+consensus-scan from_seqno=0
+----
+seqno=v1 batches=
+seqno=v2 batches=
+seqno=v3 batches=b0
+
+# Run gc up to our latest seqno
+gc from_seqno=0 to_seqno=3
+----
+ok
+
+# Now some slow gc req comes in that's behind. In the regression case, this
+# panics.
+gc from_seqno=0 to_seqno=1
+----
+ok
