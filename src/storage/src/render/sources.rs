@@ -286,6 +286,8 @@ where
                                     persist_clients,
                                     tx_storage_metadata,
                                     as_of,
+                                    Antichain::new(),
+                                    None,
                                 );
                             let (tx_source_ok, tx_source_err) = (
                                 tx_source_ok_stream.as_collection(),
@@ -318,7 +320,7 @@ where
                             // We are at the end of time, so our `as_of` is everything.
                             Some(Timestamp::MAX)
                         }
-                        Some(&0) => {
+                        Some(&Timestamp::MIN) => {
                             // We are the beginning of time (no data persisted yet), so we can
                             // skip reading out of persist.
                             None
@@ -333,6 +335,8 @@ where
                                 persist_clients,
                                 description.storage_metadata.clone(),
                                 Antichain::from_elem(previous_as_of),
+                                Antichain::new(),
+                                None,
                             );
                             (stream, Some(tok))
                         } else {
@@ -366,8 +370,11 @@ where
                     // place and re-use. There seem to be enough instances of this
                     // by now.
                     fn split_ok_err(
-                        x: (Result<Row, DataflowError>, u64, Diff),
-                    ) -> Result<(Row, u64, Diff), (DataflowError, u64, Diff)> {
+                        x: (Result<Row, DataflowError>, mz_repr::Timestamp, Diff),
+                    ) -> Result<
+                        (Row, mz_repr::Timestamp, Diff),
+                        (DataflowError, mz_repr::Timestamp, Diff),
+                    > {
                         match x {
                             (Ok(row), ts, diff) => Ok((row, ts, diff)),
                             (Err(err), ts, diff) => Err((err, ts, diff)),

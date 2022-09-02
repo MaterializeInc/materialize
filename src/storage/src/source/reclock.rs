@@ -261,7 +261,7 @@ pub struct ReclockOperator {
     /// The function that should be used to get the current time when minting new bindings
     now: NowFn,
     /// Values of current time will be rounded to be multiples of this duration in milliseconds
-    update_interval_ms: Timestamp,
+    update_interval_ms: u64,
 }
 
 impl ReclockOperator {
@@ -718,7 +718,7 @@ mod tests {
         as_of: Antichain<Timestamp>,
     ) -> (ReclockOperator, ReclockFollower) {
         let start = tokio::time::Instant::now();
-        let now_fn = NowFn::from(move || start.elapsed().as_millis() as Timestamp);
+        let now_fn = NowFn::from(move || start.elapsed().as_millis().try_into().unwrap());
 
         let metadata = CollectionMetadata {
             persist_location: PersistLocation {

@@ -809,7 +809,7 @@ impl KafkaSinkState {
 
                 if let Some(ts) = maybe_decode_consistency_end_record(&message, consistency_topic)?
                 {
-                    if ts >= latest_ts.unwrap_or(0) {
+                    if ts >= latest_ts.unwrap_or_else(timely::progress::Timestamp::minimum) {
                         latest_ts = Some(ts);
                     }
                 }
@@ -1251,7 +1251,7 @@ where
             });
 
             // Move any newly closed timestamps from pending to ready
-            let mut closed_ts: Vec<u64> = s
+            let mut closed_ts: Vec<Timestamp> = s
                 .pending_rows
                 .iter()
                 .filter(|(ts, _)| !frontier.less_equal(*ts))

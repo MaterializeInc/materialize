@@ -1447,6 +1447,12 @@ pub mod plan {
             }
             Ok(true)
         }
+
+        /// Returns true if evaluation could introduce an error on non-error inputs.
+        pub fn could_error(&self) -> bool {
+            self.mfp.predicates.iter().any(|(_pos, e)| e.could_error())
+                || self.mfp.expressions.iter().any(|e| e.could_error())
+        }
     }
 
     impl std::ops::Deref for SafeMfpPlan {
@@ -1509,7 +1515,7 @@ pub mod plan {
         ///
         /// If any unsupported expression is found, for example one that uses `mz_logical_timestamp`
         /// in an unsupported position, an error is returned.
-        pub(crate) fn create_from(mut mfp: MapFilterProject) -> Result<Self, String> {
+        pub fn create_from(mut mfp: MapFilterProject) -> Result<Self, String> {
             let mut lower_bounds = Vec::new();
             let mut upper_bounds = Vec::new();
 
@@ -1635,6 +1641,19 @@ pub mod plan {
                 && self.upper_bounds.is_empty()
         }
 
+        /// Returns `self`, and leaves behind an identity operator that acts on its output.
+        pub fn take(&mut self) -> Self {
+            let mut identity = Self {
+                mfp: SafeMfpPlan {
+                    mfp: MapFilterProject::new(self.mfp.projection.len()),
+                },
+                lower_bounds: Default::default(),
+                upper_bounds: Default::default(),
+            };
+            std::mem::swap(self, &mut identity);
+            identity
+        }
+
         /// Attempt to convert self into a non-temporal MapFilterProject plan.
         ///
         /// If that is not possible, the original instance is returned as an error.
@@ -1703,7 +1722,7 @@ pub mod plan {
                                 // An `Ok` conversion is a valid upper bound, and an `Err` error
                                 // indicates a value above `u64::MAX`. The `ok()` method does the
                                 // conversion we want to an `Option<u64>`.
-                                let v = u64::try_from(d.0).ok();
+                                let v = u64::try_from(d.0).ok().map(mz_repr::Timestamp::from);
                                 // Update `lower_bound` to be the maximum with `v`, where a `None`
                                 // value is treated as larger than `Some(_)` values.
                                 lower_bound = match (lower_bound, v) {
@@ -1755,7 +1774,7 @@ pub mod plan {
                                 // An `Ok` conversion is a valid upper bound, and an `Err` error
                                 // indicates a value above `u64::MAX`. The `ok()` method does the
                                 // conversion we want to an `Option<u64>`.
-                                let v = u64::try_from(d.0).ok();
+                                let v = u64::try_from(d.0).ok().map(mz_repr::Timestamp::from);
                                 // Update `upper_bound` to be the minimum with `v`, where a `None`
                                 // value is treated as larger than `Some(_)` values.
                                 upper_bound = match (upper_bound, v) {
@@ -1811,6 +1830,13 @@ pub mod plan {
             } else {
                 None.into_iter().chain(None.into_iter())
             }
+        }
+
+        /// Returns true if evaluation could introduce an error on non-error inputs.
+        pub fn could_error(&self) -> bool {
+            self.mfp.could_error()
+                || self.lower_bounds.iter().any(|e| e.could_error())
+                || self.upper_bounds.iter().any(|e| e.could_error())
         }
     }
 }

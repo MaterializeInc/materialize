@@ -415,7 +415,7 @@ where
 
             // We just use an advancing number for our capability. No one cares
             // about what this actually is, downstream.
-            let mut batch_counter = 0;
+            let mut batch_counter = timely::progress::Timestamp::minimum();
 
             while let Poll::Ready(Some(update)) = source_reader.as_mut().poll_next(&mut context) {
                 let (messages, non_definite_errors, unconsumed_partitions, source_upper) =
@@ -477,7 +477,7 @@ where
 
                 session.give((message_batch, source_upper_summary));
 
-                batch_counter += 1;
+                batch_counter = batch_counter.checked_add(1).expect("exhausted counter");
 
                 if timer.elapsed() > YIELD_INTERVAL {
                     let _ = activator.activate();
@@ -530,7 +530,7 @@ fn remap_operator<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
     source_upper_summaries: timely::dataflow::Stream<G, SourceUpperSummary>,
 ) -> (
-    timely::dataflow::Stream<G, HashMap<PartitionId, Vec<(u64, MzOffset)>>>,
+    timely::dataflow::Stream<G, HashMap<PartitionId, Vec<(Timestamp, MzOffset)>>>,
     Rc<dyn Any>,
 )
 where
@@ -717,7 +717,10 @@ fn reclock_operator<G, S: 'static>(
         G,
         Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
     >,
-    remap_trace_updates: timely::dataflow::Stream<G, HashMap<PartitionId, Vec<(u64, MzOffset)>>>,
+    remap_trace_updates: timely::dataflow::Stream<
+        G,
+        HashMap<PartitionId, Vec<(Timestamp, MzOffset)>>,
+    >,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,

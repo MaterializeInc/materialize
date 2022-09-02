@@ -393,10 +393,11 @@ statement ok
 CREATE INDEX idx_t1_b ON t1(b)
 
 query I
-SELECT a FROM t1 WHERE b IN ('l1', 'l2') AND (a > 0 OR a < 5)
+SELECT a FROM t1 WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
 ----
 1
 2
+3
 
 # Impossible predicates (exercise `remove_impossible_or_args`)
 

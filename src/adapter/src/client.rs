@@ -436,7 +436,7 @@ impl SessionClient {
                 ExecuteResponse::Canceled => {
                     results.push(SimpleResult::err("statement canceled due to user request"));
                 }
-                ExecuteResponse::CreatedConnection { existed: _ }
+                res @ (ExecuteResponse::CreatedConnection { existed: _ }
                 | ExecuteResponse::CreatedDatabase { existed: _ }
                 | ExecuteResponse::CreatedSchema { existed: _ }
                 | ExecuteResponse::CreatedRole
@@ -481,8 +481,8 @@ impl SessionClient {
                 | ExecuteResponse::AlteredIndexLogicalCompaction
                 | ExecuteResponse::AlteredSystemConfiguraion
                 | ExecuteResponse::Deallocate { all: _ }
-                | ExecuteResponse::Prepare => {
-                    results.push(SimpleResult::Ok);
+                | ExecuteResponse::Prepare) => {
+                    results.push(SimpleResult::ok(res));
                 }
                 ExecuteResponse::SendingRows {
                     future: rows,

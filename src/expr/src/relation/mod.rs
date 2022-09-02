@@ -15,24 +15,26 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use itertools::Itertools;
-use mz_ore::str::{separated, Indent};
-use mz_repr::explain_new::DisplayText;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::{separated, Indent};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::explain_new::DisplayText;
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
-use self::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::explain::{Indices, ViewExplanation};
 use crate::visit::{Visit, VisitChildren};
 use crate::{func as scalar_func, EvalError, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc};
+
+use self::func::{AggregateFunc, LagLeadType, TableFunc};
 
 pub mod canonicalize;
 pub mod func;
@@ -2193,7 +2195,13 @@ impl RowSetFinishing {
     }
     /// Applies finishing actions to a row set,
     /// and unrolls it to a unary representation.
-    pub fn finish(&self, mut rows: Vec<(Row, NonZeroUsize)>) -> Vec<Row> {
+    pub fn finish(
+        &self,
+        mut rows: Vec<(Row, NonZeroUsize)>,
+        // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
+        max_result_size: u32,
+    ) -> Result<Vec<Row>, String> {
+        let max_result_size = usize::cast_from(max_result_size);
         let mut left_datum_vec = mz_repr::DatumVec::new();
         let mut right_datum_vec = mz_repr::DatumVec::new();
         let sort_by = |(left, _): &(Row, _), (right, _): &(Row, _)| {
@@ -2217,7 +2225,7 @@ impl RowSetFinishing {
             *nth_diff = NonZeroUsize::new(nth_diff.get() - offset_kth_copy).unwrap();
         }
 
-        let limit = self.limit.unwrap_or(std::usize::MAX);
+        let limit = self.limit.unwrap_or(usize::MAX);
 
         // The code below is logically equivalent to:
         //
@@ -2244,6 +2252,7 @@ impl RowSetFinishing {
         let mut remaining = limit;
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
+        let mut total_bytes = 0;
         for (row, count) in &rows[offset_nth_row..] {
             if remaining == 0 {
                 break;
@@ -2257,12 +2266,18 @@ impl RowSetFinishing {
                         .extend(self.project.iter().map(|i| &datums[*i]));
                     row_buf.clone()
                 };
+                total_bytes += new_row.data().len();
+                if total_bytes > max_result_size {
+                    return Err(format!(
+                        "result exceeds max size of {max_result_size} bytes"
+                    ));
+                }
                 ret.push(new_row);
             }
             remaining -= count;
         }
 
-        ret
+        Ok(ret)
     }
 }
 
@@ -2499,10 +2514,12 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use proptest::prelude::*;
+
     use mz_proto::protobuf_roundtrip;
     use mz_repr::explain_new::text_string_at;
-    use proptest::prelude::*;
+
+    use super::*;
 
     proptest! {
         #[test]

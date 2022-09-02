@@ -1266,6 +1266,10 @@ impl RowRef {
         &self.data
     }
 
+    pub fn byte_len(&self) -> usize {
+        self.data.len()
+    }
+
     /// True iff there is no data in this Row
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()

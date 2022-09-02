@@ -555,13 +555,13 @@ mod tests {
         blob: &(dyn Blob + Send + Sync),
         key: &BlobKey,
     ) -> (
-        BlobTraceBatchPart,
+        BlobTraceBatchPart<T>,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
     )
     where
         K: Codec,
         V: Codec,
-        T: Codec64,
+        T: Timestamp + Codec64,
         D: Codec64,
     {
         let value = blob

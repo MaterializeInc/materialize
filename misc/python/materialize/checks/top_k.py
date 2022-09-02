@@ -92,8 +92,6 @@ class MonotonicTopK(Check):
 
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-
                 > CREATE SOURCE monotonic_topk_source
                   FROM KAFKA CONNECTION kafka_conn
                   TOPIC 'testdrive-monotonic-topk-${testdrive.seed}'
@@ -158,6 +156,8 @@ class MonotonicTop1(Check):
                 {"f1": "A"}
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE monotonic_top1_source
                   FROM KAFKA CONNECTION kafka_conn

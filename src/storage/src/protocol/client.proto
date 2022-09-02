@@ -9,8 +9,8 @@
 
 syntax = "proto3";
 
-import "persist/src/persist.proto";
 import "proto/src/proto.proto";
+import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "storage/src/types/sources.proto";
 import "storage/src/types/sinks.proto";
@@ -25,7 +25,7 @@ service ProtoStorage {
 
 message ProtoCompaction {
     mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_persist.gen.persist.ProtoU64Antichain frontier = 2;
+    mz_repr.antichain.ProtoU64Antichain frontier = 2;
 }
 
 message ProtoAllowCompaction {
@@ -35,7 +35,7 @@ message ProtoAllowCompaction {
 message ProtoIngestSourceCommand {
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_storage.types.sources.ProtoIngestionDescription description = 2;
-    mz_persist.gen.persist.ProtoU64Antichain resume_upper = 3;
+    mz_repr.antichain.ProtoU64Antichain resume_upper = 3;
 }
 
 message ProtoIngestSources {
@@ -57,7 +57,7 @@ message ProtoFrontierUppersKind {
 
 message ProtoTrace {
     mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_persist.gen.persist.ProtoU64Antichain upper = 2;
+    mz_repr.antichain.ProtoU64Antichain upper = 2;
 }
 
 message ProtoStorageCommand {
