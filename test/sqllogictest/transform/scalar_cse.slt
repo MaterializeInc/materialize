@@ -16,7 +16,8 @@ query T multiline
 EXPLAIN PLAN FOR SELECT b*b*b, b*b FROM x
 ----
 Source materialize.public.x (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -30,7 +31,8 @@ query T multiline
 EXPLAIN PLAN FOR SELECT b*b*b, b*b+1 FROM x
 ----
 Source materialize.public.x (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -48,7 +50,8 @@ EXPLAIN PLAN FOR SELECT
 FROM x
 ----
 Source materialize.public.x (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -67,7 +70,8 @@ EXPLAIN PLAN FOR SELECT
 FROM x
 ----
 Source materialize.public.x (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -86,7 +90,8 @@ EXPLAIN PLAN FOR SELECT
 FROM x
 ----
 Source materialize.public.x (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -108,7 +113,8 @@ FROM
 
 ----
 Source materialize.public.x (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =

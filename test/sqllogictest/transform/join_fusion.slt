@@ -31,7 +31,7 @@ query T multiline
 EXPLAIN SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
 ----
 Source materialize.public.t1 (u1):
-| Filter (#1) IS NOT NULL, (#0 > 0)
+| Filter (#0 > 0), (#1) IS NOT NULL
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):

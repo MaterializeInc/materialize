@@ -91,7 +91,7 @@ Explained Query
     raw=true
 
 Source materialize.public.u
-  Demand (#0, #1)
+  Project #0, #1
 
 EOF
 
@@ -125,7 +125,7 @@ Explained Query
     raw=true
 
 Source materialize.public.u
-  Demand (#0, #1)
+  Project #0, #1
 
 EOF
 
@@ -170,7 +170,8 @@ Explained Query
             raw=true
 
 Source materialize.public.mv
-  Demand (#1)
+  Map dummy
+  Project #2, #1
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -216,7 +217,8 @@ Explained Query
                   raw=true
 
 Source materialize.public.mv
-  Demand (#1)
+  Map dummy
+  Project #2, #1
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -252,7 +254,8 @@ Explained Query
               raw=true
 
 Source materialize.public.mv
-  Demand (#1)
+  Map dummy
+  Project #2, #1
 
 Used Indexes:
   - materialize.public.t_a_idx

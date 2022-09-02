@@ -215,7 +215,8 @@ explain
 select a+1 from (select 1 as a, b from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -230,7 +231,8 @@ explain
 select z+1 from (select 2 as y, a, 1 as z, b from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -246,7 +248,8 @@ explain
 select c1, c1 + a from (select 1 as c1, x as c2, 3 as c3 from generate_series(1, 3) as x union all select 1, x, 3 from generate_series(5, 8) as x), t;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -279,7 +282,8 @@ explain typed plan for
 select c.* from (select f1, f2 from (select f2, f1 from (select 1 as f1), generate_series(2, 4) as f2) group by f2, f1) as c, t;
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -314,7 +318,8 @@ explain typed plan for
 select c.* from (select f2, f1, f3 from (select f3, f2, f1 from generate_series(2, 4) as f2, generate_series(3, 5) as f3, (select 1 as f1)) group by f2, f3, f1) as c, t;
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -349,7 +354,8 @@ query T multiline
 explain select * from (select 1 as a from t), generate_series(a+1, 4);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -370,7 +376,8 @@ query T multiline
 explain select 123 from (select 234 from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -384,7 +391,8 @@ query T multiline
 explain select 123 from (select distinct 234 from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -399,7 +407,8 @@ query T multiline
 explain select distinct 123 from (select 234 from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -414,7 +423,8 @@ query T multiline
 explain select distinct 123 from (select distinct 234 from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -431,7 +441,8 @@ query T multiline
 explain select * from (select distinct 123 from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -446,7 +457,8 @@ query T multiline
 explain select distinct * from (select 123 from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -463,7 +475,8 @@ query T multiline
 explain select 123 from (select a from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -477,7 +490,8 @@ query T multiline
 explain select 123 from (select distinct a from t);
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -493,7 +507,8 @@ query T multiline
 explain select distinct 123 from (select a from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -508,7 +523,8 @@ query T multiline
 explain select distinct 123 from (select distinct a from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 =
@@ -525,7 +541,8 @@ query T multiline
 explain select distinct a1.a, a1.literal from (select a, 123 as literal from t) as a1;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -540,7 +557,8 @@ query T multiline
 explain select a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -555,7 +573,8 @@ query T multiline
 explain select a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -570,7 +589,8 @@ query T multiline
 explain select distinct a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -587,7 +607,8 @@ query T multiline
 explain select distinct a1.a, 123 from (select a from t) as a1;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -602,7 +623,8 @@ query T multiline
 explain select distinct a1.a, 123 from (select distinct a from t) as a1;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -618,7 +640,8 @@ query T multiline
 explain select distinct a1.a+2 from (select distinct a+1 as a, 123 as literal from t) as a1;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -632,7 +655,8 @@ query T multiline
 explain select distinct a1.a, 123 from (select distinct a+1 as a, 234 as literal from t) as a1;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -647,7 +671,8 @@ query T multiline
 explain select distinct a1.a+2, a1.literal from (select distinct a+1 as a, 123 as literal from t) as a1;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -663,7 +688,8 @@ query T multiline
 explain select distinct a1.a, a1.literal + 1 from (select distinct a, 123 as literal from t) as a1;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -772,7 +798,8 @@ query T multiline
 explain select min(1/x) from (select a as y, 0 as x from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 = Let l0 =
@@ -804,7 +831,8 @@ query T multiline
 explain select sum(1/x) from (select a as y, 0 as x from t);
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 = Let l0 =
@@ -836,12 +864,14 @@ query T multiline
 explain select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
 ----
 Source materialize.public.t (u1):
+| Map dummy
 | Filter (#0 = 1308)
-| Project (#0)
+| Project (#0, #2)
 
 Source materialize.public.t_pk (u2):
+| Map dummy
 | Filter (#0 <= 195), (#0 >= 38)
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 = Let l0 =
@@ -898,7 +928,8 @@ query T multiline
 explain select min(a) from t where a between 38 and 195 and a = (select a from t where a = 1308);
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 = Let l0 =

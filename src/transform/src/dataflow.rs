@@ -262,8 +262,9 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
                     }
                 }
 
-                // First filter, then introduce and reposition `Datum::Dummy` values.
+                // Introduce and reposition `Datum::Dummy` values.
                 source.arguments.operators = Some(operator.map(dummies).project(demand_projection));
+                source.arguments.operators.as_mut().map(|x| x.optimize());
             }
         }
     }
@@ -331,14 +332,18 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
 
     // Push predicate information into the SourceDesc.
     for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
-        if let Some(list) = predicates.get(&Id::Global(*source_id)).clone() {
+        if let Some(list) = predicates.remove(&Id::Global(*source_id)) {
+            // Canonicalize the order of predicates, for stable plans.
+            let mut list = list.into_iter().collect::<Vec<_>>();
+            list.sort();
             // Install no-op predicate information if none exists.
             if source.arguments.operators.is_none() {
                 source.arguments.operators = Some(MapFilterProject::new(source.typ.arity()));
             }
             // Add any predicates that can be pushed to the source.
             if let Some(operator) = source.arguments.operators.take() {
-                source.arguments.operators = Some(operator.filter(list.iter().cloned()));
+                source.arguments.operators = Some(operator.filter(list));
+                source.arguments.operators.as_mut().map(|x| x.optimize());
             }
         }
     }

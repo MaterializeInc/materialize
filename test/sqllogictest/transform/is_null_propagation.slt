@@ -32,7 +32,8 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -55,10 +56,12 @@ query T multiline
 EXPLAIN SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) agg1 FROM t2 a1 JOIN ( SELECT a2.f2 FROM t1 LEFT JOIN t1 a2 ON TRUE ) a2 ON TRUE WHERE  a2.f2 IS NOT NULL AND a2.f2 > a1.f2 ) )
 ----
 Source materialize.public.t1 (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Source materialize.public.t2 (u2):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 = Let l0 =

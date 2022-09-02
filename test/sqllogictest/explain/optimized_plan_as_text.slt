@@ -95,8 +95,8 @@ Explained Query
         Get materialize.public.mv // { non_negative: true }
 
 Source materialize.public.mv
-  Demand (#0, #1)
-  Filter (#1 < 0) AND (#0 > 0) AND ((#0 + #1) > 0)
+  Filter (#0 > 0) AND (#1 < 0) AND ((#0 + #1) > 0)
+  Project #0, #1
 
 EOF
 
@@ -132,7 +132,8 @@ Explained Query
             Get materialize.public.mv // { non_negative: true }
 
 Source materialize.public.mv
-  Demand (#1)
+  Map dummy
+  Project #2, #1
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -154,7 +155,8 @@ Explained Query
           Get materialize.public.mv // { non_negative: true }
 
 Source materialize.public.mv
-  Demand (#1)
+  Map dummy
+  Project #2, #1
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -274,7 +276,7 @@ Explained Query
                         Get materialize.public.mv // { non_negative: true }
 
 Source materialize.public.mv
-  Demand (#0, #1)
+  Project #0, #1
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -335,8 +337,8 @@ Explained Query
           Get materialize.public.t // { non_negative: true }
 
 Source materialize.public.mv
-  Demand (#0, #1)
   Filter (#1) IS NOT NULL
+  Project #0, #1
 
 Used Indexes:
   - materialize.public.t_a_idx
