@@ -14,6 +14,7 @@ steps:
     artifact_paths: target/slt-summary.json
     agents:
       queue: linux-x86_64
+    parallelism: 4
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
