@@ -1179,7 +1179,7 @@ pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
     pub logging: Option<DataflowLoggingConfig>,
-    /// Indexes, sinks, and materialized views exported by this compute instance.
+    /// Indexes and materialized views exported by this compute instance.
     /// Does not include introspection source indexes.
     pub exports: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
