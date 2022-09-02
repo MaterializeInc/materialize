@@ -410,11 +410,11 @@ CREATE CONNECTION pgconn FOR POSTGRES HOST = foo, PORT = 1234, SSL CERTIFICATE A
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Object(Name(UnresolvedObjectName([Ident("tun")])))) }] }, if_not_exists: false })
 
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red';
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red'
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC 'topic') FORMAT BYTES
@@ -1280,19 +1280,19 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), 
 
 # Ensure that we can parse REMOTE with pg
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' with (REMOTE 'johto:42');
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (REMOTE 'johto:42');
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' WITH (REMOTE = 'johto:42')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (REMOTE = 'johto:42')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
 
 # Ensure that we can parse legacy and non-legacy options
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' legacywith (a = 'hmm') with (REMOTE 'johto:42');
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') legacywith (a = 'hmm') with (REMOTE 'johto:42');
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' LEGACYWITH (a = 'hmm') WITH (REMOTE = 'johto:42')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') LEGACYWITH (a = 'hmm') WITH (REMOTE = 'johto:42')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, legacy_with_options: [WithOption { key: Ident("a"), value: Some(Value(String("hmm"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, legacy_with_options: [WithOption { key: Ident("a"), value: Some(Value(String("hmm"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
 
 parse-statement
 ALTER SYSTEM SET wal_level TO logical

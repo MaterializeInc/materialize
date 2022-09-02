@@ -99,7 +99,7 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
 > CREATE SOURCE "test_slot_source"
   FROM POSTGRES
     CONNECTION pg
-    PUBLICATION 'mz_source';
+    (PUBLICATION 'mz_source');
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
 
@@ -118,7 +118,7 @@ $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=mat
   USER postgres,
   PASSWORD SECRET pgpass
 ! CREATE SOURCE "no_such_host"
-  FROM POSTGRES CONNECTION no_such_host PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION no_such_host (PUBLICATION 'mz_source');
 contains:failed to lookup address information
 
 > CREATE CONNECTION no_such_port
@@ -129,8 +129,7 @@ contains:failed to lookup address information
   USER postgres,
   PASSWORD SECRET pgpass
 ! CREATE SOURCE "no_such_port"
-  FROM POSTGRES CONNECTION no_such_port
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION no_such_port (PUBLICATION 'mz_source');
 contains:error connecting to server: Connection refused (os error 111)
 
 > CREATE CONNECTION no_such_user
@@ -140,8 +139,7 @@ contains:error connecting to server: Connection refused (os error 111)
   USER no_such_user,
   PASSWORD SECRET pgpass
 ! CREATE SOURCE "no_such_user"
-  FROM POSTGRES CONNECTION no_such_user
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION no_such_user (PUBLICATION 'mz_source');
 contains:db error: FATAL: role "no_such_user" does not exist
 
 > CREATE SECRET badpass AS 'badpass'
@@ -152,8 +150,7 @@ contains:db error: FATAL: role "no_such_user" does not exist
   USER postgres,
   PASSWORD SECRET badpass
 ! CREATE SOURCE "no_such_password"
-  FROM POSTGRES CONNECTION no_such_password
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION no_such_password (PUBLICATION 'mz_source');
 contains:db error: FATAL: password authentication failed for user "postgres"
 
 > CREATE CONNECTION no_such_dbname FOR POSTGRES
@@ -162,18 +159,15 @@ contains:db error: FATAL: password authentication failed for user "postgres"
   USER postgres,
   PASSWORD SECRET pgpass
 ! CREATE SOURCE "no_such_dbname"
-  FROM POSTGRES CONNECTION no_such_dbname
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION no_such_dbname (PUBLICATION 'mz_source');
 contains:db error: FATAL: database "no_such_dbname" does not exist
 
 ! CREATE SOURCE "no_such_publication"
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'no_such_publication';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
 contains:publication "no_such_publication" does not exist
 
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE VIEWS FROM SOURCE "mz_source" ("no_replica_identity")
 # TODO: This should produce an error

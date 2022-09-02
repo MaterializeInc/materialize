@@ -41,6 +41,8 @@ mod scl;
 pub(crate) mod show;
 mod tcl;
 
+pub(crate) use ddl::PgConfigOptionExtracted;
+
 /// Describes the output of a SQL statement.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct StatementDesc {

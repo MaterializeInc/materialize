@@ -1101,8 +1101,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
         return Td(
             f"""
 > CREATE SOURCE mz_source_pgcdc
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres' (PUBLICATION 'mz_source');
   /* A */
 
 > SELECT count(*) FROM mz_source_pgcdc
@@ -1141,8 +1140,7 @@ CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
 
 > CREATE SOURCE s1
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
-  PUBLICATION 'p1';
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres' (PUBLICATION 'p1');
             """
         )
 

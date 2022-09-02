@@ -909,6 +909,42 @@ pub struct KafkaSourceConnection<T: AstInfo> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PgConfigOptionName {
+    /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
+    Details,
+    /// The name of the publication to sync
+    Publication,
+}
+
+impl AstDisplay for PgConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            PgConfigOptionName::Details => "DETAILS",
+            PgConfigOptionName::Publication => "PUBLICATION",
+        })
+    }
+}
+impl_display!(PgConfigOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `{FROM|INTO} CONNECTION ...` statement.
+pub struct PgConfigOption<T: AstInfo> {
+    pub name: PgConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for PgConfigOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(PgConfigOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceConnection<T: AstInfo> {
     Kafka(KafkaSourceConnection<T>),
     Kinesis {
@@ -928,10 +964,7 @@ pub enum CreateSourceConnection<T: AstInfo> {
     Postgres {
         /// The postgres connection.
         connection: T::ObjectName,
-        /// The name of the publication to sync
-        publication: String,
-        /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
-        details: Option<String>,
+        options: Vec<PgConfigOption<T>>,
     },
     LoadGenerator {
         generator: LoadGenerator,
@@ -979,18 +1012,15 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
             }
             CreateSourceConnection::Postgres {
                 connection,
-                publication,
-                details,
+                options,
             } => {
                 f.write_str("POSTGRES CONNECTION ");
                 f.write_node(connection);
-                f.write_str(" PUBLICATION '");
-                f.write_str(&display::escape_single_quote_string(publication));
-                if let Some(details) = details {
-                    f.write_str("' DETAILS '");
-                    f.write_str(&display::escape_single_quote_string(details));
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
                 }
-                f.write_str("'");
             }
             CreateSourceConnection::LoadGenerator { generator, options } => {
                 f.write_str("LOAD GENERATOR ");

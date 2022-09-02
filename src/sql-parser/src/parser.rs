@@ -2409,18 +2409,18 @@ impl<'a> Parser<'a> {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
-                self.expect_keyword(PUBLICATION)?;
-                let publication = self.parse_literal_string()?;
-                let details = if self.parse_keyword(DETAILS) {
-                    Some(self.parse_literal_string()?)
+
+                let options = if self.consume_token(&Token::LParen) {
+                    let options = self.parse_comma_separated(Parser::parse_pg_connection_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
                 } else {
-                    None
+                    vec![]
                 };
 
                 Ok(CreateSourceConnection::Postgres {
                     connection,
-                    publication,
-                    details,
+                    options,
                 })
             }
             KAFKA => {
@@ -2515,6 +2515,20 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn parse_pg_connection_option(&mut self) -> Result<PgConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[DETAILS, PUBLICATION])? {
+            DETAILS => PgConfigOptionName::Details,
+            PUBLICATION => PgConfigOptionName::Publication,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(PgConfigOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {

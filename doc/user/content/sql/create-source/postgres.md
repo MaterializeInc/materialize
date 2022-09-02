@@ -51,7 +51,7 @@ To avoid creating multiple replication slots upstream and minimize the required 
 CREATE SOURCE mz_source
 FROM POSTGRES
   CONNECTION pg_connection
-  PUBLICATION 'mz_source';
+  (PUBLICATION 'mz_source');
 ```
 
 , its schema looks like:
@@ -172,7 +172,7 @@ CREATE CONNECTION pg_connection
 CREATE SOURCE mz_source
 FROM POSTGRES
   CONNECTION pg_connection
-  PUBLICATION 'mz_source';
+  (PUBLICATION 'mz_source');
 ```
 
 ### Sizing a source
@@ -183,7 +183,7 @@ To provision a specific amount of CPU and memory to a source on creation, use th
 CREATE SOURCE mz_source
 FROM POSTGRES
   CONNECTION pg_connection
-  PUBLICATION 'mz_source'
+  (PUBLICATION 'mz_source')
   WITH (SIZE = 'xsmall');
 ```
 
