@@ -29,7 +29,7 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
 use tokio::sync::Mutex;
-use tracing::{info, trace};
+use tracing::trace;
 
 use mz_compute_client::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_persist_client::cache::PersistClientCache;
@@ -152,7 +152,7 @@ where
     let operator_name = format!("persist_sink {}", sink_id);
 
     if sink_id.is_user() {
-        info!(
+        trace!(
             "persist_sink {sink_id}/{shard_id}: \
             initial as_of: {:?}",
             as_of
@@ -307,7 +307,7 @@ where
             // bound.
             if PartialOrder::less_than(&current_persist_frontier, &write_lower_bound) {
                 if sink_id.is_user() {
-                    info!(
+                    trace!(
                         "persist_sink {sink_id}/{shard_id}: \
                         advancing to write_lower_bound: {:?}",
                         write_lower_bound
@@ -328,7 +328,7 @@ where
                     .expect("invalid usage");
 
                 if sink_id.is_user() {
-                    info!(
+                    trace!(
                         "persist_sink {sink_id}/{shard_id}: \
                         advancing to write_lower_bound result: {:?}",
                         res
@@ -378,7 +378,7 @@ where
 
                 if PartialOrder::less_than(&*shared_frontier.borrow(), &persist_frontier) {
                     if sink_id.is_user() {
-                        info!(
+                        trace!(
                             "persist_sink {sink_id}/{shard_id}: \
                             updating shared_frontier to {:?}",
                             persist_frontier,
@@ -439,7 +439,7 @@ where
                         })
                         .unwrap();
 
-                    info!(
+                    trace!(
                         "persist_sink {sink_id}/{shard_id}: \
                         new batch_description: {:?}",
                         batch_description
@@ -455,7 +455,7 @@ where
                     // a given batch. Just stepping forward feels a bit icky,
                     // though.
                     let new_batch_frontier = Antichain::from_elem(batch_ts.step_forward());
-                    info!(
+                    trace!(
                         "persist_sink {sink_id}/{shard_id}: \
                         downgrading to {:?}",
                         new_batch_frontier
@@ -471,7 +471,7 @@ where
                 } else {
                     // WIP: Remove this!
                     if sink_id.is_user() {
-                        info!(
+                        trace!(
                             "persist_sink {sink_id}/{shard_id}: \
                             NOT MINTING: \
                             desired: {:?}, \
@@ -614,7 +614,7 @@ where
                     data.swap(&mut batch_descriptions_buffer);
                     for description in batch_descriptions_buffer.drain(..) {
                         if sink_id.is_user() {
-                            info!(
+                            trace!(
                                 "persist_sink {sink_id}/{shard_id}: \
                                 write_batches: \
                                 new_description: {:?}, \
@@ -645,7 +645,7 @@ where
                 desired_input.for_each(|_cap, data| {
                     data.swap(&mut buffer);
                     if sink_id.is_user() && !buffer.is_empty() {
-                        info!(
+                        trace!(
                             "persist_sink {sink_id}/{shard_id}: \
                             updates: {:?}, \
                             in-flight-batches: {:?}, \
@@ -670,22 +670,26 @@ where
 
                 // We may have the opportunity to commit updates.
                 if !PartialOrder::less_equal(desired_frontier, persist_frontier) {
-                    info!(
+                    trace!(
                         "persist_sink {sink_id}/{shard_id}: \
                         CAN emit: \
                         persist_frontier: {:?}, \
                         desired_frontier: {:?}",
-                        persist_frontier, desired_frontier
+                        persist_frontier,
+                        desired_frontier
                     );
                     // Advance all updates to `persist`'s frontier.
                     for (row, time, diff) in correction.iter_mut() {
                         let time_before = *time;
                         time.advance_by(persist_frontier.borrow());
                         if sink_id.is_user() && &time_before != time {
-                            info!(
+                            trace!(
                                 "persist_sink {sink_id}/{shard_id}: \
                                 advanced {:?}, {}, {} to {}",
-                                row, time_before, diff, time
+                                row,
+                                time_before,
+                                diff,
+                                time
                             );
                         }
                     }
@@ -700,7 +704,7 @@ where
                         );
                     }
 
-                    info!(
+                    trace!(
                         "persist_sink {sink_id}/{shard_id}: \
                         in-flight batches: {:?}, \
                         batch_descriptions_frontier: {:?}, \
@@ -726,7 +730,7 @@ where
                         .cloned()
                         .collect::<Vec<_>>();
 
-                    info!(
+                    trace!(
                         "persist_sink {sink_id}/{shard_id}: \
                         ready batches: {:?}",
                         ready_batches,
@@ -736,10 +740,11 @@ where
                         let cap = in_flight_batches.remove(&batch_description).unwrap();
 
                         if sink_id.is_user() {
-                            info!(
+                            trace!(
                                 "persist_sink {sink_id}/{shard_id}: \
                                 emitting done batch: {:?}, cap: {:?}",
-                                batch_description, cap
+                                batch_description,
+                                cap
                             );
                         }
 
@@ -760,7 +765,7 @@ where
                                 .expect("invalid usage");
 
                             if sink_id.is_user() {
-                                info!(
+                                trace!(
                                     "persist_sink {sink_id}/{shard_id}: \
                                     wrote batch from worker {}: ({:?}, {:?})",
                                     worker_index,
@@ -779,10 +784,11 @@ where
                         session.give_vec(&mut batch_tokens);
                     }
                 } else {
-                    info!(
+                    trace!(
                         "persist_sink {sink_id}/{shard_id}: \
                         cannot emit: persist_frontier: {:?}, desired_frontier: {:?}",
-                        persist_frontier, desired_frontier
+                        persist_frontier,
+                        desired_frontier
                     );
                 }
             }
@@ -909,12 +915,14 @@ where
                     data.swap(&mut description_buffer);
                     for batch_description in description_buffer.drain(..) {
                         if sink_id.is_user() {
-                            info!(
+                            trace!(
                                 "persist_sink {sink_id}/{shard_id}: \
                                 append_batches: sink {}, \
                                 new description: {:?}, \
                                 batch_description_frontier: {:?}",
-                                sink_id, batch_description, batch_description_frontier
+                                sink_id,
+                                batch_description,
+                                batch_description_frontier
                             );
                         }
 
@@ -959,7 +967,7 @@ where
                     .cloned()
                     .collect::<Vec<_>>();
 
-                info!(
+                trace!(
                     "persist_sink {sink_id}/{shard_id}: \
                     append_batches: in_flight: {:?}, \
                     done: {:?}, \
@@ -990,10 +998,11 @@ where
                         .remove(&done_batch_metadata)
                         .unwrap_or_else(Vec::new);
 
-                    info!(
+                    trace!(
                         "persist_sink {sink_id}/{shard_id}: \
                         done batch: {:?}, {:?}",
-                        done_batch_metadata, batches
+                        done_batch_metadata,
+                        batches
                     );
 
                     let (batch_lower, batch_upper) = done_batch_metadata;
@@ -1011,10 +1020,12 @@ where
                         .expect("Invalid usage");
 
                     if sink_id.is_user() {
-                        info!(
+                        trace!(
                             "persist_sink {sink_id}/{shard_id}: \
                             append result for batch ({:?} -> {:?}): {:?}",
-                            batch_lower, batch_upper, result
+                            batch_lower,
+                            batch_upper,
+                            result
                         );
                     }
 
