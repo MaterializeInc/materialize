@@ -1226,7 +1226,7 @@ impl MirScalarExpr {
                     })
                     .collect();
             }
-            _ => {},
+            _ => {}
         }
     }
 
