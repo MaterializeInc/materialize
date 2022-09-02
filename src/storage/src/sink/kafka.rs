@@ -473,7 +473,7 @@ impl KafkaSinkState {
 
         let sink_state = KafkaSinkStateEnum::Init(Some(KafkaConsistencyInitState {
             topic: connection.consistency.topic,
-            key: format!("sink-{sink_id}"),
+            key: format!("mz-sink-{sink_id}"),
             consistency_client_config,
         }));
 
