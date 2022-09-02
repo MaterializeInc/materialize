@@ -29,7 +29,7 @@ $ kafka-create-topic topic=data
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE data
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > SELECT * FROM data
@@ -148,7 +148,7 @@ a  b
 
 # Cannot create sink from unmaterialized view.
 ! CREATE SINK not_mat_sink2 FROM data_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-view2-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-view2-sink')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:data_view is a view, which cannot be exported as a sink
 
@@ -159,7 +159,7 @@ contains:data_view is a view, which cannot be exported as a sink
 
 # or from an indexed unmaterialized view
 ! CREATE SINK not_mat_sink2 FROM test5
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-view2-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-view2-sink')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:test5 is a view, which cannot be exported as a sink
 
@@ -314,7 +314,7 @@ b  c
 $ kafka-create-topic topic=mat
 
 > CREATE SOURCE mat_data
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-mat-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mat-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE DEFAULT INDEX ON mat_data

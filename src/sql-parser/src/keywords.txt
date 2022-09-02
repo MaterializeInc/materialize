@@ -79,6 +79,7 @@ Connections
 Consistency
 Constraint
 Copy
+Count
 Counter
 Create
 Cross
@@ -121,6 +122,7 @@ Exists
 Explain
 Extended
 Extract
+Factor
 False
 Fetch
 Fields
@@ -135,6 +137,7 @@ Format
 Forward
 From
 Full
+Fullname
 Generator
 Graph
 Greatest
@@ -266,8 +269,10 @@ Repeatable
 Replace
 Replica
 Replicas
+Replication
 Reset
 Restrict
+Retention
 Returning
 Right
 Role

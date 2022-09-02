@@ -24,26 +24,20 @@ $ kafka-create-topic topic=t0
   URL '${testdrive.schema-registry-url}';
 
 ! CREATE SOURCE missing_topic
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=1)
-  TOPIC 'missing_topic'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, TOPIC 'missing_topic')
   FORMAT TEXT
   INCLUDE OFFSET
 contains:topic missing_topic does not exist
 
 ! CREATE SOURCE pick_one
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=1, START OFFSET=[1])
-  TOPIC 'testdrive-t0-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, START OFFSET=[1], TOPIC 'testdrive-t0-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
 contains:cannot specify START TIMESTAMP and START OFFSET at same time
 
 
 ! CREATE SOURCE not_a_number
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP="not_a_number")
-  TOPIC 'testdrive-t0-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP="not_a_number", TOPIC 'testdrive-t0-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
 contains:invalid START TIMESTAMP: cannot use value as number
@@ -70,59 +64,52 @@ $ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp
 grape:grape
 
 > CREATE SOURCE append_time_offset_0
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=0)
-  TOPIC 'testdrive-t1-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=0, TOPIC 'testdrive-t1-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
 
 > CREATE SOURCE append_time_offset_1
-  FROM KAFKA CONNECTION kafka_conn
-    WITH (
+  FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL MS=10,
-      START TIMESTAMP=1
+      START TIMESTAMP=1,
+      TOPIC 'testdrive-t1-${testdrive.seed}'
     )
-  TOPIC 'testdrive-t1-${testdrive.seed}'
   FORMAT TEXT
   INCLUDE OFFSET
 
 > CREATE SOURCE append_time_offset_2
-  FROM KAFKA CONNECTION kafka_conn
-    WITH (
+  FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL MS=10,
-      START TIMESTAMP=2
+      START TIMESTAMP=2,
+      TOPIC 'testdrive-t1-${testdrive.seed}'
     )
-  TOPIC 'testdrive-t1-${testdrive.seed}'
   FORMAT TEXT
   INCLUDE OFFSET
 
 > CREATE SOURCE append_time_offset_3
-  FROM KAFKA CONNECTION kafka_conn
-    WITH (
+  FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL MS=10,
-      START TIMESTAMP=3
+      START TIMESTAMP=3,
+      TOPIC 'testdrive-t1-${testdrive.seed}'
     )
-  TOPIC 'testdrive-t1-${testdrive.seed}'
   FORMAT TEXT
   INCLUDE OFFSET
 
 > CREATE SOURCE append_time_offset_4
-  FROM KAFKA CONNECTION kafka_conn
-    WITH (
+  FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL MS=10,
-      START TIMESTAMP=4
+      START TIMESTAMP=4,
+      TOPIC 'testdrive-t1-${testdrive.seed}'
     )
-  TOPIC 'testdrive-t1-${testdrive.seed}'
   FORMAT TEXT
   INCLUDE OFFSET
 
 > CREATE SOURCE append_time_offset_5
-  FROM KAFKA CONNECTION kafka_conn
-    WITH (
+  FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL MS=10,
-      START TIMESTAMP=5
+      START TIMESTAMP=5,
+      TOPIC 'testdrive-t1-${testdrive.seed}'
     )
-  TOPIC 'testdrive-t1-${testdrive.seed}'
   FORMAT TEXT
   INCLUDE OFFSET
 
@@ -210,49 +197,37 @@ $ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp
 grape:grape
 
 > CREATE SOURCE upsert_time_offset_0
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=0)
-  TOPIC 'testdrive-t2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=0, TOPIC 'testdrive-t2-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_1
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=1)
-  TOPIC 'testdrive-t2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, TOPIC 'testdrive-t2-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_2
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=2)
-  TOPIC 'testdrive-t2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=2, TOPIC 'testdrive-t2-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_3
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=3)
-  TOPIC 'testdrive-t2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=3, TOPIC 'testdrive-t2-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_4
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=4)
-  TOPIC 'testdrive-t2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=4, TOPIC 'testdrive-t2-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_5
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=5)
-  TOPIC 'testdrive-t2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=5, TOPIC 'testdrive-t2-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
@@ -332,16 +307,12 @@ $ kafka-ingest format=bytes topic=t3 timestamp=4084108700000
 cherry
 
 > CREATE SOURCE relative_time_offset_30_years_ago
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=-946100000000)
-  TOPIC 'testdrive-t3-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-946100000000, TOPIC 'testdrive-t3-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
 
 > CREATE SOURCE relative_time_offset_today
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=-1)
-  TOPIC 'testdrive-t3-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-1, TOPIC 'testdrive-t3-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
 
@@ -367,9 +338,7 @@ pie
 # A time offset of -1 specifies that we want to start from the end of the topic
 # (negative offsets are relative from the end).
 > CREATE SOURCE verify_no_fetch
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=-1)
-  TOPIC 'testdrive-t4-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-1, TOPIC 'testdrive-t4-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
 
@@ -446,9 +415,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": {"row": {"id": 4, "creature": "chicken"}}}
 
 > CREATE SOURCE upsert_time_skip
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=6)
-  TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=6, TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM UPSERT
 

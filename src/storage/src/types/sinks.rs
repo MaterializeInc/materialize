@@ -10,7 +10,6 @@
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
 use std::collections::{BTreeMap, HashSet};
-use std::time::Duration;
 
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -556,7 +555,7 @@ impl PopulateClientConfig for KafkaSinkConnectionBuilder {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectionRetention {
-    pub duration: Option<Option<Duration>>,
+    pub duration: Option<i64>,
     pub bytes: Option<i64>,
 }
 

@@ -90,11 +90,11 @@ $ kafka-create-topic topic=input
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE input
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK output FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-ingest format=avro topic=input schema=${schema}

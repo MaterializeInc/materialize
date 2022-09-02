@@ -395,10 +395,8 @@ pub fn create_statement(
         Statement::CreateSink(CreateSinkStatement {
             name,
             connection: _,
-            with_options: _,
             format: _,
             envelope: _,
-            with_snapshot: _,
             if_not_exists,
             ..
         }) => {
@@ -540,13 +538,13 @@ pub fn create_statement(
 macro_rules! generate_extracted_config {
     // No default specified, have remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option<$t>, None)], $(
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None)], $(
             $tail
         ),*);
     };
     // No default specified, no remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty)) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option<$t>, None)]);
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None)]);
     };
     // Default specified, have remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*) => {
@@ -573,7 +571,7 @@ macro_rules! generate_extracted_config {
                     [<$option_ty Extracted>] {
                         seen: HashSet::<[<$option_ty Name>]>::new(),
                         $(
-                            [<$option_name:snake>]: $v.into(),
+                            [<$option_name:snake>]: $t::from($v),
                         )*
                     }
                 }

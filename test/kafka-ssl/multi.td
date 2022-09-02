@@ -43,7 +43,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
     PASSWORD = SECRET password_csr;
 
 > CREATE SOURCE data
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
 
 > SELECT * FROM data
@@ -62,7 +62,7 @@ a
 
 # test sinks with multiple things to
 > CREATE SINK snk FROM data
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
 
 $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true

@@ -62,16 +62,14 @@ class SinkUpsert(Check):
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE sink_source
-                  FROM KAFKA CONNECTION kafka_conn
-                  TOPIC 'testdrive-sink-source-${testdrive.seed}'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW sink_source_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM sink_source GROUP BY LEFT(key1, 2), LEFT(f1, 1);
 
                 > CREATE SINK sink_sink1 FROM sink_source_view
-                  INTO KAFKA CONNECTION kafka_conn
-                  TOPIC 'sink-sink1'
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink1')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                 """
             )
@@ -92,8 +90,7 @@ class SinkUpsert(Check):
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SINK sink_sink2 FROM sink_source_view
-                  INTO KAFKA CONNECTION kafka_conn
-                  TOPIC 'sink-sink2'
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink2')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                 """,
                 """
@@ -103,8 +100,7 @@ class SinkUpsert(Check):
                 {"key1": "D3${kafka-ingest.iteration}"}
 
                 > CREATE SINK sink_sink3 FROM sink_source_view
-                  INTO KAFKA CONNECTION kafka_conn
-                  TOPIC 'sink-sink3'
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink3')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                 """,
             ]
@@ -127,20 +123,17 @@ class SinkUpsert(Check):
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE sink_view1
-                  FROM KAFKA CONNECTION kafka_conn
-                  TOPIC 'sink-sink1'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink1')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 > CREATE SOURCE sink_view2
-                  FROM KAFKA CONNECTION kafka_conn
-                  TOPIC 'sink-sink2'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink2')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 > CREATE SOURCE sink_view3
-                  FROM KAFKA CONNECTION kafka_conn
-                  TOPIC 'sink-sink3'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink3')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -211,8 +204,7 @@ class SinkTables(Check):
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SINK sink_large_transaction_sink1 FROM sink_large_transaction_view
-                  INTO KAFKA CONNECTION kafka_conn
-                  TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}'
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
                 """
             )
@@ -241,8 +233,7 @@ class SinkTables(Check):
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE sink_large_transaction_source
-                  FROM KAFKA CONNECTION kafka_conn
-                  TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 

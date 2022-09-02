@@ -55,8 +55,7 @@ class DebeziumPostgres(Check):
 
                 # UPSERT is requred due to https://github.com/MaterializeInc/materialize/issues/14211
                 > CREATE SOURCE debezium_source1
-                  FROM KAFKA CONNECTION kafka_conn
-                  TOPIC 'postgres.public.debezium_table'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM UPSERT;
 
@@ -84,7 +83,7 @@ class DebeziumPostgres(Check):
                 COMMIT;
 
                 > CREATE SOURCE debezium_source2
-                  FROM KAFKA CONNECTION kafka_conn TOPIC 'postgres.public.debezium_table'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM UPSERT;
 
@@ -104,7 +103,7 @@ class DebeziumPostgres(Check):
                 COMMIT;
 
                 > CREATE SOURCE debezium_source3
-                  FROM KAFKA CONNECTION kafka_conn TOPIC 'postgres.public.debezium_table'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM UPSERT;
 
