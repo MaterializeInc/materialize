@@ -21,6 +21,12 @@ CREATE TABLE u (
 )
 
 statement ok
+CREATE TABLE v (
+  e int,
+  f int
+)
+
+statement ok
 CREATE INDEX t_a_idx ON T(a);
 
 statement ok
@@ -628,5 +634,200 @@ Explained Query
 
 Used Indexes:
   - materialize.public.t_a_idx
+
+EOF
+
+# Test Join::Differential (acyclic).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(non_negative) AS TEXT FOR
+SELECT b + d, c + e, a + e
+FROM t, u, v
+WHERE a = c AND d = e AND b + d > 42
+----
+Explained Query
+  Join::Linear
+    final_closure
+      project=(#0, #1, #1)
+    linear_stage[1]
+      closure
+        project=(#3, #4)
+        filter=((#3 > 42))
+        map=((#2 + #1), (#0 + #1))
+      lookup={ relation=0, key=[#0] }
+      stream={ key=[#0], thinning=(#1) }
+    linear_stage[0]
+      closure
+        project=(#1, #0)
+      lookup={ relation=1, key=[#1] }
+      stream={ key=[#0], thinning=() }
+    source={ relation=2, key=[] }
+    ArrangeBy
+      input_key=[#0]
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      Get::PassArrangements materialize.public.t
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      Get::Collection materialize.public.u
+        filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+        raw=true
+    Get::Collection materialize.public.v
+      project=(#0)
+      filter=((#0) IS NOT NULL)
+      raw=true
+
+Source materialize.public.u
+  Demand (#0, #1)
+  Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+Source materialize.public.v
+  Demand (#0)
+  Filter (#0) IS NOT NULL
+
+Used Indexes:
+  - materialize.public.t_a_idx
+
+EOF
+
+# Create indexes required for differential join tests
+
+statement ok
+CREATE INDEX u_c_idx ON U(c);
+
+statement ok
+CREATE INDEX u_d_idx ON U(d);
+
+statement ok
+CREATE INDEX v_e_idx ON V(e);
+
+# Test Join::Differential (cyclic).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(non_negative) AS TEXT FOR
+SELECT a, b, c, d, e, f
+FROM t, u, v
+WHERE a = c AND d = e AND f = a
+----
+Explained Query
+  Join::Linear
+    final_closure
+      project=(#0, #1, #0, #2, #2, #0)
+    linear_stage[1]
+      closure
+        project=(#0, #2, #1)
+      lookup={ relation=0, key=[#0] }
+      stream={ key=[#0], thinning=(#1) }
+    linear_stage[0]
+      closure
+        project=(#1, #0)
+      lookup={ relation=2, key=[#0, #1] }
+      stream={ key=[#1, #0], thinning=() }
+    source={ relation=1, key=[] }
+    ArrangeBy
+      input_key=[#0]
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      Get::PassArrangements materialize.public.t
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    Get::Arrangement materialize.public.u
+      filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+      key=#0
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      Get::Arrangement materialize.public.v
+        filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+        key=#0
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.t_a_idx
+  - materialize.public.u_c_idx
+  - materialize.public.v_e_idx
+
+EOF
+
+# Test Join::Delta (star).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(non_negative) AS TEXT FOR
+SELECT a, b, c, d, e, f
+FROM t, u, v
+WHERE a = c and a = e
+----
+Explained Query
+  Join::Delta
+    plan_path[0]
+      final_closure
+        project=(#0, #1, #0, #2, #0, #3)
+      delta_stage[1]
+        lookup={ relation=2, key=[#0] }
+        stream={ key=[#0], thinning=(#1, #2) }
+      delta_stage[0]
+        lookup={ relation=1, key=[#0] }
+        stream={ key=[#0], thinning=(#1) }
+      initial_closure
+        filter=((#0) IS NOT NULL)
+      source={ relation=0, key=[#0] }
+    plan_path[1]
+      final_closure
+        project=(#0, #1, #0, #2, #0, #3)
+      delta_stage[1]
+        closure
+          project=(#1..=#4)
+        lookup={ relation=2, key=[#0] }
+        stream={ key=[#2], thinning=(#0, #1, #3) }
+      delta_stage[0]
+        closure
+          project=(#0, #2, #0, #1)
+          filter=((#0) IS NOT NULL)
+        lookup={ relation=0, key=[#0] }
+        stream={ key=[#0], thinning=(#1) }
+      source={ relation=1, key=[#0] }
+    plan_path[2]
+      final_closure
+        project=(#0, #1, #0, #2, #0, #3)
+      delta_stage[1]
+        closure
+          project=(#1, #2, #4, #3)
+        lookup={ relation=1, key=[#0] }
+        stream={ key=[#2], thinning=(#0, #1, #3) }
+      delta_stage[0]
+        closure
+          project=(#0, #2, #0, #1)
+          filter=((#0) IS NOT NULL)
+        lookup={ relation=0, key=[#0] }
+        stream={ key=[#0], thinning=(#1) }
+      source={ relation=2, key=[#0] }
+    ArrangeBy
+      input_key=[#0]
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      Get::PassArrangements materialize.public.t
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    ArrangeBy
+      input_key=[#0]
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      Get::PassArrangements materialize.public.u
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    ArrangeBy
+      input_key=[#0]
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      Get::PassArrangements materialize.public.v
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.t_a_idx
+  - materialize.public.u_c_idx
+  - materialize.public.v_e_idx
 
 EOF

@@ -8,10 +8,30 @@
 // by the Apache License, Version 2.0.
 
 //! `EXPLAIN ... AS TEXT` support for LIR structures.
+//!
+//! The format adheres to the following conventions:
+//! 1. In general, every line that starts with an uppercase character
+//!    corresponds to a [`Plan`] variant.
+//! 2. Whenever the variant has an attached `~Plan`, the printed name is
+//!    `$V::$P` where `$V` identifies the variant and `$P` the plan.
+//! 3. The fields of a `~Plan` struct attached to a [`Plan`] are rendered as if
+//!    they were part of the variant themself.
+//! 4. Non-recursive parameters of each sub-plan are written as `$key=$val`
+//!    pairs on the same line or as lowercase `$key` fields on indented lines.
+//! 5. A single non-recursive parameter can be written just as `$val`.
 
-use std::{collections::HashMap, fmt, ops::Deref};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+    ops::Deref,
+};
 
 use mz_compute_client::plan::{
+    join::{
+        delta_join::{DeltaPathPlan, DeltaStagePlan},
+        linear_join::LinearStagePlan,
+        DeltaJoinPlan, JoinClosure, LinearJoinPlan,
+    },
     reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan},
     AvailableCollections, Plan,
 };
@@ -149,8 +169,24 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                     Displayable::from(input.as_ref()).fmt_text(f, ctx)
                 })?;
             }
-            Join { inputs: _, plan: _ } => {
-                // todo
+            Join { inputs, plan } => {
+                use mz_compute_client::plan::join::JoinPlan;
+                match plan {
+                    JoinPlan::Linear(plan) => {
+                        writeln!(f, "{}Join::Linear", ctx.indent)?;
+                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                    }
+                    JoinPlan::Delta(plan) => {
+                        writeln!(f, "{}Join::Delta", ctx.indent)?;
+                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                    }
+                }
+                ctx.indented(|ctx| {
+                    for input in inputs {
+                        Displayable::from(input).fmt_text(f, ctx)?;
+                    }
+                    Ok(())
+                })?;
             }
             Reduce {
                 input,
@@ -366,6 +402,181 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, MapFilt
     }
 }
 
+impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, LinearJoinPlan> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        let plan = self.0;
+        if let Some(closure) = plan.final_closure.as_ref() {
+            if !closure.is_identity() {
+                writeln!(f, "{}final_closure", ctx.indent)?;
+                ctx.indented(|ctx| Displayable::from(closure).fmt_text(f, ctx))?;
+            }
+        }
+        for (i, plan) in plan.stage_plans.iter().enumerate().rev() {
+            writeln!(f, "{}linear_stage[{}]", ctx.indent, i)?;
+            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+        }
+        if let Some(closure) = plan.initial_closure.as_ref() {
+            if !closure.is_identity() {
+                writeln!(f, "{}initial_closure", ctx.indent)?;
+                ctx.indented(|ctx| Displayable::from(closure).fmt_text(f, ctx))?;
+            }
+        }
+        {
+            let source_relation = &plan.source_relation;
+            let source_key = plan.source_key.iter().flatten().map(Displayable::from);
+            let source_key = separated_text(", ", source_key);
+            writeln!(
+                f,
+                "{}source={{ relation={}, key=[{}] }}",
+                ctx.indent, source_relation, source_key
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, LinearStagePlan> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        let plan = self.0;
+        if !plan.closure.is_identity() {
+            writeln!(f, "{}closure", ctx.indent)?;
+            ctx.indented(|ctx| Displayable::from(&plan.closure).fmt_text(f, ctx))?;
+        }
+        {
+            let lookup_relation = &plan.lookup_relation;
+            let lookup_key = separated_text(", ", plan.lookup_key.iter().map(Displayable::from));
+            writeln!(
+                f,
+                "{}lookup={{ relation={}, key=[{}] }}",
+                ctx.indent, lookup_relation, lookup_key
+            )?;
+        }
+        {
+            let stream_key = separated_text(", ", plan.stream_key.iter().map(Displayable::from));
+            let stream_thinning = Indices(&plan.stream_thinning);
+            writeln!(
+                f,
+                "{}stream={{ key=[{}], thinning=({}) }}",
+                ctx.indent, stream_key, stream_thinning
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaJoinPlan> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        for (i, plan) in self.0.path_plans.iter().enumerate() {
+            writeln!(f, "{}plan_path[{}]", ctx.indent, i)?;
+            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaPathPlan> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        let plan = self.0;
+        if let Some(closure) = plan.final_closure.as_ref() {
+            if !closure.is_identity() {
+                writeln!(f, "{}final_closure", ctx.indent)?;
+                ctx.indented(|ctx| Displayable::from(closure).fmt_text(f, ctx))?;
+            }
+        }
+        for (i, plan) in plan.stage_plans.iter().enumerate().rev() {
+            writeln!(f, "{}delta_stage[{}]", ctx.indent, i)?;
+            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+        }
+        if !plan.initial_closure.is_identity() {
+            writeln!(f, "{}initial_closure", ctx.indent)?;
+            ctx.indented(|ctx| Displayable::from(&plan.initial_closure).fmt_text(f, ctx))?;
+        }
+        {
+            let source_relation = &plan.source_relation;
+            let source_key = separated_text(", ", plan.source_key.iter().map(Displayable::from));
+            writeln!(
+                f,
+                "{}source={{ relation={}, key=[{}] }}",
+                ctx.indent, source_relation, source_key
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaStagePlan> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        let plan = self.0;
+        if !plan.closure.is_identity() {
+            writeln!(f, "{}closure", ctx.indent)?;
+            ctx.indented(|ctx| Displayable::from(&plan.closure).fmt_text(f, ctx))?;
+        }
+        {
+            let lookup_relation = &plan.lookup_relation;
+            let lookup_key = separated_text(", ", plan.lookup_key.iter().map(Displayable::from));
+            writeln!(
+                f,
+                "{}lookup={{ relation={}, key=[{}] }}",
+                ctx.indent, lookup_relation, lookup_key
+            )?;
+        }
+        {
+            let stream_key = separated_text(", ", plan.stream_key.iter().map(Displayable::from));
+            let stream_thinning = Indices(&plan.stream_thinning);
+            writeln!(
+                f,
+                "{}stream={{ key=[{}], thinning=({}) }}",
+                ctx.indent, stream_key, stream_thinning
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, JoinClosure> {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'_, Plan>,
+    ) -> fmt::Result {
+        Displayable::from(self.0.before.deref()).fmt_text(f, ctx)?;
+        if !self.0.ready_equivalences.is_empty() {
+            let equivalences = separated(
+                " AND ",
+                self.0.ready_equivalences.iter().map(|equivalence| {
+                    if equivalence.len() == 2 {
+                        bracketed("", "", separated(" = ", equivalence))
+                    } else {
+                        bracketed("eq(", ")", separated(", ", equivalence))
+                    }
+                }),
+            );
+            writeln!(f, "{}ready_equivalences={}", ctx.indent, equivalences)?;
+        }
+        Ok(())
+    }
+}
+
 impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, AccumulablePlan> {
     fn fmt_text(
         &self,
@@ -526,16 +737,16 @@ struct Permutation<'a>(&'a HashMap<usize, usize>);
 impl<'a> fmt::Display for Permutation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut pairs = vec![];
-        for (x, y) in self.0.iter() {
-            if x != y {
-                pairs.push(format!("#{}: #{}", x, y))
-            }
+        // convert the wrapped `HashMap` to a `BTreeMap` first and then iterate
+        // over the individual pairs for deterministic output
+        for (x, y) in BTreeMap::from_iter(self.0.iter().filter(|(x, y)| x != y)) {
+            pairs.push(format!("#{}: #{}", x, y));
         }
 
         if pairs.len() > 0 {
-            bracketed("{", "}", separated(", ", pairs)).fmt(f)
+            write!(f, "{{{}}}", separated(", ", pairs))
         } else {
-            separated("", vec!["id".to_string()]).fmt(f)
+            write!(f, "id")
         }
     }
 }
