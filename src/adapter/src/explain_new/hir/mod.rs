@@ -29,16 +29,33 @@ impl<'a> Explain<'a> for Explainable<'a, HirRelationExpr> {
 
     type Text = ExplainSinglePlan<'a, HirRelationExpr>;
 
-    type Json = UnsupportedFormat;
+    type Json = ExplainSinglePlan<'a, HirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
-    #[allow(unused_variables)] // TODO (#13299)
     fn explain_text(
         &'a mut self,
         config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(config, context)
+    }
+
+    fn explain_json(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a Self::Context,
+    ) -> Result<Self::Json, ExplainError> {
+        self.as_explain_single_plan(config, context)
+    }
+}
+
+impl<'a> Explainable<'a, HirRelationExpr> {
+    fn as_explain_single_plan(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a ExplainContext<'a>,
+    ) -> Result<ExplainSinglePlan<'a, HirRelationExpr>, ExplainError> {
         // unless raw plans are explicitly requested
         // ensure that all nested subqueries are wrapped in Let blocks
         if !config.raw_plans {

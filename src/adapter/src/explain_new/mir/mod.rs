@@ -31,16 +31,33 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
 
     type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
-    type Json = UnsupportedFormat;
+    type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
-    #[allow(unused_variables)] // TODO (#13299)
     fn explain_text(
         &'a mut self,
         config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(config, context)
+    }
+
+    fn explain_json(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a Self::Context,
+    ) -> Result<Self::Json, ExplainError> {
+        self.as_explain_single_plan(config, context)
+    }
+}
+
+impl<'a> Explainable<'a, MirRelationExpr> {
+    fn as_explain_single_plan(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a ExplainContext<'a>,
+    ) -> Result<ExplainSinglePlan<'a, MirRelationExpr>, ExplainError> {
         // unless raw plans are explicitly requested
         // normalize the representation of nested Let bindings
         if !config.raw_plans {
@@ -57,16 +74,33 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
 
     type Text = ExplainMultiPlan<'a, MirRelationExpr>;
 
-    type Json = UnsupportedFormat;
+    type Json = ExplainMultiPlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
-    #[allow(unused_variables)] // TODO (#13299)
     fn explain_text(
         &'a mut self,
         config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(config, context)
+    }
+
+    fn explain_json(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a Self::Context,
+    ) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(config, context)
+    }
+}
+
+impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
+    fn as_explain_multi_plan(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a ExplainContext<'a>,
+    ) -> Result<ExplainMultiPlan<'a, MirRelationExpr>, ExplainError> {
         let plans = self
             .0
             .objects_to_build

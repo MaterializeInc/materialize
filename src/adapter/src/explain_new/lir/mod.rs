@@ -9,7 +9,6 @@
 
 //! `EXPLAIN` support for LIR structures.
 
-pub(crate) mod json;
 pub(crate) mod text;
 
 use std::collections::HashMap;
@@ -18,7 +17,6 @@ use mz_compute_client::command::DataflowDescription;
 use mz_compute_client::plan::Plan;
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 
-use super::common::{Explanation, JsonViewFormatter};
 use super::{AnnotatedPlan, ExplainContext, ExplainMultiPlan, Explainable};
 
 impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<Plan>> {
@@ -26,15 +24,33 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<Plan>> {
 
     type Text = ExplainMultiPlan<'a, Plan>;
 
-    type Json = Explanation<'a, JsonViewFormatter, Plan>;
+    type Json = ExplainMultiPlan<'a, Plan>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(
         &'a mut self,
-        _config: &'a ExplainConfig,
+        config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(config, context)
+    }
+
+    fn explain_json(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a Self::Context,
+    ) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(config, context)
+    }
+}
+
+impl<'a> Explainable<'a, DataflowDescription<Plan>> {
+    fn as_explain_multi_plan(
+        &'a mut self,
+        _config: &'a ExplainConfig,
+        context: &'a ExplainContext<'a>,
+    ) -> Result<ExplainMultiPlan<'a, Plan>, ExplainError> {
         let plans = self
             .0
             .objects_to_build
@@ -73,18 +89,5 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<Plan>> {
             sources,
             plans,
         })
-    }
-
-    fn explain_json(
-        &'a mut self,
-        _config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Json, ExplainError> {
-        let formatter = JsonViewFormatter {};
-        let mut explanation = Explanation::new_from_dataflow(self.0, context.humanizer, formatter);
-        if let Some(row_set_finishing) = context.finishing.clone() {
-            explanation.explain_row_set_finishing(row_set_finishing);
-        }
-        Ok(explanation)
     }
 }

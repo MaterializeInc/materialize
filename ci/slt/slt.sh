@@ -25,6 +25,7 @@ sqllogictest \
 sqllogictest \
     -v "$@" \
     test/sqllogictest/*.slt \
+    test/sqllogictest/attributes/*.slt \
     test/sqllogictest/explain/*.slt \
     test/sqllogictest/transform/*.slt \
     | tee -a target/slt.log

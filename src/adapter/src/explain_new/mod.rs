@@ -23,14 +23,13 @@ use mz_expr::explain::Indices;
 use mz_expr::RowSetFinishing;
 use mz_ore::str::{Indent, IndentLike};
 use mz_repr::explain_new::{
-    separated_text, DisplayText, ExplainConfig, ExprHumanizer, RenderingContext,
+    separated_text, DisplayJson, DisplayText, ExplainConfig, ExprHumanizer, RenderingContext,
 };
 use mz_repr::GlobalId;
 use mz_storage::types::transforms::LinearOperator;
 
 use crate::coord::peek::{self, FastPathPlan};
 
-pub(crate) mod common;
 pub(crate) mod hir;
 pub(crate) mod lir;
 pub(crate) mod mir;
@@ -201,6 +200,15 @@ where
     }
 }
 
+impl<'a, T: 'a> DisplayJson for ExplainSinglePlan<'a, T>
+where
+    T: serde::Serialize,
+{
+    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(&self.plan.plan)
+    }
+}
+
 /// A structure produced by the `explain_$format` methods in
 /// [`mz_repr::explain_new::Explain`] implementations at points
 /// in the optimization pipeline identified with a
@@ -209,8 +217,7 @@ pub(crate) struct ExplainMultiPlan<'a, T> {
     pub(crate) context: &'a ExplainContext<'a>,
     // Maps the names of the sources to the linear operators that will be
     // on them.
-    // TODO: implement DisplayText and DisplayJson for LinearOperator
-    // there are plans to replace LinearOperator with MFP struct (#6657)
+    // There are plans to replace LinearOperator with MFP struct (#6657)
     pub(crate) sources: Vec<(String, &'a LinearOperator)>,
     // elements of the vector are in topological order
     pub(crate) plans: Vec<(String, AnnotatedPlan<'a, T>)>,
@@ -284,6 +291,40 @@ where
         }
 
         Ok(())
+    }
+}
+
+impl<'a, T: 'a> DisplayJson for ExplainMultiPlan<'a, T>
+where
+    T: serde::Serialize,
+{
+    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
+        let plans = self
+            .plans
+            .iter()
+            .map(|(id, plan)| {
+                // TODO: fix plans with Constants
+                serde_json::json!({
+                    "id": id,
+                    "plan": &plan.plan
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let sources = self
+            .sources
+            .iter()
+            .map(|(id, op)| {
+                serde_json::json!({
+                    "id": id,
+                    "op": op
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let result = serde_json::json!({ "plans": plans, "sources": sources });
+
+        Ok(result)
     }
 }
 
