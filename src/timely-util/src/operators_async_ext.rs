@@ -95,15 +95,44 @@ pub trait OperatorBuilderExt<G: Scope> {
     ///
     /// ```ignore
     /// op.build_async(scope, move |capabilities, frontier, scheduler| async move {
-    ///     while scheduler.yield_now().await {
-    ///         // async operator logic here
+    ///     // setup logic here
+    ///     while scheduler.notified().await {
+    ///         // processing logic here
     ///     }
     /// });
     /// ```
     ///
+    /// # !!IMPORTANT!!
+    ///
+    /// When using `build_async` it is easy to accidentally provide a future that leads to an
+    /// infinite loop in the form of a timely operator that get continuously activated.
+    ///
+    /// The future produced by the provided constructor must preserve the invariant that after
+    /// entering the `scheduler.notified()` loop MUST NOT do any async call UNLESS you have
+    /// observed data in one of the inputs or a change in the frontier.
+    ///
+    /// In other words the following code will lead to an infinite loop:
+    ///
+    /// ```ignore
+    /// op.build_async(scope, move |capabilities, frontier, scheduler| async move {
+    ///     // Async setup is fine, before entering the scheduler loop
+    ///     tokio::time::sleep(Duration::from_secs(1)).await;
+    ///
+    ///     let buffer = tokio::sync::Mutex::new(vec![]);
+    ///     while scheduler.notified().await {
+    ///         // UNCONDITIONAL AWAIT POINT!! Will lead to infinite loop
+    ///         let buffer = buffer.lock().await;
+    ///         while let Some((cap, data)) = input.next() {
+    ///             // This is fine because we only enter this loop if there is data in the input,
+    ///             // therefore we're allowed to call async logic
+    ///             let buffer = buffer.lock().await;
+    ///         }
+    ///     }
+    /// });
+    ///
     /// Since timely's input handles and frontier notifications are not integrated with the async
     /// ecosystem the only way to yield control back to timely is by awaiting on
-    /// `scheduler.yield_now()`. The operator will ensure that this call resolves when there is
+    /// `scheduler.notified()`. The operator will ensure that this call resolves when there is
     /// more work to do.
     fn build_async<B, Fut>(self, scope: G, constructor: B)
     where
