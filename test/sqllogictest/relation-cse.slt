@@ -1312,10 +1312,6 @@ EXPLAIN
 UNION ALL
 (SELECT * FROM t2 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
 ----
-Source materialize.public.t2 (u3):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)
@@ -1354,10 +1350,6 @@ EXPLAIN SELECT * FROM
 (SELECT f1 FROM t2 UNION ALL SELECT f1 FROM t1 WHERE f1 = 1) ,
 (SELECT f2 FROM t2 UNION ALL SELECT f1 FROM t1 WHERE f1 = 1)
 ----
-Source materialize.public.t2 (u3):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | ArrangeBy (#0)

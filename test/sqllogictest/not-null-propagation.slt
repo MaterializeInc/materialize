@@ -81,10 +81,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT CAST(col_null AS BIGINT), CAST(col_not_null AS BIGINT) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -105,11 +101,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_null IS NULL, col_null IS NOT NULL FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#0, #2)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -126,11 +117,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_null IS TRUE, col_null IS NOT TRUE FROM bool_table;
 ----
-Source materialize.public.bool_table (u2):
-| Map dummy
-| Project (#0, #2)
-
-Query:
 %0 =
 | Get materialize.public.bool_table (u2)
 | | types = (boolean?, boolean)
@@ -147,11 +133,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_null IS UNKNOWN, col_null IS NOT UNKNOWN FROM bool_table;
 ----
-Source materialize.public.bool_table (u2):
-| Map dummy
-| Project (#0, #2)
-
-Query:
 %0 =
 | Get materialize.public.bool_table (u2)
 | | types = (boolean?, boolean)
@@ -172,11 +153,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null + col_not_null , col_not_null + 1 , col_not_null % col_not_null , col_not_null % 2 FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -198,10 +174,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT GREATEST(col_not_null), GREATEST(col_not_null, col_not_null), GREATEST(col_not_null, col_null), GREATEST(col_null, col_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -218,10 +190,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT LEAST(col_not_null), LEAST(col_not_null, col_not_null), LEAST(col_not_null, col_null), LEAST(col_null, col_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -238,10 +206,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT COALESCE(col_not_null), COALESCE(col_not_null, col_not_null), COALESCE(col_not_null, col_null), COALESCE(col_null, col_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -260,10 +224,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT NULLIF(col_not_null, 'a') , NULLIF(col_not_null, NULL), NULLIF(col_null, NULL) , NULLIF(col_null, col_not_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -287,11 +247,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null = 1 FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -308,11 +263,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null AND col_not_null , col_not_null OR col_not_null FROM bool_table;
 ----
-Source materialize.public.bool_table (u2):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 =
 | Get materialize.public.bool_table (u2)
 | | types = (boolean?, boolean)
@@ -326,10 +276,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_null AND col_not_null , col_null OR col_not_null FROM bool_table;
 ----
-Source materialize.public.bool_table (u2):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.bool_table (u2)
 | | types = (boolean?, boolean)
@@ -346,10 +292,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT NOT col_null , NOT col_not_null FROM bool_table;
 ----
-Source materialize.public.bool_table (u2):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.bool_table (u2)
 | | types = (boolean?, boolean)
@@ -370,11 +312,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT ABS(col_not_null), LOG(col_not_null), ROUND(col_not_null), COS(col_not_null), col_not_null << col_not_null FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -395,11 +332,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -463,11 +395,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT COUNT(col_not_null), COUNT(DISTINCT col_not_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -519,10 +446,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null LIKE col_not_null, col_null LIKE col_not_null, col_not_null LIKE col_null FROM str_table;
 ----
-Source materialize.public.str_table (u3):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.str_table (u3)
 | | types = (text?, text)
@@ -543,11 +466,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGEXP_MATCH('aaa', col_not_null) FROM str_table;
 ----
-Source materialize.public.str_table (u3):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 =
 | Get materialize.public.str_table (u3)
 | | types = (text?, text)
@@ -568,11 +486,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT SPLIT_PART(col_not_null, 'a', 100), SPLIT_PART('a', col_not_null, 100), SPLIT_PART('a', 'a', col_not_null::int) FROM str_table;
 ----
-Source materialize.public.str_table (u3):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 =
 | Get materialize.public.str_table (u3)
 | | types = (text?, text)
@@ -593,11 +506,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -614,11 +522,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -639,10 +542,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT 1 = SOME (VALUES(col_null)), 1 = SOME (VALUES(col_not_null)), col_null = SOME (VALUES(NULL::int)), col_not_null = SOME (VALUES(NULL::int)) , col_null = SOME (VALUES(col_not_null)) , col_not_null = SOME (VALUES(col_null)) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -844,10 +743,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT 1 > ANY (VALUES(col_null)), 1 > ANY (VALUES(col_not_null)), col_null > ANY (VALUES(NULL::int)), col_not_null > ANY (VALUES(NULL::int)) , col_null > ANY (VALUES(col_not_null)) , col_not_null > ANY (VALUES(col_null)) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -1079,10 +974,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT 1 < ALL (VALUES(col_null)), 1 < ALL (VALUES(col_not_null)), col_null < ALL (VALUES(NULL::int)), col_not_null < ALL (VALUES(NULL::int)) , col_null < ALL (VALUES(col_not_null)) , col_not_null < ALL (VALUES(col_null)) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -1334,11 +1225,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT 1 = SOME(VALUES(col_not_null), (NULL::int)), 1 = ALL (VALUES(col_not_null), (NULL::int)) , 1 = ANY (VALUES(col_not_null), (NULL::int)) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -1501,11 +1387,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT (SELECT col_not_null FROM int_table) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -1600,11 +1481,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT 1 IN (SELECT col_not_null FROM int_table), 1 NOT IN (SELECT col_not_null FROM int_table) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -1678,11 +1554,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT EXISTS (SELECT col_not_null FROM int_table), NOT EXISTS (SELECT col_not_null FROM int_table) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy, dummy
-| Project (#2, #3)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -1755,10 +1626,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT 1 = SOME (SELECT col_not_null FROM int_table), col_not_null = SOME (SELECT 1), col_null = SOME ( SELECT col_not_null FROM int_table ) FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -1975,10 +1842,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_null - INTERVAL '1 second' , col_not_null - INTERVAL '1 second' FROM ts_table;
 ----
-Source materialize.public.ts_table (u4):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.ts_table (u4)
 | | types = (timestamp?, timestamp)
@@ -1995,10 +1858,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_null - col_not_null, col_not_null - col_null FROM ts_table;
 ----
-Source materialize.public.ts_table (u4):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.ts_table (u4)
 | | types = (timestamp?, timestamp)
@@ -2020,11 +1879,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 INNER JOIN int_table AS a2 ON TRUE;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -2056,10 +1910,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 LEFT JOIN int_table AS a2 ON TRUE;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -2147,10 +1997,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 FULL OUTER JOIN int_table AS a2 ON TRUE;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -2279,11 +2125,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_not_null FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -2302,10 +2143,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_null FROM int_table;
 ----
-Source materialize.public.int_table (u1):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
@@ -2336,11 +2173,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PLAN FOR SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS f1 FROM int_table);
 ----
-Source materialize.public.int_table (u1):
-| Map dummy
-| Project (#2, #1)
-
-Query:
 %0 =
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)

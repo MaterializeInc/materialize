@@ -232,10 +232,6 @@ CREATE TABLE date_trunc_timestamps (
 query T multiline
 EXPLAIN PLAN FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
-Source materialize.public.date_trunc_timestamps (u2):
-| Project (#0)
-
-Query:
 %0 =
 | Get materialize.public.date_trunc_timestamps (u2)
 | Map date_trunc_day_ts(#0)
@@ -246,13 +242,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
 ----
-Source materialize.public.date_trunc_fields (u1):
-| Project (#0)
-
-Source materialize.public.date_trunc_timestamps (u2):
-| Project (#0)
-
-Query:
 %0 =
 | Get materialize.public.date_trunc_fields (u1)
 | ArrangeBy ()
@@ -712,11 +701,6 @@ CREATE TABLE t (
 query T multiline
 EXPLAIN PLAN FOR SELECT a IS NULL FROM t
 ----
-Source materialize.public.t (u7):
-| Map dummy
-| Project (#0, #2)
-
-Query:
 %0 =
 | Get materialize.public.t (u7)
 | Map (#0) IS NULL
@@ -727,11 +711,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT a + a + a + a + a IS NULL FROM t
 ----
-Source materialize.public.t (u7):
-| Map dummy
-| Project (#0, #2)
-
-Query:
 %0 =
 | Get materialize.public.t (u7)
 | Map (#0) IS NULL
@@ -742,11 +721,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT a + b IS NULL FROM t
 ----
-Source materialize.public.t (u7):
-| Map dummy
-| Project (#0, #2)
-
-Query:
 %0 =
 | Get materialize.public.t (u7)
 | Map (#0) IS NULL
@@ -761,10 +735,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT (a::bool AND b::bool) IS NULL FROM t
 ----
-Source materialize.public.t (u7):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.t (u7)
 | Map ((integer_to_boolean(#0) AND integer_to_boolean(#1))) IS NULL

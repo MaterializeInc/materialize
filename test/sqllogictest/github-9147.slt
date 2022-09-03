@@ -16,10 +16,6 @@ create table t1(f1 int, f2 int);
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE 1 in (SELECT 1 FROM (VALUES (0)) CONSTANT WHERE f1 > 1);
 ----
-Source materialize.public.t1 (u1):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.t1 (u1)
 

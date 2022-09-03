@@ -272,10 +272,6 @@ EOF
 query T multiline
 EXPLAIN TYPED OPTIMIZED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
-Source materialize.public.ordered (u2):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.ordered (u2)
 | | types = (integer?, text?)
@@ -291,10 +287,6 @@ CREATE VIEW ordered_view AS SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 query T multiline
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW ordered_view
 ----
-Source materialize.public.ordered (u2):
-| Project (#0, #1)
-
-View materialize.public.ordered_view (u3):
 %0 =
 | Get materialize.public.ordered (u2)
 | | types = (integer?, text?)
@@ -319,18 +311,6 @@ EOF
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
 ----
-Source materialize.public.ordered (u2):
-{
-  "expressions": [],
-  "predicates": [],
-  "projection": [
-    0,
-    1
-  ],
-  "input_arity": 2
-}
-
-Query:
 {
   "Get": {
     "id": {
@@ -351,18 +331,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
 ----
-Source materialize.public.ordered (u2):
-{
-  "expressions": [],
-  "predicates": [],
-  "projection": [
-    0,
-    1
-  ],
-  "input_arity": 2
-}
-
-Query:
 {
   "Get": {
     "id": {
@@ -383,18 +351,6 @@ EOF
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR VIEW ordered_view
 ----
-Source materialize.public.ordered (u2):
-{
-  "expressions": [],
-  "predicates": [],
-  "projection": [
-    0,
-    1
-  ],
-  "input_arity": 2
-}
-
-View materialize.public.ordered_view (u3):
 {
   "TopK": {
     "input": {
@@ -439,18 +395,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
 ----
-Source materialize.public.ordered (u2):
-{
-  "expressions": [],
-  "predicates": [],
-  "projection": [
-    0,
-    1
-  ],
-  "input_arity": 2
-}
-
-View materialize.public.ordered_view (u3):
 {
   "TopK": {
     "input": {
@@ -495,18 +439,6 @@ EOF
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
-Source materialize.public.ordered (u2):
-{
-  "expressions": [],
-  "predicates": [],
-  "projection": [
-    0,
-    1
-  ],
-  "input_arity": 2
-}
-
-Query:
 {
   "Get": {
     "id": {
@@ -529,18 +461,6 @@ EOF
 query T multiline
 EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
-Source materialize.public.ordered (u2):
-{
-  "expressions": [],
-  "predicates": [],
-  "projection": [
-    0,
-    1
-  ],
-  "input_arity": 2
-}
-
-Query:
 {
   "Get": {
     "id": {

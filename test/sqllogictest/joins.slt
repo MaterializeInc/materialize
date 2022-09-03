@@ -112,7 +112,6 @@ WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 ----
 Source materialize.public.l (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0, #1)
 
 Query:
 %0 = Let l0 =
@@ -153,10 +152,6 @@ WHERE l1.la IN (
     )
 )
 ----
-Source materialize.public.l (u1):
-| Project (#0, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.l (u1)
 | Project (#0)
@@ -322,12 +317,8 @@ query T multiline
 EXPLAIN PLAN FOR
 SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 ----
-Source materialize.public.l (u1):
-| Project (#0, #1)
-
 Source materialize.public.r (u2):
 | Filter (#0) IS NOT NULL
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -381,10 +372,6 @@ SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 ----
 Source materialize.public.l (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0, #1)
-
-Source materialize.public.r (u2):
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -437,13 +424,6 @@ query T multiline
 EXPLAIN PLAN FOR
 SELECT * FROM l FULL JOIN r ON l.la = r.ra
 ----
-Source materialize.public.l (u1):
-| Project (#0, #1)
-
-Source materialize.public.r (u2):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.l (u1)
 | Filter (#0) IS NOT NULL
@@ -522,11 +502,9 @@ EXPLAIN PLAN FOR SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 ----
 Source materialize.public.l (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0, #1)
 
 Source materialize.public.r (u2):
 | Filter (#0) IS NOT NULL
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -582,10 +560,6 @@ mode standard
 query T multiline
 EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id = 1)
 ----
-Source materialize.public.t4362 (u6):
-| Project (#0, #1)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.t4362 (u6)
 | Filter (#1 = 1)
@@ -671,11 +645,9 @@ EXPLAIN SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra
 ----
 Source materialize.public.l3 (u10):
 | Filter (#0) IS NOT NULL
-| Project (#0, #1)
 
 Source materialize.public.r3 (u11):
 | Filter (#0) IS NOT NULL
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -703,13 +675,6 @@ l3  r3
 query T multiline
 EXPLAIN SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra OR (ra IS NULL AND la IS NULL)
 ----
-Source materialize.public.l3 (u10):
-| Project (#0, #1)
-
-Source materialize.public.r3 (u11):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.l3 (u10)
 | ArrangeBy (#0)
@@ -734,13 +699,6 @@ l4  r5
 query T multiline
 EXPLAIN SELECT lb, rb FROM l3 INNER JOIN r3 ON (la IS NULL AND ra IS NULL) OR la = ra
 ----
-Source materialize.public.l3 (u10):
-| Project (#0, #1)
-
-Source materialize.public.r3 (u11):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.l3 (u10)
 | ArrangeBy (#0)

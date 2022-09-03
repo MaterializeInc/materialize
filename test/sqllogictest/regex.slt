@@ -54,10 +54,6 @@ mode standard
 query T multiline
 EXPLAIN PLAN FOR SELECT input ~ 'foo?' FROM data
 ----
-Source materialize.public.data (u1):
-| Project (#0)
-
-Query:
 %0 =
 | Get materialize.public.data (u1)
 | Map "foo?" ~(#0)
@@ -69,10 +65,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT input ~ input FROM data
 ----
-Source materialize.public.data (u1):
-| Project (#0)
-
-Query:
 %0 =
 | Get materialize.public.data (u1)
 | Map (#0 ~ #0)
