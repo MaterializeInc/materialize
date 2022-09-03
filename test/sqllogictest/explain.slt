@@ -321,11 +321,13 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered
 ----
 Source materialize.public.ordered (u2):
 {
+  "expressions": [],
   "predicates": [],
   "projection": [
     0,
     1
-  ]
+  ],
+  "input_arity": 2
 }
 
 Query:
@@ -351,11 +353,13 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered
 ----
 Source materialize.public.ordered (u2):
 {
+  "expressions": [],
   "predicates": [],
   "projection": [
     0,
     1
-  ]
+  ],
+  "input_arity": 2
 }
 
 Query:
@@ -381,11 +385,13 @@ EXPLAIN PHYSICAL PLAN FOR VIEW ordered_view
 ----
 Source materialize.public.ordered (u2):
 {
+  "expressions": [],
   "predicates": [],
   "projection": [
     0,
     1
-  ]
+  ],
+  "input_arity": 2
 }
 
 View materialize.public.ordered_view (u3):
@@ -435,11 +441,13 @@ EXPLAIN TYPED PHYSICAL PLAN FOR VIEW ordered_view
 ----
 Source materialize.public.ordered (u2):
 {
+  "expressions": [],
   "predicates": [],
   "projection": [
     0,
     1
-  ]
+  ],
+  "input_arity": 2
 }
 
 View materialize.public.ordered_view (u3):
@@ -489,11 +497,13 @@ EXPLAIN PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
 Source materialize.public.ordered (u2):
 {
+  "expressions": [],
   "predicates": [],
   "projection": [
     0,
     1
-  ]
+  ],
+  "input_arity": 2
 }
 
 Query:
@@ -521,11 +531,13 @@ EXPLAIN TYPED PHYSICAL PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIM
 ----
 Source materialize.public.ordered (u2):
 {
+  "expressions": [],
   "predicates": [],
   "projection": [
     0,
     1
-  ]
+  ],
+  "input_arity": 2
 }
 
 Query:

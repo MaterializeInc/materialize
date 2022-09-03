@@ -28,7 +28,7 @@ query T multiline
 EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = t1.f2
 ----
 Source materialize.public.t1 (u1):
-| Filter (#0 = #1), (#0 = 123)
+| Filter (#0 = 123), (#0 = #1)
 | Project (#0, #1)
 
 Query:
@@ -232,12 +232,14 @@ query T multiline
 EXPLAIN SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1 = 123;
 ----
 Source materialize.public.t1 (u1):
+| Map dummy
 | Filter (#0 = 123)
-| Project (#0)
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0 = 123)
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -266,12 +268,14 @@ query T multiline
 EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 123;
 ----
 Source materialize.public.t1 (u1):
+| Map dummy
 | Filter (#0 = 123)
-| Project (#0)
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0 = 123)
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 = Let l0 =
@@ -315,11 +319,13 @@ query T multiline
 EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 ----
 Source materialize.public.t1 (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0 = 123)
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -376,8 +382,9 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0 = 123)
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -404,12 +411,14 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0 = 123)
-| Project (#0)
+| Project (#0, #2)
 
 Source materialize.public.t3 (u3):
+| Map dummy
 | Filter (#0 = 123)
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -442,8 +451,9 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0 = 123)
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -469,7 +479,8 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -506,7 +517,8 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =

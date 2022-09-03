@@ -42,7 +42,8 @@ Explained Query
             Get materialize.public.t // { keys: "()" }
 
 Source materialize.public.t
-  Demand (#0)
+  project=(#0, #2)
+  map=(dummy)
 
 EOF
 
@@ -85,8 +86,7 @@ Explained Query
         Get materialize.public.v // { keys: "([0, 1])" }
 
 Source materialize.public.t
-  Demand (#0, #1)
-  Filter (#1) IS NOT NULL
+  filter=((#1) IS NOT NULL)
 
 Used Indexes:
   - materialize.public.v_primary_idx
@@ -129,11 +129,11 @@ Explained Query
               Get materialize.public.v // { keys: "([0, 1])" }
 
 Source materialize.public.t
-  Demand (#0, #1)
-  Filter (#1) IS NOT NULL
+  filter=((#1) IS NOT NULL)
 Source materialize.public.u
-  Demand (#0)
-  Filter (#0) IS NOT NULL
+  project=(#0, #2)
+  filter=((#0) IS NOT NULL)
+  map=(dummy)
 
 Used Indexes:
   - materialize.public.v_primary_idx

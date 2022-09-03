@@ -91,7 +91,6 @@ Explained Query
     raw=true
 
 Source materialize.public.u
-  Demand (#0, #1)
 
 EOF
 
@@ -120,12 +119,11 @@ SELECT c + d, 1 FROM u
 ----
 Explained Query
   Get::Collection materialize.public.u
-    project=(#2, #3)
-    map=((#0 + #1), 1)
     raw=true
 
 Source materialize.public.u
-  Demand (#0, #1)
+  project=(#2, #3)
+  map=((#0 + #1), 1)
 
 EOF
 
@@ -166,11 +164,10 @@ Explained Query
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
         Negate
           Get::Collection materialize.public.mv
-            project=(#1)
             raw=true
 
 Source materialize.public.mv
-  Demand (#1)
+  project=(#1)
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -212,11 +209,10 @@ Explained Query
                 arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
               Negate
                 Get::Collection materialize.public.mv
-                  project=(#1)
                   raw=true
 
 Source materialize.public.mv
-  Demand (#1)
+  project=(#1)
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -248,11 +244,10 @@ Explained Query
             arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
           Negate
             Get::Collection materialize.public.mv
-              project=(#1)
               raw=true
 
 Source materialize.public.mv
-  Demand (#1)
+  project=(#1)
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -672,19 +667,15 @@ Explained Query
       raw=true
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
       Get::Collection materialize.public.u
-        filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
         raw=true
     Get::Collection materialize.public.v
-      project=(#0)
-      filter=((#0) IS NOT NULL)
       raw=true
 
 Source materialize.public.u
-  Demand (#0, #1)
-  Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 Source materialize.public.v
-  Demand (#0)
-  Filter (#0) IS NOT NULL
+  project=(#0)
+  filter=((#0) IS NOT NULL)
 
 Used Indexes:
   - materialize.public.t_a_idx

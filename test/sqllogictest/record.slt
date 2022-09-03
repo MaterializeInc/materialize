@@ -17,7 +17,8 @@ query T multiline
 EXPLAIN SELECT (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
 ----
 Source materialize.public.t1 (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -31,7 +32,8 @@ query T multiline
 EXPLAIN SELECT record, (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
 ----
 Source materialize.public.t1 (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -45,7 +47,8 @@ query T multiline
 EXPLAIN SELECT (COALESCE(record, ROW(NULL, NULL))).f2 FROM (SELECT ROW(a, a) AS record FROM t1)
 ----
 Source materialize.public.t1 (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =

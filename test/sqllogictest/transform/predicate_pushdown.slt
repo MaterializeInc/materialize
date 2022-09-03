@@ -19,8 +19,9 @@ query T multiline
 EXPLAIN PLAN FOR SELECT b FROM (SELECT b, not(b) as neg FROM x) WHERE NOT(neg)
 ----
 Source materialize.public.x (u1):
+| Map dummy, dummy
 | Filter #2
-| Project (#2)
+| Project (#3, #4, #2)
 
 Query:
 %0 =
@@ -34,8 +35,9 @@ query T multiline
 EXPLAIN PLAN FOR SELECT b FROM (SELECT b, b = false as neg FROM x) WHERE NOT(neg)
 ----
 Source materialize.public.x (u1):
+| Map dummy, dummy
 | Filter (#2 != false)
-| Project (#2)
+| Project (#3, #4, #2)
 
 Query:
 %0 =
@@ -52,8 +54,9 @@ EXPLAIN PLAN FOR
   SELECT a FROM (SELECT a, a = 3 AS cond, u != 2 as cond2 FROM x) WHERE NOT(cond) AND NOT(cond2)
 ----
 Source materialize.public.x (u1):
-| Filter (#1 = 2), (#0 != 3)
-| Project (#0, #1)
+| Map dummy
+| Filter (#0 != 3), (#1 = 2)
+| Project (#0, #1, #3)
 
 Query:
 %0 =
@@ -70,7 +73,8 @@ EXPLAIN PLAN FOR
   SELECT a FROM (SELECT a, (a + 1) = (u + 3) AS cond FROM x) WHERE NOT(cond)
 ----
 Source materialize.public.x (u1):
-| Project (#0, #1)
+| Map dummy
+| Project (#0, #1, #3)
 
 Query:
 %0 =
@@ -150,8 +154,9 @@ EXPLAIN PLAN FOR
 SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
 ----
 Source materialize.public.x (u1):
+| Map dummy, dummy
 | Filter (#0 = 3)
-| Project (#0)
+| Project (#0, #3, #4)
 
 Source materialize.public.y (u2):
 | Filter (#0 = 3)

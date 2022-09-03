@@ -20,13 +20,12 @@ use std::collections::HashMap;
 use std::fmt;
 
 use mz_expr::explain::Indices;
-use mz_expr::RowSetFinishing;
+use mz_expr::{MapFilterProject, RowSetFinishing};
 use mz_ore::str::{Indent, IndentLike};
 use mz_repr::explain_new::{
     separated_text, DisplayJson, DisplayText, ExplainConfig, ExprHumanizer, RenderingContext,
 };
 use mz_repr::GlobalId;
-use mz_storage::types::transforms::LinearOperator;
 
 use crate::coord::peek::{self, FastPathPlan};
 
@@ -217,8 +216,7 @@ pub(crate) struct ExplainMultiPlan<'a, T> {
     pub(crate) context: &'a ExplainContext<'a>,
     // Maps the names of the sources to the linear operators that will be
     // on them.
-    // There are plans to replace LinearOperator with MFP struct (#6657)
-    pub(crate) sources: Vec<(String, &'a LinearOperator)>,
+    pub(crate) sources: Vec<(String, &'a MapFilterProject)>,
     // elements of the vector are in topological order
     pub(crate) plans: Vec<(String, AnnotatedPlan<'a, T>)>,
 }
@@ -328,20 +326,33 @@ where
     }
 }
 
-impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, LinearOperator> {
+impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, MapFilterProject> {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut RenderingContext<'a>) -> fmt::Result {
-        let LinearOperator {
-            predicates,
-            projection,
-        } = self.0;
-        // handle projection
-        let outputs = Indices(projection);
-        writeln!(f, "{}Demand ({})", ctx.indent, outputs)?;
-        // handle predicates
-        if !predicates.is_empty() {
-            let predicates = separated_text(" AND ", predicates.iter().map(Displayable::from));
-            writeln!(f, "{}Filter {}", ctx.indent, predicates)?;
+        let (scalars, predicates, outputs, input_arity) = (
+            &self.0.expressions,
+            &self.0.predicates,
+            &self.0.projection,
+            &self.0.input_arity,
+        );
+
+        // render `project` field iff not the identity projection
+        if &outputs.len() != input_arity || outputs.iter().enumerate().any(|(i, p)| i != *p) {
+            let outputs = Indices(&outputs);
+            writeln!(f, "{}project=({})", ctx.indent, outputs)?;
         }
+        // render `filter` field iff predicates are present
+        if !predicates.is_empty() {
+            let predicates = predicates.iter().map(|(_, p)| Displayable::from(p));
+            let predicates = separated_text(" AND ", predicates);
+            writeln!(f, "{}filter=({})", ctx.indent, predicates)?;
+        }
+        // render `map` field iff scalars are present
+        if !scalars.is_empty() {
+            let scalars = scalars.iter().map(Displayable::from);
+            let scalars = separated_text(", ", scalars);
+            writeln!(f, "{}map=({})", ctx.indent, scalars)?;
+        }
+
         Ok(())
     }
 }

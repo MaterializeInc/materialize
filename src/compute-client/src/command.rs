@@ -32,7 +32,6 @@ use mz_repr::{GlobalId, RelationType, Row};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::protocol::client::ProtoAllowCompaction;
 use mz_storage::types::sinks::ComputeSinkDesc;
-use mz_storage::types::transforms::LinearOperator;
 
 use crate::command::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
@@ -302,8 +301,8 @@ impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata
 /// Per-source construction arguments.
 #[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceArguments {
-    /// Optional linear operators that can be applied record-by-record.
-    pub operators: Option<LinearOperator>,
+    /// Linear operators to be applied record-by-record.
+    pub operators: Option<mz_expr::MapFilterProject>,
 }
 
 impl RustType<ProtoSourceInstanceArguments> for SourceInstanceArguments {

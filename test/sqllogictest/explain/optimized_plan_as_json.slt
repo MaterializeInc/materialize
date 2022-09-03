@@ -482,101 +482,112 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
     {
       "id": "materialize.public.mv",
       "op": {
+        "expressions": [],
         "predicates": [
-          {
-            "CallBinary": {
-              "func": "Lt",
-              "expr1": {
-                "Column": 1
-              },
-              "expr2": {
-                "Literal": [
-                  {
-                    "Ok": {
-                      "data": [
-                        4,
-                        0,
-                        0,
-                        0,
-                        0
-                      ]
+          [
+            1,
+            {
+              "CallBinary": {
+                "func": "Gt",
+                "expr1": {
+                  "Column": 0
+                },
+                "expr2": {
+                  "Literal": [
+                    {
+                      "Ok": {
+                        "data": [
+                          4,
+                          0,
+                          0,
+                          0,
+                          0
+                        ]
+                      }
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
                     }
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": false
-                  }
-                ]
-              }
-            }
-          },
-          {
-            "CallBinary": {
-              "func": "Gt",
-              "expr1": {
-                "Column": 0
-              },
-              "expr2": {
-                "Literal": [
-                  {
-                    "Ok": {
-                      "data": [
-                        4,
-                        0,
-                        0,
-                        0,
-                        0
-                      ]
-                    }
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": false
-                  }
-                ]
-              }
-            }
-          },
-          {
-            "CallBinary": {
-              "func": "Gt",
-              "expr1": {
-                "CallBinary": {
-                  "func": "AddInt32",
-                  "expr1": {
-                    "Column": 0
-                  },
-                  "expr2": {
-                    "Column": 1
-                  }
+                  ]
                 }
-              },
-              "expr2": {
-                "Literal": [
-                  {
-                    "Ok": {
-                      "data": [
-                        4,
-                        0,
-                        0,
-                        0,
-                        0
-                      ]
-                    }
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": false
-                  }
-                ]
               }
             }
-          }
+          ],
+          [
+            2,
+            {
+              "CallBinary": {
+                "func": "Lt",
+                "expr1": {
+                  "Column": 1
+                },
+                "expr2": {
+                  "Literal": [
+                    {
+                      "Ok": {
+                        "data": [
+                          4,
+                          0,
+                          0,
+                          0,
+                          0
+                        ]
+                      }
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          [
+            2,
+            {
+              "CallBinary": {
+                "func": "Gt",
+                "expr1": {
+                  "CallBinary": {
+                    "func": "AddInt32",
+                    "expr1": {
+                      "Column": 0
+                    },
+                    "expr2": {
+                      "Column": 1
+                    }
+                  }
+                },
+                "expr2": {
+                  "Literal": [
+                    {
+                      "Ok": {
+                        "data": [
+                          4,
+                          0,
+                          0,
+                          0,
+                          0
+                        ]
+                      }
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    }
+                  ]
+                }
+              }
+            }
+          ]
         ],
         "projection": [
           0,
           1
-        ]
+        ],
+        "input_arity": 2
       }
     }
   ]
@@ -770,10 +781,29 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
     {
       "id": "materialize.public.mv",
       "op": {
+        "expressions": [
+          {
+            "Literal": [
+              {
+                "Ok": {
+                  "data": [
+                    28
+                  ]
+                }
+              },
+              {
+                "scalar_type": "Int32",
+                "nullable": false
+              }
+            ]
+          }
+        ],
         "predicates": [],
         "projection": [
+          2,
           1
-        ]
+        ],
+        "input_arity": 2
       }
     }
   ]
@@ -867,10 +897,29 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
     {
       "id": "materialize.public.mv",
       "op": {
+        "expressions": [
+          {
+            "Literal": [
+              {
+                "Ok": {
+                  "data": [
+                    28
+                  ]
+                }
+              },
+              {
+                "scalar_type": "Int32",
+                "nullable": false
+              }
+            ]
+          }
+        ],
         "predicates": [],
         "projection": [
+          2,
           1
-        ]
+        ],
+        "input_arity": 2
       }
     }
   ]
@@ -1739,11 +1788,13 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
     {
       "id": "materialize.public.mv",
       "op": {
+        "expressions": [],
         "predicates": [],
         "projection": [
           0,
           1
-        ]
+        ],
+        "input_arity": 2
       }
     }
   ]
@@ -2429,29 +2480,34 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
     {
       "id": "materialize.public.mv",
       "op": {
+        "expressions": [],
         "predicates": [
-          {
-            "CallUnary": {
-              "func": {
-                "Not": null
-              },
-              "expr": {
-                "CallUnary": {
-                  "func": {
-                    "IsNull": null
-                  },
-                  "expr": {
-                    "Column": 1
+          [
+            2,
+            {
+              "CallUnary": {
+                "func": {
+                  "Not": null
+                },
+                "expr": {
+                  "CallUnary": {
+                    "func": {
+                      "IsNull": null
+                    },
+                    "expr": {
+                      "Column": 1
+                    }
                   }
                 }
               }
             }
-          }
+          ]
         ],
         "projection": [
           0,
           1
-        ]
+        ],
+        "input_arity": 2
       }
     }
   ]

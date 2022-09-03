@@ -61,21 +61,25 @@ WHERE
 ----
 Source materialize.public.orders (u1):
 {
+  "expressions": [],
   "predicates": [],
   "projection": [
     0,
     4
-  ]
+  ],
+  "input_arity": 9
 }
 
 Source materialize.public.lineitem (u2):
 {
+  "expressions": [],
   "predicates": [],
   "projection": [
     0,
     11,
     12
-  ]
+  ],
+  "input_arity": 16
 }
 
 Query:
@@ -105,7 +109,7 @@ Query:
                       "projection": [
                         0
                       ],
-                      "input_arity": 16
+                      "input_arity": 3
                     }
                   }
                 }
@@ -151,7 +155,7 @@ Query:
                   "expressions": [],
                   "predicates": [],
                   "projection": [],
-                  "input_arity": 9
+                  "input_arity": 2
                 }
               }
             }
@@ -228,10 +232,10 @@ Query:
                                     "expressions": [],
                                     "predicates": [],
                                     "projection": [
-                                      11,
-                                      12
+                                      1,
+                                      2
                                     ],
-                                    "input_arity": 16
+                                    "input_arity": 3
                                   }
                                 }
                               }
@@ -375,9 +379,9 @@ Query:
                                     ],
                                     "projection": [
                                       0,
-                                      4
+                                      1
                                     ],
-                                    "input_arity": 9
+                                    "input_arity": 2
                                   }
                                 }
                               }
