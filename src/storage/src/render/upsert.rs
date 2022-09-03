@@ -197,7 +197,7 @@ fn evaluate(
     let mut row_packer = row_buf.packer();
     row_packer.extend(position_or.iter().map(|x| match x {
         Some(column) => datums[*column],
-        None => Datum::Dummy,
+        None => unreachable!("Columns are not marked as unused at the moment"),
     }));
     Ok(Some(row_buf.clone()))
 }

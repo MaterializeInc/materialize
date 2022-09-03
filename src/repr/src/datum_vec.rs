@@ -99,7 +99,7 @@ mod test {
 
         assert_eq!(d.borrow().len(), 0);
 
-        let r = Row::pack_slice(&[Datum::String("first"), Datum::Dummy]);
+        let r = Row::pack_slice(&[Datum::String("first"), Datum::True]);
 
         {
             let borrow = d.borrow_with(&r);

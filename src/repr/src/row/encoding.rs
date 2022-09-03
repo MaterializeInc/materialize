@@ -137,7 +137,6 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             }
             Datum::JsonNull => DatumType::Other(ProtoDatumOther::JsonNull.into()),
             Datum::Uuid(x) => DatumType::Uuid(x.as_bytes().to_vec()),
-            Datum::Dummy => DatumType::Other(ProtoDatumOther::Dummy.into()),
             Datum::Null => DatumType::Other(ProtoDatumOther::Null.into()),
         };
         ProtoDatum {
@@ -155,7 +154,6 @@ impl RowPacker<'_> {
                 Some(ProtoDatumOther::False) => self.push(Datum::False),
                 Some(ProtoDatumOther::True) => self.push(Datum::True),
                 Some(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
-                Some(ProtoDatumOther::Dummy) => self.push(Datum::Dummy),
                 Some(ProtoDatumOther::NumericPosInf) => self.push(Datum::from(Numeric::infinity())),
                 Some(ProtoDatumOther::NumericNegInf) => {
                     self.push(Datum::from(-Numeric::infinity()))
@@ -338,7 +336,6 @@ mod tests {
             Datum::from(Numeric::nan()),
             Datum::JsonNull,
             Datum::Uuid(Uuid::from_u128(30)),
-            Datum::Dummy,
             Datum::Null,
         ]);
         packer
