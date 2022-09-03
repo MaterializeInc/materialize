@@ -20,7 +20,11 @@
 //!    pairs on the same line or as lowercase `$key` fields on indented lines.
 //! 5. A single non-recursive parameter can be written just as `$val`.
 
-use std::{collections::HashMap, fmt, ops::Deref};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+    ops::Deref,
+};
 
 use mz_compute_client::plan::{
     join::{
@@ -733,16 +737,16 @@ struct Permutation<'a>(&'a HashMap<usize, usize>);
 impl<'a> fmt::Display for Permutation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut pairs = vec![];
-        for (x, y) in self.0.iter() {
-            if x != y {
-                pairs.push(format!("#{}: #{}", x, y))
-            }
+        // convert the wrapped `HashMap` to a `BTreeMap` first and then iterate
+        // over the individual pairs for deterministic output
+        for (x, y) in BTreeMap::from_iter(self.0.iter().filter(|(x, y)| x != y)) {
+            pairs.push(format!("#{}: #{}", x, y));
         }
 
         if pairs.len() > 0 {
-            bracketed("{", "}", separated(", ", pairs)).fmt(f)
+            write!(f, "{{{}}}", separated(", ", pairs))
         } else {
-            separated("", vec!["id".to_string()]).fmt(f)
+            write!(f, "id")
         }
     }
 }
