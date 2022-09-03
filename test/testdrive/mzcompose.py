@@ -9,7 +9,7 @@
 
 from pathlib import Path
 
-from materialize import ci_util, ui
+from materialize import ci_util
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,
@@ -20,7 +20,6 @@ from materialize.mzcompose.services import (
     Testdrive,
     Zookeeper,
 )
-from materialize.xcompile import Arch
 
 SERVICES = [
     Zookeeper(),
@@ -57,13 +56,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="run against the specified files",
     )
     args = parser.parse_args()
-
-    if not args.redpanda and Arch.host() == Arch.AARCH64:
-        ui.warn(
-            "Running the Confluent Platform in Docker on ARM-based machines is "
-            "nearly unusably slow. Consider using Redpanda instead (--redpanda) "
-            "or running tests without mzcompose."
-        )
 
     dependencies = ["materialized"]
     if args.redpanda:
