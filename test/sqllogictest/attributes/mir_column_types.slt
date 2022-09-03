@@ -39,7 +39,6 @@ Explained Query
       Get materialize.public.v // { types: "(double precision?, boolean?)" }
 
 Source materialize.public.v
-  Demand (#0, #1)
 
 EOF
 
@@ -55,7 +54,6 @@ Explained Query
       Get materialize.public.v // { types: "(double precision?, boolean?)" }
 
 Source materialize.public.v
-  Demand (#0, #1)
 
 EOF
 
@@ -77,7 +75,6 @@ Explained Query
         - (1, "hello", null)
 
 Source materialize.public.t
-  Demand (#0..=#2)
 
 EOF
 
@@ -114,10 +111,8 @@ Explained Query
               Get materialize.public.t // { types: "(integer?, text?, date?)" }
 
 Source materialize.public.t
-  Demand (#0..=#2)
-  Filter (#0) IS NOT NULL
+  filter=((#0) IS NOT NULL)
 Source materialize.public.u
-  Demand (#0)
 
 EOF
 
@@ -152,9 +147,7 @@ Explained Query
         - (null, 10)
 
 Source materialize.public.u
-  Demand (#0)
 Source materialize.public.v
-  Demand (#0, #1)
-  Filter (#0) IS NOT NULL
+  filter=((#0) IS NOT NULL)
 
 EOF

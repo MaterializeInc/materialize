@@ -326,42 +326,11 @@ SELECT c + d, 1 FROM u
           },
           "plan": {
             "Collection": {
-              "expressions": [
-                {
-                  "CallBinary": {
-                    "func": "AddInt32",
-                    "expr1": {
-                      "Column": 0
-                    },
-                    "expr2": {
-                      "Column": 1
-                    }
-                  }
-                },
-                {
-                  "Literal": [
-                    {
-                      "Ok": {
-                        "data": [
-                          4,
-                          1,
-                          0,
-                          0,
-                          0
-                        ]
-                      }
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    }
-                  ]
-                }
-              ],
+              "expressions": [],
               "predicates": [],
               "projection": [
-                2,
-                3
+                0,
+                1
               ],
               "input_arity": 2
             }
@@ -374,11 +343,42 @@ SELECT c + d, 1 FROM u
     {
       "id": "materialize.public.u",
       "op": {
-        "expressions": [],
+        "expressions": [
+          {
+            "CallBinary": {
+              "func": "AddInt32",
+              "expr1": {
+                "Column": 0
+              },
+              "expr2": {
+                "Column": 1
+              }
+            }
+          },
+          {
+            "Literal": [
+              {
+                "Ok": {
+                  "data": [
+                    4,
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                }
+              },
+              {
+                "scalar_type": "Int32",
+                "nullable": false
+              }
+            ]
+          }
+        ],
         "predicates": [],
         "projection": [
-          0,
-          1
+          2,
+          3
         ],
         "input_arity": 2
       }
@@ -557,9 +557,9 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                 "expressions": [],
                                 "predicates": [],
                                 "projection": [
-                                  1
+                                  0
                                 ],
-                                "input_arity": 2
+                                "input_arity": 1
                               }
                             }
                           }
@@ -619,26 +619,9 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
     {
       "id": "materialize.public.mv",
       "op": {
-        "expressions": [
-          {
-            "Literal": [
-              {
-                "Ok": {
-                  "data": [
-                    28
-                  ]
-                }
-              },
-              {
-                "scalar_type": "Int32",
-                "nullable": false
-              }
-            ]
-          }
-        ],
+        "expressions": [],
         "predicates": [],
         "projection": [
-          2,
           1
         ],
         "input_arity": 2
@@ -821,9 +804,9 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     "expressions": [],
                                     "predicates": [],
                                     "projection": [
-                                      1
+                                      0
                                     ],
-                                    "input_arity": 2
+                                    "input_arity": 1
                                   }
                                 }
                               }
@@ -1029,26 +1012,9 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
     {
       "id": "materialize.public.mv",
       "op": {
-        "expressions": [
-          {
-            "Literal": [
-              {
-                "Ok": {
-                  "data": [
-                    28
-                  ]
-                }
-              },
-              {
-                "scalar_type": "Int32",
-                "nullable": false
-              }
-            ]
-          }
-        ],
+        "expressions": [],
         "predicates": [],
         "projection": [
-          2,
           1
         ],
         "input_arity": 2
@@ -1141,9 +1107,9 @@ SELECT x * 5 FROM cte WHERE x = 5
                                     "expressions": [],
                                     "predicates": [],
                                     "projection": [
-                                      1
+                                      0
                                     ],
-                                    "input_arity": 2
+                                    "input_arity": 1
                                   }
                                 }
                               }
@@ -1280,26 +1246,9 @@ SELECT x * 5 FROM cte WHERE x = 5
     {
       "id": "materialize.public.mv",
       "op": {
-        "expressions": [
-          {
-            "Literal": [
-              {
-                "Ok": {
-                  "data": [
-                    28
-                  ]
-                }
-              },
-              {
-                "scalar_type": "Int32",
-                "nullable": false
-              }
-            ]
-          }
-        ],
+        "expressions": [],
         "predicates": [],
         "projection": [
-          2,
           1
         ],
         "input_arity": 2
@@ -4605,48 +4554,7 @@ WHERE a = c AND d = e AND b + d > 42
                     "plan": {
                       "Collection": {
                         "expressions": [],
-                        "predicates": [
-                          [
-                            1,
-                            {
-                              "CallUnary": {
-                                "func": {
-                                  "Not": null
-                                },
-                                "expr": {
-                                  "CallUnary": {
-                                    "func": {
-                                      "IsNull": null
-                                    },
-                                    "expr": {
-                                      "Column": 0
-                                    }
-                                  }
-                                }
-                              }
-                            }
-                          ],
-                          [
-                            2,
-                            {
-                              "CallUnary": {
-                                "func": {
-                                  "Not": null
-                                },
-                                "expr": {
-                                  "CallUnary": {
-                                    "func": {
-                                      "IsNull": null
-                                    },
-                                    "expr": {
-                                      "Column": 1
-                                    }
-                                  }
-                                }
-                              }
-                            }
-                          ]
-                        ],
+                        "predicates": [],
                         "projection": [
                           0,
                           1
@@ -4701,32 +4609,11 @@ WHERE a = c AND d = e AND b + d > 42
                 "plan": {
                   "Collection": {
                     "expressions": [],
-                    "predicates": [
-                      [
-                        1,
-                        {
-                          "CallUnary": {
-                            "func": {
-                              "Not": null
-                            },
-                            "expr": {
-                              "CallUnary": {
-                                "func": {
-                                  "IsNull": null
-                                },
-                                "expr": {
-                                  "Column": 0
-                                }
-                              }
-                            }
-                          }
-                        }
-                      ]
-                    ],
+                    "predicates": [],
                     "projection": [
                       0
                     ],
-                    "input_arity": 2
+                    "input_arity": 1
                   }
                 }
               }
@@ -4929,23 +4816,7 @@ WHERE a = c AND d = e AND b + d > 42
     {
       "id": "materialize.public.v",
       "op": {
-        "expressions": [
-          {
-            "Literal": [
-              {
-                "Ok": {
-                  "data": [
-                    28
-                  ]
-                }
-              },
-              {
-                "scalar_type": "Int32",
-                "nullable": false
-              }
-            ]
-          }
-        ],
+        "expressions": [],
         "predicates": [
           [
             1,
@@ -4969,8 +4840,7 @@ WHERE a = c AND d = e AND b + d > 42
           ]
         ],
         "projection": [
-          0,
-          2
+          0
         ],
         "input_arity": 2
       }

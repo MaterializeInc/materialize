@@ -61,365 +61,23 @@ WHERE
 ----
 Source materialize.public.orders (u1):
 {
-  "expressions": [
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "Int32",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "String",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": {
-            "Numeric": {
-              "max_scale": 2
-            }
-          },
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "String",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "String",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "Int32",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "String",
-          "nullable": false
-        }
-      ]
-    }
-  ],
+  "expressions": [],
   "predicates": [],
   "projection": [
     0,
-    9,
-    10,
-    11,
-    4,
-    12,
-    13,
-    14,
-    15
+    4
   ],
   "input_arity": 9
 }
 
 Source materialize.public.lineitem (u2):
 {
-  "expressions": [
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "Int32",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "Int32",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "Int32",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": {
-            "Numeric": {
-              "max_scale": 2
-            }
-          },
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": {
-            "Numeric": {
-              "max_scale": 2
-            }
-          },
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": {
-            "Numeric": {
-              "max_scale": 2
-            }
-          },
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": {
-            "Numeric": {
-              "max_scale": 2
-            }
-          },
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "String",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "String",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "Date",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "String",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "String",
-          "nullable": false
-        }
-      ]
-    },
-    {
-      "Literal": [
-        {
-          "Ok": {
-            "data": [
-              28
-            ]
-          }
-        },
-        {
-          "scalar_type": "String",
-          "nullable": false
-        }
-      ]
-    }
-  ],
+  "expressions": [],
   "predicates": [],
   "projection": [
     0,
-    16,
-    17,
-    18,
-    19,
-    20,
-    21,
-    22,
-    23,
-    24,
-    25,
     11,
-    12,
-    26,
-    27,
-    28
+    12
   ],
   "input_arity": 16
 }
@@ -451,7 +109,7 @@ Query:
                       "projection": [
                         0
                       ],
-                      "input_arity": 16
+                      "input_arity": 3
                     }
                   }
                 }
@@ -497,7 +155,7 @@ Query:
                   "expressions": [],
                   "predicates": [],
                   "projection": [],
-                  "input_arity": 9
+                  "input_arity": 2
                 }
               }
             }
@@ -574,10 +232,10 @@ Query:
                                     "expressions": [],
                                     "predicates": [],
                                     "projection": [
-                                      11,
-                                      12
+                                      1,
+                                      2
                                     ],
-                                    "input_arity": 16
+                                    "input_arity": 3
                                   }
                                 }
                               }
@@ -721,9 +379,9 @@ Query:
                                     ],
                                     "projection": [
                                       0,
-                                      4
+                                      1
                                     ],
-                                    "input_arity": 9
+                                    "input_arity": 2
                                   }
                                 }
                               }

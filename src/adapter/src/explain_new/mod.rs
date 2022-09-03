@@ -328,16 +328,31 @@ where
 
 impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, MapFilterProject> {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut RenderingContext<'a>) -> fmt::Result {
-        let (map, filter, project) = self.0.as_map_filter_project();
-        if !map.is_empty() {
-            let expressions = separated_text(" AND ", map.iter().map(Displayable::from));
-            writeln!(f, "{}Map {}", ctx.indent, expressions)?;
+        let (scalars, predicates, outputs, input_arity) = (
+            &self.0.expressions,
+            &self.0.predicates,
+            &self.0.projection,
+            &self.0.input_arity,
+        );
+
+        // render `project` field iff not the identity projection
+        if &outputs.len() != input_arity || outputs.iter().enumerate().any(|(i, p)| i != *p) {
+            let outputs = Indices(&outputs);
+            writeln!(f, "{}project=({})", ctx.indent, outputs)?;
         }
-        if !filter.is_empty() {
-            let predicates = separated_text(" AND ", filter.iter().map(Displayable::from));
-            writeln!(f, "{}Filter {}", ctx.indent, predicates)?;
+        // render `filter` field iff predicates are present
+        if !predicates.is_empty() {
+            let predicates = predicates.iter().map(|(_, p)| Displayable::from(p));
+            let predicates = separated_text(" AND ", predicates);
+            writeln!(f, "{}filter=({})", ctx.indent, predicates)?;
         }
-        writeln!(f, "{}Project {}", ctx.indent, Indices(&project))?;
+        // render `map` field iff scalars are present
+        if !scalars.is_empty() {
+            let scalars = scalars.iter().map(Displayable::from);
+            let scalars = separated_text(", ", scalars);
+            writeln!(f, "{}map=({})", ctx.indent, scalars)?;
+        }
+
         Ok(())
     }
 }
