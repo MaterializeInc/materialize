@@ -268,16 +268,8 @@ impl crate::coord::Coordinator {
         let peek_plan = fast_path_plan.map_or_else(
             // finalize the dataflow and produce a PeekPlan::SlowPath as a default
             || {
-                let mut desc = self.finalize_dataflow(dataflow, compute_instance)?;
-                // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
-                // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
-                if let Some(as_of) = desc.as_of.as_ref() {
-                    if !as_of.is_empty() {
-                        if let Some(next) = as_of.elements()[0].checked_add(1) {
-                            desc.until = timely::progress::Antichain::from_elem(next);
-                        }
-                    }
-                }
+                let desc = self.finalize_dataflow(dataflow, compute_instance)?;
+
                 Ok::<_, AdapterError>(PeekPlan::SlowPath(PeekDataflowPlan {
                     desc,
                     id: index_id,

@@ -2190,6 +2190,25 @@ impl Coordinator {
             typ,
         );
 
+        // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
+        // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
+        // We do this here so that `optimize_dataflow` can pick up the monotonicity information.
+        if let Some(as_of) = dataflow.as_of.as_ref() {
+            if !as_of.is_empty() {
+                if let Some(next) = as_of.elements()[0].checked_add(1) {
+                    dataflow.until = timely::progress::Antichain::from_elem(next);
+                    // Indicate imported sources and indexes as monotonic; as we will produce
+                    // only the snapshot (without retractions).
+                    for (_id, (_source, monotonic)) in dataflow.source_imports.iter_mut() {
+                        *monotonic = true;
+                    }
+                    for (_id, (_index, _type, monotonic)) in dataflow.index_imports.iter_mut() {
+                        *monotonic = true;
+                    }
+                }
+            }
+        }
+
         // Optimize the dataflow across views, and any other ways that appeal.
         mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
 
