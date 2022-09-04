@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::str::FromStr;
 
@@ -21,10 +21,10 @@ use globset::GlobBuilder;
 use itertools::Itertools;
 use prost::Message;
 use regex::Regex;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use mz_expr::CollectionPlan;
-use mz_interchange::avro::{self, AvroSchemaGenerator};
+use mz_interchange::avro::AvroSchemaGenerator;
 use mz_kafka_util::KafkaAddrs;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
@@ -46,8 +46,8 @@ use mz_storage::types::connections::{
     StringOrSecret, TlsIdentity,
 };
 use mz_storage::types::sinks::{
-    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope,
-    StorageSinkConnectionBuilder,
+    KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
+    KafkaSinkFormat, SinkEnvelope, StorageSinkConnectionBuilder,
 };
 use mz_storage::types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -78,8 +78,8 @@ use crate::ast::{
     DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
-    KafkaConnectionOption, KafkaConnectionOptionName, KafkaConsistency, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
+    KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
     PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
@@ -375,15 +375,13 @@ pub fn plan_create_source(
                 match &connection_inner {
                     mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
                         scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
-                        let mut options = BTreeMap::new();
-                        options.insert(
-                            "bootstrap.servers".into(),
-                            KafkaAddrs::from_str(broker)
-                                .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
-                                .to_string()
-                                .into(),
-                        );
-                        let connection = KafkaConnection::try_from(&mut options)?;
+                        let connection = KafkaConnection {
+                            brokers: vec![broker.clone()],
+                            progress_topic: None,
+                            security: None,
+                        };
+
+                        let options = connection.clone().into();
                         (
                             connection,
                             topic
@@ -1851,100 +1849,6 @@ pub fn plan_create_materialized_view(
     }))
 }
 
-/// Determines the consistency configuration (topic and format) that should be used for a Kafka
-/// sink based on the given configuration items.
-///
-/// This is slightly complicated because of a desire to maintain backwards compatibility with
-/// previous ways of specifying consistency configuration.
-fn get_kafka_sink_consistency_config(
-    scx: &StatementContext,
-    topic_name: &str,
-    sink_format: &KafkaSinkFormat,
-    consistency: Option<KafkaConsistency<Aug>>,
-) -> Result<Option<(String, KafkaSinkFormat)>, PlanError> {
-    let result = match consistency {
-        Some(KafkaConsistency {
-            topic,
-            topic_format,
-        }) => match topic_format {
-            Some(Format::Avro(AvroSchema::Csr {
-                csr_connection:
-                    CsrConnectionAvro {
-                        connection: CsrConnection { connection, options },
-                        seed,
-                        key_strategy,
-                        value_strategy,
-                    },
-            })) => {
-                if seed.is_some() {
-                    sql_bail!("SEED option does not make sense with sinks");
-                }
-                if key_strategy.is_some() {
-                    sql_bail!("KEY STRATEGY option does not make sense with sinks");
-                }
-                if value_strategy.is_some() {
-                    sql_bail!("VALUE STRATEGY option does not make sense with sinks");
-                }
-
-                let item = scx.get_item_by_resolved_name(&connection)?;
-                let csr_connection = match item.connection()? {
-                    Connection::Csr(connection) => connection.clone(),
-                    _ => {
-                        sql_bail!("{} is not a schema registry connection", item.name())
-                    }
-                };
-
-                if !options.is_empty() {
-                    sql_bail!("CSR CONNECTIONs for CONSISTENCY topics do not support any options");
-                }
-
-                Some((
-                    topic,
-                    KafkaSinkFormat::Avro {
-                        key_schema: None,
-                        value_schema: avro::get_debezium_transaction_schema().canonical_form(),
-                        csr_connection,
-                    },
-                ))
-            }
-            None => {
-                // If a CONSISTENCY FORMAT is not provided, default to the FORMAT of the sink.
-                match sink_format {
-                    format @ KafkaSinkFormat::Avro { .. } => Some((topic, format.clone())),
-                    KafkaSinkFormat::Json => bail_unsupported!("CONSISTENCY FORMAT JSON"),
-                }
-            }
-            Some(other) => bail_unsupported!(format!("CONSISTENCY FORMAT {}", &other)),
-        },
-        None => {
-            match sink_format {
-                KafkaSinkFormat::Avro {
-                    csr_connection,
-                    ..
-                } => {
-                    let default_consistency_topic = format!("{}-consistency", topic_name);
-                    debug!(
-                        "Using default consistency topic '{}' for topic '{}'",
-                        default_consistency_topic, topic_name
-                    );
-                    Some((
-                        default_consistency_topic,
-                        KafkaSinkFormat::Avro {
-                            key_schema: None,
-                            value_schema: avro::get_debezium_transaction_schema()
-                                .canonical_form(),
-                            csr_connection: csr_connection.clone(),
-                        },
-                    ))
-                }
-                KafkaSinkFormat::Json => sql_bail!("For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY (TOPIC consistency_topic FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url)'. The default of using a JSON consistency topic is not supported."),
-            }
-        }
-    };
-
-    Ok(result)
-}
-
 pub fn describe_create_sink(
     scx: &StatementContext,
     _: CreateSinkStatement<Aug>,
@@ -2059,15 +1963,10 @@ pub fn plan_create_sink(
     }
 
     let connection_builder = match connection {
-        CreateSinkConnection::Kafka {
-            connection,
-            consistency,
-            ..
-        } => kafka_sink_builder(
+        CreateSinkConnection::Kafka { connection, .. } => kafka_sink_builder(
             scx,
             connection,
             format,
-            consistency,
             relation_key_indices,
             key_desc_and_indices,
             desc.into_owned(),
@@ -2148,13 +2047,13 @@ fn kafka_sink_builder(
     scx: &StatementContext,
     connection: mz_sql_parser::ast::KafkaConnection<Aug>,
     format: Option<Format<Aug>>,
-    consistency: Option<KafkaConsistency<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
     let (
+        connection_id,
         connection,
         config_options,
         KafkaConfigOptionExtracted {
@@ -2193,7 +2092,7 @@ fn kafka_sink_builder(
 
             let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
             let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
-            (connection, config_options, extracted_options)
+            (item.id(), connection, config_options, extracted_options)
         }
         mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
     };
@@ -2273,8 +2172,12 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let consistency_config =
-        get_kafka_sink_consistency_config(scx, &topic_name, &format, consistency)?;
+    let consistency_config = KafkaConsistencyConfig::Progress {
+        topic: connection
+            .progress_topic
+            .clone()
+            .unwrap_or_else(|| format!("_materialize-progress-{connection_id}")),
+    };
 
     if partition_count == 0 || partition_count < -1 {
         sql_bail!(
@@ -2301,17 +2204,14 @@ fn kafka_sink_builder(
         bytes: retention_bytes,
     };
 
-    let consistency_topic = consistency_config.clone().map(|config| config.0);
-    let consistency_format = consistency_config.map(|config| config.1);
-
     Ok(StorageSinkConnectionBuilder::Kafka(
         KafkaSinkConnectionBuilder {
+            connection_id,
             connection,
             options: config_options,
             format,
             topic_name,
-            consistency_topic_name: consistency_topic,
-            consistency_format,
+            consistency_config,
             partition_count,
             replication_factor,
             fuel: 10000,
@@ -2840,6 +2740,7 @@ generate_extracted_config!(
     KafkaConnectionOption,
     (Broker, String),
     (Brokers, Vec<String>),
+    (ProgressTopic, String),
     (SslKey, with_options::Secret),
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
@@ -2946,6 +2847,7 @@ impl TryFrom<KafkaConnectionOptionExtracted> for KafkaConnection {
         Ok(KafkaConnection {
             brokers: value.get_brokers()?,
             security: (&value).try_into()?,
+            progress_topic: value.progress_topic,
         })
     }
 }

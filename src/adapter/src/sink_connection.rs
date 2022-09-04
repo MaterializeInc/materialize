@@ -16,9 +16,9 @@ use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
 use mz_storage::types::connections::{ConnectionContext, PopulateClientConfig};
 use mz_storage::types::sinks::{
-    KafkaSinkConnection, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
-    KafkaSinkConsistencyConnection, PublishedSchemaInfo, StorageSinkConnection,
-    StorageSinkConnectionBuilder,
+    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
+    KafkaSinkConnectionRetention, KafkaSinkConsistencyConnection, PublishedSchemaInfo,
+    StorageSinkConnection, StorageSinkConnectionBuilder,
 };
 
 use crate::error::AdapterError;
@@ -32,7 +32,7 @@ pub async fn build(
     }
 }
 
-async fn register_kafka_topic(
+async fn ensure_kafka_topic(
     client: &AdminClient<MzClientContext>,
     topic: &str,
     mut partition_count: i32,
@@ -199,7 +199,7 @@ async fn build_kafka(
         .create_with_context(MzClientContext)
         .context("creating admin client failed")?;
 
-    register_kafka_topic(
+    ensure_kafka_topic(
         &client,
         &builder.topic_name,
         builder.partition_count,
@@ -237,17 +237,11 @@ async fn build_kafka(
         mz_storage::types::sinks::KafkaSinkFormat::Json => None,
     };
 
-    let consistency = match builder.consistency_format {
-        Some(mz_storage::types::sinks::KafkaSinkFormat::Avro {
-            value_schema,
-            csr_connection,
-            ..
-        }) => {
-            let consistency_topic = builder.consistency_topic_name.expect("known to exist");
-            // create consistency topic/schema and retrieve schema id
-            register_kafka_topic(
+    let consistency = match builder.consistency_config {
+        KafkaConsistencyConfig::Progress { topic } => {
+            ensure_kafka_topic(
                 &client,
-                &consistency_topic,
+                &topic,
                 1,
                 builder.replication_factor,
                 KafkaSinkConnectionRetention::default(),
@@ -255,27 +249,8 @@ async fn build_kafka(
             .await
             .context("error registering kafka consistency topic for sink")?;
 
-            let ccsr = csr_connection
-                .connect(&*connection_context.secrets_reader)
-                .await?;
-            let (_, consistency_schema_id) = publish_kafka_schemas(
-                &ccsr,
-                &consistency_topic,
-                None,
-                None,
-                &value_schema,
-                mz_ccsr::SchemaType::Avro,
-            )
-            .await
-            .context("error publishing kafka consistency schemas for sink")?;
-
-            Some(KafkaSinkConsistencyConnection {
-                topic: consistency_topic,
-                schema_id: consistency_schema_id,
-            })
+            KafkaSinkConsistencyConnection { topic }
         }
-        Some(other) => unreachable!("non-Avro consistency format for Kafka sink {:#?}", &other),
-        _ => None,
     };
 
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {

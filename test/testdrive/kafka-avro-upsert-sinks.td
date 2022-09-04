@@ -149,7 +149,6 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK input_sink FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
-  CONSISTENCY (TOPIC 'input-sink-consistency-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
@@ -157,7 +156,6 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK input_sink_multiple_keys FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-multikey-${testdrive.seed}') KEY (b, a)
-  CONSISTENCY (TOPIC 'input-sink-multikey-consistency-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 

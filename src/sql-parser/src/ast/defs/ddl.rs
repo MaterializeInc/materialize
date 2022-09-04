@@ -568,6 +568,7 @@ impl_display_t!(DbzTxMetadataOption);
 pub enum KafkaConnectionOptionName {
     Broker,
     Brokers,
+    ProgressTopic,
     SslKey,
     SslCertificate,
     SslCertificateAuthority,
@@ -581,6 +582,7 @@ impl AstDisplay for KafkaConnectionOptionName {
         f.write_str(match self {
             KafkaConnectionOptionName::Broker => "BROKER",
             KafkaConnectionOptionName::Brokers => "BROKERS",
+            KafkaConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
             KafkaConnectionOptionName::SslKey => "SSL KEY",
             KafkaConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             KafkaConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
@@ -1089,52 +1091,23 @@ pub enum CreateSinkConnection<T: AstInfo> {
     Kafka {
         connection: KafkaConnection<T>,
         key: Option<KafkaSinkKey>,
-        consistency: Option<KafkaConsistency<T>>,
     },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSinkConnection::Kafka {
-                connection,
-                key,
-                consistency,
-            } => {
+            CreateSinkConnection::Kafka { connection, key } => {
                 f.write_str("KAFKA ");
                 f.write_node(connection);
                 if let Some(key) = key.as_ref() {
                     f.write_node(key);
-                }
-                if let Some(consistency) = consistency.as_ref() {
-                    f.write_node(consistency);
                 }
             }
         }
     }
 }
 impl_display_t!(CreateSinkConnection);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KafkaConsistency<T: AstInfo> {
-    pub topic: String,
-    pub topic_format: Option<Format<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for KafkaConsistency<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(" CONSISTENCY (TOPIC '");
-        f.write_node(&display::escape_single_quote_string(&self.topic));
-        f.write_str("'");
-
-        if let Some(format) = self.topic_format.as_ref() {
-            f.write_str(" FORMAT ");
-            f.write_node(format);
-        }
-        f.write_str(")");
-    }
-}
-impl_display_t!(KafkaConsistency);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaSinkKey {

@@ -120,7 +120,7 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK non_keyed_sink FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-${testdrive.seed}')
-  CONSISTENCY (TOPIC 'non-keyed-sink-consistency-${testdrive.seed}') FORMAT AVRO
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE VIEW max_view AS SELECT a, MAX(b) as b FROM input GROUP BY a
@@ -129,22 +129,22 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK non_keyed_sink_of_keyed_relation FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-of-keyed-relation-${testdrive.seed}')
-  CONSISTENCY (TOPIC 'non-keyed-sink-of-keyed-relation-consistency-${testdrive.seed}') FORMAT AVRO
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK keyed_sink FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-${testdrive.seed}') KEY (a)
-  CONSISTENCY (TOPIC 'keyed-sink-consistency-${testdrive.seed}') FORMAT AVRO
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK keyed_sink_of_keyed_relation FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-of-keyed-relation-${testdrive.seed}') KEY (b)
-  CONSISTENCY (TOPIC 'keyed-sink-of-keyed-relation-consistency-${testdrive.seed}') FORMAT AVRO
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK multi_keyed_sink FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'multi-keyed-sink-${testdrive.seed}') KEY (b, a)
-  CONSISTENCY (TOPIC 'multi-keyed-sink-consistency-${testdrive.seed}') FORMAT AVRO
+  FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-ingest format=avro topic=input schema=${schema}

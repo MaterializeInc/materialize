@@ -8,6 +8,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 $ set cdcv2-schema=[
   {
     "type": "array",
@@ -237,7 +239,6 @@ contains:input_values_view is a view, which cannot be exported as a sink
 
 > CREATE SINK output14_custom_consistency_topic FROM input_kafka_cdcv2
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output14-view-${testdrive.seed}')
-  CONSISTENCY (TOPIC 'output14-custom-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # We need some data -- any data -- to start creating timestamp bindings
@@ -278,116 +279,3 @@ $ kafka-ingest format=avro topic=compaction-test-input schema=${cdcv2-schema}
 $ kafka-verify format=avro sink=materialize.public.compaction_test_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
-
-# verify output of consistency topic with real-time timestamp bindings
-
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
-
-$ kafka-create-topic topic=rt-binding-consistency-test-input
-
-> CREATE SOURCE rt_binding_consistency_test_source
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rt-binding-consistency-test-input-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
-
-> CREATE SINK rt_binding_consistency_test_sink FROM rt_binding_consistency_test_source
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'rt-binding-consistency-test-output-${testdrive.seed}')
-  FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
-
-$ kafka-ingest format=avro topic=rt-binding-consistency-test-input schema=${dbz-schema} timestamp=1
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
-
-$ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-
-# Because the consistency topic produces a new end record every second, parital-search will wait
-# for 10 seconds before continuing rather than the per-record timeout. Be wary of copy/pasting the
-# `partial-search` arg.
-$ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink consistency=debezium partial-search=10
-{"id": "<TIMESTAMP>", "status": "BEGIN", "event_count": null, "data_collections": null}
-{"id": "<TIMESTAMP>", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "rt-binding-consistency-test-output-${testdrive.seed}"}]}}
-
-# Test the CONSISTENCY TOPIC and FORMAT options
-
-> CREATE MATERIALIZED VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
-
-# Can't create sinks with JSON-encoded consistency topics
-! CREATE SINK double_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'double-avro')
-    CONSISTENCY (TOPIC 'consistency-double-avro' FORMAT JSON)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:CONSISTENCY FORMAT JSON not yet supported
-
-# Providing CONSISTENCY without a FORMAT will default to the sink's FORMAT
-# of the sink, if valid
-> CREATE SINK default_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'default-avro')
-    CONSISTENCY (TOPIC 'consistency-default-avro')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-
-# Fail to default to JSON
-! CREATE SINK default_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'default-avro')
-    CONSISTENCY (TOPIC 'consistency-default-avro')
-  FORMAT JSON
-contains:CONSISTENCY FORMAT JSON not yet supported
-
-> CREATE SINK double_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'double-avro')
-    CONSISTENCY (TOPIC 'consistency-double-avro' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-
-$ kafka-verify format=avro sink=materialize.public.double_avro sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
-
-> CREATE SINK json_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'json-avro')
-    CONSISTENCY (TOPIC 'consistency-json-avro' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn)
-  FORMAT JSON
-
-$ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true key=false
-{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "<TIMESTAMP>"}}
-
-! CREATE SINK json_reuse_topic_no_parens FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'json-reuse-topic')
-  FORMAT JSON
-contains:For FORMAT JSON, you need to manually specify an Avro consistency topic
-
-> CREATE SINK json_reuse_topic_with_parens FROM rt_binding_consistency_test_source
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'json-reuse-topic-2')
-    CONSISTENCY (TOPIC 'consistency-json-avro-2' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn)
-  FORMAT JSON
-
-# Same as above!
-> CREATE SINK json_reuse_topic_with_parens_and_with FROM rt_binding_consistency_test_source
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'json-reuse-topic-3')
-    CONSISTENCY (TOPIC 'consistency-json-avro-3' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn)
-  FORMAT JSON
-
-# Default consistency format is Avro if consistency_topic is used
-> CREATE SINK default_avro_2 FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'default-avro-2')
-  CONSISTENCY (TOPIC 'default-consistency-avro')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-
-$ kafka-verify format=avro sink=materialize.public.default_avro sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
-
-> CREATE SINK json_avro_upsert_key FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'json-avro-upsert-key')
-  KEY (b)
-    CONSISTENCY (TOPIC 'consistency-json-avro-upsert-key' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn)
-  FORMAT JSON
-  ENVELOPE UPSERT
-
-$ kafka-verify format=json sink=materialize.public.json_avro_upsert_key key=true
-{"b": 2} {"a": 1, "b": 2, "c": 3, "transaction": {"id": "<TIMESTAMP>"}}
-
-# Verify compaction of exactly once sinks.
-
-# TODO: we've disabled this after observing it be flaky in CI. Re-enable once we've
-# fixed the issue.
-# $ verify-timestamp-compaction source=input_csv max-size=3 permit-progress=true
-# $ verify-timestamp-compaction source=rt_binding_consistency_test_source max-size=3 permit-progress=true
-# $ verify-timestamp-compaction source=input_kafka_dbz max-size=3 permit-progress=true
-# $ verify-timestamp-compaction source=input_kafka_cdcv2 max-size=3 permit-progress=true

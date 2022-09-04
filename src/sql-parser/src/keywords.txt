@@ -76,7 +76,6 @@ Compression
 Confluent
 Connection
 Connections
-Consistency
 Constraint
 Copy
 Count

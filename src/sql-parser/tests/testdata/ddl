@@ -579,56 +579,28 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETE
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC = 'topic') FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: ReplicationFactor, value: Some(Value(Number("7"))) }, KafkaConfigOption { name: RetentionMs, value: Some(Value(Number("10000"))) }, KafkaConfigOption { name: RetentionBytes, value: Some(Value(Number("10000000000"))) }, KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None, consistency: None }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: ReplicationFactor, value: Some(Value(Number("7"))) }, KafkaConfigOption { name: RetentionMs, value: Some(Value(Number("10000"))) }, KafkaConfigOption { name: RetentionBytes, value: Some(Value(Number("10000000000"))) }, KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: None }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }) }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }), consistency: None }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }) }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, format: Some(Bytes), envelope: None, with_options: [] })
-
-parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency') FORMAT BYTES
-----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency') FORMAT BYTES
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: None }) }, format: Some(Bytes), envelope: None, with_options: [] })
-
-parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' CONSISTENCY FORMAT BYTES) FORMAT BYTES
-----
-error: Expected right parenthesis, found CONSISTENCY
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' CONSISTENCY FORMAT BYTES) FORMAT BYTES
-                                                                                                               ^
-
-parse-statement
+error: Expected end of statement, found identifier "consistency"
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
-----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, format: Some(Bytes), envelope: None, with_options: [] })
-
-parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username=user)) FORMAT BYTES
-----
-error: Expected CONNECTION, found string literal "http://localhost:8081"
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username=user)) FORMAT BYTES
-                                                                                                                                                           ^
+                                                                              ^
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY FORMAT BYTES
@@ -1348,6 +1320,13 @@ CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERT
 CREATE CONNECTION conn1 FOR KAFKA BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux'
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(Value(String("kafka:1234"))) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', PROGRESS TOPIC 'my-materialize-progress-topic';
+----
+CREATE CONNECTION conn1 FOR KAFKA BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-materialize-progress-topic'
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(Value(String("kafka:1234"))) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
 
 parse-statement
 DROP CONNECTION conn1
