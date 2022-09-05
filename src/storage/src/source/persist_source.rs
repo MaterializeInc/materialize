@@ -31,7 +31,6 @@ use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::controller::CollectionMetadata;
@@ -195,7 +194,7 @@ where
 
     let (inner, token) = crate::source::util::source(
         scope,
-        format!("persist_source {:?}: part distribution", source_id),
+        format!("persist_source {}: part distribution", source_id),
         move |info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures::task::waker(waker_activator);
@@ -245,10 +244,7 @@ where
     );
 
     let mut fetcher_builder = OperatorBuilder::new(
-        format!(
-            "persist_source {:?}: part fetcher {}",
-            worker_index, source_id
-        ),
+        format!("persist_source {}: part fetcher", source_id),
         scope.clone(),
     );
 
@@ -268,7 +264,7 @@ where
 
     fetcher_builder.build_async(
         scope.clone(),
-        async_op!(|initial_capabilities, _frontiers| {
+        move |mut initial_capabilities, frontiers, scheduler| async move {
             let fetcher = persist_clients
                 .lock()
                 .await
@@ -285,87 +281,105 @@ where
 
             initial_capabilities.clear();
 
-            let mut output_handle = update_output.activate();
-            let mut consumed_part_output_handle = consumed_part_output.activate();
-
             let mut buffer = Vec::new();
 
-            while let Some((cap, data)) = fetcher_input.next() {
-                // `LeasedBatchPart`es cannot be dropped at this point w/o
-                // panicking, so swap them to an owned version.
-                data.swap(&mut buffer);
+            while scheduler.notified().await {
+                // Re-acquire the output handle on each invocation and drop it
+                // when we're done.
+                let mut output_handle = update_output.activate();
+                let mut consumed_part_output_handle = consumed_part_output.activate();
 
-                let update_cap = cap.delayed_for_output(cap.time(), update_output_port);
-                let mut update_session = output_handle.session(&update_cap);
+                while let Some((cap, data)) = fetcher_input.next() {
+                    // `LeasedBatchPart`es cannot be dropped at this point w/o
+                    // panicking, so swap them to an owned version.
+                    data.swap(&mut buffer);
 
-                let consumed_part_cap = cap.delayed_for_output(cap.time(), consumed_part_port);
-                let mut consumed_part_session =
-                    consumed_part_output_handle.session(&consumed_part_cap);
+                    let update_cap = cap.delayed_for_output(cap.time(), update_output_port);
+                    let mut update_session = output_handle.session(&update_cap);
 
-                for (_idx, part) in buffer.drain(..) {
-                    let (consumed_part, updates) = fetcher.fetch_leased_part(part.into()).await;
+                    let consumed_part_cap = cap.delayed_for_output(cap.time(), consumed_part_port);
+                    let mut consumed_part_session =
+                        consumed_part_output_handle.session(&consumed_part_cap);
 
-                    let updates = updates
-                        .expect("shard_id generated for sources must match across all workers");
+                    for (_idx, part) in buffer.drain(..) {
+                        let (consumed_part, updates) = fetcher.fetch_leased_part(part.into()).await;
 
-                    // Apply as much logic to `updates` as we can, before we emit anything.
-                    let mut update_outputs = Vec::with_capacity(updates.len());
-                    for ((key, val), time, diff) in updates {
-                        if !until.less_equal(&time) {
-                            match (key, val) {
-                                (Ok(SourceData(Ok(row))), Ok(())) => {
-                                    if let Some(mfp) = &mut map_filter_project {
-                                        let arena = mz_repr::RowArena::new();
-                                        let mut datums_local = datum_vec.borrow_with(&row);
-                                        for result in mfp.evaluate(
-                                            &mut datums_local,
-                                            &arena,
-                                            time,
-                                            diff,
-                                            |time| !until.less_equal(time),
-                                            &mut row_builder,
-                                        ) {
-                                            match result {
-                                                Ok((row, time, diff)) => {
-                                                    // Additional `until` filtering due to temporal filters.
-                                                    if !until.less_equal(&time) {
-                                                        update_outputs.push((Ok(row), time, diff));
+                        let updates = updates
+                            .expect("shard_id generated for sources must match across all workers");
+
+                        // Apply as much logic to `updates` as we can, before we emit anything.
+                        let mut update_outputs = Vec::with_capacity(updates.len());
+                        for ((key, val), time, diff) in updates {
+                            if !until.less_equal(&time) {
+                                match (key, val) {
+                                    (Ok(SourceData(Ok(row))), Ok(())) => {
+                                        if let Some(mfp) = &mut map_filter_project {
+                                            let arena = mz_repr::RowArena::new();
+                                            let mut datums_local = datum_vec.borrow_with(&row);
+                                            for result in mfp.evaluate(
+                                                &mut datums_local,
+                                                &arena,
+                                                time,
+                                                diff,
+                                                |time| !until.less_equal(time),
+                                                &mut row_builder,
+                                            ) {
+                                                match result {
+                                                    Ok((row, time, diff)) => {
+                                                        // Additional `until` filtering due to temporal filters.
+                                                        if !until.less_equal(&time) {
+                                                            update_outputs.push((
+                                                                Ok(row),
+                                                                time,
+                                                                diff,
+                                                            ));
+                                                        }
                                                     }
-                                                }
-                                                Err((err, time, diff)) => {
-                                                    // Additional `until` filtering due to temporal filters.
-                                                    if !until.less_equal(&time) {
-                                                        update_outputs.push((Err(err), time, diff));
+                                                    Err((err, time, diff)) => {
+                                                        // Additional `until` filtering due to temporal filters.
+                                                        if !until.less_equal(&time) {
+                                                            update_outputs.push((
+                                                                Err(err),
+                                                                time,
+                                                                diff,
+                                                            ));
+                                                        }
                                                     }
                                                 }
                                             }
+                                        } else {
+                                            update_outputs.push((Ok(row), time, diff));
                                         }
-                                    } else {
-                                        update_outputs.push((Ok(row), time, diff));
                                     }
+                                    (Ok(SourceData(Err(err))), Ok(())) => {
+                                        update_outputs.push((Err(err), time, diff));
+                                    }
+                                    // TODO(petrosagg): error handling
+                                    _ => panic!("decoding failed"),
                                 }
-                                (Ok(SourceData(Err(err))), Ok(())) => {
-                                    update_outputs.push((Err(err), time, diff));
-                                }
-                                // TODO(petrosagg): error handling
-                                _ => panic!("decoding failed"),
                             }
                         }
-                    }
-                    differential_dataflow::consolidation::consolidate_updates(&mut update_outputs);
+                        differential_dataflow::consolidation::consolidate_updates(
+                            &mut update_outputs,
+                        );
 
-                    update_session.give_vec(&mut update_outputs);
-                    consumed_part_session.give(consumed_part.into_exchangeable_part());
+                        update_session.give_vec(&mut update_outputs);
+                        consumed_part_session.give(consumed_part.into_exchangeable_part());
+                    }
+                }
+
+                // Quit the loop once we know that we processed all input.
+                if frontiers.borrow().iter().all(|f| f.is_empty()) {
+                    break;
                 }
             }
-            false
-        }),
+        },
     );
 
     // This operator is meant to only run on the chosen worker. All workers will
     // exchange their fetched ("consumed") parts back to the leasor.
     let mut consumed_part_builder = OperatorBuilder::new(
-        format!("persist_source {:?}: consumed part collector", source_id),
+        format!("persist_source {}: consumed part collector", source_id),
         scope.clone(),
     );
 
@@ -378,21 +392,18 @@ where
     let last_token = Rc::new(token);
     let token = Rc::clone(&last_token);
 
-    consumed_part_builder.build_async(
-        scope.clone(),
-        async_op!(|initial_capabilities, _frontiers| {
-            initial_capabilities.clear();
+    consumed_part_builder.build(|_initial_capabilities| {
+        let mut buffer = Vec::new();
 
+        move |_frontiers| {
             // The chosen worker is the leasor because it issues batches.
             if worker_index != chosen_worker {
                 trace!(
                     "We are not the batch leasor for {:?}, exiting...",
                     source_id
                 );
-                return false;
+                return;
             }
-
-            let mut buffer = Vec::new();
 
             while let Some((_cap, data)) = consumed_part_input.next() {
                 data.swap(&mut buffer);
@@ -408,10 +419,8 @@ where
                     }
                 }
             }
-
-            false
-        }),
-    );
+        }
+    });
 
     let token = Rc::new(token);
 
