@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 axum = { version = "0.5.15", features = ["headers"] }
 backtrace = "0.3.66"
 cfg-if = "1.0.0"
@@ -29,7 +29,7 @@ tokio = { version = "1.19.2", features = ["time"] }
 tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
 
 [build-dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 mz-npm = { path = "../npm" }
 
 [features]

@@ -12,7 +12,7 @@ path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 byteorder = "1.4.3"
 chrono = { version = "0.4.20", default-features = false, features = ["std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }

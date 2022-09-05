@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 aws-config = { version = "0.47.0", default-features = false, features = ["native-tls"] }
 aws-sdk-kinesis = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-types = "0.47.0"
