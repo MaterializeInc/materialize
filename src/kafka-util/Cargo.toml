@@ -30,4 +30,4 @@ url = "2.2.2"
 
 [build-dependencies]
 prost-build = "0.11.1"
-protobuf-src = "1.0.4"
+protobuf-src = "1.1.0"
