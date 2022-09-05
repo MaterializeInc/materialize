@@ -57,7 +57,7 @@ hyper = { version = "0.14.20", features = ["http1", "server"], optional = true }
 hyper-tls = { version = "0.5.0", optional = true }
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"], optional = true }
 opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", optional = true }
-console-subscriber = { version = "0.1.7", optional = true }
+console-subscriber = { version = "0.1.8", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.19.2", features = ["macros"] }
