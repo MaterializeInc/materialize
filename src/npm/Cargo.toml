@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 flate2 = "1.0.24"
 hex = "0.4.3"
 hex-literal = "0.3.4"

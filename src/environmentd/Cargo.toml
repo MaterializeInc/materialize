@@ -9,7 +9,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.57"
 axum = { version = "0.5.15", features = ["headers"] }
@@ -103,7 +103,7 @@ serde_json = "1.0.85"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 cc = "1.0.73"
 mz-npm = { path = "../npm" }
 

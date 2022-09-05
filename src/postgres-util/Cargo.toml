@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 async-ssh2-lite = { version = "0.3.2", features = ["tokio"] }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-proto = { path = "../proto" }

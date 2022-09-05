@@ -27,7 +27,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tracing = "0.1.36"
 
 [dev-dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 mz-postgres-util = { path = "../postgres-util" }
 tempfile = "3.2.0"
 tokio = { version = "1.19.2", features = ["macros"] }
