@@ -408,7 +408,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // Migrate builtin objects.
         for (compute_id, index_ids) in builtin_migration_metadata.previous_index_ids {
             self.controller
-                .compute_mut(compute_id)
+                .active_compute(compute_id)
                 .unwrap()
                 .drop_indexes_unvalidated(index_ids)
                 .await?;
@@ -417,7 +417,7 @@ impl<S: Append + 'static> Coordinator<S> {
             builtin_migration_metadata.previous_materialized_view_ids
         {
             self.controller
-                .compute_mut(compute_id)
+                .active_compute(compute_id)
                 .unwrap()
                 .drop_sinks_unvalidated(recorded_view_ids.clone())
                 .await?;
@@ -536,7 +536,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         let dataflow_plan =
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
                         self.controller
-                            .compute_mut(idx.compute_instance)
+                            .active_compute(idx.compute_instance)
                             .unwrap()
                             .create_dataflows(dataflow_plan)
                             .await

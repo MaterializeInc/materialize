@@ -50,7 +50,7 @@ pub struct DataflowBuilder<'a, T> {
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
-    pub compute: ComputeController<'a, T>,
+    pub compute: &'a ComputeController<T>,
     recursion_guard: RecursionGuard,
 }
 
@@ -102,7 +102,7 @@ impl<S: Append + 'static> Coordinator<S> {
             dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
         }
         self.controller
-            .compute_mut(instance)
+            .active_compute(instance)
             .unwrap()
             .create_dataflows(dataflow_plans)
             .await
