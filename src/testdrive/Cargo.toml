@@ -11,13 +11,13 @@ anyhow = "1.0.64"
 async-compression = { version = "0.3.14", features = ["tokio", "gzip"] }
 async-trait = "0.1.57"
 atty = "0.2.0"
-aws-config = { version = "0.47.0", default-features = false, features = ["native-tls"] }
-aws-sdk-kinesis = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-s3 = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sqs = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sts = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-smithy-http = "0.47.0"
-aws-types = { version = "0.47.0", features = ["hardcoded-credentials"] }
+aws-config = { version = "0.48.0", default-features = false, features = ["native-tls"] }
+aws-sdk-kinesis = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-s3 = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sqs = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sts = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-smithy-http = "0.48.0"
+aws-types = { version = "0.48.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
 bytes = "1.2.1"
 chrono = { version = "0.4.20", default-features = false, features = ["std"] }
