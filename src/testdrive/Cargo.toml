@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 async-compression = { version = "0.3.14", features = ["tokio", "gzip"] }
 async-trait = "0.1.57"
 atty = "0.2.0"
@@ -15,7 +15,7 @@ aws-config = { version = "0.47.0", default-features = false, features = ["native
 aws-sdk-kinesis = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-s3 = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-sqs = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sts = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sts = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-smithy-http = "0.47.0"
 aws-types = { version = "0.47.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
@@ -23,7 +23,7 @@ bytes = "1.2.1"
 chrono = { version = "0.4.20", default-features = false, features = ["std"] }
 clap = { version = "3.2.17", features = ["derive"] }
 flate2 = "1.0.24"
-futures = "0.3.23"
+futures = "0.3.24"
 globset = "0.4.9"
 http = "0.2.8"
 itertools = "0.10.3"
@@ -49,7 +49,7 @@ mz-stash = { path = "../stash" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.9.2", features = ["serde"] }
-protobuf-src = "1.0.4"
+protobuf-src = "1.1.0"
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.6.0"
