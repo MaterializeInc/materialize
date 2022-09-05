@@ -7,7 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN` support for `Mir` structures.
+//! `EXPLAIN ... AS TEXT` support for MIR structures.
+//!
+//! The format adheres to the following conventions:
+//! 1. In general, every line corresponds to an [`MirRelationExpr`] node in the
+//!    plan.
+//! 2. Non-recursive parameters of each sub-plan are written as `$key=$val`
+//!    pairs on the same line.
+//! 3. A single non-recursive parameter can be written just as `$val`.
+//! 4. Exceptions in (1) can be made when virtual syntax is requested (done by
+//!    default, can be turned off with `WITH(raw_syntax)`).
+//! 5. Exceptions in (2) can be made when join implementations are rendered
+//!    explicitly `WITH(join_impls)`.
 
 use std::fmt;
 

@@ -1,0 +1,1402 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+)
+
+statement ok
+CREATE VIEW ov AS SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
+
+statement ok
+CREATE VIEW v AS
+SELECT * FROM t WHERE a IS NOT NULL
+
+statement ok
+CREATE DEFAULT INDEX ON v
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS
+SELECT * FROM t WHERE a IS NOT NULL
+
+mode cockroach
+
+# Test basic linear chains.
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+SELECT a + 1, b, 4 FROM mv WHERE a > 0
+----
+{
+  "Project": {
+    "input": {
+      "Map": {
+        "input": {
+          "Filter": {
+            "input": {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 5
+                  }
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            },
+            "predicates": [
+              {
+                "CallBinary": {
+                  "func": "Gt",
+                  "expr1": {
+                    "Column": {
+                      "level": 0,
+                      "column": 0
+                    }
+                  },
+                  "expr2": {
+                    "Literal": [
+                      {
+                        "data": [
+                          4,
+                          0,
+                          0,
+                          0,
+                          0
+                        ]
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": false
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "scalars": [
+          {
+            "CallBinary": {
+              "func": "AddInt32",
+              "expr1": {
+                "Column": {
+                  "level": 0,
+                  "column": 0
+                }
+              },
+              "expr2": {
+                "Literal": [
+                  {
+                    "data": [
+                      4,
+                      1,
+                      0,
+                      0,
+                      0
+                    ]
+                  },
+                  {
+                    "scalar_type": "Int32",
+                    "nullable": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "Literal": [
+              {
+                "data": [
+                  4,
+                  4,
+                  0,
+                  0,
+                  0
+                ]
+              },
+              {
+                "scalar_type": "Int32",
+                "nullable": false
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "outputs": [
+      2,
+      1,
+      3
+    ]
+  }
+}
+EOF
+
+# Test table functions (CallTable).
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+SELECT * FROM generate_series(1, 7)
+----
+{
+  "CallTable": {
+    "func": "GenerateSeriesInt32",
+    "exprs": [
+      {
+        "Literal": [
+          {
+            "data": [
+              4,
+              1,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "scalar_type": "Int32",
+            "nullable": false
+          }
+        ]
+      },
+      {
+        "Literal": [
+          {
+            "data": [
+              4,
+              7,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "scalar_type": "Int32",
+            "nullable": false
+          }
+        ]
+      },
+      {
+        "Literal": [
+          {
+            "data": [
+              4,
+              1,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "scalar_type": "Int32",
+            "nullable": false
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+
+# Test Threshold, Union, Distinct, Negate.
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+SELECT a FROM t EXCEPT SELECT b FROM mv
+----
+{
+  "Threshold": {
+    "input": {
+      "Union": {
+        "base": {
+          "Distinct": {
+            "input": {
+              "Project": {
+                "input": {
+                  "Map": {
+                    "input": {
+                      "Project": {
+                        "input": {
+                          "Get": {
+                            "id": {
+                              "Global": {
+                                "User": 1
+                              }
+                            },
+                            "typ": {
+                              "column_types": [
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                },
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                }
+                              ],
+                              "keys": []
+                            }
+                          }
+                        },
+                        "outputs": [
+                          0
+                        ]
+                      }
+                    },
+                    "scalars": [
+                      {
+                        "Column": {
+                          "level": 0,
+                          "column": 0
+                        }
+                      }
+                    ]
+                  }
+                },
+                "outputs": [
+                  1
+                ]
+              }
+            }
+          }
+        },
+        "inputs": [
+          {
+            "Negate": {
+              "input": {
+                "Distinct": {
+                  "input": {
+                    "Project": {
+                      "input": {
+                        "Map": {
+                          "input": {
+                            "Project": {
+                              "input": {
+                                "Get": {
+                                  "id": {
+                                    "Global": {
+                                      "User": 5
+                                    }
+                                  },
+                                  "typ": {
+                                    "column_types": [
+                                      {
+                                        "scalar_type": "Int32",
+                                        "nullable": false
+                                      },
+                                      {
+                                        "scalar_type": "Int32",
+                                        "nullable": true
+                                      }
+                                    ],
+                                    "keys": []
+                                  }
+                                }
+                              },
+                              "outputs": [
+                                1
+                              ]
+                            }
+                          },
+                          "scalars": [
+                            {
+                              "Column": {
+                                "level": 0,
+                                "column": 0
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "outputs": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+EOF
+
+# Test TopK.
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+VIEW ov
+----
+{
+  "Project": {
+    "input": {
+      "TopK": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                "User": 1
+              }
+            },
+            "typ": {
+              "column_types": [
+                {
+                  "scalar_type": "Int32",
+                  "nullable": true
+                },
+                {
+                  "scalar_type": "Int32",
+                  "nullable": true
+                }
+              ],
+              "keys": []
+            }
+          }
+        },
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 1,
+            "desc": false,
+            "nulls_last": true
+          },
+          {
+            "column": 0,
+            "desc": true,
+            "nulls_last": false
+          }
+        ],
+        "limit": 5,
+        "offset": 0
+      }
+    },
+    "outputs": [
+      0,
+      1
+    ]
+  }
+}
+EOF
+
+# Test Finish (TODO).
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
+----
+{
+  "Get": {
+    "id": {
+      "Global": {
+        "User": 1
+      }
+    },
+    "typ": {
+      "column_types": [
+        {
+          "scalar_type": "Int32",
+          "nullable": true
+        },
+        {
+          "scalar_type": "Int32",
+          "nullable": true
+        }
+      ],
+      "keys": []
+    }
+  }
+}
+EOF
+
+# Test Reduce (global).
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+SELECT abs(min(a) - max(a)) FROM t
+----
+{
+  "Project": {
+    "input": {
+      "Map": {
+        "input": {
+          "Reduce": {
+            "input": {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 1
+                  }
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            },
+            "group_key": [],
+            "aggregates": [
+              {
+                "func": "MinInt32",
+                "expr": {
+                  "Column": {
+                    "level": 0,
+                    "column": 0
+                  }
+                },
+                "distinct": false
+              },
+              {
+                "func": "MaxInt32",
+                "expr": {
+                  "Column": {
+                    "level": 0,
+                    "column": 0
+                  }
+                },
+                "distinct": false
+              }
+            ],
+            "expected_group_size": null
+          }
+        },
+        "scalars": [
+          {
+            "CallUnary": {
+              "func": {
+                "AbsInt32": null
+              },
+              "expr": {
+                "CallBinary": {
+                  "func": "SubInt32",
+                  "expr1": {
+                    "Column": {
+                      "level": 0,
+                      "column": 0
+                    }
+                  },
+                  "expr2": {
+                    "Column": {
+                      "level": 0,
+                      "column": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "outputs": [
+      2
+    ]
+  }
+}
+EOF
+
+# Test Reduce (local).
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+SELECT abs(min(a) - max(a)) FROM t GROUP BY b
+----
+{
+  "Project": {
+    "input": {
+      "Map": {
+        "input": {
+          "Reduce": {
+            "input": {
+              "Map": {
+                "input": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 1
+                      }
+                    },
+                    "typ": {
+                      "column_types": [
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        }
+                      ],
+                      "keys": []
+                    }
+                  }
+                },
+                "scalars": [
+                  {
+                    "Column": {
+                      "level": 0,
+                      "column": 1
+                    }
+                  }
+                ]
+              }
+            },
+            "group_key": [
+              2
+            ],
+            "aggregates": [
+              {
+                "func": "MinInt32",
+                "expr": {
+                  "Column": {
+                    "level": 0,
+                    "column": 0
+                  }
+                },
+                "distinct": false
+              },
+              {
+                "func": "MaxInt32",
+                "expr": {
+                  "Column": {
+                    "level": 0,
+                    "column": 0
+                  }
+                },
+                "distinct": false
+              }
+            ],
+            "expected_group_size": null
+          }
+        },
+        "scalars": [
+          {
+            "CallUnary": {
+              "func": {
+                "AbsInt32": null
+              },
+              "expr": {
+                "CallBinary": {
+                  "func": "SubInt32",
+                  "expr1": {
+                    "Column": {
+                      "level": 0,
+                      "column": 1
+                    }
+                  },
+                  "expr2": {
+                    "Column": {
+                      "level": 0,
+                      "column": 2
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "outputs": [
+      3
+    ]
+  }
+}
+EOF
+
+# Test EXISTS subqueries.
+query T multiline
+EXPLAIN RAW PLAN WITH(raw_syntax) AS JSON FOR
+SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
+----
+{
+  "Let": {
+    "name": "subquery-2",
+    "id": 2,
+    "value": {
+      "Filter": {
+        "input": {
+          "Get": {
+            "id": {
+              "Global": {
+                "User": 5
+              }
+            },
+            "typ": {
+              "column_types": [
+                {
+                  "scalar_type": "Int32",
+                  "nullable": false
+                },
+                {
+                  "scalar_type": "Int32",
+                  "nullable": true
+                }
+              ],
+              "keys": []
+            }
+          }
+        },
+        "predicates": [
+          {
+            "CallBinary": {
+              "func": "Gt",
+              "expr1": {
+                "Column": {
+                  "level": 1,
+                  "column": 1
+                }
+              },
+              "expr2": {
+                "Column": {
+                  "level": 0,
+                  "column": 1
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "body": {
+      "Let": {
+        "name": "subquery-1",
+        "id": 1,
+        "value": {
+          "Filter": {
+            "input": {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 5
+                  }
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            },
+            "predicates": [
+              {
+                "CallBinary": {
+                  "func": "Lt",
+                  "expr1": {
+                    "Column": {
+                      "level": 1,
+                      "column": 0
+                    }
+                  },
+                  "expr2": {
+                    "Column": {
+                      "level": 0,
+                      "column": 0
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": {
+          "Filter": {
+            "input": {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 1
+                  }
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            },
+            "predicates": [
+              {
+                "CallVariadic": {
+                  "func": "And",
+                  "exprs": [
+                    {
+                      "Exists": {
+                        "Get": {
+                          "id": {
+                            "Local": 1
+                          },
+                          "typ": {
+                            "column_types": [],
+                            "keys": []
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "Exists": {
+                        "Get": {
+                          "id": {
+                            "Local": 2
+                          },
+                          "typ": {
+                            "column_types": [],
+                            "keys": []
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+EOF
+
+# Test SELECT subqueries.
+query T multiline
+EXPLAIN RAW PLAN WITH(raw_syntax) AS JSON FOR
+SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
+----
+{
+  "Project": {
+    "input": {
+      "Let": {
+        "name": "subquery-2",
+        "id": 2,
+        "value": {
+          "Project": {
+            "input": {
+              "TopK": {
+                "input": {
+                  "Filter": {
+                    "input": {
+                      "Get": {
+                        "id": {
+                          "Global": {
+                            "User": 5
+                          }
+                        },
+                        "typ": {
+                          "column_types": [
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": false
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": true
+                            }
+                          ],
+                          "keys": []
+                        }
+                      }
+                    },
+                    "predicates": [
+                      {
+                        "CallBinary": {
+                          "func": "Eq",
+                          "expr1": {
+                            "Column": {
+                              "level": 0,
+                              "column": 1
+                            }
+                          },
+                          "expr2": {
+                            "Column": {
+                              "level": 1,
+                              "column": 1
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "group_key": [],
+                "order_key": [],
+                "limit": 1,
+                "offset": 0
+              }
+            },
+            "outputs": [
+              0
+            ]
+          }
+        },
+        "body": {
+          "Let": {
+            "name": "subquery-1",
+            "id": 1,
+            "value": {
+              "Project": {
+                "input": {
+                  "TopK": {
+                    "input": {
+                      "Filter": {
+                        "input": {
+                          "Get": {
+                            "id": {
+                              "Global": {
+                                "User": 3
+                              }
+                            },
+                            "typ": {
+                              "column_types": [
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": false
+                                },
+                                {
+                                  "scalar_type": "Int32",
+                                  "nullable": true
+                                }
+                              ],
+                              "keys": []
+                            }
+                          }
+                        },
+                        "predicates": [
+                          {
+                            "CallBinary": {
+                              "func": "Eq",
+                              "expr1": {
+                                "Column": {
+                                  "level": 0,
+                                  "column": 1
+                                }
+                              },
+                              "expr2": {
+                                "Column": {
+                                  "level": 1,
+                                  "column": 1
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "group_key": [],
+                    "order_key": [],
+                    "limit": 1,
+                    "offset": 0
+                  }
+                },
+                "outputs": [
+                  0
+                ]
+              }
+            },
+            "body": {
+              "Map": {
+                "input": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 1
+                      }
+                    },
+                    "typ": {
+                      "column_types": [
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        }
+                      ],
+                      "keys": []
+                    }
+                  }
+                },
+                "scalars": [
+                  {
+                    "Select": {
+                      "Get": {
+                        "id": {
+                          "Local": 1
+                        },
+                        "typ": {
+                          "column_types": [],
+                          "keys": []
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "Select": {
+                      "Get": {
+                        "id": {
+                          "Local": 2
+                        },
+                        "typ": {
+                          "column_types": [],
+                          "keys": []
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "outputs": [
+      2,
+      3
+    ]
+  }
+}
+EOF
+
+# Test CrossJoin derived from a comma join without a predicate.
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+SELECT t1.a, t2.a FROM t as t1, t as t2
+----
+{
+  "Project": {
+    "input": {
+      "Join": {
+        "left": {
+          "Get": {
+            "id": {
+              "Global": {
+                "User": 1
+              }
+            },
+            "typ": {
+              "column_types": [
+                {
+                  "scalar_type": "Int32",
+                  "nullable": true
+                },
+                {
+                  "scalar_type": "Int32",
+                  "nullable": true
+                }
+              ],
+              "keys": []
+            }
+          }
+        },
+        "right": {
+          "Get": {
+            "id": {
+              "Global": {
+                "User": 1
+              }
+            },
+            "typ": {
+              "column_types": [
+                {
+                  "scalar_type": "Int32",
+                  "nullable": true
+                },
+                {
+                  "scalar_type": "Int32",
+                  "nullable": true
+                }
+              ],
+              "keys": []
+            }
+          }
+        },
+        "on": {
+          "Literal": [
+            {
+              "data": [
+                2
+              ]
+            },
+            {
+              "scalar_type": "Bool",
+              "nullable": false
+            }
+          ]
+        },
+        "kind": "Inner"
+      }
+    },
+    "outputs": [
+      0,
+      2
+    ]
+  }
+}
+EOF
+
+# Test InnerJoin (comma syntax).
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+SELECT t1.a, t2.a
+FROM
+  t as t1,
+  t as t2,
+  t as t3
+WHERE t1.b = t2.b AND t2.b = t3.b
+----
+{
+  "Project": {
+    "input": {
+      "Filter": {
+        "input": {
+          "Join": {
+            "left": {
+              "Join": {
+                "left": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 1
+                      }
+                    },
+                    "typ": {
+                      "column_types": [
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        }
+                      ],
+                      "keys": []
+                    }
+                  }
+                },
+                "right": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 1
+                      }
+                    },
+                    "typ": {
+                      "column_types": [
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        }
+                      ],
+                      "keys": []
+                    }
+                  }
+                },
+                "on": {
+                  "Literal": [
+                    {
+                      "data": [
+                        2
+                      ]
+                    },
+                    {
+                      "scalar_type": "Bool",
+                      "nullable": false
+                    }
+                  ]
+                },
+                "kind": "Inner"
+              }
+            },
+            "right": {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 1
+                  }
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            },
+            "on": {
+              "Literal": [
+                {
+                  "data": [
+                    2
+                  ]
+                },
+                {
+                  "scalar_type": "Bool",
+                  "nullable": false
+                }
+              ]
+            },
+            "kind": "Inner"
+          }
+        },
+        "predicates": [
+          {
+            "CallVariadic": {
+              "func": "And",
+              "exprs": [
+                {
+                  "CallBinary": {
+                    "func": "Eq",
+                    "expr1": {
+                      "Column": {
+                        "level": 0,
+                        "column": 1
+                      }
+                    },
+                    "expr2": {
+                      "Column": {
+                        "level": 0,
+                        "column": 3
+                      }
+                    }
+                  }
+                },
+                {
+                  "CallBinary": {
+                    "func": "Eq",
+                    "expr1": {
+                      "Column": {
+                        "level": 0,
+                        "column": 3
+                      }
+                    },
+                    "expr2": {
+                      "Column": {
+                        "level": 0,
+                        "column": 5
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "outputs": [
+      0,
+      2
+    ]
+  }
+}
+EOF
+
+# Test multiple CTEs: directly nested 'Let' variants are rendered in a flattened way.
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM A, B;
+----
+{
+  "Let": {
+    "name": "a",
+    "id": 0,
+    "value": {
+      "Map": {
+        "input": {
+          "Constant": {
+            "rows": [
+              {
+                "data": []
+              }
+            ],
+            "typ": {
+              "column_types": [],
+              "keys": []
+            }
+          }
+        },
+        "scalars": [
+          {
+            "Literal": [
+              {
+                "data": [
+                  4,
+                  1,
+                  0,
+                  0,
+                  0
+                ]
+              },
+              {
+                "scalar_type": "Int32",
+                "nullable": false
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "body": {
+      "Let": {
+        "name": "b",
+        "id": 1,
+        "value": {
+          "Filter": {
+            "input": {
+              "Get": {
+                "id": {
+                  "Local": 0
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            },
+            "predicates": [
+              {
+                "CallBinary": {
+                  "func": "Gt",
+                  "expr1": {
+                    "Column": {
+                      "level": 0,
+                      "column": 0
+                    }
+                  },
+                  "expr2": {
+                    "Literal": [
+                      {
+                        "data": [
+                          4,
+                          0,
+                          0,
+                          0,
+                          0
+                        ]
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": false
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": {
+          "Join": {
+            "left": {
+              "Get": {
+                "id": {
+                  "Local": 0
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            },
+            "right": {
+              "Get": {
+                "id": {
+                  "Local": 1
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            },
+            "on": {
+              "Literal": [
+                {
+                  "data": [
+                    2
+                  ]
+                },
+                {
+                  "scalar_type": "Bool",
+                  "nullable": false
+                }
+              ]
+            },
+            "kind": "Inner"
+          }
+        }
+      }
+    }
+  }
+}
+EOF

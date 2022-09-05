@@ -22,7 +22,6 @@ import "repr/src/row.proto";
 import "storage/src/protocol/client.proto";
 import "storage/src/controller.proto";
 import "storage/src/types/sinks.proto";
-import "storage/src/types/transforms.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -106,7 +105,7 @@ message ProtoSourceInstanceDesc {
 }
 
 message ProtoSourceInstanceArguments {
-    optional mz_storage.types.transforms.ProtoLinearOperator operators = 1;
+    optional mz_expr.linear.ProtoMapFilterProject operators = 2;
 }
 
 message ProtoPeek {

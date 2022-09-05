@@ -49,16 +49,12 @@ $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} 
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE start_offset
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET = [100])
-  TOPIC 'testdrive-offset-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET = [100], TOPIC 'testdrive-offset-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE SOURCE kafka_time_offset
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START TIMESTAMP=2)
-  TOPIC 'testdrive-offset-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=2, TOPIC 'testdrive-offset-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 

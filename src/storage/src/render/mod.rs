@@ -148,8 +148,6 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 id,
                 description.clone(),
                 resume_upper,
-                // NOTE: For now sources never have LinearOperators but might have in the future
-                None,
                 storage_state,
             );
 

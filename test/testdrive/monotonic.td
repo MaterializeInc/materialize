@@ -461,10 +461,12 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v11
 Source materialize.public.m1 UID:
 {
+  "expressions": [],
   "predicates": [],
   "projection": [
     0
-  ]
+  ],
+  "input_arity": 1
 }
 
 View materialize.public.v11 UID:

@@ -15,7 +15,7 @@ from packaging import version
 
 from materialize.mzcompose import Service, ServiceConfig
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
 
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
 # minor version in the release series, and minor versions have been known to

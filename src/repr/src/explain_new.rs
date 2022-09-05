@@ -37,49 +37,6 @@ use serde::{Serialize, Serializer};
 
 use crate::{ColumnType, GlobalId, Row, ScalarType};
 
-/// Wraps a reference to a type that implements `Display$Format` for a specific
-/// [`ExplainFormat`] and implements [`fmt::Display`] by delegating to this
-/// implementation.
-///
-/// For context-independent `Display$Format` implementations, the explanation
-/// type can be a reference to the type that implements [`Explain`].
-///
-/// For context-dependent `Display$Format` implementations, the explanation
-/// type also needs a reference to the context (see [`Explain::Context`]).
-///
-/// The same type can implement more than one `Display$Format` trait and
-/// thereby be plugged as an `Explanation` for more than one output format.
-#[allow(missing_debug_implementations)]
-enum Explanation<'a, Text = UnsupportedFormat, Json = UnsupportedFormat, Dot = UnsupportedFormat> {
-    Text(&'a Text),
-    Json(&'a Json),
-    Dot(&'a Dot),
-}
-
-/// Wraps an instance of type `T` together with a lambda that produces its
-/// display context `C`.
-///
-/// Used internally by all `$format_string_at(T, Fn() -> C)` implementations.
-struct DisplayWithContext<'a, T, C, F: Fn() -> C> {
-    t: &'a T,
-    f: F,
-}
-
-impl<'a, T, J, D> fmt::Display for Explanation<'a, T, J, D>
-where
-    T: DisplayText,
-    J: DisplayJson,
-    D: DisplayDot,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Explanation::Text(explain) => explain.fmt_text(f, &mut ()),
-            Explanation::Json(explain) => explain.fmt_json(f, &mut ()),
-            Explanation::Dot(explain) => explain.fmt_dot(f, &mut ()),
-        }
-    }
-}
-
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ExplainFormat {
@@ -107,21 +64,6 @@ where
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
 }
 
-pub fn text_string<T: DisplayText<()>>(t: &T) -> String {
-    Explanation::<'_, T, UnsupportedFormat, UnsupportedFormat>::Text(t).to_string()
-}
-
-pub fn text_string_at<'a, T: DisplayText<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
-    text_string(&DisplayWithContext { t, f })
-}
-
-impl<T: DisplayText<C>, C, F: Fn() -> C> DisplayText<()> for DisplayWithContext<'_, T, C, F> {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-        let mut ctx = (self.f)();
-        self.t.fmt_text(f, &mut ctx)
-    }
-}
-
 impl<A, C> DisplayText<C> for Box<A>
 where
     A: DisplayText<C>,
@@ -142,6 +84,44 @@ where
             fmt::Result::Ok(())
         }
     }
+}
+
+/// Render a type `t: T` as [`ExplainFormat::Text`].
+///
+/// # Panics
+///
+/// Panics if the [`DisplayText::fmt_text`] call returns a [`fmt::Error`].
+pub fn text_string<T: DisplayText>(t: &T) -> String {
+    struct TextString<'a, T>(&'a T);
+
+    impl<'a, F: DisplayText> fmt::Display for TextString<'a, F> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.0.fmt_text(f, &mut ())
+        }
+    }
+
+    TextString::<'_>(t).to_string()
+}
+
+/// Apply `f: F` to create a rendering context of type `C` and render the given
+/// tree `t: T` within that context.
+/// # Panics
+///
+/// Panics if the [`DisplayText::fmt_text`] call returns a [`fmt::Error`].
+pub fn text_string_at<'a, T: DisplayText<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
+    struct TextStringAt<'a, T, C, F: Fn() -> C> {
+        t: &'a T,
+        f: F,
+    }
+
+    impl<T: DisplayText<C>, C, F: Fn() -> C> DisplayText<()> for TextStringAt<'_, T, C, F> {
+        fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+            let mut ctx = (self.f)();
+            self.t.fmt_text(f, &mut ctx)
+        }
+    }
+
+    text_string(&TextStringAt { t, f })
 }
 
 /// Creates a type whose [`fmt::Display`] implementation outputs each item in
@@ -190,47 +170,27 @@ where
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Json`].
-pub trait DisplayJson<C = ()>
+pub trait DisplayJson
 where
     Self: Sized,
 {
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
+    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value>;
 }
 
-pub fn json_string<T: DisplayJson<()>>(t: &T) -> String {
-    Explanation::<'_, UnsupportedFormat, T, UnsupportedFormat>::Json(t).to_string()
+/// Render a type `t: T` as [`ExplainFormat::Json`].
+///
+/// # Panics
+///
+/// Panics if the [`DisplayJson::to_serde_value`] or the subsequent
+/// [`serde_json::to_string_pretty`] call return a [`serde_json::Error`].
+pub fn json_string<T: DisplayJson>(t: &T) -> String {
+    let value = t.to_serde_value().expect("serde_json::Value");
+    serde_json::to_string_pretty(&value).expect("JSON string")
 }
 
-pub fn json_string_at<'a, T: DisplayJson<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
-    json_string(&DisplayWithContext { t, f })
-}
-
-impl<T: DisplayJson<C>, C, F: Fn() -> C> DisplayJson<()> for DisplayWithContext<'_, T, C, F> {
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-        let mut ctx = (self.f)();
-        self.t.fmt_json(f, &mut ctx)
-    }
-}
-
-impl<A, C> DisplayJson<C> for Box<A>
-where
-    A: DisplayJson<C>,
-{
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        self.as_ref().fmt_json(f, ctx)
-    }
-}
-
-impl<A, C> DisplayJson<C> for Option<A>
-where
-    A: DisplayJson<C>,
-{
-    fn fmt_json(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        if let Some(val) = self {
-            val.fmt_json(f, ctx)
-        } else {
-            fmt::Result::Ok(())
-        }
+impl DisplayJson for String {
+    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
+        Ok(serde_json::Value::String(self.clone()))
     }
 }
 
@@ -241,21 +201,6 @@ where
     Self: Sized,
 {
     fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
-}
-
-pub fn dot_string<T: DisplayDot<()>>(t: &T) -> String {
-    Explanation::<'_, UnsupportedFormat, UnsupportedFormat, T>::Dot(t).to_string()
-}
-
-pub fn dot_string_at<'a, T: DisplayDot<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
-    dot_string(&DisplayWithContext { t, f })
-}
-
-impl<T: DisplayDot<C>, C, F: Fn() -> C> DisplayDot<()> for DisplayWithContext<'_, T, C, F> {
-    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-        let mut ctx = (self.f)();
-        self.t.fmt_dot(f, &mut ctx)
-    }
 }
 
 impl<A, C> DisplayDot<C> for Box<A>
@@ -280,6 +225,45 @@ where
     }
 }
 
+/// Render a type `t: T` as [`ExplainFormat::Dot`].
+///
+/// # Panics
+///
+/// Panics if the [`DisplayDot::fmt_dot`] call returns a [`fmt::Error`].
+pub fn dot_string<T: DisplayDot<()>>(t: &T) -> String {
+    struct DotString<'a, T>(&'a T);
+
+    impl<'a, T: DisplayDot> fmt::Display for DotString<'a, T> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.0.fmt_dot(f, &mut ())
+        }
+    }
+
+    DotString::<'_>(t).to_string()
+}
+
+/// Apply `f: F` to create a rendering context of type `C` and render the given
+/// type `t: T` as [`ExplainFormat::Dot`] within that context.
+///
+/// # Panics
+///
+/// Panics if the [`DisplayDot::fmt_dot`] call returns a [`fmt::Error`].
+pub fn dot_string_at<'a, T: DisplayDot<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
+    struct DotStringAt<'a, T, C, F: Fn() -> C> {
+        t: &'a T,
+        f: F,
+    }
+
+    impl<T: DisplayDot<C>, C, F: Fn() -> C> DisplayDot<()> for DotStringAt<'_, T, C, F> {
+        fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+            let mut ctx = (self.f)();
+            self.t.fmt_dot(f, &mut ctx)
+        }
+    }
+
+    dot_string(&DotStringAt { t, f })
+}
+
 /// A zero-variant enum to be used as the explanation type in the
 /// [`Explain`] implementation for all formats that are not supported
 /// for `Self`.
@@ -293,7 +277,7 @@ impl DisplayText for UnsupportedFormat {
 }
 
 impl DisplayJson for UnsupportedFormat {
-    fn fmt_json(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
         unreachable!()
     }
 }
@@ -312,6 +296,7 @@ pub enum ExplainError {
     FormatError(fmt::Error),
     AnyhowError(anyhow::Error),
     RecursionLimitError(RecursionLimitError),
+    SerdeJsonError(serde_json::Error),
     UnknownError(String),
 }
 
@@ -329,6 +314,9 @@ impl fmt::Display for ExplainError {
                 write!(f, "{}", error)
             }
             ExplainError::RecursionLimitError(error) => {
+                write!(f, "{}", error)
+            }
+            ExplainError::SerdeJsonError(error) => {
                 write!(f, "{}", error)
             }
             ExplainError::UnknownError(error) => {
@@ -353,6 +341,12 @@ impl From<anyhow::Error> for ExplainError {
 impl From<RecursionLimitError> for ExplainError {
     fn from(error: RecursionLimitError) -> Self {
         ExplainError::RecursionLimitError(error)
+    }
+}
+
+impl From<serde_json::Error> for ExplainError {
+    fn from(error: serde_json::Error) -> Self {
+        ExplainError::SerdeJsonError(error)
     }
 }
 

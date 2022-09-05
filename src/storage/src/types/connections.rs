@@ -10,10 +10,9 @@
 //! Connection types.
 
 use std::collections::{BTreeMap, HashSet};
-use std::str::FromStr;
+
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -22,7 +21,7 @@ use tokio_postgres::config::SslMode;
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
-use mz_kafka_util::KafkaAddrs;
+
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -219,6 +218,7 @@ impl ConfigKey for KafkaConnectionOptionName {
         use KafkaConnectionOptionName::*;
         match self {
             Broker | Brokers => "bootstrap.servers",
+            ProgressTopic => unimplemented!("not a kafka config"),
             SslKey => "ssl.key.pem",
             SslCertificate => "ssl.certificate.pem",
             SslCertificateAuthority => "ssl.ca.pem",
@@ -233,6 +233,7 @@ impl ConfigKey for KafkaConnectionOptionName {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection {
     pub brokers: Vec<String>,
+    pub progress_topic: Option<String>,
     pub security: Option<KafkaSecurity>,
 }
 
@@ -276,68 +277,6 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
         }
 
         r
-    }
-}
-
-impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
-    type Error = anyhow::Error;
-    /// Extracts only the options necessary to create a `KafkaConnection` from
-    /// a `BTreeMap<String, StringOrSecret>`, and returns the remaining
-    /// options.
-    ///
-    /// # Panics
-    /// - If `value` was not sufficiently or incorrectly type checked and
-    ///   parameters expected to reference objects (i.e. secrets) are instead
-    ///   `String`s, or vice versa.
-    fn try_from(map: &mut BTreeMap<String, StringOrSecret>) -> Result<Self, Self::Error> {
-        use KafkaConnectionOptionName::*;
-
-        let key_or_err = |config: &str,
-                          map: &mut BTreeMap<String, StringOrSecret>,
-                          key: KafkaConnectionOptionName| {
-            map.remove(&key.config_key()).ok_or_else(|| {
-                anyhow!(
-                    "invalid {} config: missing {} ({})",
-                    config.to_uppercase(),
-                    key,
-                    key.config_key(),
-                )
-            })
-        };
-
-        let security = if let Some(v) = map.remove("security.protocol") {
-            match v.unwrap_string().to_lowercase().as_str() {
-                config @ "ssl" => Some(KafkaSecurity::Tls(KafkaTlsConfig {
-                    identity: Some(TlsIdentity {
-                        key: key_or_err(config, map, SslKey)?.unwrap_secret(),
-                        cert: key_or_err(config, map, SslCertificate)?,
-                    }),
-                    root_cert: map.remove(&SslCertificateAuthority.config_key()),
-                })),
-                config @ "sasl_ssl" => Some(KafkaSecurity::Sasl(SaslConfig {
-                    mechanisms: key_or_err(config, map, SaslMechanisms)?
-                        .unwrap_string()
-                        .to_string(),
-                    username: key_or_err(config, map, SaslUsername)?,
-                    password: key_or_err(config, map, SaslPassword)?.unwrap_secret(),
-                    tls_root_cert: map.remove(&SslCertificateAuthority.config_key()),
-                })),
-                o => bail!("unsupported security.protocol: {}", o),
-            }
-        } else {
-            None
-        };
-
-        let brokers = match map.remove(&Broker.config_key()) {
-            Some(v) => KafkaAddrs::from_str(&v.unwrap_string())?
-                .to_string()
-                .split(',')
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>(),
-            None => bail!("must specify {}", Broker.config_key()),
-        };
-
-        Ok(KafkaConnection { brokers, security })
     }
 }
 
@@ -408,6 +347,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn into_proto(&self) -> ProtoKafkaConnection {
         ProtoKafkaConnection {
             brokers: self.brokers.into_proto(),
+            progress_topic: self.progress_topic.into_proto(),
             security: self.security.into_proto(),
         }
     }
@@ -415,6 +355,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaConnection {
             brokers: proto.brokers,
+            progress_topic: proto.progress_topic,
             security: proto.security.into_rust()?,
         })
     }

@@ -57,7 +57,8 @@ message ProtoStorageSinkConnection {
 
 message ProtoKafkaSinkConsistencyConnection {
     string topic = 1;
-    int32 schema_id = 2;
+    // int32 schema_id = 2;
+    reserved 2;
 }
 
 message ProtoSinkAsOf {

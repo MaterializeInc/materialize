@@ -88,8 +88,8 @@ impl RustType<ProtoJoinPlan> for JoinPlan {
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct JoinClosure {
-    ready_equivalences: Vec<Vec<MirScalarExpr>>,
-    before: mz_expr::SafeMfpPlan,
+    pub ready_equivalences: Vec<Vec<MirScalarExpr>>,
+    pub before: mz_expr::SafeMfpPlan,
 }
 
 impl Arbitrary for JoinClosure {

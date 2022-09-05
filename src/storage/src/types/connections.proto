@@ -52,6 +52,7 @@ message ProtoKafkaConnection {
     reserved 1, 2;
     reserved "broker", "options";
     repeated string brokers = 3;
+    optional string progress_topic = 5;
     optional ProtoKafkaConnectionSecurity security = 4;
 }
 

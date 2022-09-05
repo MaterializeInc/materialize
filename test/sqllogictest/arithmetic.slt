@@ -957,7 +957,8 @@ EXPLAIN SELECT
 FROM nums
 ----
 Source materialize.public.nums (u3):
-| Project (#0..=#5)
+| Map dummy, dummy, dummy
+| Project (#0..=#5, #9..=#11)
 
 Query:
 %0 =
@@ -992,7 +993,8 @@ EXPLAIN SELECT
 FROM nums
 ----
 Source materialize.public.nums (u3):
-| Project (#0..=#5)
+| Map dummy, dummy, dummy
+| Project (#0..=#5, #9..=#11)
 
 Query:
 %0 =

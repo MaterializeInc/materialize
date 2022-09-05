@@ -55,8 +55,7 @@ class AlterIndex(Check):
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE alter_index_source
-                  FROM KAFKA CONNECTION kafka_conn
-                  TOPIC 'testdrive-alter-index-${testdrive.seed}'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-index-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 

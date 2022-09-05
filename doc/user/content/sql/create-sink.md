@@ -191,7 +191,7 @@ CREATE CONNECTION kafka_connection
 
 CREATE SINK quotes_sink
 FROM quotes
-INTO KAFKA CONNECTION kafka_connection TOPIC 'quotes-eo-sink'
+INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-eo-sink')
 CONSISTENCY (TOPIC 'quotes-eo-sink-consistency'
              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081')
 WITH (reuse_topic=true)
@@ -322,14 +322,14 @@ _data&lowbar;collections_ | This field is null for `BEGIN` records, and for `END
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection TOPIC 'quotes'
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 ```sql
 CREATE SINK quotes_sink
 FROM quotes
-INTO KAFKA CONNECTION kafka_connection TOPIC 'quotes-sink'
+INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
@@ -338,7 +338,7 @@ FORMAT AVRO USING
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection TOPIC 'quotes'
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
@@ -350,7 +350,7 @@ CREATE MATERIALIZED VIEW frank_quotes AS
 ```sql
 CREATE SINK frank_quotes_sink
 FROM frank_quotes
-INTO KAFKA CONNECTION kafka_connection TOPIC 'frank-quotes-sink'
+INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
@@ -376,14 +376,14 @@ JOIN mz_kafka_sinks ON mz_sinks.id = mz_kafka_sinks.sink_id
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection TOPIC 'quotes'
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 ```sql
 CREATE SINK quotes_sink
 FROM quotes
-INTO KAFKA CONNECTION kafka_connection TOPIC 'quotes-sink'
+INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
 FORMAT JSON;
 ```
 
@@ -391,7 +391,7 @@ FORMAT JSON;
 
 ```sql
 CREATE SOURCE quotes
-FROM KAFKA CONNECTION kafka_connection TOPIC 'quotes'
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
 FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
@@ -403,7 +403,7 @@ CREATE MATERIALIZED VIEW frank_quotes AS
 ```sql
 CREATE SINK frank_quotes_sink
 FROM frank_quotes
-INTO KAFKA CONNECTION kafka_connection TOPIC 'frank-quotes-sink'
+INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
 FORMAT JSON;
 ```
 

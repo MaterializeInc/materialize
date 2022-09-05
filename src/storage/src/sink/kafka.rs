@@ -30,6 +30,7 @@ use rdkafka::message::{Message, OwnedMessage, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use rdkafka::{Offset, TopicPartitionList};
+use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -43,10 +44,7 @@ use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
-use mz_avro::types::Value;
-use mz_interchange::avro::{
-    self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
-};
+use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
@@ -66,9 +64,10 @@ use crate::storage_state::StorageState;
 use crate::types::connections::{ConnectionContext, PopulateClientConfig};
 use crate::types::errors::DataflowError;
 use crate::types::sinks::{
-    KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf,
-    SinkEnvelope, StorageSinkDesc,
+    KafkaSinkConnection, PublishedSchemaInfo, SinkAsOf, SinkEnvelope, StorageSinkDesc,
 };
+
+use serde_json;
 
 impl<G> SinkRender<G> for KafkaSinkConnection
 where
@@ -102,23 +101,19 @@ where
         G: Scope<Timestamp = Timestamp>,
     {
         // consistent/exactly-once Kafka sinks need the timestamp in the row
-        let sinked_collection = if self.consistency.is_some() {
-            sinked_collection
-                .inner
-                .map(|((k, v), t, diff)| {
-                    let v = v.map(|mut v| {
-                        let t = t.to_string();
-                        RowPacker::for_existing_row(&mut v).push_list_with(|rp| {
-                            rp.push(Datum::String(&t));
-                        });
-                        v
+        let sinked_collection = sinked_collection
+            .inner
+            .map(|((k, v), t, diff)| {
+                let v = v.map(|mut v| {
+                    let t = t.to_string();
+                    RowPacker::for_existing_row(&mut v).push_list_with(|rp| {
+                        rp.push(Datum::String(&t));
                     });
-                    ((k, v), t, diff)
-                })
-                .as_collection()
-        } else {
-            sinked_collection
-        };
+                    v
+                });
+                ((k, v), t, diff)
+            })
+            .as_collection();
 
         // TODO: this is a brittle way to indicate the worker that will write to the sink
         // because it relies on us continuing to hash on the sink_id, with the same hash
@@ -359,7 +354,7 @@ impl KafkaTxProducer {
 #[derive(Debug, Clone)]
 struct KafkaConsistencyInitState {
     topic: String,
-    schema_id: i32,
+    key: String,
     consistency_client_config: rdkafka::ClientConfig,
 }
 
@@ -367,7 +362,7 @@ impl KafkaConsistencyInitState {
     fn to_running(self, gate_ts: Rc<Cell<Option<Timestamp>>>) -> KafkaConsistencyRunningState {
         KafkaConsistencyRunningState {
             topic: self.topic,
-            schema_id: self.schema_id,
+            key: self.key,
             gate_ts,
         }
     }
@@ -376,7 +371,7 @@ impl KafkaConsistencyInitState {
 #[derive(Debug, Clone)]
 struct KafkaConsistencyRunningState {
     topic: String,
-    schema_id: i32,
+    key: String,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
 }
 
@@ -452,7 +447,7 @@ impl KafkaSinkState {
         let config =
             Self::create_producer_config(&connection, connection_context, transactional_id);
         let consistency_client_config =
-            Self::create_consistency_client_config(&connection, connection_context);
+            Self::create_consistency_client_config(&connection, connection_context, *sink_id);
 
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -476,13 +471,11 @@ impl KafkaSinkState {
             timeout: Duration::from_secs(5),
         };
 
-        let sink_state = KafkaSinkStateEnum::Init(connection.consistency.map(
-            |KafkaSinkConsistencyConnection { topic, schema_id }| KafkaConsistencyInitState {
-                topic,
-                schema_id,
-                consistency_client_config,
-            },
-        ));
+        let sink_state = KafkaSinkStateEnum::Init(Some(KafkaConsistencyInitState {
+            topic: connection.consistency.topic,
+            key: format!("mz-sink-{sink_id}"),
+            consistency_client_config,
+        }));
 
         KafkaSinkState {
             name: sink_name,
@@ -544,6 +537,7 @@ impl KafkaSinkState {
     fn create_consistency_client_config(
         connection: &KafkaSinkConnection,
         connection_context: &ConnectionContext,
+        id: GlobalId,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
         TokioHandle::current().block_on(
@@ -551,17 +545,7 @@ impl KafkaSinkState {
         );
 
         config
-            .set(
-                "group.id",
-                format!(
-                    "materialize-bootstrap-{}",
-                    connection
-                        .consistency
-                        .as_ref()
-                        .map(|c| c.topic.clone())
-                        .unwrap_or_else(String::new)
-                ),
-            )
+            .set("group.id", format!("materialize-bootstrap-sink-{id}"))
             .set("isolation.level", "read_committed")
             .set("enable.auto.commit", "false")
             .set("auto.offset.reset", "earliest")
@@ -720,11 +704,15 @@ impl KafkaSinkState {
         fn get_next_message(
             consumer: &mut BaseConsumer,
             timeout: Duration,
-        ) -> Result<Option<(Vec<u8>, i64)>, anyhow::Error> {
+        ) -> Result<Option<(Vec<u8>, Vec<u8>, i64)>, anyhow::Error> {
             if let Some(result) = consumer.poll(timeout) {
                 match result {
                     Ok(message) => match message.payload() {
-                        Some(p) => Ok(Some((p.to_vec(), message.offset()))),
+                        Some(p) => Ok(Some((
+                            message.key().unwrap_or(&[]).to_vec(),
+                            p.to_vec(),
+                            message.offset(),
+                        ))),
                         None => bail!("unexpected null payload"),
                     },
                     Err(KafkaError::PartitionEOF(_)) => Ok(None),
@@ -739,6 +727,7 @@ impl KafkaSinkState {
         // always be called on background thread
         fn get_latest_ts(
             consistency_topic: &str,
+            consistency_key: &str,
             config: &ClientConfig,
             timeout: Duration,
         ) -> Result<Option<Timestamp>, anyhow::Error> {
@@ -803,12 +792,22 @@ impl KafkaSinkState {
 
             let mut latest_ts = None;
             let mut latest_offset = None;
-            while let Some((message, offset)) = get_next_message(&mut consumer, timeout)? {
+
+            while let Some((key, message, offset)) = get_next_message(&mut consumer, timeout)? {
                 debug_assert!(offset >= latest_offset.unwrap_or(0));
                 latest_offset = Some(offset);
 
-                if let Some(ts) = maybe_decode_consistency_end_record(&message, consistency_topic)?
-                {
+                let timestamp_opt = {
+                    match std::str::from_utf8(&key) {
+                        Ok(str_key) if str_key == consistency_key => {
+                            let progress: ProgressRecord = serde_json::from_slice(&message)?;
+                            Some(progress.timestamp)
+                        }
+                        _ => None,
+                    }
+                };
+
+                if let Some(ts) = timestamp_opt {
                     if ts >= latest_ts.unwrap_or_else(timely::progress::Timestamp::minimum) {
                         latest_ts = Some(ts);
                     }
@@ -826,60 +825,25 @@ impl KafkaSinkState {
             Ok(latest_ts)
         }
 
-        // There may be arbitrary messages in this topic that we cannot decode.  We only
-        // return an error when we know we've found an END message but cannot decode it.
-        fn maybe_decode_consistency_end_record(
-            bytes: &[u8],
-            consistency_topic: &str,
-        ) -> Result<Option<Timestamp>, anyhow::Error> {
-            // The first 5 bytes are reserved for the schema id/schema registry information
-            let mut bytes = bytes.get(5..).ok_or_else(|| {
-                anyhow!("Malformed consistency topic message.  Shorter than 5 bytes.")
-            })?;
-
-            let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
-                .context("Failed to decode consistency topic message")?;
-
-            if let Value::Record(ref r) = record {
-                let m: HashMap<String, Value> = r.clone().into_iter().collect();
-                let status = m.get("status");
-                let id = m.get("id");
-                match (status, id) {
-                    (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
-                        if let Ok(ts) = id.parse::<u64>() {
-                            Ok(Some(ts))
-                        } else {
-                            bail!(
-                        "Malformed consistency record, failed to parse timestamp {} in topic {}",
-                        id,
-                        consistency_topic
-                    );
-                        }
-                    }
-                    _ => Ok(None),
-                }
-            } else {
-                Ok(None)
-            }
-        }
-
         if let KafkaSinkStateEnum::Init(Some(KafkaConsistencyInitState {
-            ref topic,
-            ref consistency_client_config,
-            ..
-        })) = self.sink_state
+            topic,
+            key,
+            consistency_client_config,
+        })) = &self.sink_state
         {
             // Only actually used for retriable errors.
             return Retry::default()
                 .clamp_backoff(Duration::from_secs(60 * 10))
                 .retry_async(|_| async {
                     let topic = topic.clone();
+                    let key = key.clone();
                     let consistency_client_config = consistency_client_config.clone();
                     task::spawn_blocking(
                         || format!("get_latest_ts:{}", self.name),
                         move || {
                             get_latest_ts(
                                 &topic,
+                                &key,
                                 &consistency_client_config,
                                 Duration::from_secs(10),
                             )
@@ -895,24 +859,18 @@ impl KafkaSinkState {
 
     async fn send_consistency_record(
         &self,
-        transaction_id: &str,
-        status: &str,
-        message_count: Option<i64>,
+        transaction_id: Timestamp,
         consistency: &KafkaConsistencyRunningState,
-    ) -> KafkaResult<()> {
-        let encoded = avro::encode_debezium_transaction_unchecked(
-            consistency.schema_id,
-            &self.topic,
-            transaction_id,
-            status,
-            message_count,
-        );
-
+    ) -> Result<(), anyhow::Error> {
+        let encoded = serde_json::to_vec(&ProgressRecord {
+            timestamp: transaction_id,
+        })?;
         let record = BaseRecord::to(&consistency.topic)
             .payload(&encoded)
-            .key(&self.topic);
+            .key(&consistency.key);
+        self.send(record).await?;
 
-        self.send(record).await
+        Ok(())
     }
 
     /// Asserts that the write frontier has not yet advanced beyond `t`.
@@ -976,14 +934,9 @@ impl KafkaSinkState {
                         self.retry_on_txn_error(|p| p.begin_transaction()).await?;
                     }
 
-                    self.send_consistency_record(
-                        &min_frontier.to_string(),
-                        "END",
-                        None,
-                        consistency_state,
-                    )
-                    .await
-                    .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
+                    self.send_consistency_record(min_frontier, consistency_state)
+                        .await
+                        .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
 
                     if self.transactional {
                         self.retry_on_txn_error(|p| p.commit_transaction()).await?;
@@ -1053,7 +1006,7 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                connection.consistency.is_some(),
+                true,
             );
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
@@ -1070,7 +1023,7 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                connection.consistency.is_some(),
+                true,
             );
             encode_stream(
                 stream,
@@ -1269,20 +1222,8 @@ where
                 if s.transactional {
                     bail_err!(s.retry_on_txn_error(|p| p.begin_transaction()).await);
                 }
-                if let Some(ref consistency_state) = s.sink_state.unwrap_running() {
-                    bail_err!(
-                        s.send_consistency_record(
-                            &ts.to_string(),
-                            "BEGIN",
-                            None,
-                            consistency_state
-                        )
-                        .await
-                    );
-                }
 
                 let mut repeat_counter = 0;
-                let mut total_sent = 0;
                 for encoded_row in rows {
                     let record = BaseRecord::to(&s.topic);
                     let record = match encoded_row.value.as_ref() {
@@ -1299,7 +1240,6 @@ where
 
                     // advance to the next repetition of this row, or the next row if all
                     // repetitions are exhausted
-                    total_sent += 1;
                     repeat_counter += 1;
                     if repeat_counter == encoded_row.count {
                         repeat_counter = 0;
@@ -1312,16 +1252,9 @@ where
                 bail_err!(s.flush().await);
 
                 if let Some(ref consistency_state) = s.sink_state.unwrap_running() {
-                    bail_err!(
-                        s.send_consistency_record(
-                            &ts.to_string(),
-                            "END",
-                            Some(total_sent),
-                            consistency_state
-                        )
-                        .await
-                    );
+                    bail_err!(s.send_consistency_record(*ts, consistency_state).await);
                 }
+
                 if s.transactional {
                     bail_err!(s.retry_on_txn_error(|p| p.commit_transaction()).await);
                 };
@@ -1505,4 +1438,18 @@ where
     });
 
     output_stream
+}
+
+#[derive(Serialize, Deserialize)]
+/// This struct is emitted as part of a transactional produce, and captures the information we
+/// need to resume the Kafka sink at the correct place in the sunk collection. (Currently, all
+/// we need is the timestamp... this is a record to make it easier to add more metadata in the
+/// future if needed.) It's encoded as JSON to make it easier to introspect while debugging, and
+/// because we expect it to remain small.
+///
+/// Unlike the old consistency topic, this is not intended to be a user-facing feature; it's there
+/// purely so the sink can maintain its transactional guarantees. Any future user-facing consistency
+/// information should be added elsewhere instead of overloading this record.
+struct ProgressRecord {
+    timestamp: Timestamp,
 }

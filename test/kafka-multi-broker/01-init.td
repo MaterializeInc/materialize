@@ -28,7 +28,7 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=3
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 > CREATE SOURCE kafka_multi_broker
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-kafka-multi-broker-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE NONE
 
@@ -47,7 +47,5 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=6
 
 > CREATE SINK multi_broker_sink
   FROM kafka_multi_broker
-  INTO KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-kafka-multi-broker-sink-${testdrive.seed}'
-  WITH (replication_factor = 2, partition_count = 2)
+  INTO KAFKA CONNECTION kafka_conn (REPLICATION FACTOR = 2, PARTITION COUNT = 2, TOPIC 'testdrive-kafka-multi-broker-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
