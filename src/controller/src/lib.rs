@@ -320,11 +320,13 @@ where
         match config.location {
             ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
                 let mut compute_instance = self.active_compute(instance_id).unwrap();
-                compute_instance.add_replica(
-                    replica_id,
-                    addrs.into_iter().collect(),
-                    config.persisted_logs.get_sources().into_iter().collect(),
-                );
+                compute_instance
+                    .add_replica(
+                        replica_id,
+                        addrs.into_iter().collect(),
+                        config.persisted_logs.get_sources().into_iter().collect(),
+                    )
+                    .await?;
             }
             ConcreteComputeInstanceReplicaLocation::Managed {
                 allocation,
@@ -416,11 +418,14 @@ where
                         },
                     )
                     .await?;
-                self.active_compute(instance_id).unwrap().add_replica(
-                    replica_id,
-                    service.addresses("controller"),
-                    config.persisted_logs.get_sources().into_iter().collect(),
-                );
+                self.active_compute(instance_id)
+                    .unwrap()
+                    .add_replica(
+                        replica_id,
+                        service.addresses("controller"),
+                        config.persisted_logs.get_sources().into_iter().collect(),
+                    )
+                    .await?;
             }
         }
 
@@ -442,7 +447,7 @@ where
                 .await?;
         }
         let mut compute = self.active_compute(instance_id).unwrap();
-        compute.remove_replica(replica_id);
+        compute.remove_replica(replica_id).await?;
         Ok(())
     }
 
