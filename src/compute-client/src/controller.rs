@@ -492,28 +492,6 @@ where
         Ok(())
     }
 
-    /// Drops the read capability for the sinks and allows their resources to be reclaimed.
-    /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
-    ///     controller starts/restarts it has no durable state. That means that it has no way of
-    ///     remembering any past commands sent. In the future we plan on persisting state for the
-    ///     controller so that it is aware of past commands.
-    ///     Therefore this method is for dropping sinks that we know to have been previously
-    ///     created, but have been forgotten by the controller due to a restart.
-    ///     Once command history becomes durable we can remove this method and use the normal
-    ///     `drop_sinks`.
-    pub async fn drop_sinks_unvalidated(
-        &mut self,
-        identifiers: Vec<GlobalId>,
-    ) -> Result<(), ComputeError> {
-        let compaction_commands = identifiers
-            .into_iter()
-            .map(|id| (id, Antichain::new()))
-            .collect();
-        self.allow_compaction_unvalidated(compaction_commands)
-            .await?;
-        Ok(())
-    }
-
     /// Drops the read capability for the indexes and allows their resources to be reclaimed.
     pub async fn drop_indexes(&mut self, identifiers: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
@@ -524,28 +502,6 @@ where
             .map(|id| (id, Antichain::new()))
             .collect();
         self.allow_compaction(compaction_commands).await?;
-        Ok(())
-    }
-
-    /// Drops the read capability for the indexes and allows their resources to be reclaimed.
-    /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
-    ///     controller starts/restarts it has no durable state. That means that it has no way of
-    ///     remembering any past commands sent. In the future we plan on persisting state for the
-    ///     controller so that it is aware of past commands.
-    ///     Therefore this method is for dropping indexes that we know to have been previously
-    ///     created, but have been forgotten by the controller due to a restart.
-    ///     Once command history becomes durable we can remove this method and use the normal
-    ///     `drop_indexes`.
-    pub async fn drop_indexes_unvalidated(
-        &mut self,
-        identifiers: Vec<GlobalId>,
-    ) -> Result<(), ComputeError> {
-        let compaction_commands = identifiers
-            .into_iter()
-            .map(|id| (id, Antichain::new()))
-            .collect();
-        self.allow_compaction_unvalidated(compaction_commands)
-            .await?;
         Ok(())
     }
 
