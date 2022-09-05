@@ -31,7 +31,6 @@ use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::controller::CollectionMetadata;
@@ -393,21 +392,18 @@ where
     let last_token = Rc::new(token);
     let token = Rc::clone(&last_token);
 
-    consumed_part_builder.build_async(
-        scope.clone(),
-        async_op!(|initial_capabilities, _frontiers| {
-            initial_capabilities.clear();
+    consumed_part_builder.build(|_initial_capabilities| {
+        let mut buffer = Vec::new();
 
+        move |_frontiers| {
             // The chosen worker is the leasor because it issues batches.
             if worker_index != chosen_worker {
                 trace!(
                     "We are not the batch leasor for {:?}, exiting...",
                     source_id
                 );
-                return false;
+                return;
             }
-
-            let mut buffer = Vec::new();
 
             while let Some((_cap, data)) = consumed_part_input.next() {
                 data.swap(&mut buffer);
@@ -423,10 +419,8 @@ where
                     }
                 }
             }
-
-            false
-        }),
-    );
+        }
+    });
 
     let token = Rc::new(token);
 
