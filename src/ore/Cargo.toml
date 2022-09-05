@@ -21,7 +21,7 @@ chrono = { version = "0.4.20", default-features = false, features = ["std"], opt
 clap = { version = "3.2.17", features = ["env"], optional = true }
 ctor = { version = "0.1.23", optional = true }
 either = "1.8.0"
-futures = { version = "0.3.23", optional = true }
+futures = { version = "0.3.24", optional = true }
 once_cell = "1.13.1"
 # This directly imported only by `ssh` feature, but it's also required at link time
 # on other features. The vendored feature is transitively depended upon by tokio-openssl.

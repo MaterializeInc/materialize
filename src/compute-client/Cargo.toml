@@ -11,7 +11,7 @@ anyhow = "1.0.64"
 async-trait = "0.1.57"
 chrono = { version = "0.4.20", default-features = false, features = ["clock", "std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.23"
+futures = "0.3.24"
 mz-build-info = { path = "../build-info" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["tracing_"] }

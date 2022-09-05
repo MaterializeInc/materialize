@@ -11,7 +11,7 @@ anyhow = "1.0.64"
 async-trait = "0.1.57"
 byteorder = "1.4.3"
 bytes = "1.2.1"
-futures = "0.3.23"
+futures = "0.3.24"
 itertools = "0.10.3"
 mz-adapter = { path = "../adapter" }
 mz-expr = { path = "../expr" }
