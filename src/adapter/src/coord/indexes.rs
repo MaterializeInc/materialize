@@ -25,7 +25,7 @@ use crate::coord::{CollectionIdBundle, Coordinator};
 #[derive(Debug)]
 pub struct ComputeInstanceIndexOracle<'a, T> {
     catalog: &'a CatalogState,
-    compute: ComputeController<'a, T>,
+    compute: &'a ComputeController<T>,
 }
 
 impl<S: Append> Coordinator<S> {

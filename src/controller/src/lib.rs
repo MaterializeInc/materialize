@@ -43,8 +43,7 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_compute_client::command::{ComputeCommand, ProcessId, ProtoComputeCommand, ReplicaId};
 use mz_compute_client::controller::{
-    ComputeController, ComputeControllerMut, ComputeControllerResponse, ComputeControllerState,
-    ComputeInstanceId,
+    ActiveComputeController, ComputeController, ComputeControllerResponse, ComputeInstanceId,
 };
 use mz_compute_client::logging::{LogVariant, LogView, LoggingConfig};
 use mz_compute_client::response::{
@@ -272,7 +271,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute_orchestrator: Arc<dyn NamespacedOrchestrator>,
     computed_image: String,
-    compute: BTreeMap<ComputeInstanceId, ComputeControllerState<T>>,
+    compute: BTreeMap<ComputeInstanceId, ComputeController<T>>,
     readiness: Readiness,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
@@ -292,7 +291,7 @@ where
         // Insert a new compute instance controller.
         self.compute.insert(
             instance,
-            ComputeControllerState::new(self.build_info, &logging).await,
+            ComputeController::new(instance, self.build_info, &logging),
         );
         if self.initialized {
             self.compute_mut(instance)
@@ -320,7 +319,7 @@ where
         // Add replicas backing that instance.
         match config.location {
             ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
-                let mut compute_instance = self.compute_mut(instance_id).unwrap();
+                let mut compute_instance = self.active_compute(instance_id).unwrap();
                 compute_instance.add_replica(
                     replica_id,
                     addrs.into_iter().collect(),
@@ -417,7 +416,7 @@ where
                         },
                     )
                     .await?;
-                self.compute_mut(instance_id).unwrap().add_replica(
+                self.active_compute(instance_id).unwrap().add_replica(
                     replica_id,
                     service.addresses("controller"),
                     config.persisted_logs.get_sources().into_iter().collect(),
@@ -442,7 +441,7 @@ where
                 .drop_service(&service_name)
                 .await?;
         }
-        let mut compute = self.compute_mut(instance_id).unwrap();
+        let mut compute = self.active_compute(instance_id).unwrap();
         compute.remove_replica(replica_id);
         Ok(())
     }
@@ -508,22 +507,32 @@ impl<T> Controller<T> {
         &mut *self.storage_controller
     }
 
-    /// Acquires an immutable handle to a controller for the indicated compute instance, if it exists.
+    /// Acquires an immutable reference to a controller for the indicated compute instance, if it
+    /// exists.
     #[inline]
-    pub fn compute(&self, instance: ComputeInstanceId) -> Option<ComputeController<T>> {
-        let compute = self.compute.get(&instance)?;
-        Some(ComputeController::new(instance, compute))
+    pub fn compute(&self, instance: ComputeInstanceId) -> Option<&ComputeController<T>> {
+        self.compute.get(&instance)
     }
 
-    /// Acquires a mutable handle to a controller for the indicated compute instance, if it exists.
+    /// Acquires a mutable reference to a controller for the indicated compute instance, if it
+    /// exists.
     #[inline]
-    pub fn compute_mut(&mut self, instance: ComputeInstanceId) -> Option<ComputeControllerMut<T>> {
-        let compute = self.compute.get_mut(&instance)?;
-        Some(ComputeControllerMut::new(
-            instance,
-            compute,
-            &mut *self.storage_controller,
-        ))
+    pub fn compute_mut(
+        &mut self,
+        instance: ComputeInstanceId,
+    ) -> Option<&mut ComputeController<T>> {
+        self.compute.get_mut(&instance)
+    }
+
+    /// Acquires an active controller for the indicated compute instance, if it exists.
+    #[inline]
+    pub fn active_compute(
+        &mut self,
+        instance: ComputeInstanceId,
+    ) -> Option<ActiveComputeController<T>> {
+        self.compute
+            .get_mut(&instance)
+            .map(|c| c.activate(&mut *self.storage_controller))
     }
 }
 
@@ -539,9 +548,8 @@ where
     /// This method can be invoked immediately, at the potential expense of performance.
     pub fn initialization_complete(&mut self) {
         self.initialized = true;
-        for (instance, compute) in self.compute.iter_mut() {
-            ComputeControllerMut::new(*instance, compute, &mut *self.storage_controller)
-                .initialization_complete();
+        for (_, compute) in self.compute.iter_mut() {
+            compute.initialization_complete();
         }
         self.storage_mut().initialization_complete();
     }
@@ -597,7 +605,7 @@ where
             }
             Readiness::Compute(id) => {
                 let response = self
-                    .compute_mut(id)
+                    .active_compute(id)
                     .expect("reference to absent compute instance")
                     .process()
                     .await?;
