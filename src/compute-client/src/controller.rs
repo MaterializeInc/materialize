@@ -479,28 +479,13 @@ where
 
         Ok(())
     }
-    /// Drops the read capability for the sinks and allows their resources to be reclaimed.
-    pub async fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), ComputeError> {
+    /// Drops the read capability for the given collections and allows their resources to be
+    /// reclaimed.
+    pub async fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
-        self.as_ref().validate_ids(identifiers.iter().cloned())?;
+        self.as_ref().validate_ids(ids.iter().cloned())?;
 
-        let compaction_commands = identifiers
-            .into_iter()
-            .map(|id| (id, Antichain::new()))
-            .collect();
-        self.allow_compaction(compaction_commands).await?;
-        Ok(())
-    }
-
-    /// Drops the read capability for the indexes and allows their resources to be reclaimed.
-    pub async fn drop_indexes(&mut self, identifiers: Vec<GlobalId>) -> Result<(), ComputeError> {
-        // Validate that the ids exist.
-        self.as_ref().validate_ids(identifiers.iter().cloned())?;
-
-        let compaction_commands = identifiers
-            .into_iter()
-            .map(|id| (id, Antichain::new()))
-            .collect();
+        let compaction_commands = ids.into_iter().map(|id| (id, Antichain::new())).collect();
         self.allow_compaction(compaction_commands).await?;
         Ok(())
     }
