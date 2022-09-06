@@ -696,9 +696,7 @@ impl KafkaSinkState {
             .await
     }
 
-    async fn determine_latest_consistency_record(
-        &self,
-    ) -> Result<Option<Timestamp>, anyhow::Error> {
+    async fn determine_latest_progress_record(&self) -> Result<Option<Timestamp>, anyhow::Error> {
         // Polls a message from a Kafka Source.  Blocking so should always be called on background
         // thread.
         fn get_next_message(
@@ -726,8 +724,8 @@ impl KafkaSinkState {
         // Retrieves the latest committed timestamp from the consistency topic.  Blocking so should
         // always be called on background thread
         fn get_latest_ts(
-            consistency_topic: &str,
-            consistency_key: &str,
+            progress_topic: &str,
+            progress_key: &str,
             config: &ClientConfig,
             timeout: Duration,
         ) -> Result<Option<Timestamp>, anyhow::Error> {
@@ -736,22 +734,19 @@ impl KafkaSinkState {
                 .context("creating consumer client failed")?;
 
             // ensure the consistency topic has exactly one partition
-            let partitions = mz_kafka_util::client::get_partitions(
-                consumer.client(),
-                consistency_topic,
-                timeout,
-            )
-            .with_context(|| {
-                format!(
-                    "Unable to fetch metadata about consistency topic {}",
-                    consistency_topic
-                )
-            })?;
+            let partitions =
+                mz_kafka_util::client::get_partitions(consumer.client(), progress_topic, timeout)
+                    .with_context(|| {
+                    format!(
+                        "Unable to fetch metadata about consistency topic {}",
+                        progress_topic
+                    )
+                })?;
 
             if partitions.len() != 1 {
                 bail!(
                     "Consistency topic {} should contain a single partition, but instead contains {} partitions",
-                    consistency_topic, partitions.len(),
+                    progress_topic, partitions.len(),
                 );
             }
 
@@ -766,21 +761,21 @@ impl KafkaSinkState {
             // topic or in between.
 
             let mut tps = TopicPartitionList::new();
-            tps.add_partition(consistency_topic, partition);
-            tps.set_partition_offset(consistency_topic, partition, Offset::Beginning)?;
+            tps.add_partition(progress_topic, partition);
+            tps.set_partition_offset(progress_topic, partition, Offset::Beginning)?;
 
             consumer.assign(&tps).with_context(|| {
                 format!(
-                    "Error seeking in consistency topic {}:{}",
-                    consistency_topic, partition
+                    "Error seeking in progress topic {}:{}",
+                    progress_topic, partition
                 )
             })?;
 
             let (lo, hi) = consumer
-                .fetch_watermarks(consistency_topic, 0, timeout)
+                .fetch_watermarks(progress_topic, 0, timeout)
                 .map_err(|e| {
                     anyhow!(
-                        "Failed to fetch metadata while reading from consistency topic: {}",
+                        "Failed to fetch metadata while reading from progress topic: {}",
                         e
                     )
                 })?;
@@ -799,7 +794,7 @@ impl KafkaSinkState {
 
                 let timestamp_opt = {
                     match std::str::from_utf8(&key) {
-                        Ok(str_key) if str_key == consistency_key => {
+                        Ok(str_key) if str_key == progress_key => {
                             let progress: ProgressRecord = serde_json::from_slice(&message)?;
                             Some(progress.timestamp)
                         }
@@ -819,7 +814,7 @@ impl KafkaSinkState {
             if latest_offset.is_none() {
                 debug!(
                     "unable to read any messages from non-empty topic {}:{}, lo/hi: {}/{}",
-                    consistency_topic, partition, lo, hi
+                    progress_topic, partition, lo, hi
                 );
             }
             Ok(latest_ts)
@@ -857,7 +852,7 @@ impl KafkaSinkState {
         return Ok(None);
     }
 
-    async fn send_consistency_record(
+    async fn send_progress_record(
         &self,
         transaction_id: Timestamp,
         consistency: &KafkaConsistencyRunningState,
@@ -895,12 +890,12 @@ impl KafkaSinkState {
     /// Updates the latest progress update timestamp based on the given
     /// input frontier and pending rows.
     ///
-    /// This will emit an `END` record to the consistency topic if the frontier
+    /// This will emit an `END` record to the progress topic if the frontier
     /// advanced and advance the maintained write frontier, which will in turn
     /// unblock compaction of timestamp bindings in sources.
     ///
     /// *NOTE*: `END` records will only be emitted when
-    /// `KafkaSinkConnection.consistency` points to a consistency topic. The
+    /// `KafkaSinkConnection.consistency` points to a progress topic. The
     /// write frontier will be advanced regardless.
     async fn maybe_emit_progress<'a>(
         &mut self,
@@ -928,13 +923,13 @@ impl KafkaSinkState {
             let min_frontier = min_frontier.saturating_sub(1);
 
             if min_frontier > self.latest_progress_ts {
-                // record the write frontier in the consistency topic.
+                // record the write frontier in the progress topic.
                 if let Some(consistency_state) = self.sink_state.unwrap_running() {
                     if self.transactional {
                         self.retry_on_txn_error(|p| p.begin_transaction()).await?;
                     }
 
-                    self.send_consistency_record(min_frontier, consistency_state)
+                    self.send_progress_record(min_frontier, consistency_state)
                         .await
                         .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
 
@@ -1146,7 +1141,7 @@ where
                         bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
                     }
 
-                    let latest_ts = match s.determine_latest_consistency_record().await {
+                    let latest_ts = match s.determine_latest_progress_record().await {
                         Ok(ts) => ts,
                         Err(e) => {
                             s.shutdown_flag.store(true, Ordering::SeqCst);
@@ -1248,11 +1243,11 @@ where
                 }
 
                 // Flush to make sure that errored messages have been properly retried before
-                // sending consistency records and commit transactions.
+                // sending progress records and commit transactions.
                 bail_err!(s.flush().await);
 
                 if let Some(ref consistency_state) = s.sink_state.unwrap_running() {
-                    bail_err!(s.send_consistency_record(*ts, consistency_state).await);
+                    bail_err!(s.send_progress_record(*ts, consistency_state).await);
                 }
 
                 if s.transactional {
