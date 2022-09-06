@@ -199,6 +199,27 @@ mod columnation {
                 item.clone()
             }
         }
+
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.region.reserve(
+                items
+                    .filter(|row| row.data.spilled())
+                    .map(|row| row.data.len())
+                    .sum(),
+            );
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.region.reserve(regions.map(|r| r.region.len()).sum());
+        }
     }
 }
 
