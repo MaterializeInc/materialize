@@ -23,9 +23,10 @@ use uuid::Uuid;
 use crate::error::CodecMismatch;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    HollowBatch, ProtoHollowBatch, ProtoReaderState, ProtoStateDiff, ProtoStateField,
-    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoWriterState, ReaderState, State, StateCollections, WriterState,
+    HollowBatch, HollowBatchPart, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReaderState,
+    ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
+    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState,
+    ReaderState, State, StateCollections, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -642,16 +643,45 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     fn into_proto(&self) -> ProtoHollowBatch {
         ProtoHollowBatch {
             desc: Some(self.desc.into_proto()),
-            keys: self.keys.into_proto(),
+            parts: self.parts.into_proto(),
             len: self.len.into_proto(),
+            deprecated_keys: vec![],
         }
     }
 
     fn from_proto(proto: ProtoHollowBatch) -> Result<Self, TryFromProtoError> {
+        let mut parts: Vec<HollowBatchPart> = proto.parts.into_rust()?;
+        // MIGRATION: We used to just have the keys instead of a more structured
+        // part.
+        parts.extend(
+            proto
+                .deprecated_keys
+                .into_iter()
+                .map(|key| HollowBatchPart {
+                    key: PartialBatchKey(key),
+                    encoded_size_bytes: 0,
+                }),
+        );
         Ok(HollowBatch {
             desc: proto.desc.into_rust_if_some("desc")?,
-            keys: proto.keys.into_rust()?,
+            parts,
             len: proto.len.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        ProtoHollowBatchPart {
+            key: self.key.into_proto(),
+            encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        Ok(HollowBatchPart {
+            key: proto.key.into_rust()?,
+            encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
         })
     }
 }
@@ -705,6 +735,8 @@ mod tests {
     use crate::internal::state_diff::StateDiff;
     use crate::ShardId;
 
+    use super::*;
+
     #[test]
     fn applier_version_state() {
         let v1 = semver::Version::new(1, 0, 0);
@@ -752,5 +784,37 @@ mod tests {
         // of code.
         let v1_res = std::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, &buf));
         assert!(v1_res.is_err());
+    }
+
+    #[test]
+    fn hollow_batch_migration() {
+        let x = HollowBatch {
+            desc: Description::new(
+                Antichain::from_elem(1u64),
+                Antichain::from_elem(2u64),
+                Antichain::from_elem(3u64),
+            ),
+            len: 4,
+            parts: vec![HollowBatchPart {
+                key: PartialBatchKey("a".into()),
+                encoded_size_bytes: 5,
+            }],
+        };
+        let mut old = x.into_proto();
+        // Old ProtoHollowBatch had keys instead of parts.
+        old.deprecated_keys = vec!["b".into()];
+        // We don't expect to see a ProtoHollowBatch with keys _and_ parts, only
+        // one or the other, but we have a defined output, so may as well test
+        // it.
+        let mut expected = x;
+        // We fill in 0 for encoded_size_bytes when we migrate from keys. This
+        // will violate bounded memory usage compaction during the transition
+        // (short-term issue), but that's better than creating unnecessary runs
+        // (longer-term issue).
+        expected.parts.push(HollowBatchPart {
+            key: PartialBatchKey("b".into()),
+            encoded_size_bytes: 0,
+        });
+        assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
 }

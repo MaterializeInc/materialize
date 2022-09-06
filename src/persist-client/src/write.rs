@@ -432,13 +432,13 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        let (mut keys, mut num_updates) = (Vec::new(), 0);
+        let (mut parts, mut num_updates) = (Vec::new(), 0);
         for batch in batches.iter() {
-            if let Err(err) = validate_truncate_batch(&batch.desc, &desc) {
+            if let Err(err) = validate_truncate_batch(&batch.batch.desc, &desc) {
                 return Ok(Err(err));
             }
-            keys.extend_from_slice(&batch.blob_keys);
-            num_updates += batch.num_updates;
+            parts.extend_from_slice(&batch.batch.parts);
+            num_updates += batch.batch.len;
         }
 
         let heartbeat_timestamp = (self.cfg.now)();
@@ -447,7 +447,7 @@ where
             .compare_and_append(
                 &HollowBatch {
                     desc: desc.clone(),
-                    keys,
+                    parts,
                     len: num_updates,
                 },
                 &self.writer_id,
