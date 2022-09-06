@@ -1679,10 +1679,9 @@ impl CatalogItemRebuilder {
 }
 
 pub struct BuiltinMigrationMetadata {
-    // Used to drop objects on COMPUTE and STORAGE nodes
-    pub previous_index_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    // Used to drop objects on STORAGE nodes
     pub previous_sink_ids: Vec<GlobalId>,
-    pub previous_materialized_view_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    pub previous_materialized_view_ids: Vec<GlobalId>,
     pub previous_source_ids: Vec<GlobalId>,
     // Used to update in memory catalog state
     pub all_drop_ops: Vec<GlobalId>,
@@ -1697,9 +1696,8 @@ pub struct BuiltinMigrationMetadata {
 impl BuiltinMigrationMetadata {
     fn new() -> BuiltinMigrationMetadata {
         BuiltinMigrationMetadata {
-            previous_index_ids: HashMap::new(),
             previous_sink_ids: Vec::new(),
-            previous_materialized_view_ids: HashMap::new(),
+            previous_materialized_view_ids: Vec::new(),
             previous_source_ids: Vec::new(),
             all_drop_ops: Vec::new(),
             all_create_ops: Vec::new(),
@@ -2381,16 +2379,9 @@ impl<S: Append> Catalog<S> {
                     migration_metadata.previous_source_ids.push(id)
                 }
                 CatalogItem::Sink(_) => migration_metadata.previous_sink_ids.push(id),
-                CatalogItem::Index(index) => migration_metadata
-                    .previous_index_ids
-                    .entry(index.compute_instance)
-                    .or_default()
-                    .push(id),
-                CatalogItem::MaterializedView(mview) => migration_metadata
-                    .previous_materialized_view_ids
-                    .entry(mview.compute_instance)
-                    .or_default()
-                    .push(id),
+                CatalogItem::MaterializedView(_) => {
+                    migration_metadata.previous_materialized_view_ids.push(id)
+                }
                 // TODO(jkosh44) Implement log migration
                 CatalogItem::Log(_) => {
                     panic!("Log migration is unimplemented")
@@ -2399,8 +2390,8 @@ impl<S: Append> Catalog<S> {
                 CatalogItem::StorageCollection(_) => {
                     panic!("Storage collection migration is unimplemented")
                 }
-                CatalogItem::View(_) => {
-                    // Views don't have any objects in STORAGE/COMPUTE to drop.
+                CatalogItem::View(_) | CatalogItem::Index(_) => {
+                    // Views and indexes don't have any objects in STORAGE to drop.
                 }
                 CatalogItem::Type(_)
                 | CatalogItem::Func(_)
@@ -2440,9 +2431,6 @@ impl<S: Append> Catalog<S> {
         }
 
         // Reverse drop commands.
-        for (_, index_ids) in &mut migration_metadata.previous_index_ids {
-            index_ids.reverse();
-        }
         migration_metadata.previous_sink_ids.reverse();
         migration_metadata.previous_source_ids.reverse();
         migration_metadata.all_drop_ops.reverse();

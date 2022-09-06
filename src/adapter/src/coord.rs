@@ -406,26 +406,10 @@ impl<S: Append + 'static> Coordinator<S> {
         .await;
 
         // Migrate builtin objects.
-        for (compute_id, index_ids) in builtin_migration_metadata.previous_index_ids {
-            self.controller
-                .compute_mut(compute_id)
-                .unwrap()
-                .drop_indexes_unvalidated(index_ids)
-                .await?;
-        }
-        for (compute_id, recorded_view_ids) in
-            builtin_migration_metadata.previous_materialized_view_ids
-        {
-            self.controller
-                .compute_mut(compute_id)
-                .unwrap()
-                .drop_sinks_unvalidated(recorded_view_ids.clone())
-                .await?;
-            self.controller
-                .storage_mut()
-                .drop_sources_unvalidated(recorded_view_ids)
-                .await?;
-        }
+        self.controller
+            .storage_mut()
+            .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids)
+            .await?;
         self.controller
             .storage_mut()
             .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids)
