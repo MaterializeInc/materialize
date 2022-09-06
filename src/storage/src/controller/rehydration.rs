@@ -170,10 +170,16 @@ where
             .expect("retry retries forever");
 
         for ingest in self.ingestions.values_mut() {
+            let mut persist_clients = self.persist.lock().await;
+            let persist_client = persist_clients
+                .open(ingest.description.storage_metadata.persist_location.clone())
+                .await
+                .expect("error creating persist client");
+
             ingest.resume_upper = ingest
                 .description
                 .storage_metadata
-                .get_resume_upper::<T, _>(&self.persist, &ingest.description.desc.envelope)
+                .get_resume_upper::<T>(&persist_client, &ingest.description.desc.envelope)
                 .await;
         }
 
