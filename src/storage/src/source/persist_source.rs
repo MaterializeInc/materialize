@@ -31,7 +31,6 @@ use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::controller::CollectionMetadata;
@@ -47,7 +46,7 @@ use crate::types::sources::SourceData;
 /// and any un-applied part of the argument will be left behind in the argument.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G>(
+pub fn persist_source<G, YFn>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -55,6 +54,7 @@ pub fn persist_source<G>(
     as_of: Antichain<Timestamp>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
+    yield_fn: YFn,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -62,6 +62,7 @@ pub fn persist_source<G>(
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
+    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let (stream, token) = persist_source_core(
         scope,
@@ -71,6 +72,7 @@ where
         as_of,
         until,
         map_filter_project,
+        yield_fn,
     );
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((row, t, r)),
@@ -85,7 +87,7 @@ where
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source_core<G>(
+pub fn persist_source_core<G, YFn>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -93,12 +95,14 @@ pub fn persist_source_core<G>(
     as_of: Antichain<Timestamp>,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
+    yield_fn: YFn,
 ) -> (
     Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
+    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
@@ -195,7 +199,7 @@ where
 
     let (inner, token) = crate::source::util::source(
         scope,
-        format!("persist_source {:?}: part distribution", source_id),
+        format!("persist_source {}: part distribution", source_id),
         move |info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures::task::waker(waker_activator);
@@ -245,10 +249,7 @@ where
     );
 
     let mut fetcher_builder = OperatorBuilder::new(
-        format!(
-            "persist_source {:?}: part fetcher {}",
-            worker_index, source_id
-        ),
+        format!("persist_source {}: part fetcher", source_id),
         scope.clone(),
     );
 
@@ -268,7 +269,7 @@ where
 
     fetcher_builder.build_async(
         scope.clone(),
-        async_op!(|initial_capabilities, _frontiers| {
+        move |mut initial_capabilities, frontiers, scheduler| async move {
             let fetcher = persist_clients
                 .lock()
                 .await
@@ -285,87 +286,117 @@ where
 
             initial_capabilities.clear();
 
-            let mut output_handle = update_output.activate();
-            let mut consumed_part_output_handle = consumed_part_output.activate();
-
             let mut buffer = Vec::new();
 
-            while let Some((cap, data)) = fetcher_input.next() {
-                // `LeasedBatchPart`es cannot be dropped at this point w/o
-                // panicking, so swap them to an owned version.
-                data.swap(&mut buffer);
+            while scheduler.notified().await {
+                // Re-acquire the output handle on each invocation and drop it
+                // when we're done.
+                let mut output_handle = update_output.activate();
+                let mut consumed_part_output_handle = consumed_part_output.activate();
 
-                let update_cap = cap.delayed_for_output(cap.time(), update_output_port);
-                let mut update_session = output_handle.session(&update_cap);
+                while let Some((cap, data)) = fetcher_input.next() {
+                    // `LeasedBatchPart`es cannot be dropped at this point w/o
+                    // panicking, so swap them to an owned version.
+                    data.swap(&mut buffer);
 
-                let consumed_part_cap = cap.delayed_for_output(cap.time(), consumed_part_port);
-                let mut consumed_part_session =
-                    consumed_part_output_handle.session(&consumed_part_cap);
+                    let update_cap = cap.delayed_for_output(cap.time(), update_output_port);
+                    let mut update_session = output_handle.session(&update_cap);
 
-                for (_idx, part) in buffer.drain(..) {
-                    let (consumed_part, updates) = fetcher.fetch_leased_part(part.into()).await;
+                    let consumed_part_cap = cap.delayed_for_output(cap.time(), consumed_part_port);
+                    let mut consumed_part_session =
+                        consumed_part_output_handle.session(&consumed_part_cap);
 
-                    let updates = updates
-                        .expect("shard_id generated for sources must match across all workers");
+                    for (_idx, part) in buffer.drain(..) {
+                        let (consumed_part, fetched_part) =
+                            fetcher.fetch_leased_part(part.into()).await;
+                        let fetched_part = fetched_part
+                            .expect("shard_id generated for sources must match across all workers");
+                        // SUBTLE: This operator yields back to timely whenever an await returns a
+                        // Pending result from the overall async/await state machine `poll`. Since
+                        // this is fetching from remote storage, it will yield and thus we can reset
+                        // our yield counters here.
+                        let mut decode_start = Instant::now();
 
-                    // Apply as much logic to `updates` as we can, before we emit anything.
-                    let mut update_outputs = Vec::with_capacity(updates.len());
-                    for ((key, val), time, diff) in updates {
-                        if !until.less_equal(&time) {
-                            match (key, val) {
-                                (Ok(SourceData(Ok(row))), Ok(())) => {
-                                    if let Some(mfp) = &mut map_filter_project {
-                                        let arena = mz_repr::RowArena::new();
-                                        let mut datums_local = datum_vec.borrow_with(&row);
-                                        for result in mfp.evaluate(
-                                            &mut datums_local,
-                                            &arena,
-                                            time,
-                                            diff,
-                                            |time| !until.less_equal(time),
-                                            &mut row_builder,
-                                        ) {
-                                            match result {
-                                                Ok((row, time, diff)) => {
-                                                    // Additional `until` filtering due to temporal filters.
-                                                    if !until.less_equal(&time) {
-                                                        update_outputs.push((Ok(row), time, diff));
+                        // Apply as much logic to `updates` as we can, before we emit anything.
+                        let (updates_size_hint_min, updates_size_hint_max) =
+                            fetched_part.size_hint();
+                        let mut updates = Vec::with_capacity(
+                            updates_size_hint_max.unwrap_or(updates_size_hint_min),
+                        );
+                        for ((key, val), time, diff) in fetched_part {
+                            if !until.less_equal(&time) {
+                                match (key, val) {
+                                    (Ok(SourceData(Ok(row))), Ok(())) => {
+                                        if let Some(mfp) = &mut map_filter_project {
+                                            let arena = mz_repr::RowArena::new();
+                                            let mut datums_local = datum_vec.borrow_with(&row);
+                                            for result in mfp.evaluate(
+                                                &mut datums_local,
+                                                &arena,
+                                                time,
+                                                diff,
+                                                |time| !until.less_equal(time),
+                                                &mut row_builder,
+                                            ) {
+                                                match result {
+                                                    Ok((row, time, diff)) => {
+                                                        // Additional `until` filtering due to temporal filters.
+                                                        if !until.less_equal(&time) {
+                                                            updates.push((Ok(row), time, diff));
+                                                        }
                                                     }
-                                                }
-                                                Err((err, time, diff)) => {
-                                                    // Additional `until` filtering due to temporal filters.
-                                                    if !until.less_equal(&time) {
-                                                        update_outputs.push((Err(err), time, diff));
+                                                    Err((err, time, diff)) => {
+                                                        // Additional `until` filtering due to temporal filters.
+                                                        if !until.less_equal(&time) {
+                                                            updates.push((Err(err), time, diff));
+                                                        }
                                                     }
                                                 }
                                             }
+                                        } else {
+                                            updates.push((Ok(row), time, diff));
                                         }
-                                    } else {
-                                        update_outputs.push((Ok(row), time, diff));
+                                    }
+                                    (Ok(SourceData(Err(err))), Ok(())) => {
+                                        updates.push((Err(err), time, diff));
+                                    }
+                                    // TODO(petrosagg): error handling
+                                    (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
+                                        panic!("decoding failed")
                                     }
                                 }
-                                (Ok(SourceData(Err(err))), Ok(())) => {
-                                    update_outputs.push((Err(err), time, diff));
-                                }
-                                // TODO(petrosagg): error handling
-                                _ => panic!("decoding failed"),
+                            }
+                            if yield_fn(decode_start, updates.len()) {
+                                // A large part of the point of yielding is to let later operators
+                                // reduce down the data, so emit what we have. Note that this means
+                                // we don't get to consolidate everything, but that's part of the
+                                // tradeoff in tuning yield_fn.
+                                differential_dataflow::consolidation::consolidate_updates(
+                                    &mut updates,
+                                );
+                                update_session.give_vec(&mut updates);
+                                force_yield().await;
+                                decode_start = Instant::now();
                             }
                         }
+                        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+                        update_session.give_vec(&mut updates);
+                        consumed_part_session.give(consumed_part.into_exchangeable_part());
                     }
-                    differential_dataflow::consolidation::consolidate_updates(&mut update_outputs);
+                }
 
-                    update_session.give_vec(&mut update_outputs);
-                    consumed_part_session.give(consumed_part.into_exchangeable_part());
+                // Quit the loop once we know that we processed all input.
+                if frontiers.borrow().iter().all(|f| f.is_empty()) {
+                    break;
                 }
             }
-            false
-        }),
+        },
     );
 
     // This operator is meant to only run on the chosen worker. All workers will
     // exchange their fetched ("consumed") parts back to the leasor.
     let mut consumed_part_builder = OperatorBuilder::new(
-        format!("persist_source {:?}: consumed part collector", source_id),
+        format!("persist_source {}: consumed part collector", source_id),
         scope.clone(),
     );
 
@@ -378,21 +409,18 @@ where
     let last_token = Rc::new(token);
     let token = Rc::clone(&last_token);
 
-    consumed_part_builder.build_async(
-        scope.clone(),
-        async_op!(|initial_capabilities, _frontiers| {
-            initial_capabilities.clear();
+    consumed_part_builder.build(|_initial_capabilities| {
+        let mut buffer = Vec::new();
 
+        move |_frontiers| {
             // The chosen worker is the leasor because it issues batches.
             if worker_index != chosen_worker {
                 trace!(
                     "We are not the batch leasor for {:?}, exiting...",
                     source_id
                 );
-                return false;
+                return;
             }
-
-            let mut buffer = Vec::new();
 
             while let Some((_cap, data)) = consumed_part_input.next() {
                 data.swap(&mut buffer);
@@ -408,12 +436,30 @@ where
                     }
                 }
             }
-
-            false
-        }),
-    );
+        }
+    });
 
     let token = Rc::new(token);
 
     (update_output_stream, token)
+}
+
+// The build_async operator yields to timely whenever the Future handed to it
+// (in practice an async/await state machine) returns from `poll` with a
+// `Pending`. Force a yield by constructing a future that returns Pending the
+// first time it's polled and `Ready` the second.
+//
+// This allows us to yield without having to do anything special to stash
+// in-progress work. (Basically, the async/await state machine does it for us.)
+async fn force_yield() {
+    let mut polled = false;
+    let () = futures::future::poll_fn(move |cx| match polled {
+        true => Poll::Ready(()),
+        false => {
+            polled = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await;
 }

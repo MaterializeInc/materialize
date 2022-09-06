@@ -118,6 +118,24 @@ where
     }
 }
 
+impl<K, V, T, D> Drop for Subscribe<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    fn drop(&mut self) {
+        // Return all leased parts from the snapshot to ensure they don't panic
+        // if dropped.
+        if let Some((parts, _)) = self.snapshot.take() {
+            for part in parts {
+                self.return_leased_part(part)
+            }
+        }
+    }
+}
+
 /// Data and progress events of a shard subscription.
 ///
 /// TODO: Unify this with [timely::dataflow::operators::to_stream::Event] or
@@ -284,14 +302,15 @@ where
         let (parts, progress) = self.next_parts().await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
-            let (part, updates) = fetch_leased_part(
+            let (part, fetched_part) = fetch_leased_part(
                 part,
                 self.handle.blob.as_ref(),
-                &self.handle.metrics,
+                Arc::clone(&self.handle.metrics),
                 Some(&self.handle.reader_id),
             )
             .await;
             self.handle.process_returned_leased_part(part);
+            let updates = fetched_part.collect::<Vec<_>>();
             if !updates.is_empty() {
                 ret.push(ListenEvent::Updates(updates));
             }
@@ -500,16 +519,16 @@ where
         let snap = self.snapshot(as_of).await?;
 
         let mut contents = Vec::new();
-        for batch in snap {
-            let (batch, mut r) = fetch_leased_part(
-                batch,
+        for part in snap {
+            let (part, fetched_part) = fetch_leased_part(
+                part,
                 self.blob.as_ref(),
-                &self.metrics,
+                Arc::clone(&self.metrics),
                 Some(&self.reader_id),
             )
             .await;
-            self.process_returned_leased_part(batch);
-            contents.append(&mut r);
+            self.process_returned_leased_part(part);
+            contents.extend(fetched_part);
         }
         Ok(contents)
     }
@@ -534,12 +553,12 @@ where
         batch: HollowBatch<T>,
         metadata: SerdeLeasedBatchPartMetadata,
     ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
-        batch.keys.into_iter().map(move |key| LeasedBatchPart {
+        batch.parts.into_iter().map(move |part| LeasedBatchPart {
             shard_id: self.machine.shard_id(),
             reader_id: self.reader_id.clone(),
             metadata: metadata.clone(),
             desc: batch.desc.clone(),
-            key,
+            key: part.key,
             leased_seqno: Some(self.lease_seqno()),
         })
     }
@@ -730,6 +749,35 @@ where
 #[cfg(test)]
 mod tests {
     use crate::tests::new_test_client;
+
+    // Verifies `Subscribe` can be dropped while holding snapshot batches.
+    #[tokio::test]
+    async fn drop_unused_subscribe() {
+        let data = vec![
+            (("0".to_owned(), "zero".to_owned()), 0, 1),
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+        ];
+
+        let (mut write, read) = new_test_client()
+            .await
+            .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+            .await;
+
+        write.expect_compare_and_append(&data[0..1], 0, 1).await;
+        write.expect_compare_and_append(&data[1..2], 1, 2).await;
+        write.expect_compare_and_append(&data[2..3], 2, 3).await;
+
+        let subscribe = read
+            .subscribe(timely::progress::Antichain::from_elem(2))
+            .await
+            .unwrap();
+        assert!(
+            !subscribe.snapshot.as_ref().unwrap().0.is_empty(),
+            "snapshot must have batches for test to be meaningful"
+        );
+        drop(subscribe);
+    }
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
     #[tokio::test]

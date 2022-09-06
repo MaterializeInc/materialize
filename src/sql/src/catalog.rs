@@ -264,8 +264,8 @@ pub trait CatalogComputeInstance<'a> {
     /// Returns a stable ID for the compute instance.
     fn id(&self) -> ComputeInstanceId;
 
-    /// Returns the set of non-transient exports (indexes, sinks, materialized
-    /// views) of this cluster.
+    /// Returns the set of non-transient exports (indexes, materialized views)
+    /// of this cluster.
     fn exports(&self) -> &std::collections::HashSet<GlobalId>;
 
     /// Returns the set of replicas of this cluster.

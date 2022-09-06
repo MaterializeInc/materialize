@@ -461,6 +461,60 @@ impl MapFilterProject {
             .project(0..old_projection_len)
     }
 
+    /// Extracts common expressions from multiple `Self` into a result `Self`.
+    ///
+    /// The argument `mfps` are mutated so that each are functionaly equivalent to their
+    /// corresponding input, when composed atop the resulting `Self`.
+    pub fn extract_common(mfps: &mut [&mut Self]) -> Self {
+        match mfps.len() {
+            0 => {
+                panic!("Cannot call method on empty arguments");
+            }
+            1 => {
+                let output_arity = mfps[0].projection.len();
+                std::mem::replace(&mut mfps[0], MapFilterProject::new(output_arity))
+            }
+            _ => {
+                // Prepare a return `Self`.
+                let input_arity = mfps[0].input_arity;
+                let mut result_mfp = MapFilterProject::new(input_arity);
+
+                // Naive strategy:
+                // First, look for identical predicates and extract them.
+                // Then, look for unused columns and project them away.
+
+                // First, look for identical predicates and extract them.
+                // The trouble here is CSE, as predicates may not "look"
+                // identical despite being identical.
+                // unimplemented!()
+
+                // Then, look for unused columns and project them away.
+                let mut common_demand = HashSet::new();
+                for mfp in mfps.iter() {
+                    common_demand.extend(mfp.demand());
+                }
+                // columns in `common_demand` must be retained, but others
+                // may be discarded.
+                let common_demand = (0..input_arity)
+                    .filter(|x| common_demand.contains(x))
+                    .collect::<Vec<_>>();
+                let remap = common_demand
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(new, old)| (old, new))
+                    .collect::<HashMap<_, _>>();
+                for mfp in mfps.iter_mut() {
+                    mfp.permute(remap.clone(), common_demand.len());
+                }
+                result_mfp = result_mfp.project(common_demand);
+
+                // Return the resulting MFP.
+                result_mfp
+            }
+        }
+    }
+
     /// Returns `self`, and leaves behind an identity operator that acts on its output.
     pub fn take(&mut self) -> Self {
         let mut identity = Self::new(self.projection.len());

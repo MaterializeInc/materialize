@@ -43,7 +43,6 @@ fn main() {
                 "storage/src/types/sinks.proto",
                 "storage/src/types/sources.proto",
                 "storage/src/types/sources/encoding.proto",
-                "storage/src/types/transforms.proto",
             ],
             &[".."],
         )

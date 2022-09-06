@@ -96,7 +96,6 @@ Explained Query
       Get materialize.public.v // { arity: 2 }
 
 Source materialize.public.v
-  Demand (#0, #1)
 
 EOF
 
@@ -160,8 +159,7 @@ Explained Query
               Get materialize.public.v // { arity: 2 }
 
 Source materialize.public.v
-  Demand (#0, #1)
-  Filter (#0) IS NOT NULL
+  filter=((#0) IS NOT NULL)
 
 Used Indexes:
   - materialize.public.u_d_idx

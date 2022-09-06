@@ -437,11 +437,7 @@ impl CatalogState {
                 StorageSinkConnection::Kafka(KafkaSinkConnection {
                     topic, consistency, ..
                 }) => {
-                    let consistency_topic = if let Some(consistency) = consistency {
-                        Datum::String(consistency.topic.as_str())
-                    } else {
-                        Datum::Null
-                    };
+                    let consistency_topic = Datum::String(consistency.topic.as_str());
                     updates.push(BuiltinTableUpdate {
                         id: self.resolve_builtin_table(&MZ_KAFKA_SINKS),
                         row: Row::pack_slice(&[

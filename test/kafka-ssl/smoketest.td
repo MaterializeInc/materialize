@@ -55,7 +55,7 @@ contains: cannot drop
 contains: materialize.public.not_a_secret is not a secret
 
 > CREATE SOURCE data
-  FROM KAFKA CONNECTION kafka_ssl TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_ssl (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl;
 
 > SELECT * FROM data
@@ -73,7 +73,7 @@ a
 2
 
 > CREATE SINK snk FROM data
-  INTO KAFKA CONNECTION kafka_ssl TOPIC 'snk'
+  INTO KAFKA CONNECTION kafka_ssl (TOPIC 'snk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
 
 $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
@@ -89,7 +89,7 @@ $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
 
 # not basic_auth
 ! CREATE SINK no_basic_auth FROM data
-  INTO KAFKA CONNECTION kafka_ssl TOPIC 'snk'
+  INTO KAFKA CONNECTION kafka_ssl (TOPIC 'snk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION no_basic_auth_conn
 contains:error publishing kafka schemas for sink: unable to publish value schema to registry in kafka sink: server error 401: Unauthorized
 
@@ -101,7 +101,7 @@ contains:error publishing kafka schemas for sink: unable to publish value schema
 
 # Ensure that we get an ssl error if we forget to set certs
 ! CREATE SOURCE data
-  FROM KAFKA CONNECTION kafka_ssl TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_ssl (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_without_ssl
 contains:self signed certificate in certificate chain
 
@@ -113,8 +113,7 @@ contains:self signed certificate in certificate chain
 contains:invalid CONNECTION: under-specified security configuration
 
 > CREATE SOURCE kafka_csr_connector_source
-  FROM KAFKA CONNECTION kafka_ssl
-    TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_ssl (TOPIC 'testdrive-data-${testdrive.seed}')
     FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
 
@@ -127,8 +126,7 @@ a
 
 # Old with_options do not work
 ! CREATE SOURCE IF NOT EXISTS duplicate_option_specified
-  FROM KAFKA CONNECTION kafka_ssl
-  TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_ssl (TOPIC 'testdrive-data-${testdrive.seed}')
   LEGACYWITH (
     security_protocol = 'ssl'
   )
@@ -154,8 +152,7 @@ contains:unexpected parameters for CREATE SOURCE: security_protocol
 # This ensures that the error is not that the CA was required, but simply that
 # not providing it prohibits connecting.
 ! CREATE SOURCE kafka_ssl_no_ca
-  FROM KAFKA CONNECTION kafka_sasl_no_ca
-    TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_sasl_no_ca (TOPIC 'testdrive-data-${testdrive.seed}')
     FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl_no_ca
 contains: broker certificate could not be verified

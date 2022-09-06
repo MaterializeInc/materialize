@@ -345,6 +345,41 @@ pub enum Plan<T = mz_repr::Timestamp> {
     },
 }
 
+impl<T> Plan<T> {
+    /// Iterates through mutable references to child expressions.
+    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Self> {
+        let mut first = None;
+        let mut second = None;
+        let mut rest = None;
+
+        use Plan::*;
+        match self {
+            Constant { .. } | Get { .. } => (),
+            Let { value, body, .. } => {
+                first = Some(&mut **value);
+                second = Some(&mut **body);
+            }
+            Mfp { input, .. }
+            | FlatMap { input, .. }
+            | Reduce { input, .. }
+            | TopK { input, .. }
+            | Negate { input }
+            | Threshold { input, .. }
+            | ArrangeBy { input, .. } => {
+                first = Some(&mut **input);
+            }
+            Join { inputs, .. } | Union { inputs } => {
+                rest = Some(inputs);
+            }
+        }
+
+        first
+            .into_iter()
+            .chain(second)
+            .chain(rest.into_iter().flatten())
+    }
+}
+
 impl Arbitrary for Plan {
     type Strategy = BoxedStrategy<Plan>;
     type Parameters = ();
@@ -1491,7 +1526,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             objects_to_build.push(BuildDesc { id: build.id, plan });
         }
 
-        Ok(DataflowDescription {
+        let mut dataflow = DataflowDescription {
             source_imports: desc.source_imports,
             index_imports: desc.index_imports,
             objects_to_build,
@@ -1500,7 +1535,56 @@ This is not expected to cause incorrect results, but could indicate a performanc
             as_of: desc.as_of,
             until: desc.until,
             debug_name: desc.debug_name,
-        })
+        };
+
+        // Extract MFPs from Get operators for sources, and extract what we can for the source.
+        // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
+        for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
+            let mut identity_present = false;
+            let mut mfps = Vec::new();
+            for build_desc in dataflow.objects_to_build.iter_mut() {
+                let mut todo = vec![&mut build_desc.plan];
+                while let Some(expression) = todo.pop() {
+                    if let Plan::Get { id, plan, .. } = expression {
+                        if *id == mz_expr::Id::Global(*source_id) {
+                            match plan {
+                                GetPlan::Collection(mfp) => mfps.push(mfp),
+                                GetPlan::PassArrangements => {
+                                    identity_present = true;
+                                }
+                                GetPlan::Arrangement(..) => {
+                                    panic!("Surprising `GetPlan` for imported source: {:?}", plan);
+                                }
+                            }
+                        }
+                    } else {
+                        todo.extend(expression.children_mut());
+                    }
+                }
+            }
+
+            // Direct exports of sources are possible, and prevent pushdown.
+            identity_present |= dataflow
+                .index_exports
+                .values()
+                .any(|(x, _)| x.on_id == *source_id);
+            identity_present |= dataflow.sink_exports.values().any(|x| x.from == *source_id);
+
+            if !identity_present && !mfps.is_empty() {
+                // Extract a common prefix `MapFilterProject` from `mfps`.
+                let common = MapFilterProject::extract_common(&mut mfps[..]);
+                // Apply common expressions to the source's `MapFilterProject`.
+                let mut mfp = if let Some(mfp) = source.arguments.operators.take() {
+                    MapFilterProject::compose(mfp, common)
+                } else {
+                    common
+                };
+                mfp.optimize();
+                source.arguments.operators = Some(mfp);
+            }
+        }
+
+        Ok(dataflow)
     }
 
     /// Partitions the plan into `parts` many disjoint pieces.

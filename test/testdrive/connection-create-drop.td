@@ -46,8 +46,7 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 > CREATE SOURCE connection_source (first, second)
-  FROM KAFKA CONNECTION testconn
-  TOPIC 'testdrive-connection_test-${testdrive.seed}'
+  FROM KAFKA CONNECTION testconn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
 
 > SELECT * FROM connection_source
@@ -134,14 +133,11 @@ id creature
 -----------
 1  lizard
 
-
 > CREATE CONNECTION broker_connection
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
-
 > CREATE SOURCE two_connection_source
-  FROM KAFKA CONNECTION broker_connection
-  TOPIC 'testdrive-csr_test-${testdrive.seed}'
+  FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM UPSERT
 
@@ -156,8 +152,7 @@ contains:depended upon by catalog item 'materialize.public.csr_source'
 > DROP CONNECTION csr_conn CASCADE
 
 ! CREATE SOURCE should_fail
-  FROM KAFKA CONNECTION does_not_exist
-  TOPIC 'error_topic'
+  FROM KAFKA CONNECTION does_not_exist (TOPIC 'error_topic')
   FORMAT TEXT
 contains: unknown catalog item 'does_not_exist'
 

@@ -16,9 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::{collections::HashMap, num::NonZeroUsize};
 
-use futures::{FutureExt, StreamExt};
+use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use mz_compute_client::command::{DataflowDescription, ReplicaId};
@@ -26,7 +26,6 @@ use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::response::PeekResponse;
 use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_ore::str::{bracketed, separated, Indent};
 use mz_ore::tracing::OpenTelemetryContext;
@@ -40,7 +39,7 @@ use crate::util::send_immediate_rows;
 use crate::AdapterError;
 
 pub(crate) struct PendingPeek {
-    pub(crate) sender: mpsc::UnboundedSender<PeekResponse>,
+    pub(crate) sender: oneshot::Sender<PeekResponse>,
     pub(crate) conn_id: ConnectionId,
 }
 
@@ -528,7 +527,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         };
 
         // Endpoints for sending and receiving peek responses.
-        let (rows_tx, rows_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (rows_tx, rows_rx) = tokio::sync::oneshot::channel();
 
         // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
         // small but unlikely chance that it's not unique to completed peeks.
@@ -569,52 +568,17 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
         // Prepare the receiver to return as a response.
         let max_result_size = self.catalog.system_config().max_result_size();
-        let rows_rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rows_rx)
-            .fold(
-                (PeekResponse::Rows(vec![]), 0),
-                move |memo: (_, usize), resp| async move {
-                    let max_result_size = usize::cast_from(max_result_size.clone());
-                    match (memo, resp) {
-                        (
-                            (PeekResponse::Rows(mut memo), mut total_size),
-                            PeekResponse::Rows(rows),
-                        ) => {
-                            let rows_size = rows.iter().fold(0, |acc: usize, (row, count)| {
-                                acc.saturating_add(row.byte_len().saturating_mul(count.get()))
-                            });
-                            total_size = total_size.saturating_add(rows_size);
-                            // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
-                            if total_size > max_result_size {
-                                (
-                                    PeekResponse::Error(format!(
-                                        "result exceeds max size of {max_result_size} bytes"
-                                    )),
-                                    total_size,
-                                )
-                            } else {
-                                memo.extend(rows);
-                                (PeekResponse::Rows(memo), total_size)
-                            }
-                        }
-                        ((PeekResponse::Error(e), total_size), _)
-                        | ((_, total_size), PeekResponse::Error(e)) => {
-                            (PeekResponse::Error(e), total_size)
-                        }
-                        ((PeekResponse::Canceled, total_size), _)
-                        | ((_, total_size), PeekResponse::Canceled) => {
-                            (PeekResponse::Canceled, total_size)
-                        }
-                    }
-                },
-            )
-            .map(move |(resp, _)| match resp {
+        let rows_rx = rows_rx.map_ok_or_else(
+            |e| PeekResponseUnary::Error(e.to_string()),
+            move |resp| match resp {
                 PeekResponse::Rows(rows) => match finishing.finish(rows, max_result_size) {
                     Ok(rows) => PeekResponseUnary::Rows(rows),
                     Err(e) => PeekResponseUnary::Error(e),
                 },
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),
-            });
+            },
+        );
 
         // If it was created, drop the dataflow once the peek command is sent.
         if let Some(index_id) = drop_dataflow {

@@ -164,10 +164,8 @@ pub fn build_compute_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
-                // Convert any `LinearOperator` to a `MfpPlan`.
-                // TODO: remove the `LinearOperator` entirely in favor of a `MfpPlan`.
                 let mut mfp = source.arguments.operators.clone().map(|ops| {
-                    mz_expr::MfpPlan::create_from(ops.to_mfp(&source.typ))
+                    mz_expr::MfpPlan::create_from(ops)
                         .expect("Linear operators should always be valid")
                 });
 
@@ -181,6 +179,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                     dataflow.as_of.clone().unwrap(),
                     dataflow.until.clone(),
                     mfp.as_mut(),
+                    // Copy the logic in DeltaJoin/Get/Join to start.
+                    |_timer, count| count > 1_000_000,
                 );
 
                 // If `mfp` is non-identity, we need to apply what remains.

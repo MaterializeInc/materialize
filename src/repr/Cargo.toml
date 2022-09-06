@@ -15,9 +15,9 @@ name = "strconv"
 harness = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 bytes = "1.2.1"
-chrono = { version = "0.4.20", default-features = false, features = ["serde", "std"] }
+chrono = { version = "0.4.21", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.6.3", features = ["serde", "case-insensitive"] }
 dec = "0.4.8"
 enum-kinds = "0.5.1"
@@ -51,4 +51,4 @@ rand = "0.8.5"
 
 [build-dependencies]
 prost-build = "0.11.1"
-protobuf-src = "1.0.4"
+protobuf-src = "1.1.0"

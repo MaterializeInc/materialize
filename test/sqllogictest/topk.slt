@@ -141,7 +141,8 @@ EXPLAIN PLAN FOR SELECT state, COUNT(*) FROM (
     GROUP BY state
 ----
 Source materialize.public.cities (u1):
-| Project (#1, #2)
+| Map dummy
+| Project (#3, #1, #2)
 
 Query:
 %0 =

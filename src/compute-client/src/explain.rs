@@ -12,15 +12,14 @@
 //!
 //! Format details:
 //!
-//!   * Sources that have [`LinearOperator`]s come first.
-//!     The format is "Source <name> (<id>):" followed by the `predicates` of
-//!     the [`LinearOperator`] and then the `projection`.
+//!   * Sources that have [`MapFilterProject`]s come first.
+//!     The format is "Source <name> (<id>):" followed by the [`MapFilterProject`].
 //!   * Intermediate views in the dataflow come next.
 //!     The format is "View <name> (<id>):" followed by the output of
 //!     [`mz_expr::explain::ViewExplanation`].
 //!   * Last is the view or query being explained. The format is "Query:"
 //!     followed by the output of [`mz_expr::explain::ViewExplanation`].
-//!   * If there are no sources with some [`LinearOperator`] and no intermediate
+//!   * If there are no sources with some [`MapFilterProject`] and no intermediate
 //!     views, then the format is identical to the format of
 //!     [`mz_expr::explain::ViewExplanation`].
 //!
@@ -31,17 +30,17 @@
 use std::fmt;
 
 use mz_expr::explain::{Indices, ViewExplanation};
+use mz_expr::MapFilterProject;
 use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::result::ResultExt;
 use mz_ore::str::{bracketed, separated};
 use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::GlobalId;
-use mz_storage::types::transforms::LinearOperator;
 
 use crate::command::DataflowDescription;
 
 pub trait ViewFormatter<ViewExpr> {
-    fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &LinearOperator) -> fmt::Result;
+    fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &MapFilterProject) -> fmt::Result;
     fn fmt_view(&self, f: &mut fmt::Formatter, view: &ViewExpr) -> fmt::Result;
 }
 
@@ -59,8 +58,8 @@ where
     /// Determines how sources and views are formatted
     formatter: &'a Formatter,
     expr_humanizer: &'a dyn ExprHumanizer,
-    /// Each source that has some [`LinearOperator`].
-    sources: Vec<(GlobalId, &'a LinearOperator)>,
+    /// Each source that has some [`MapFilterProject`].
+    sources: Vec<(GlobalId, &'a MapFilterProject)>,
     /// One `ViewExplanation` per view in the dataflow.
     views: Vec<(GlobalId, &'a ViewExpr)>,
     /// An optional `RowSetFinishing` to mention at the end.
@@ -179,7 +178,7 @@ where
 pub struct JsonViewFormatter {}
 
 impl<ViewExpr: serde::Serialize> ViewFormatter<ViewExpr> for JsonViewFormatter {
-    fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &LinearOperator) -> fmt::Result {
+    fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &MapFilterProject) -> fmt::Result {
         let operator_str = match serde_json::to_string_pretty(operator).map_err_to_string() {
             Ok(o) => o,
             Err(e) => e,
@@ -211,19 +210,16 @@ impl<'a> DataflowGraphFormatter<'a> {
 }
 
 impl<'a> ViewFormatter<OptimizedMirRelationExpr> for DataflowGraphFormatter<'a> {
-    fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &LinearOperator) -> fmt::Result {
-        if !operator.predicates.is_empty() {
-            writeln!(
-                f,
-                "| Filter {}",
-                separated(", ", operator.predicates.iter())
-            )?;
+    fn fmt_source_body(&self, f: &mut fmt::Formatter, operator: &MapFilterProject) -> fmt::Result {
+        let (map, filter, project) = operator.as_map_filter_project();
+        if !map.is_empty() {
+            writeln!(f, "| Map {}", separated(", ", map.iter()))?;
         }
-        writeln!(
-            f,
-            "| Project {}",
-            bracketed("(", ")", Indices(&operator.projection))
-        )
+        if !filter.is_empty() {
+            writeln!(f, "| Filter {}", separated(", ", filter.iter()))?;
+        }
+        writeln!(f, "| Project {}", bracketed("(", ")", Indices(&project)))?;
+        Ok(())
     }
 
     fn fmt_view(&self, f: &mut fmt::Formatter, view: &OptimizedMirRelationExpr) -> fmt::Result {

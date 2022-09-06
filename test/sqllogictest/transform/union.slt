@@ -156,7 +156,8 @@ Source materialize.public.t2 (u2):
 | Project (#0, #1)
 
 Source materialize.public.t3 (u3):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -195,8 +196,9 @@ query T multiline
 EXPLAIN SELECT a1.* FROM t3 AS a1 LEFT JOIN t2 AS a2 ON (a1.f1 = a2.nokey);
 ----
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#1) IS NOT NULL
-| Project (#1)
+| Project (#2, #1)
 
 Source materialize.public.t3 (u3):
 | Project (#0, #1)

@@ -271,7 +271,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 > CREATE SINK snk FROM source_data
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-catalog-sink-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-catalog-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 
 > SHOW FULL OBJECTS

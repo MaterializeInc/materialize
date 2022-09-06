@@ -53,6 +53,15 @@ pub struct WriterState {
     pub lease_duration_ms: u64,
 }
 
+/// A subset of a [HollowBatch] corresponding 1:1 to a blob.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HollowBatchPart {
+    /// Pointer usable to retrieve the updates.
+    pub key: PartialBatchKey,
+    /// The encoded size of this part.
+    pub encoded_size_bytes: usize,
+}
+
 /// A [Batch] but with the updates themselves stored externally.
 ///
 /// [Batch]: differential_dataflow::trace::BatchReader
@@ -61,7 +70,7 @@ pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
     /// Pointers usable to retrieve the updates.
-    pub keys: Vec<PartialBatchKey>,
+    pub parts: Vec<HollowBatchPart>,
     /// The number of updates in the batch.
     pub len: usize,
 }
@@ -78,26 +87,26 @@ impl<T: Ord> Ord for HollowBatch<T> {
         // are added.
         let HollowBatch {
             desc: self_desc,
-            keys: self_keys,
+            parts: self_parts,
             len: self_len,
         } = self;
         let HollowBatch {
             desc: other_desc,
-            keys: other_keys,
+            parts: other_parts,
             len: other_len,
         } = other;
         (
             self_desc.lower().elements(),
             self_desc.upper().elements(),
             self_desc.since().elements(),
-            self_keys,
+            self_parts,
             self_len,
         )
             .cmp(&(
                 other_desc.lower().elements(),
                 other_desc.upper().elements(),
                 other_desc.since().elements(),
-                other_keys,
+                other_parts,
                 other_len,
             ))
     }
@@ -220,11 +229,11 @@ where
 
         // If the time interval is empty, the list of updates must also be
         // empty.
-        if batch.desc.upper() == batch.desc.lower() && !batch.keys.is_empty() {
+        if batch.desc.upper() == batch.desc.lower() && !batch.parts.is_empty() {
             return Break(Err(InvalidUsage::InvalidEmptyTimeInterval {
                 lower: batch.desc.lower().clone(),
                 upper: batch.desc.upper().clone(),
-                keys: batch.keys.to_vec(),
+                keys: batch.parts.iter().map(|x| x.key.clone()).collect(),
             }));
         }
 
@@ -457,6 +466,10 @@ where
         self.collections.trace.num_updates()
     }
 
+    pub fn encoded_batch_size(&self) -> usize {
+        self.collections.trace.encoded_batch_size()
+    }
+
     pub fn latest_rollup(&self) -> (&SeqNo, &PartialRollupKey) {
         // We maintain the invariant that every version of state has at least
         // one rollup.
@@ -687,9 +700,12 @@ mod tests {
                 Antichain::from_elem(upper),
                 Antichain::from_elem(T::minimum()),
             ),
-            keys: keys
+            parts: keys
                 .iter()
-                .map(|x| PartialBatchKey((*x).to_owned()))
+                .map(|x| HollowBatchPart {
+                    key: PartialBatchKey((*x).to_owned()),
+                    encoded_size_bytes: 0,
+                })
                 .collect(),
             len,
         }

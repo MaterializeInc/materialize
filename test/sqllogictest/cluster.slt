@@ -228,7 +228,7 @@ default
 statement error unknown cluster 'baz'
 DROP CLUSTER baz
 
-statement error cannot drop cluster with active indexes, sinks, materialized views, or replicas
+statement error cannot drop cluster with active indexes or materialized views
 DROP CLUSTER bar
 
 query TTTTTTT
@@ -242,12 +242,6 @@ DROP INDEX v_primary_idx
 
 statement ok
 DROP INDEX v_primary_idx1
-
-statement ok
-DROP CLUSTER REPLICA bar.r1
-
-statement ok
-DROP CLUSTER REPLICA bar.r2
 
 # Test valid DROPs
 
@@ -263,7 +257,7 @@ CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234']))
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
 
-statement error cannot drop cluster with active indexes, sinks, materialized views, or replicas
+statement error cannot drop cluster with active indexes or materialized views
 DROP CLUSTER baz
 
 statement ok
