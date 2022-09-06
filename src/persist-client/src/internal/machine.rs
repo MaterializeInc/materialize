@@ -165,12 +165,13 @@ where
     pub async fn register_reader(
         &mut self,
         reader_id: &ReaderId,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, ReaderState<T>) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, (shard_upper, read_cap), _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
-                state.register_reader(reader_id, seqno, heartbeat_timestamp_ms)
+                state.register_reader(reader_id, seqno, lease_duration, heartbeat_timestamp_ms)
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
@@ -195,12 +196,13 @@ where
     pub async fn clone_reader(
         &mut self,
         new_reader_id: &ReaderId,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ReaderState<T> {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, read_cap, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, |seqno, state| {
-                state.clone_reader(new_reader_id, seqno, heartbeat_timestamp_ms)
+                state.clone_reader(new_reader_id, seqno, lease_duration, heartbeat_timestamp_ms)
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
