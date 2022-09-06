@@ -35,7 +35,6 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row};
 use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
 use mz_storage::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
@@ -59,31 +58,25 @@ pub struct ComputeSinkId {
     pub global_id: GlobalId,
 }
 
-/// Controller state maintained for each compute instance.
+/// A controller for a compute instance.
 #[derive(Debug)]
-pub struct ComputeControllerState<T> {
+pub struct ComputeController<T> {
+    /// The ID of the compute instance.
+    instance_id: ComputeInstanceId,
     /// The replicas of this compute instance.
     replicas: ActiveReplication<T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
     peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
-    /// A response to handle on the next call to `ComputeControllerMut::process`.
+    /// A response to handle on the next call to `ActiveComputeController::process`.
     stashed_response: Option<ActiveReplicationResponse<T>>,
 }
 
-/// An immutable controller for a compute instance.
-#[derive(Debug, Copy, Clone)]
-pub struct ComputeController<'a, T> {
-    instance: ComputeInstanceId,
-    compute: &'a ComputeControllerState<T>,
-}
-
-/// A mutable controller for a compute instance.
+/// A wrapper around [`ComputeController`] with a live storage controller.
 #[derive(Debug)]
-pub struct ComputeControllerMut<'a, T> {
-    instance: ComputeInstanceId,
-    compute: &'a mut ComputeControllerState<T>,
+pub struct ActiveComputeController<'a, T> {
+    compute: &'a mut ComputeController<T>,
     storage_controller: &'a mut dyn StorageController<Timestamp = T>,
 }
 
@@ -170,12 +163,40 @@ impl From<anyhow::Error> for ComputeError {
     }
 }
 
-impl<T> ComputeControllerState<T>
+// Public interface
+
+impl<T> ComputeController<T> {
+    /// Returns this controller's compute instance ID.
+    pub fn instance_id(&self) -> ComputeInstanceId {
+        self.instance_id
+    }
+
+    /// Acquire a handle to the collection state associated with `id`.
+    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
+        self.collections
+            .get(&id)
+            .ok_or(ComputeError::IdentifierMissing(id))
+    }
+
+    /// Acquire an [`ActiveComputeController`] by providing a storage controller.
+    pub fn activate<'a>(
+        &'a mut self,
+        storage_controller: &'a mut dyn StorageController<Timestamp = T>,
+    ) -> ActiveComputeController<'a, T> {
+        ActiveComputeController {
+            compute: self,
+            storage_controller,
+        }
+    }
+}
+
+impl<T> ComputeController<T>
 where
-    T: Timestamp + Lattice + Debug + Copy,
+    T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    pub async fn new(
+    pub fn new(
+        instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         logging: &Option<LoggingConfig>,
         max_result_size: u32,
@@ -201,6 +222,7 @@ where
         }));
 
         Self {
+            instance_id,
             replicas,
             collections,
             peeks: Default::default(),
@@ -208,12 +230,19 @@ where
         }
     }
 
+    /// Marks the end of any initialization commands.
+    ///
+    /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
+    pub fn initialization_complete(&mut self) {
+        self.replicas.send(ComputeCommand::InitializationComplete);
+    }
+
     /// Waits until the controller is ready to process a response.
     ///
     /// This method may block for an arbitrarily long time.
     ///
     /// When the method returns, the owner should call
-    /// [`ComputeControllerMut::process`] to process the ready message.
+    /// [`ActiveComputeController::process`] to process the ready message.
     ///
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
@@ -235,55 +264,16 @@ where
     }
 }
 
-// Public interface
-impl<'a, T> ComputeController<'a, T> {
-    /// Construct a new [`ComputeController`].
-    pub fn new(instance: ComputeInstanceId, compute: &'a ComputeControllerState<T>) -> Self {
-        Self { instance, compute }
-    }
-
-    /// Returns this controller's compute instance ID.
-    pub fn instance_id(&self) -> ComputeInstanceId {
-        self.instance
-    }
-
-    /// Acquire a handle to the collection state associated with `id`.
-    pub fn collection(&self, id: GlobalId) -> Result<&'a CollectionState<T>, ComputeError> {
-        self.compute
-            .collections
-            .get(&id)
-            .ok_or(ComputeError::IdentifierMissing(id))
-    }
-}
-
-impl<'a, T> ComputeControllerMut<'a, T> {
-    /// Construct a new [`ComputeControllerMut`].
-    pub fn new(
-        instance: ComputeInstanceId,
-        compute: &'a mut ComputeControllerState<T>,
-        storage_controller: &'a mut dyn StorageController<Timestamp = T>,
-    ) -> Self {
-        Self {
-            instance,
-            compute,
-            storage_controller,
-        }
-    }
-
-    /// Constructs an immutable handle from this mutable handle.
-    pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
-        ComputeController {
-            instance: self.instance,
-            compute: &self.compute,
-        }
-    }
-}
-
-impl<'a, T> ComputeControllerMut<'a, T>
+impl<'a, T> ActiveComputeController<'a, T>
 where
-    T: Timestamp + Lattice + Codec64 + Debug,
+    T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
+    /// Acquire a handle to the collection state associated with `id`.
+    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
+        self.compute.collection(id)
+    }
+
     /// Adds a new instance replica, by name.
     pub fn add_replica(
         &mut self,
@@ -363,7 +353,7 @@ where
             // Validate indexes have `since.less_equal(as_of)`.
             // TODO(mcsherry): Instead, return an error from the constructing method.
             for index_id in dataflow.index_imports.keys() {
-                let collection = self.as_ref().collection(*index_id)?;
+                let collection = self.compute.collection(*index_id)?;
                 let since = collection.read_capabilities.frontier();
                 if !(timely::order::PartialOrder::less_equal(&since, &as_of.borrow())) {
                     Err(ComputeError::DataflowSinceViolation(*index_id))?;
@@ -484,11 +474,12 @@ where
 
         Ok(())
     }
+
     /// Drops the read capability for the given collections and allows their resources to be
     /// reclaimed.
     pub async fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
-        self.as_ref().validate_ids(ids.iter().cloned())?;
+        self.validate_ids(ids.iter().cloned())?;
 
         let compaction_commands = ids.into_iter().map(|id| (id, Antichain::new())).collect();
         self.allow_compaction(compaction_commands).await?;
@@ -507,7 +498,7 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), ComputeError> {
-        let since = self.as_ref().collection(id)?.read_capabilities.frontier();
+        let since = self.compute.collection(id)?.read_capabilities.frontier();
 
         if !since.less_equal(&timestamp) {
             Err(ComputeError::PeekSinceViolation(id))?;
@@ -569,7 +560,7 @@ where
     ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
-            if let Ok(collection) = self.collection_mut(id) {
+            if let Ok(collection) = self.compute.collection_mut(id) {
                 let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
 
                 if timely::order::PartialOrder::less_equal(
@@ -604,7 +595,7 @@ where
             .send(ComputeCommand::UpdateMaxResultSize(max_result_size))
     }
 
-    /// Processes the work queued by [`ComputeControllerState::ready`].
+    /// Processes the work queued by [`ComputeController::ready`].
     ///
     /// This method is guaranteed to return "quickly" unless doing so would
     /// compromise the correctness of the system.
@@ -651,42 +642,30 @@ where
             )),
         }
     }
-
-    /// Marks the end of any initialization commands.
-    ///
-    /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
-    pub fn initialization_complete(&mut self) {
-        self.compute
-            .replicas
-            .send(ComputeCommand::InitializationComplete);
-    }
 }
 
 // Internal interface
-impl<'a, T> ComputeController<'a, T>
+
+impl<T> ComputeController<T> {
+    /// Acquire a mutable handle to the collection state associated with `id`.
+    fn collection_mut(&mut self, id: GlobalId) -> Result<&mut CollectionState<T>, ComputeError> {
+        self.collections
+            .get_mut(&id)
+            .ok_or(ComputeError::IdentifierMissing(id))
+    }
+}
+
+impl<'a, T> ActiveComputeController<'a, T>
 where
     T: Timestamp + Lattice,
+    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Validate that a collection exists for all identifiers, and error if any do not.
     fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
         for id in ids {
-            self.collection(id)?;
+            self.compute.collection(id)?;
         }
         Ok(())
-    }
-}
-
-impl<'a, T> ComputeControllerMut<'a, T>
-where
-    T: Timestamp + Lattice + Codec64,
-    ComputeGrpcClient: ComputeClient<T>,
-{
-    /// Acquire a mutable reference to the collection state, should it exist.
-    fn collection_mut(&mut self, id: GlobalId) -> Result<&mut CollectionState<T>, ComputeError> {
-        self.compute
-            .collections
-            .get_mut(&id)
-            .ok_or(ComputeError::IdentifierMissing(id))
     }
 
     /// Accept write frontier updates from the compute layer.
@@ -698,6 +677,7 @@ where
         let mut read_capability_changes = BTreeMap::default();
         for (id, new_upper) in updates.iter() {
             let collection = self
+                .compute
                 .collection_mut(*id)
                 .expect("Reference to absent collection");
 
@@ -753,7 +733,7 @@ where
         // Repeatedly extract the maximum id, and updates for it.
         while let Some(key) = updates.keys().rev().next().cloned() {
             let mut update = updates.remove(&key).unwrap();
-            if let Ok(collection) = self.collection_mut(key) {
+            if let Ok(collection) = self.compute.collection_mut(key) {
                 let changes = collection.read_capabilities.update_iter(update.drain());
                 update.extend(changes);
                 for id in collection.storage_dependencies.iter() {
@@ -783,7 +763,7 @@ where
         for (id, change) in compute_net.iter_mut() {
             if !change.is_empty() {
                 let frontier = self
-                    .as_ref()
+                    .compute
                     .collection(*id)
                     .unwrap()
                     .read_capabilities
@@ -806,6 +786,7 @@ where
         }
         Ok(())
     }
+
     /// Removes a registered peek, unblocking compaction that might have waited on it.
     async fn remove_peeks(
         &mut self,
@@ -833,8 +814,7 @@ where
         frontiers: Vec<(GlobalId, Antichain<T>)>,
     ) -> Result<(), ComputeError> {
         // Validate that the ids exist.
-        self.as_ref()
-            .validate_ids(frontiers.iter().map(|(id, _)| *id))?;
+        self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
         let policies = frontiers
             .into_iter()
             .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
