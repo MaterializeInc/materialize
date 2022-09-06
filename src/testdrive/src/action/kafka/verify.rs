@@ -39,6 +39,7 @@ pub struct VerifyAction {
     source: Topic,
     format: SinkFormat,
     sort_messages: bool,
+    header_keys: Vec<String>,
     expected_messages: Vec<String>,
     partial_search: Option<usize>,
     // If true, print partial_search.unwrap_or(expected_messages.len()) number of messages in sink topic
@@ -62,6 +63,13 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Err
     };
 
     let sort_messages = cmd.args.opt_bool("sort-messages")?.unwrap_or(false);
+
+    let header_keys = cmd
+        .args
+        .opt_string("headers")
+        .map(|s| s.split(",").map(str::to_owned).collect())
+        .unwrap_or(vec![]);
+
     let expected_messages = cmd.input;
     if expected_messages.len() == 0 {
         // verify with 0 messages doesn't check that no messages have been written -
@@ -75,6 +83,7 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Err
         source,
         format,
         sort_messages,
+        header_keys,
         expected_messages,
         partial_search,
         debug_print_only,
