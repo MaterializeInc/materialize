@@ -298,7 +298,7 @@ use any SSL library that may be provided by your system. To see the version of
 OpenSSL used by a particular `materialized` binary, inquire with the `-vv` flag:
 
 ```shell
-$ materialize -vv
+$ materialized -vv
 ```
 ```nofmt
 materialized v0.2.3-dev (c62c988e8167875b92122719eee5709cf81cdac4)
