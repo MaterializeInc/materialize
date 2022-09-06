@@ -20,7 +20,7 @@ mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 serde_json = "1.0.85"
 scopeguard = "1.1.0"
-sysinfo = "0.25.3"
+sysinfo = "0.26.2"
 tokio = { version = "1.19.2", features = ["process"] }
 tracing = "0.1.36"
 
