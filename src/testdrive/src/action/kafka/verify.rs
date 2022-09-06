@@ -28,13 +28,13 @@ pub enum SinkFormat {
     Json { key: bool },
 }
 
-pub enum VerifySource {
-    Sink(String),
-    Topic(String),
+pub enum Topic {
+    FromSink(String),
+    Named(String),
 }
 
 pub struct VerifyAction {
-    source: VerifySource,
+    source: Topic,
     format: SinkFormat,
     sort_messages: bool,
     expected_messages: Vec<String>,
@@ -53,8 +53,8 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Err
     };
 
     let source = match (cmd.args.opt_string("sink"), cmd.args.opt_string("topic")) {
-        (Some(sink), None) => VerifySource::Sink(sink),
-        (None, Some(topic)) => VerifySource::Topic(topic),
+        (Some(sink), None) => Topic::FromSink(sink),
+        (None, Some(topic)) => Topic::Named(topic),
         (Some(_), Some(_)) => bail!("Can't provide both `source` and `topic` to kafka-verify"),
         (None, None) => bail!("kafka-verify expects either `source` or `topic`"),
     };
@@ -127,8 +127,8 @@ impl Action for VerifyAction {
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic: String = match &self.source {
-            VerifySource::Sink(sink) => get_topic(&sink, "topic", state).await?,
-            VerifySource::Topic(name) => name.clone(),
+            Topic::FromSink(sink) => get_topic(&sink, "topic", state).await?,
+            Topic::Named(name) => name.clone(),
         };
 
         println!("Verifying results in Kafka topic {}", topic);
