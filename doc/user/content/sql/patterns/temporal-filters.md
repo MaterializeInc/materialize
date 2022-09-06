@@ -94,7 +94,7 @@ FROM events
 -- The interval begins here ...
 WHERE mz_logical_timestamp() >= PERIOD_MS * (insert_ms / PERIOD_MS)
 -- ... and ends here.
-  AND mz_logical_timestamp() < INTERVALS * (PERIOD_MS + insert_ms / PERIOD_MS)
+  AND mz_logical_timestamp() < PERIOD_MS * (INTERVALS + insert_ms / PERIOD_MS)
 ```
 
 Note that when `INTERVALS` is one, this query is identical to the query above it.
