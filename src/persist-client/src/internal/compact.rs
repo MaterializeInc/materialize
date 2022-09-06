@@ -393,10 +393,10 @@ impl Compactor {
         D: Semigroup + Codec64 + Send + Sync,
     {
         let mut compaction_runs = vec![];
-        let mut compaction_parts = vec![];
+        let mut compaction_parts_count = 0;
         let mut total_updates = 0;
 
-        let mut heap = BinaryHeap::new();
+        let mut sorted_updates = BinaryHeap::new();
         let mut update_buffer: Vec<((Vec<u8>, Vec<u8>), T, D)> = Vec::new();
         let mut update_buffer_size_bytes = 0;
         let mut greatest_kv: Option<(Vec<u8>, Vec<u8>)> = None;
@@ -422,7 +422,7 @@ impl Compactor {
                         let k = k.to_vec();
                         let v = v.to_vec();
                         // default heap ordering is descending
-                        heap.push(Reverse((((k, v), t, d), index)));
+                        sorted_updates.push(Reverse((((k, v), t, d), index)));
                         remaining_updates_by_run[index] += 1;
                     },
                 )
@@ -433,7 +433,7 @@ impl Compactor {
         // repeatedly pull off the least element from our heap, refilling from the originating run
         // if needed. the heap will be exhausted only when all parts from all input runs have been
         // consumed.
-        while let Some(Reverse((((k, v), t, d), index))) = heap.pop() {
+        while let Some(Reverse((((k, v), t, d), index))) = sorted_updates.pop() {
             remaining_updates_by_run[index] -= 1;
             if remaining_updates_by_run[index] == 0 {
                 // repopulate from the originating run, if any parts remain
@@ -450,7 +450,7 @@ impl Compactor {
                             let d = D::decode(d);
                             let k = k.to_vec();
                             let v = v.to_vec();
-                            heap.push(Reverse((((k, v), t, d), index)));
+                            sorted_updates.push(Reverse((((k, v), t, d), index)));
                             remaining_updates_by_run[index] += 1;
                         },
                     )
@@ -470,7 +470,7 @@ impl Compactor {
                 Self::consolidate_run(
                     &mut update_buffer,
                     &mut compaction_runs,
-                    &mut compaction_parts,
+                    compaction_parts_count,
                     &mut greatest_kv,
                     &mut total_updates,
                 );
@@ -478,7 +478,7 @@ impl Compactor {
                     cfg,
                     &mut batch_parts,
                     &mut update_buffer,
-                    &mut compaction_parts,
+                    &mut compaction_parts_count,
                     desc.clone(),
                 )
                 .await;
@@ -490,7 +490,7 @@ impl Compactor {
             Self::consolidate_run(
                 &mut update_buffer,
                 &mut compaction_runs,
-                &mut compaction_parts,
+                compaction_parts_count,
                 &mut greatest_kv,
                 &mut total_updates,
             );
@@ -498,12 +498,14 @@ impl Compactor {
                 cfg,
                 &mut batch_parts,
                 &mut update_buffer,
-                &mut compaction_parts,
+                &mut compaction_parts_count,
                 desc.clone(),
             )
             .await;
         }
 
+        let compaction_parts = batch_parts.finish().await;
+        assert_eq!(compaction_parts.len(), compaction_parts_count);
         Ok((compaction_parts, compaction_runs, total_updates))
     }
 
@@ -513,7 +515,7 @@ impl Compactor {
     fn consolidate_run<T, D>(
         updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
         compaction_runs: &mut Vec<usize>,
-        compaction_keys: &mut Vec<PartialBatchKey>,
+        number_of_compacted_runs: usize,
         greatest_kv: &mut Option<(Vec<u8>, Vec<u8>)>,
         total_updates: &mut usize,
     ) where
@@ -530,7 +532,7 @@ impl Compactor {
             (Some(greatest_kv_seen), Some(greatest_kv_in_batch))
                 if *greatest_kv_seen > greatest_kv_in_batch.0 =>
             {
-                compaction_runs.push(compaction_keys.len());
+                compaction_runs.push(number_of_compacted_runs);
             }
             (_, Some(greatest_kv_in_batch)) => *greatest_kv = Some(greatest_kv_in_batch.0.clone()),
             (Some(_), None) | (None, None) => {}
@@ -542,12 +544,17 @@ impl Compactor {
         cfg: &PersistConfig,
         batch_parts: &mut BatchParts<T>,
         updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
-        compaction_keys: &mut Vec<PartialBatchKey>,
+        compaction_parts_count: &mut usize,
         desc: Description<T>,
     ) where
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        if updates.is_empty() {
+            return;
+        }
+
+        *compaction_parts_count += 1;
         let mut builder = ColumnarRecordsVecBuilder::new_with_len(cfg.blob_target_size);
         for ((k, v), t, d) in updates.drain(..) {
             builder.push(((&k, &v), T::encode(&t), D::encode(&d)));
@@ -564,7 +571,6 @@ impl Compactor {
                 .write(chunk, desc.upper().clone(), desc.since().clone())
                 .await;
         }
-        compaction_keys.extend_from_slice(&batch_parts.flush().await);
     }
 
     fn validate_req<T: Timestamp>(req: &CompactReq<T>) -> Result<(), anyhow::Error> {
