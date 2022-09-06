@@ -65,8 +65,8 @@ pub struct Config {
 struct ClusterClient<C> {
     /// The actual client to talk to the cluster
     inner: Option<C>,
-    /// Worker guards to wait for finishing the computation.
-    worker_guards: Option<WorkerGuards<()>>,
+    /// The running timely instance
+    timely_container: TimelyContainerRef,
     /// The dataflow trace metrics.
     trace_metrics: TraceMetrics,
     /// Handle to the persist infrastructure.
@@ -75,8 +75,29 @@ struct ClusterClient<C> {
     tokio_handle: tokio::runtime::Handle,
 }
 
+/// Metadata about timely workers in this process.
+pub struct TimelyContainer {
+    /// The current communication config in use
+    comm_config: CommunicationConfig,
+    /// Channels over which to send endpoints for wiring up a new Client
+    client_txs: Vec<
+        crossbeam_channel::Sender<(
+            crossbeam_channel::Receiver<ComputeCommand>,
+            mpsc::UnboundedSender<ComputeResponse>,
+            crossbeam_channel::Sender<SyncActivator>,
+        )>,
+    >,
+    /// Thread guards that keep worker threads alive
+    worker_guards: WorkerGuards<()>,
+}
+
+/// Threadsafe reference to an optional TimelyContainer
+pub type TimelyContainerRef = Arc<Mutex<Option<TimelyContainer>>>;
+
 /// Initiates a timely dataflow computation, processing compute commands.
-pub fn serve(config: Config) -> Result<((), impl Fn() -> Box<dyn ComputeClient>), Error> {
+pub fn serve(
+    config: Config,
+) -> Result<(TimelyContainerRef, impl Fn() -> Box<dyn ComputeClient>), Error> {
     // Various metrics related things.
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
 
@@ -86,34 +107,40 @@ pub fn serve(config: Config) -> Result<((), impl Fn() -> Box<dyn ComputeClient>)
     );
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
     let tokio_executor = tokio::runtime::Handle::current();
-    let client_builder = move || {
-        let client = ClusterClient::new(
-            trace_metrics.clone(),
-            Arc::clone(&persist_clients),
-            tokio_executor.clone(),
-        );
-        Box::new(client) as Box<dyn ComputeClient>
+    let timely_container = Arc::new(Mutex::new(None));
+    let client_builder = {
+        let timely_container = Arc::clone(&timely_container);
+        move || {
+            let client = ClusterClient::new(
+                Arc::clone(&timely_container),
+                trace_metrics.clone(),
+                Arc::clone(&persist_clients),
+                tokio_executor.clone(),
+            );
+            Box::new(client) as Box<dyn ComputeClient>
+        }
     };
 
-    Ok(((), client_builder))
+    Ok((timely_container, client_builder))
 }
 
 impl ClusterClient<PartitionedClient> {
     fn new(
+        timely_container: TimelyContainerRef,
         trace_metrics: TraceMetrics,
         persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
         tokio_handle: tokio::runtime::Handle,
     ) -> Self {
         Self {
+            timely_container,
             inner: None,
-            worker_guards: None,
             trace_metrics,
             persist_clients,
             tokio_handle,
         }
     }
 
-    fn build(&mut self, comm_config: &CommunicationConfig) -> Result<(), Error> {
+    fn build_timely(&mut self, comm_config: CommunicationConfig) -> Result<TimelyContainer, Error> {
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..comm_config.workers)
             .map(|_| crossbeam_channel::unbounded())
             .unzip();
@@ -149,11 +176,34 @@ impl ClusterClient<PartitionedClient> {
         )
         .map_err(|e| anyhow!("{e}"))?;
 
+        return Ok(TimelyContainer {
+            comm_config,
+            client_txs,
+            worker_guards,
+        });
+    }
+
+    fn build(&mut self, comm_config: CommunicationConfig) -> Result<(), Error> {
+        let workers = comm_config.workers;
+
+        // Check if we can reuse the existing timely
+        let timely = self
+            .timely_container
+            .lock()
+            .unwrap()
+            .take()
+            .filter(|existing| existing.comm_config == comm_config);
+        let timely = match timely {
+            Some(existing) => existing,
+            None => self.build_timely(comm_config)?,
+        };
+
         let (command_txs, command_rxs): (Vec<_>, Vec<_>) =
             (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
         let (response_txs, response_rxs): (Vec<_>, Vec<_>) =
             (0..workers).map(|_| mpsc::unbounded_channel()).unzip();
-        let activators = client_txs
+        let activators = timely
+            .client_txs
             .iter()
             .zip(command_rxs)
             .zip(response_txs)
@@ -172,7 +222,8 @@ impl ClusterClient<PartitionedClient> {
             command_txs,
             activators,
         ));
-        self.worker_guards = Some(worker_guards);
+
+        *self.timely_container.lock().unwrap() = Some(timely);
         Ok(())
     }
 }
@@ -191,11 +242,18 @@ impl<C: Debug> Debug for ClusterClient<C> {
 impl GenericClient<ComputeCommand, ComputeResponse> for ClusterClient<PartitionedClient> {
     async fn send(&mut self, cmd: ComputeCommand) -> Result<(), Error> {
         match cmd {
-            ComputeCommand::CreateTimely(comm_config) => self.build(&comm_config),
+            ComputeCommand::CreateTimely(comm_config) => self.build(comm_config),
             ComputeCommand::DropInstance => {
                 self.inner.as_mut().expect("intialized").send(cmd).await?;
                 self.inner = None;
-                let _ = self.worker_guards.take().map(|guards| guards.join());
+                let _ = self
+                    .timely_container
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("Running instance") // Maybe better to send an error back in this case?
+                    .worker_guards
+                    .join();
                 Ok(())
             }
             _ => self.inner.as_mut().expect("intialized").send(cmd).await,

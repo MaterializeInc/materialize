@@ -779,7 +779,7 @@ where
             }
         }
         let mut replicas = ActiveReplication::new(build_info);
-        // These commands will be modified ActiveReplication
+        // These commands will be modified by ActiveReplication
         replicas.send(ComputeCommand::CreateTimely(Default::default()));
         replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),

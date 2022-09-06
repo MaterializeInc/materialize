@@ -42,12 +42,40 @@ use crate::sinks::ComputeSinkDesc;
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 
 /// Commands related to the computation and maintenance of views.
+///
+/// A replica can consist of multiple computed processes. Upon startup, a computed will listen for
+/// a connection from environmentd. The first command sent to computed must be a CreateTimely
+/// command, which will build the timely runtime.
+///
+/// CreateTimely is the only command that is sent to every process of the replica by environmentd.
+/// The other commands are sent only to the first process, which in turn will disseminate the
+/// command to other timely workers using the timely communication fabric.
+///
+/// After a timely runtime has been built with CreateTimely, a sequence of commands that have to be
+/// handled in the timely runtime can be sent: First a CreateInstance must be sent which activates
+/// logging sources. After this, any combination of CreateDataflows, AllowCompaction, Peek,
+/// UpdateMaxResultSize and CancelPeeks can be sent.
+///
+/// Within this sequence, exactly one InitializationComplete has to be sent. Commands sent before
+/// InitializationComplete are buffered and are compacted. For example a Peek followed by a
+/// CancelPeek will become a no-op if sent before InitializationComplete. After
+/// InitializationComplete, the computed is considered rehydrated and will immediately act upon the
+/// commands. If a new cluster is created, InitializationComplete will follow immediately after
+/// CreateInstance. If a replica is added to a cluster or environmentd restarts and rehydrates a
+/// computed, a potentially long command sequence will be sent before InitializationComplete.
+///
+/// DropInstance will undo both CreateTimely and CreateInstance.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
-    /// Create the timely runtime according to CommunicationConfig
+    /// Create the timely runtime according to the supplied CommunicationConfig. Must be the first
+    /// command sent to a computed. This is the only command that is broadcasted by
+    /// ActiveReplication to all computed processes within a replica.
     CreateTimely(CommunicationConfig),
-    /// After CreateTimely this is the first command that sets up logging sources.
+
+    /// Setup and logging sources within a running timely instance. Must be the second command
+    /// after CreateTimely.
     CreateInstance(InstanceConfig),
+
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
 
@@ -64,6 +92,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// the dataflow runners are responsible for ensuring that they can
     /// correctly maintain the dataflows.
     CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>>),
+
     /// Enable compaction in compute-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -73,6 +102,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
 
     /// Peek at an arrangement.
     Peek(Peek<T>),
+
     /// Cancel the peeks associated with the given `uuids`.
     CancelPeeks {
         /// The identifiers of the peek requests to cancel.
