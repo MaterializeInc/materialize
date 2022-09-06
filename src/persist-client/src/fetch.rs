@@ -79,7 +79,7 @@ where
         part: LeasedBatchPart<T>,
     ) -> (
         LeasedBatchPart<T>,
-        Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, InvalidUsage<T>>,
+        Result<FetchedPart<K, V, T, D>, InvalidUsage<T>>,
     ) {
         if &part.shard_id != &self.shard_id {
             let batch_shard = part.shard_id.clone();
@@ -92,11 +92,13 @@ where
             );
         }
 
-        let (part, res) = fetch_leased_part(part, self.blob.as_ref(), &self.metrics, None).await;
-        (part, Ok(res))
+        let (part, fetched_part) =
+            fetch_leased_part(part, self.blob.as_ref(), Arc::clone(&self.metrics), None).await;
+        (part, Ok(fetched_part))
     }
 }
 
+#[derive(Debug)]
 enum FetchBatchFilter<T> {
     Snapshot {
         as_of: Antichain<T>,
@@ -147,19 +149,15 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
 pub(crate) async fn fetch_leased_part<K, V, T, D>(
     part: LeasedBatchPart<T>,
     blob: &(dyn Blob + Send + Sync),
-    metrics: &Metrics,
+    metrics: Arc<Metrics>,
     reader_id: Option<&ReaderId>,
-) -> (
-    LeasedBatchPart<T>,
-    Vec<((Result<K, String>, Result<V, String>), T, D)>,
-)
+) -> (LeasedBatchPart<T>, FetchedPart<K, V, T, D>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let mut updates = Vec::new();
     let ts_filter = match &part.metadata {
         SerdeLeasedBatchPartMetadata::Snapshot { as_of } => {
             let as_of = Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
@@ -172,56 +170,44 @@ where
         }
     };
 
-    fetch_batch_part(
-        &part.shard_id,
-        blob,
-        &metrics,
-        &part.key,
-        &part.desc,
-        |k, v, mut t, d| {
-            if !ts_filter.filter_ts(&mut t) {
-                return;
-            }
+    let encoded_part = fetch_batch_part(&part.shard_id, blob, &metrics, &part.key, &part.desc)
+        .await
+        .unwrap_or_else(|err| {
+            // Ideally, readers should never encounter a missing blob. They place a seqno
+            // hold as they consume their snapshot/listen, preventing any blobs they need
+            // from being deleted by garbage collection, and all blob implementations are
+            // linearizable so there should be no possibility of stale reads.
+            //
+            // If we do have a bug and a reader does encounter a missing blob, the state
+            // cannot be recovered, and our best option is to panic and retry the whole
+            // process.
+            panic!(
+                "{} could not fetch batch part: {}",
+                reader_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "batch fetcher".to_string()),
+                err
+            )
+        });
+    let fetched_part = FetchedPart {
+        metrics,
+        ts_filter,
+        part: encoded_part,
+        _phantom: PhantomData,
+    };
 
-            let k = metrics.codecs.key.decode(|| K::decode(k));
-            let v = metrics.codecs.val.decode(|| V::decode(v));
-            let d = D::decode(d);
-            updates.push(((k, v), t, d));
-        },
-    )
-    .await
-    .unwrap_or_else(|err| {
-        // Ideally, readers should never encounter a missing blob. They place a seqno
-        // hold as they consume their snapshot/listen, preventing any blobs they need
-        // from being deleted by garbage collection, and all blob implementations are
-        // linearizable so there should be no possibility of stale reads.
-        //
-        // If we do have a bug and a reader does encounter a missing blob, the state
-        // cannot be recovered, and our best option is to panic and retry the whole
-        // process.
-        panic!(
-            "{} could not fetch batch part: {}",
-            reader_id
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "batch fetcher".to_string()),
-            err
-        )
-    });
-
-    (part, updates)
+    (part, fetched_part)
 }
 
-pub(crate) async fn fetch_batch_part<T, UpdateFn>(
+pub(crate) async fn fetch_batch_part<T>(
     shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
     key: &PartialBatchKey,
     registered_desc: &Description<T>,
-    mut update_fn: UpdateFn,
-) -> Result<(), anyhow::Error>
+) -> Result<EncodedPart<T>, anyhow::Error>
 where
     T: Timestamp + Lattice + Codec64,
-    UpdateFn: FnMut(&[u8], &[u8], T, [u8; 8]),
 {
     let get_span = debug_span!("fetch_batch::get");
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
@@ -242,8 +228,8 @@ where
     };
     drop(get_span);
 
-    trace_span!("fetch_batch::decode").in_scope(|| {
-        let batch = metrics
+    let part = trace_span!("fetch_batch::decode").in_scope(|| {
+        let part = metrics
             .codecs
             .batch
             .decode(|| BlobTraceBatchPart::decode(&value))
@@ -257,76 +243,10 @@ where
         // Drop the encoded representation as soon as we can to reclaim memory.
         drop(value);
 
-        // There are two types of batches in persist:
-        // - Batches written by a persist user (either directly or indirectly
-        //   via BatchBuilder). These always have a since of the minimum
-        //   timestamp and may be registered in persist state with a tighter set
-        //   of bounds than are inline in the batch (truncation). To read one of
-        //   these batches, all data physically in the batch but outside of the
-        //   truncated bounds must be ignored. Not every user batch is
-        //   truncated.
-        // - Batches written by compaction. These always have an inline desc
-        //   that exactly matches the one they are registered with. The since
-        //   can be anything.
-        let inline_desc = &batch.desc;
-        let needs_truncation = inline_desc.lower() != registered_desc.lower()
-            || inline_desc.upper() != registered_desc.upper();
-        if needs_truncation {
-            assert!(
-                PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
-                "key={} inline={:?} registered={:?}",
-                key,
-                inline_desc,
-                registered_desc
-            );
-            assert!(
-                PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
-                "key={} inline={:?} registered={:?}",
-                key,
-                inline_desc,
-                registered_desc
-            );
-            // As mentioned above, batches that needs truncation will always have a
-            // since of the minimum timestamp. Technically we could truncate any
-            // batch where the since is less_than the output_desc's lower, but we're
-            // strict here so we don't get any surprises.
-            assert_eq!(
-                inline_desc.since(),
-                &Antichain::from_elem(T::minimum()),
-                "key={} inline={:?} registered={:?}",
-                key,
-                inline_desc,
-                registered_desc
-            );
-        } else {
-            assert_eq!(
-                inline_desc, registered_desc,
-                "key={} inline={:?} registered={:?}",
-                key, inline_desc, registered_desc
-            );
-        }
-
-        for chunk in batch.updates {
-            for ((k, v), t, d) in chunk.iter() {
-                let t = T::decode(t);
-
-                // This filtering is really subtle, see the comment above for
-                // what's going on here.
-                if needs_truncation {
-                    if !registered_desc.lower().less_equal(&t) {
-                        continue;
-                    }
-                    if registered_desc.upper().less_equal(&t) {
-                        continue;
-                    }
-                }
-
-                update_fn(k, v, t, d);
-            }
-        }
+        EncodedPart::new(key, registered_desc.clone(), part)
     });
 
-    Ok(())
+    Ok(part)
 }
 
 /// Propagates metadata from readers alongside a `HollowBatch` to apply the
@@ -448,6 +368,157 @@ where
             "LeasedBatchPart cannot be dropped with lease intact: {:?}",
             self
         );
+    }
+}
+
+/// A [Blob] object that has been fetched, but not yet decoded.
+#[derive(Debug)]
+pub struct FetchedPart<K, V, T, D> {
+    metrics: Arc<Metrics>,
+    ts_filter: FetchBatchFilter<T>,
+    part: EncodedPart<T>,
+
+    _phantom: PhantomData<fn() -> (K, V, D)>,
+}
+
+/// A [Blob] object that has been fetched, but has no associated decoding
+/// logic.
+#[derive(Debug)]
+pub(crate) struct EncodedPart<T> {
+    registered_desc: Description<T>,
+    part: BlobTraceBatchPart<T>,
+
+    needs_truncation: bool,
+    part_idx: usize,
+    idx: usize,
+}
+
+impl<K, V, T, D> Iterator for FetchedPart<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    type Item = ((Result<K, String>, Result<V, String>), T, D);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some((k, v, mut t, d)) = self.part.next() {
+            if !self.ts_filter.filter_ts(&mut t) {
+                continue;
+            }
+
+            let k = self.metrics.codecs.key.decode(|| K::decode(k));
+            let v = self.metrics.codecs.val.decode(|| V::decode(v));
+            let d = D::decode(d);
+            return Some(((k, v), t, d));
+        }
+        None
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // We don't know in advance how restrictive the filter will be.
+        let max_len = self.part.part.updates.iter().map(|x| x.len()).sum();
+        (0, Some(max_len))
+    }
+}
+
+impl<T> EncodedPart<T>
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    pub(crate) fn new(
+        key: &str,
+        registered_desc: Description<T>,
+        part: BlobTraceBatchPart<T>,
+    ) -> Self {
+        // There are two types of batches in persist:
+        // - Batches written by a persist user (either directly or indirectly
+        //   via BatchBuilder). These always have a since of the minimum
+        //   timestamp and may be registered in persist state with a tighter set
+        //   of bounds than are inline in the batch (truncation). To read one of
+        //   these batches, all data physically in the batch but outside of the
+        //   truncated bounds must be ignored. Not every user batch is
+        //   truncated.
+        // - Batches written by compaction. These always have an inline desc
+        //   that exactly matches the one they are registered with. The since
+        //   can be anything.
+        let inline_desc = &part.desc;
+        let needs_truncation = inline_desc.lower() != registered_desc.lower()
+            || inline_desc.upper() != registered_desc.upper();
+        if needs_truncation {
+            assert!(
+                PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
+                "key={} inline={:?} registered={:?}",
+                key,
+                inline_desc,
+                registered_desc
+            );
+            assert!(
+                PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
+                "key={} inline={:?} registered={:?}",
+                key,
+                inline_desc,
+                registered_desc
+            );
+            // As mentioned above, batches that needs truncation will always have a
+            // since of the minimum timestamp. Technically we could truncate any
+            // batch where the since is less_than the output_desc's lower, but we're
+            // strict here so we don't get any surprises.
+            assert_eq!(
+                inline_desc.since(),
+                &Antichain::from_elem(T::minimum()),
+                "key={} inline={:?} registered={:?}",
+                key,
+                inline_desc,
+                registered_desc
+            );
+        } else {
+            assert_eq!(
+                inline_desc, &registered_desc,
+                "key={} inline={:?} registered={:?}",
+                key, inline_desc, registered_desc
+            );
+        }
+
+        EncodedPart {
+            registered_desc,
+            part,
+            part_idx: 0,
+            idx: 0,
+            needs_truncation,
+        }
+    }
+
+    pub fn next<'a>(&'a mut self) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
+        while let Some(part) = self.part.updates.get(self.part_idx) {
+            let ((k, v), t, d) = match part.get(self.idx) {
+                Some(x) => {
+                    self.idx += 1;
+                    x
+                }
+                None => {
+                    self.part_idx += 1;
+                    self.idx = 0;
+                    continue;
+                }
+            };
+
+            let t = T::decode(t);
+
+            // This filtering is really subtle, see the comment above for
+            // what's going on here.
+            if self.needs_truncation {
+                if !self.registered_desc.lower().less_equal(&t) {
+                    continue;
+                }
+                if self.registered_desc.upper().less_equal(&t) {
+                    continue;
+                }
+            }
+            return Some((k, v, t, d));
+        }
+        return None;
     }
 }
 

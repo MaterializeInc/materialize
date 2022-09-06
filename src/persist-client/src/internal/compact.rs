@@ -206,19 +206,19 @@ impl Compactor {
             let mut updates = Vec::new();
             for batch in req.inputs.iter() {
                 for part in batch.parts.iter() {
-                    fetch_batch_part(
+                    let mut fetched_part = fetch_batch_part(
                         &req.shard_id,
                         blob.as_ref(),
                         &metrics,
                         &part.key,
                         &batch.desc,
-                        |k, v, mut t, d| {
-                            t.advance_by(req.desc.since().borrow());
-                            let d = D::decode(d);
-                            updates.push(((k.to_vec(), v.to_vec()), t, d));
-                        },
                     )
                     .await?;
+                    while let Some((k, v, mut t, d)) = fetched_part.next() {
+                        t.advance_by(req.desc.since().borrow());
+                        let d = D::decode(d);
+                        updates.push(((k.to_vec(), v.to_vec()), t, d));
+                    }
                 }
             }
             consolidate_updates(&mut updates);
