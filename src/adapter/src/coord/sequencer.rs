@@ -3326,7 +3326,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn update_max_result_size(&mut self) {
         for compute_instance in self.catalog.compute_instances() {
-            let mut compute = self.controller.compute_mut(compute_instance.id).unwrap();
+            let mut compute = self.controller.active_compute(compute_instance.id).unwrap();
             compute
                 .update_max_result_size(self.catalog.system_config().max_result_size())
                 .await;
