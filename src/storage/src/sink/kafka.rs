@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
 use prometheus::core::AtomicU64;
@@ -35,7 +35,7 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{InputHandle, OutputHandle};
-use timely::dataflow::operators::{Capability, Map};
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
@@ -53,7 +53,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -100,21 +100,6 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        // consistent/exactly-once Kafka sinks need the timestamp in the row
-        let sinked_collection = sinked_collection
-            .inner
-            .map(|((k, v), t, diff)| {
-                let v = v.map(|mut v| {
-                    let t = t.to_string();
-                    RowPacker::for_existing_row(&mut v).push_list_with(|rp| {
-                        rp.push(Datum::String(&t));
-                    });
-                    v
-                });
-                ((k, v), t, diff)
-            })
-            .as_collection();
-
         // TODO: this is a brittle way to indicate the worker that will write to the sink
         // because it relies on us continuing to hash on the sink_id, with the same hash
         // function, and for the Exchange pact to continue to distribute by modulo number
@@ -1006,7 +991,7 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                true,
+                false,
             );
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
