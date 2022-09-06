@@ -9,16 +9,16 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.57"
 axum = { version = "0.5.15", features = ["headers"] }
 base64 = "0.13.0"
 bytes = "1.2.1"
-chrono = { version = "0.4.20", default-features = false, features = ["std"] }
+chrono = { version = "0.4.21", default-features = false, features = ["std"] }
 clap = { version = "3.2.17", features = ["wrap_help", "env", "derive"] }
 fail = { version = "0.5.0", features = ["failpoints"] }
-futures = "0.3.23"
+futures = "0.3.24"
 headers = "0.3.7"
 http = "0.2.8"
 hyper = { version = "0.14.20", features = ["http1", "server"] }
@@ -60,7 +60,7 @@ serde = { version = "1.0.144", features = ["derive"] }
 serde_json = "1.0.85"
 shell-words = "1.1.0"
 sysctl = "0.5.2"
-sysinfo = "0.25.3"
+sysinfo = "0.26.2"
 tempfile = "3.2.0"
 thiserror = "1.0.32"
 tokio = { version = "1.19.2", features = ["sync"] }
@@ -103,7 +103,7 @@ serde_json = "1.0.85"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 cc = "1.0.73"
 mz-npm = { path = "../npm" }
 

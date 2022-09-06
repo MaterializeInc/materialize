@@ -3255,10 +3255,8 @@ pub fn plan_drop_cluster(
         };
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
             Ok(instance) => {
-                if !cascade
-                    && (!instance.exports().is_empty() || !instance.replica_names().is_empty())
-                {
-                    sql_bail!("cannot drop cluster with active indexes, sinks, materialized views, or replicas");
+                if !cascade && !instance.exports().is_empty() {
+                    sql_bail!("cannot drop cluster with active indexes or materialized views");
                 }
                 out.push(name.into_string());
             }

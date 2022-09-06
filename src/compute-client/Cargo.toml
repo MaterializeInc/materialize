@@ -7,11 +7,11 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 async-trait = "0.1.57"
-chrono = { version = "0.4.20", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4.21", default-features = false, features = ["clock", "std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.23"
+futures = "0.3.24"
 mz-build-info = { path = "../build-info" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
@@ -36,5 +36,5 @@ tracing = "0.1.36"
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
 [build-dependencies]
-protobuf-src = "1.0.4"
+protobuf-src = "1.1.0"
 tonic-build = "0.8.0"

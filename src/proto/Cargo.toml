@@ -8,7 +8,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 globset = "0.4.9"
 http = "0.2.8"
 mz-ore = { path = "../ore", default-features = false }
@@ -22,4 +22,4 @@ uuid = "1.1.2"
 
 [build-dependencies]
 prost-build = "0.11.1"
-protobuf-src = "1.0.4"
+protobuf-src = "1.1.0"
