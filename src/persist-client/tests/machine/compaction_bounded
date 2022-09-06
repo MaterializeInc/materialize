@@ -9,17 +9,14 @@
 
 # Compaction with memory bounds
 
-# this test assumes each (k, v, t, d) update is counted as 20 bytes
-#      (4 bytes for k, 0 for v, 8 for t, 8 for d)
-
-write-batch output=b0 lower=0 upper=3 target_size=0
+write-batch output=b0 lower=0 upper=3 target_size=0 parts_size_override=20
 aaaa 0 1
 bbbb 1 1
 cccc 2 1
 ----
 parts=3 len=3
 
-write-batch output=b1 lower=3 upper=6 target_size=0
+write-batch output=b1 lower=3 upper=6 target_size=0 parts_size_override=20
 aaaa 3 1
 bbbb 4 1
 dddd 5 1
@@ -41,9 +38,9 @@ dddd 6 1
 <run 0>
 part 0
 
-# compact b0 and b1 with enough memory for both runs, but a target size that can only hold 2 keys in mem at a time.
+# compact b0 and b1 with enough memory for both runs, but a target size that can only hold 2 parts/keys in mem at a time.
 # most importantly, we expect there to be a single run, as each input has a single run of ordered parts
-compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=40 memory_bound=1000
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=40 memory_bound=10000
 ----
 parts=3 len=4
 
@@ -62,7 +59,7 @@ part 1
 part 2
 
 # introduce a new batch, that is *gasp* unordered
-write-batch output=b2 lower=6 upper=9 target_size=0
+write-batch output=b2 lower=6 upper=9 target_size=0 parts_size_override=20
 ffff 7 1
 eeee 6 1
 aaaa 8 1
@@ -85,29 +82,6 @@ eeee 8 1
 ffff 8 1
 <run 0>
 part 0
-
-# compact b0, b1, b2 with enough memory for all keys, but only 2 runs at a time. this means
-# b0 and b1 will be physically compacted together, but b2 will be compacted in isolation.
-# we expect two part and two runs, one for (b0, b1) and (b2)
-compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=1000 memory_bound=4000
-----
-parts=2 len=7
-
-fetch-batch input=b0_1_2
-----
-<part 0>
-aaaa 8 2
-bbbb 8 2
-cccc 8 1
-dddd 8 1
-<part 1>
-aaaa 8 1
-eeee 8 1
-ffff 8 1
-<run 0>
-part 0
-<run 1>
-part 1
 
 # compact b0, b1, b2 with enough memory for all runs, but a target size that can only hold 2 keys in mem at a time.
 # because b2 is out of order, we expect its entry for `aaaa` to appear in a separate run
@@ -137,9 +111,58 @@ part 3
 <run 1>
 part 4
 
+# compact b0, b1, b2 with enough memory for all keys, but only 2 runs at a time. this means
+# b0 and b1 will be physically compacted together, but b2 will be compacted in isolation.
+# we expect two part and two runs, one for (b0, b1) and (b2).
+
+# manually fudge the size of our batch parts so compaction only processes at most 2 runs at a time
+set-batch-parts-size input=b0 size=1000
+----
+ok
+
+set-batch-parts-size input=b1 size=1000
+----
+ok
+
+set-batch-parts-size input=b2 size=1000
+----
+ok
+
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=1000 memory_bound=4000
+----
+parts=2 len=7
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+aaaa 8 2
+bbbb 8 2
+cccc 8 1
+dddd 8 1
+<part 1>
+aaaa 8 1
+eeee 8 1
+ffff 8 1
+<run 0>
+part 0
+<run 1>
+part 1
+
 # compact b0, b1, b2 with enough memory for only 2 runs at a time, and a target size that can only hold 2 keys in mem at a time.
 # this means b0 and b1 will be physically compacted together, and then b2 compacted in isolation. evaluating b2 should
 # produce a new run, and then because of its out-of-order `aaaa` key, a third run should be created
+set-batch-parts-size input=b0 size=40
+----
+ok
+
+set-batch-parts-size input=b1 size=40
+----
+ok
+
+set-batch-parts-size input=b2 size=40
+----
+ok
+
 compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=40 memory_bound=160
 ----
 parts=5 len=7

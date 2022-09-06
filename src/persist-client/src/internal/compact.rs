@@ -177,6 +177,37 @@ impl Compactor {
         ))
     }
 
+    pub async fn compact<T, D>(
+        cfg: PersistConfig,
+        blob: Arc<dyn Blob + Send + Sync>,
+        metrics: Arc<Metrics>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        req: CompactReq<T>,
+        writer_id: WriterId,
+    ) -> Result<CompactRes<T>, anyhow::Error>
+    where
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let parts_cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
+        // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
+        let compact_span = debug_span!("compact::consolidate");
+        parts_cpu_heavy_runtime
+            .spawn_named(
+                || "persist::compact::consolidate",
+                Compactor::compact_bounded::<T, D>(
+                    cfg,
+                    blob,
+                    metrics,
+                    cpu_heavy_runtime,
+                    req,
+                    writer_id,
+                )
+                .instrument(compact_span),
+            )
+            .await?
+    }
+
     /// Compacts input batches in bounded memory.
     ///
     /// The memory bound is broken into pieces:
@@ -200,7 +231,7 @@ impl Compactor {
     ///
     /// 3. If there is excess memory after accounting for (1) and (2), we increase the
     ///    number of outstanding parts we can keep in-flight to Blob.
-    pub async fn compact<T, D>(
+    async fn compact_bounded<T, D>(
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
@@ -212,123 +243,118 @@ impl Compactor {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let parts_cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
-        let compact_blocking = async move {
-            let () = Compactor::validate_req(&req)?;
+        let () = Compactor::validate_req(&req)?;
 
-            // compaction needs memory enough for at least 2 runs and 2 in-progress parts
-            assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.blob_target_size);
-            // reserve space for an in-progress part to be held in-mem representation and columnar
-            let in_progress_part_reserved_memory_bytes = 2 * cfg.blob_target_size;
-            // then remaining memory will go towards pulling down as many runs as we can
-            let run_reserved_memory_bytes =
-                cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
+        // compaction needs memory enough for at least 2 runs and 2 in-progress parts
+        assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.blob_target_size);
+        // reserve space for the in-progress part to be held in-mem representation and columnar
+        let in_progress_part_reserved_memory_bytes = 2 * cfg.blob_target_size;
+        // then remaining memory will go towards pulling down as many runs as we can
+        let run_reserved_memory_bytes =
+            cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
-            let ordered_runs = Self::order_runs::<T, D>(&req);
-            let mut ordered_runs = ordered_runs.iter().peekable();
+        let ordered_runs = Self::order_runs::<T, D>(&req);
+        let mut ordered_runs = ordered_runs.iter().peekable();
 
-            let mut all_parts = vec![];
-            let mut all_runs = vec![];
-            let mut len = 0;
+        let mut all_parts = vec![];
+        let mut all_runs = vec![];
+        let mut len = 0;
 
-            let mut compactable_runs_max_memory_bytes = 0;
-            let mut compactable_runs = vec![];
-            while let Some(run) = ordered_runs.next() {
-                compactable_runs.push(*run);
-                // TODO: use HollowBatch's max parts size instead: https://github.com/MaterializeInc/materialize/pull/14459
-                compactable_runs_max_memory_bytes += cfg.blob_target_size;
+        let mut selected_runs_max_memory_usage = 0;
+        let mut selected_runs = vec![];
+        while let Some(run) = ordered_runs.next() {
+            let run_greatest_part_size = run
+                .1
+                .iter()
+                .map(|x| x.encoded_size_bytes)
+                .max()
+                .unwrap_or(cfg.blob_target_size);
+            selected_runs.push(*run);
+            selected_runs_max_memory_usage += run_greatest_part_size;
 
-                match ordered_runs.peek() {
-                    // if we can fit the next run in our batch without going over our reserved memory, we should do so
-                    Some(_run)
-                        // TODO: use HollowBatch's max parts size instead
-                        if compactable_runs_max_memory_bytes + cfg.blob_target_size
-                            <= run_reserved_memory_bytes =>
-                    {
-                        continue;
-                    }
-                    // otherwise, we've either gathered all remaining runs, or as many as will fit in memory
-                    None | Some(_) => {}
-                }
+            if let Some(next_run) = ordered_runs.peek() {
+                let next_run_greatest_part_size = next_run
+                    .1
+                    .iter()
+                    .map(|x| x.encoded_size_bytes)
+                    .max()
+                    .unwrap_or(cfg.blob_target_size);
 
-                // given the runs we actually have in our batch, we might have extra memory
-                // available. we reserved enough space to always have 1 in-progress part in
-                // flight, but if we have excess, we can use it to increase our write parallelism
-                let extra_outstanding_parts = (run_reserved_memory_bytes
-                    - compactable_runs_max_memory_bytes)
-                    / cfg.blob_target_size;
-
-                let batch_parts = BatchParts::new(
-                    1 + extra_outstanding_parts,
-                    Arc::clone(&metrics),
-                    req.shard_id,
-                    writer_id.clone(),
-                    req.desc.lower().clone(),
-                    Arc::clone(&blob),
-                    Arc::clone(&cpu_heavy_runtime),
-                    &metrics.compaction.batch,
-                );
-
-                let (parts, runs, updates) = Self::compact_runs::<T, D>(
-                    &cfg,
-                    &req.shard_id,
-                    &req.desc,
-                    compactable_runs.drain(..).collect(),
-                    batch_parts,
-                    Arc::clone(&blob),
-                    Arc::clone(&metrics),
-                )
-                .await?;
-                assert!((updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0));
-                compactable_runs_max_memory_bytes = 0;
-
-                if updates == 0 {
+                // if we can fit the next run in our batch without going over our reserved memory, we should do so
+                if selected_runs_max_memory_usage + next_run_greatest_part_size
+                    <= run_reserved_memory_bytes
+                {
                     continue;
                 }
-
-                // merge together parts and runs from each compaction round.
-                // parts are appended onto our existing vec, and then we shift
-                // the latest run offsets to account for prior parts.
-                //
-                // e.g. if we currently have 3 parts and 2 runs (including the implicit one from 0):
-                //         parts: [k0, k1, k2]
-                //         runs:  [    1     ]
-                //
-                // and we merge in another result with 2 parts and 2 runs:
-                //         parts: [k3, k4]
-                //         runs:  [    1]
-                //
-                // we our result will contain 5 parts and 4 runs:
-                //         parts: [k0, k1, k2, k3, k4]
-                //         runs:  [    1       3   4 ]
-                let run_offset = all_parts.len();
-                if all_parts.len() > 0 {
-                    all_runs.push(run_offset);
-                }
-                all_runs.extend(runs.iter().map(|run_start| run_start + run_offset));
-                all_parts.extend(parts);
-                len += updates;
             }
 
-            Ok(CompactRes {
-                output: HollowBatch {
-                    desc: req.desc.clone(),
-                    parts: all_parts,
-                    runs: all_runs,
-                    len,
-                },
-            })
-        };
+            // given the runs we actually have in our batch, we might have extra memory
+            // available. we reserved enough space to always have 1 in-progress part in
+            // flight, but if we have excess, we can use it to increase our write parallelism
+            let extra_outstanding_parts = (run_reserved_memory_bytes
+                .saturating_sub(selected_runs_max_memory_usage))
+                / cfg.blob_target_size;
 
-        // Compaction is cpu intensive, so be polite and spawn it on the
-        // CPU heavy runtime.
-        let compact_span = debug_span!("compact::consolidate");
-        parts_cpu_heavy_runtime
-            .spawn_named(
-                || "persist::compact::consolidate",
-                compact_blocking.instrument(compact_span),
+            let batch_parts = BatchParts::new(
+                1 + extra_outstanding_parts,
+                Arc::clone(&metrics),
+                req.shard_id,
+                writer_id.clone(),
+                req.desc.lower().clone(),
+                Arc::clone(&blob),
+                Arc::clone(&cpu_heavy_runtime),
+                &metrics.compaction.batch,
+            );
+
+            let (parts, runs, updates) = Self::compact_runs::<T, D>(
+                &cfg,
+                &req.shard_id,
+                &req.desc,
+                selected_runs.drain(..).collect(),
+                batch_parts,
+                Arc::clone(&blob),
+                Arc::clone(&metrics),
             )
-            .await?
+            .await?;
+            assert!((updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0));
+            selected_runs_max_memory_usage = 0;
+
+            if updates == 0 {
+                continue;
+            }
+
+            // merge together parts and runs from each compaction round.
+            // parts are appended onto our existing vec, and then we shift
+            // the latest run offsets to account for prior parts.
+            //
+            // e.g. if we currently have 3 parts and 2 runs (including the implicit one from 0):
+            //         parts: [k0, k1, k2]
+            //         runs:  [    1     ]
+            //
+            // and we merge in another result with 2 parts and 2 runs:
+            //         parts: [k3, k4]
+            //         runs:  [    1]
+            //
+            // we our result will contain 5 parts and 4 runs:
+            //         parts: [k0, k1, k2, k3, k4]
+            //         runs:  [    1       3   4 ]
+            let run_offset = all_parts.len();
+            if all_parts.len() > 0 {
+                all_runs.push(run_offset);
+            }
+            all_runs.extend(runs.iter().map(|run_start| run_start + run_offset));
+            all_parts.extend(parts);
+            len += updates;
+        }
+
+        Ok(CompactRes {
+            output: HollowBatch {
+                desc: req.desc.clone(),
+                parts: all_parts,
+                runs: all_runs,
+                len,
+            },
+        })
     }
 
     /// With bounded memory where we cannot compact all runs/parts together, the groupings
@@ -344,7 +370,7 @@ impl Compactor {
     ///     b0 runs=[A, B]
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
-    fn order_runs<T, D>(req: &CompactReq<T>) -> Vec<(&HollowBatch<T>, &[HollowBatchPart])>
+    fn order_runs<T, D>(req: &CompactReq<T>) -> Vec<(&Description<T>, &[HollowBatchPart])>
     where
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
@@ -353,14 +379,14 @@ impl Compactor {
 
         let mut batch_runs = Vec::with_capacity(req.inputs.len());
         for batch in &req.inputs {
-            batch_runs.push((batch, batch.runs()));
+            batch_runs.push((&batch.desc, batch.runs()));
         }
 
         let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
         while batch_runs.len() > 0 {
-            for (batch, runs) in batch_runs.iter_mut() {
+            for (desc, runs) in batch_runs.iter_mut() {
                 if let Some(run) = runs.next() {
-                    ordered_runs.push((*batch, run));
+                    ordered_runs.push((*desc, run));
                 }
             }
             batch_runs.retain_mut(|(_, iter)| iter.inner.peek().is_some());
@@ -377,7 +403,7 @@ impl Compactor {
         cfg: &'a PersistConfig,
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
-        runs: Vec<(&'a HollowBatch<T>, &'a [HollowBatchPart])>,
+        runs: Vec<(&'a Description<T>, &'a [HollowBatchPart])>,
         mut batch_parts: BatchParts<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
@@ -398,14 +424,14 @@ impl Compactor {
         let mut remaining_updates_by_run = vec![0; runs.len()];
         let mut runs: Vec<_> = runs
             .iter()
-            .map(|(batch, parts)| (batch, parts.into_iter()))
+            .map(|(part_desc, parts)| (part_desc, parts.into_iter()))
             .collect();
 
         // populate our heap with the updates from the first part of each run
-        for (index, (batch, parts)) in runs.iter_mut().enumerate() {
+        for (index, (part_desc, parts)) in runs.iter_mut().enumerate() {
             if let Some(part) = parts.next() {
                 let mut part =
-                    fetch_batch_part(&shard_id, blob.as_ref(), &metrics, &part.key, &batch.desc)
+                    fetch_batch_part(&shard_id, blob.as_ref(), &metrics, &part.key, part_desc)
                         .await?;
                 while let Some((k, v, mut t, d)) = part.next() {
                     t.advance_by(desc.since().borrow());
@@ -426,16 +452,11 @@ impl Compactor {
             remaining_updates_by_run[index] -= 1;
             if remaining_updates_by_run[index] == 0 {
                 // repopulate from the originating run, if any parts remain
-                let (batch, parts) = &mut runs[index];
+                let (part_desc, parts) = &mut runs[index];
                 if let Some(part) = parts.next() {
-                    let mut part = fetch_batch_part(
-                        &shard_id,
-                        blob.as_ref(),
-                        &metrics,
-                        &part.key,
-                        &batch.desc,
-                    )
-                    .await?;
+                    let mut part =
+                        fetch_batch_part(&shard_id, blob.as_ref(), &metrics, &part.key, part_desc)
+                            .await?;
                     while let Some((k, v, mut t, d)) = part.next() {
                         t.advance_by(desc.since().borrow());
                         let d = D::decode(d);

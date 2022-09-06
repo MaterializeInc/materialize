@@ -882,6 +882,8 @@ mod tests {
                             let upper = get_u64(&tc.args, "upper").expect("missing upper");
                             let target_size = get_arg(&tc.args, "target_size")
                                 .map(|x| x.parse::<usize>().expect("invalid target_size"));
+                            let parts_size_override = get_arg(&tc.args, "parts_size_override")
+                                .map(|x| x.parse::<usize>().expect("invalid parts_size_override"));
 
                             let updates = tc
                                 .input
@@ -922,7 +924,17 @@ mod tests {
                                 .await
                                 .expect("invalid batch")
                                 .into_hollow_batch();
-                            state.batches.insert(output.to_owned(), batch.clone());
+
+                            if let Some(size) = parts_size_override {
+                                let mut batch = batch.clone();
+                                for part in batch.parts.iter_mut() {
+                                    part.encoded_size_bytes = size;
+                                }
+                                state.batches.insert(output.to_owned(), batch);
+                            } else {
+                                state.batches.insert(output.to_owned(), batch.clone());
+                            }
+
                             format!("parts={} len={}\n", batch.parts.len(), batch.len)
                         }
                         "fetch-batch" => {
@@ -995,6 +1007,15 @@ mod tests {
                                 }
                                 Err(err) => format!("error: {}\n", err),
                             }
+                        }
+                        "set-batch-parts-size" => {
+                            let input = get_arg(&tc.args, "input").expect("missing input");
+                            let size = get_u64(&tc.args, "size").expect("missing size");
+                            let batch = state.batches.get_mut(input).expect("unknown batch");
+                            for part in batch.parts.iter_mut() {
+                                part.encoded_size_bytes = usize::cast_from(size);
+                            }
+                            format!("ok\n")
                         }
                         "compact" => {
                             let output = get_arg(&tc.args, "output").expect("missing output");
