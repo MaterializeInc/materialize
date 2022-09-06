@@ -20,7 +20,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
+use mz_persist::indexed::columnar::{ColumnarRecordsVecBuilder, KEY_VAL_DATA_MAX_LEN};
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
@@ -459,14 +459,11 @@ impl Compactor {
             }
 
             // both T and D are Codec64, ergo 8 bytes a piece
-            update_buffer_size_bytes += k.len() + v.len() + 16;
-            update_buffer.push(((k, v), t, d));
+            let update_size_bytes = k.len() + v.len() + 16;
 
-            // if we're more than 90% into our target size, write out our part. this is an
-            // attempt to avoid writing blobs that are just at the threshold of `blob_target_size`
-            // where they could potentially spill over into two parts, a full one and a very
-            // small overflow
-            if update_buffer_size_bytes >= cfg.blob_target_size * 9 / 10 {
+            // flush the current buffer if adding  this latest
+            // update would cause it to exceed our target size
+            if update_size_bytes + update_buffer_size_bytes > cfg.blob_target_size {
                 Self::consolidate_run(
                     &mut update_buffer,
                     &mut compaction_runs,
@@ -475,7 +472,6 @@ impl Compactor {
                     &mut total_updates,
                 );
                 Self::write_run(
-                    cfg,
                     &mut batch_parts,
                     &mut update_buffer,
                     &mut compaction_parts_count,
@@ -484,6 +480,9 @@ impl Compactor {
                 .await;
                 update_buffer_size_bytes = 0;
             }
+
+            update_buffer_size_bytes += update_size_bytes;
+            update_buffer.push(((k, v), t, d));
         }
 
         if update_buffer.len() > 0 {
@@ -495,7 +494,6 @@ impl Compactor {
                 &mut total_updates,
             );
             Self::write_run(
-                cfg,
                 &mut batch_parts,
                 &mut update_buffer,
                 &mut compaction_parts_count,
@@ -539,9 +537,10 @@ impl Compactor {
         }
     }
 
-    /// Encodes `updates` into columnar format and writes its parts out to blob
+    /// Encodes `updates` into columnar format and writes its parts out to blob.
+    /// The caller is expected to chunk `updates` into batches no greater than
+    /// [crate::PersistConfig::blob_target_size]
     async fn write_run<T, D>(
-        cfg: &PersistConfig,
         batch_parts: &mut BatchParts<T>,
         updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
         compaction_parts_count: &mut usize,
@@ -553,13 +552,11 @@ impl Compactor {
         if updates.is_empty() {
             return;
         }
-
         *compaction_parts_count += 1;
-        let mut builder = ColumnarRecordsVecBuilder::new_with_len(cfg.blob_target_size);
+
+        let mut builder = ColumnarRecordsVecBuilder::new_with_len(KEY_VAL_DATA_MAX_LEN);
         for ((k, v), t, d) in updates.drain(..) {
             builder.push(((&k, &v), T::encode(&t), D::encode(&d)));
-
-            // Flush out filled parts as we go to keep bounded memory use.
             for chunk in builder.take_filled() {
                 batch_parts
                     .write(chunk, desc.upper().clone(), desc.since().clone())
