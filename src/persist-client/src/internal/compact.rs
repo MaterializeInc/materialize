@@ -244,7 +244,6 @@ impl Compactor {
         D: Semigroup + Codec64 + Send + Sync,
     {
         let () = Compactor::validate_req(&req)?;
-
         // compaction needs memory enough for at least 2 runs and 2 in-progress parts
         assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.blob_target_size);
         // reserve space for the in-progress part to be held in-mem representation and columnar
@@ -253,46 +252,18 @@ impl Compactor {
         let run_reserved_memory_bytes =
             cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
-        let ordered_runs = Self::order_runs::<T, D>(&req);
-        let mut ordered_runs = ordered_runs.iter().peekable();
-
         let mut all_parts = vec![];
         let mut all_runs = vec![];
         let mut len = 0;
 
-        let mut selected_runs_max_memory_usage = 0;
-        let mut selected_runs = vec![];
-        while let Some(run) = ordered_runs.next() {
-            let run_greatest_part_size = run
-                .1
-                .iter()
-                .map(|x| x.encoded_size_bytes)
-                .max()
-                .unwrap_or(cfg.blob_target_size);
-            selected_runs.push(*run);
-            selected_runs_max_memory_usage += run_greatest_part_size;
-
-            if let Some(next_run) = ordered_runs.peek() {
-                let next_run_greatest_part_size = next_run
-                    .1
-                    .iter()
-                    .map(|x| x.encoded_size_bytes)
-                    .max()
-                    .unwrap_or(cfg.blob_target_size);
-
-                // if we can fit the next run in our batch without going over our reserved memory, we should do so
-                if selected_runs_max_memory_usage + next_run_greatest_part_size
-                    <= run_reserved_memory_bytes
-                {
-                    continue;
-                }
-            }
-
+        for (runs, run_chunk_max_memory_usage) in
+            Self::chunk_runs::<T, D>(&req, &cfg, run_reserved_memory_bytes)
+        {
             // given the runs we actually have in our batch, we might have extra memory
             // available. we reserved enough space to always have 1 in-progress part in
             // flight, but if we have excess, we can use it to increase our write parallelism
             let extra_outstanding_parts = (run_reserved_memory_bytes
-                .saturating_sub(selected_runs_max_memory_usage))
+                .saturating_sub(run_chunk_max_memory_usage))
                 / cfg.blob_target_size;
 
             let batch_parts = BatchParts::new(
@@ -310,19 +281,17 @@ impl Compactor {
                 &cfg,
                 &req.shard_id,
                 &req.desc,
-                selected_runs.drain(..).collect(),
+                runs,
                 batch_parts,
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
             )
             .await?;
             assert!((updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0));
-            selected_runs_max_memory_usage = 0;
 
             if updates == 0 {
                 continue;
             }
-
             // merge together parts and runs from each compaction round.
             // parts are appended onto our existing vec, and then we shift
             // the latest run offsets to account for prior parts.
@@ -355,6 +324,60 @@ impl Compactor {
                 len,
             },
         })
+    }
+
+    /// Sorts and groups all runs from the inputs into chunks, each of which has been determined
+    /// to consume no more than `run_reserved_memory_bytes` at a time. Uses [Self::order_runs] to
+    /// determine the order in which runs are selected.
+    fn chunk_runs<'a, T, D>(
+        req: &'a CompactReq<T>,
+        cfg: &PersistConfig,
+        run_reserved_memory_bytes: usize,
+    ) -> Vec<(Vec<(&'a Description<T>, &'a [HollowBatchPart])>, usize)>
+    where
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let ordered_runs = Self::order_runs::<T, D>(req);
+        let mut ordered_runs = ordered_runs.iter().peekable();
+
+        let mut chunks = vec![];
+        let mut current_chunk = vec![];
+        let mut current_chunk_max_memory_usage = 0;
+        while let Some(run) = ordered_runs.next() {
+            let run_greatest_part_size = run
+                .1
+                .iter()
+                .map(|x| x.encoded_size_bytes)
+                .max()
+                .unwrap_or(cfg.blob_target_size);
+            current_chunk.push(*run);
+            current_chunk_max_memory_usage += run_greatest_part_size;
+
+            if let Some(next_run) = ordered_runs.peek() {
+                let next_run_greatest_part_size = next_run
+                    .1
+                    .iter()
+                    .map(|x| x.encoded_size_bytes)
+                    .max()
+                    .unwrap_or(cfg.blob_target_size);
+
+                // if we can fit the next run in our batch without going over our reserved memory, we should do so
+                if current_chunk_max_memory_usage + next_run_greatest_part_size
+                    <= run_reserved_memory_bytes
+                {
+                    continue;
+                }
+            }
+
+            chunks.push((
+                current_chunk.drain(..).collect(),
+                current_chunk_max_memory_usage,
+            ));
+            current_chunk_max_memory_usage = 0;
+        }
+
+        chunks
     }
 
     /// With bounded memory where we cannot compact all runs/parts together, the groupings
@@ -472,8 +495,7 @@ impl Compactor {
             // both T and D are Codec64, ergo 8 bytes a piece
             let update_size_bytes = k.len() + v.len() + 16;
 
-            // flush the current buffer if adding  this latest
-            // update would cause it to exceed our target size
+            // flush the buffer if adding this latest update would cause it to exceed our target size
             if update_size_bytes + update_buffer_size_bytes > cfg.blob_target_size {
                 Self::consolidate_run(
                     &mut update_buffer,
