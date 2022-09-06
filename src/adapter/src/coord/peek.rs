@@ -606,7 +606,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 self.controller
                     .active_compute(compute_instance)
                     .unwrap()
-                    .cancel_peeks(&uuids)
+                    .cancel_peeks(uuids)
                     .await
                     .unwrap();
             }

@@ -100,10 +100,12 @@ where
         }
     }
 
+    // TODO(teskje): Remove once compute initialization is fully driven by the compute controller.
     pub(super) fn initialization_complete(&mut self) {
         self.replicas.send(ComputeCommand::InitializationComplete);
     }
 
+    // TODO(teskje): Document why this doesn't need to pass through `apply`.
     pub(super) async fn receive_response(&mut self) -> ActiveReplicationResponse<T> {
         self.replicas.recv().await
     }
@@ -123,7 +125,65 @@ where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    pub(super) fn add_replica(
+    pub(super) async fn apply(&mut self, cmd: Command<T>) -> Result<(), ComputeError> {
+        match cmd {
+            Command::AddReplica {
+                id,
+                addrs,
+                persisted_logs,
+            } => self.add_replica(id, addrs, persisted_logs),
+            Command::RemoveReplica { id } => self.remove_replica(id),
+            Command::CreateDataflows { dataflows } => self.create_dataflows(dataflows).await?,
+            Command::DropCollections { ids } => self.drop_collections(ids).await?,
+            Command::Peek {
+                id,
+                literal_constraints,
+                uuid,
+                timestamp,
+                finishing,
+                map_filter_project,
+                target_replica,
+            } => {
+                self.peek(
+                    id,
+                    literal_constraints,
+                    uuid,
+                    timestamp,
+                    finishing,
+                    map_filter_project,
+                    target_replica,
+                )
+                .await?
+            }
+            Command::CancelPeeks { uuids } => self.cancel_peeks(&uuids).await?,
+            Command::SetReadPolicy { policies } => self.set_read_policy(policies).await?,
+            Command::UpdateWriteFrontiers { updates } => {
+                self.update_write_frontiers(&updates).await?
+            }
+            Command::RemovePeeks { uuids } => self.remove_peeks(uuids).await?,
+        }
+
+        Ok(())
+    }
+}
+
+// Internal interface
+
+impl<T> DurableState<T> {
+    /// Acquire a mutable handle to the collection state associated with `id`.
+    fn collection_mut(&mut self, id: GlobalId) -> Result<&mut CollectionState<T>, ComputeError> {
+        self.collections
+            .get_mut(&id)
+            .ok_or(ComputeError::IdentifierMissing(id))
+    }
+}
+
+impl<'a, T> ActiveDurableState<'a, T>
+where
+    T: Timestamp + Lattice,
+    ComputeGrpcClient: ComputeClient<T>,
+{
+    fn add_replica(
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
@@ -155,11 +215,11 @@ where
         self.state.replicas.add_replica(id, addrs, persisted_logs);
     }
 
-    pub(super) fn remove_replica(&mut self, id: ReplicaId) {
+    fn remove_replica(&mut self, id: ReplicaId) {
         self.state.replicas.remove_replica(id);
     }
 
-    pub(super) async fn create_dataflows(
+    async fn create_dataflows(
         &mut self,
         dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
     ) -> Result<(), ComputeError> {
@@ -315,7 +375,7 @@ where
         Ok(())
     }
 
-    pub(super) async fn drop_collections(
+    async fn drop_collections(
         &mut self,
         ids: Vec<GlobalId>,
     ) -> Result<(), ComputeError> {
@@ -327,7 +387,7 @@ where
         Ok(())
     }
 
-    pub(super) async fn peek(
+    async fn peek(
         &mut self,
         id: GlobalId,
         literal_constraints: Option<Vec<Row>>,
@@ -365,7 +425,7 @@ where
         Ok(())
     }
 
-    pub(super) async fn cancel_peeks(
+    async fn cancel_peeks(
         &mut self,
         uuids: &BTreeSet<Uuid>,
     ) -> Result<(), ComputeError> {
@@ -376,7 +436,7 @@ where
         Ok(())
     }
 
-    pub(super) async fn set_read_policy(
+    async fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), ComputeError> {
@@ -411,7 +471,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) async fn update_write_frontiers(
+    async fn update_write_frontiers(
         &mut self,
         updates: &[(GlobalId, Antichain<T>)],
     ) -> Result<(), ComputeError> {
@@ -462,7 +522,7 @@ where
         Ok(())
     }
 
-    pub(super) async fn remove_peeks(
+    async fn remove_peeks(
         &mut self,
         peek_ids: impl IntoIterator<Item = uuid::Uuid>,
     ) -> Result<(), ComputeError> {
@@ -478,24 +538,7 @@ where
         self.update_read_capabilities(&mut updates).await?;
         Ok(())
     }
-}
 
-// Internal interface
-
-impl<T> DurableState<T> {
-    /// Acquire a mutable handle to the collection state associated with `id`.
-    fn collection_mut(&mut self, id: GlobalId) -> Result<&mut CollectionState<T>, ComputeError> {
-        self.collections
-            .get_mut(&id)
-            .ok_or(ComputeError::IdentifierMissing(id))
-    }
-}
-
-impl<'a, T> ActiveDurableState<'a, T>
-where
-    T: Timestamp + Lattice,
-    ComputeGrpcClient: ComputeClient<T>,
-{
     fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
         for id in ids {
             self.state.collection(id)?;
@@ -581,4 +624,43 @@ where
         self.set_read_policy(policies.collect()).await?;
         Ok(())
     }
+}
+
+pub(super) enum Command<T> {
+    AddReplica {
+        id: ReplicaId,
+        addrs: Vec<String>,
+        persisted_logs: HashMap<LogVariant, GlobalId>,
+    },
+    RemoveReplica {
+        id: ReplicaId,
+    },
+    CreateDataflows {
+        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
+    },
+    DropCollections {
+        ids: Vec<GlobalId>,
+    },
+    Peek {
+        id: GlobalId,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: T,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        target_replica: Option<ReplicaId>,
+    },
+    CancelPeeks {
+        uuids: BTreeSet<Uuid>,
+    },
+    SetReadPolicy {
+        policies: Vec<(GlobalId, ReadPolicy<T>)>,
+    },
+    UpdateWriteFrontiers {
+        updates: Vec<(GlobalId, Antichain<T>)>,
+    },
+    // TODO can we replace this with CancelPeeks?
+    RemovePeeks {
+        uuids: BTreeSet<Uuid>,
+    },
 }

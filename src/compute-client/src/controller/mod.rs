@@ -43,7 +43,7 @@ use crate::logging::{LogVariant, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-use self::durable::{ActiveDurableState, DurableState};
+use self::durable::DurableState;
 use self::replicated::ActiveReplicationResponse;
 
 mod durable;
@@ -242,19 +242,24 @@ where
     }
 
     /// Adds a new instance replica, by ID.
-    pub fn add_replica(
+    pub async fn add_replica(
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
         persisted_logs: HashMap<LogVariant, GlobalId>,
-    ) {
-        self.active_durable_state()
-            .add_replica(id, addrs, persisted_logs)
+    ) -> Result<(), ComputeError> {
+        let cmd = durable::Command::AddReplica {
+            id,
+            addrs,
+            persisted_logs,
+        };
+        self.apply_durable_command(cmd).await
     }
 
     /// Removes an existing instance replica, by ID.
-    pub fn remove_replica(&mut self, id: ReplicaId) {
-        self.active_durable_state().remove_replica(id)
+    pub async fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ComputeError> {
+        let cmd = durable::Command::RemoveReplica { id };
+        self.apply_durable_command(cmd).await
     }
 
     /// Creates and maintains the described dataflows, and initializes state for their output.
@@ -268,15 +273,15 @@ where
         &mut self,
         dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
     ) -> Result<(), ComputeError> {
-        self.active_durable_state()
-            .create_dataflows(dataflows)
-            .await
+        let cmd = durable::Command::CreateDataflows { dataflows };
+        self.apply_durable_command(cmd).await
     }
 
     /// Drops the read capability for the given collections and allows their resources to be
     /// reclaimed.
     pub async fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), ComputeError> {
-        self.active_durable_state().drop_collections(ids).await
+        let cmd = durable::Command::DropCollections { ids };
+        self.apply_durable_command(cmd).await
     }
 
     /// Initiate a peek request for the contents of `id` at `timestamp`.
@@ -291,17 +296,16 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), ComputeError> {
-        self.active_durable_state()
-            .peek(
-                id,
-                literal_constraints,
-                uuid,
-                timestamp,
-                finishing,
-                map_filter_project,
-                target_replica,
-            )
-            .await
+        let cmd = durable::Command::Peek {
+            id,
+            literal_constraints,
+            uuid,
+            timestamp,
+            finishing,
+            map_filter_project,
+            target_replica,
+        };
+        self.apply_durable_command(cmd).await
     }
 
     /// Cancels existing peek requests.
@@ -315,8 +319,9 @@ where
     ///   * A `PeekResponse::Canceled` affirming that the peek was canceled.
     ///
     ///   * No `PeekResponse` at all.
-    pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
-        self.active_durable_state().cancel_peeks(uuids).await
+    pub async fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) -> Result<(), ComputeError> {
+        let cmd = durable::Command::CancelPeeks { uuids };
+        self.apply_durable_command(cmd).await
     }
 
     /// Assigns a read policy to specific identifiers.
@@ -332,7 +337,8 @@ where
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), ComputeError> {
-        self.active_durable_state().set_read_policy(policies).await
+        let cmd = durable::Command::SetReadPolicy { policies };
+        self.apply_durable_command(cmd).await
     }
 
     /// Processes the work queued by [`ComputeController::ready`].
@@ -347,15 +353,15 @@ where
             None => Ok(None),
             Some(ActiveReplicationResponse::ComputeResponse(response)) => match response {
                 ComputeResponse::FrontierUppers(updates) => {
-                    self.active_durable_state()
-                        .update_write_frontiers(&updates)
-                        .await?;
+                    let cmd = durable::Command::UpdateWriteFrontiers { updates };
+                    self.apply_durable_command(cmd).await?;
                     Ok(None)
                 }
                 ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
-                    self.active_durable_state()
-                        .remove_peeks(std::iter::once(uuid))
-                        .await?;
+                    let cmd = durable::Command::RemovePeeks {
+                        uuids: [uuid].into(),
+                    };
+                    self.apply_durable_command(cmd).await?;
                     Ok(Some(ComputeControllerResponse::PeekResponse(
                         uuid,
                         peek_response,
@@ -375,9 +381,9 @@ where
                         TailResponse::DroppedAt(_) => Antichain::new(),
                     };
 
-                    self.active_durable_state()
-                        .update_write_frontiers(&[(global_id, new_upper)])
-                        .await?;
+                    let updates = vec![(global_id, new_upper)];
+                    let cmd = durable::Command::UpdateWriteFrontiers { updates };
+                    self.apply_durable_command(cmd).await?;
 
                     Ok(Some(ComputeControllerResponse::TailResponse(
                         global_id, response,
@@ -398,8 +404,15 @@ where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    fn active_durable_state(&mut self) -> ActiveDurableState<T> {
-        self.compute.durable.activate(self.storage_controller)
+    async fn apply_durable_command(
+        &mut self,
+        cmd: durable::Command<T>,
+    ) -> Result<(), ComputeError> {
+        self.compute
+            .durable
+            .activate(self.storage_controller)
+            .apply(cmd)
+            .await
     }
 }
 
