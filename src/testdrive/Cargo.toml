@@ -20,7 +20,7 @@ aws-smithy-http = "0.48.0"
 aws-types = { version = "0.48.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
 bytes = "1.2.1"
-chrono = { version = "0.4.20", default-features = false, features = ["std"] }
+chrono = { version = "0.4.21", default-features = false, features = ["std"] }
 clap = { version = "3.2.17", features = ["derive"] }
 flate2 = "1.0.24"
 futures = "0.3.24"
