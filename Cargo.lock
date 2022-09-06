@@ -1640,11 +1640,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-<<<<<<< HEAD
-source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=columnation#84de25222f9c047a3d45e0979d7b1f625fe8952d"
-=======
 source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=columnation#63181357e130b97bd62ae755c74f1049e3a2f185"
->>>>>>> other/columnation
 dependencies = [
  "abomonation",
  "abomonation_derive",

@@ -20,7 +20,6 @@ bytes = "1.2.1"
 chrono = { version = "0.4.21", default-features = false, features = ["serde", "std"] }
 columnation = { git = "https://github.com/frankmcsherry/columnation" }
 chrono-tz = { version = "0.6.3", features = ["serde", "case-insensitive"] }
-columnation = { git = "https://github.com/frankmcsherry/columnation" }
 dec = "0.4.8"
 enum-kinds = "0.5.1"
 fast-float = "0.2.0"
