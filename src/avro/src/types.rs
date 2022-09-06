@@ -23,7 +23,8 @@
 
 //! Logic handling the intermediate representation of Avro values.
 
-// `EnumKind` unconditionally introduces a lifetime.
+// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
+// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
 use std::collections::HashMap;

@@ -18,6 +18,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
+// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
+#![allow(clippy::extra_unused_lifetimes)]
+
 use std::fmt;
 
 use enum_kinds::EnumKind;
