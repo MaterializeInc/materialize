@@ -16,7 +16,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use rdkafka::consumer::{Consumer, StreamConsumer};
-use rdkafka::message::Message;
+use rdkafka::message::{Headers, Message};
 use regex::Regex;
 use tokio::pin;
 use tokio_stream::StreamExt;
@@ -33,6 +33,13 @@ pub enum SinkFormat {
 pub enum Topic {
     FromSink(String),
     Named(String),
+}
+
+#[derive(Debug)]
+pub struct Record<A> {
+    headers: Vec<String>,
+    key: Option<A>,
+    value: Option<A>,
 }
 
 pub struct VerifyAction {
@@ -67,8 +74,8 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Err
     let header_keys = cmd
         .args
         .opt_string("headers")
-        .map(|s| s.split(",").map(str::to_owned).collect())
-        .unwrap_or(vec![]);
+        .map(|s| s.split(',').map(str::to_owned).collect())
+        .unwrap_or_default();
 
     let expected_messages = cmd.input;
     if expected_messages.len() == 0 {
@@ -176,10 +183,25 @@ impl Action for VerifyAction {
                     consumer
                         .store_offset_from_message(&message)
                         .context("storing message offset")?;
-                    actual_bytes.push((
-                        message.key().and_then(|bytes| Some(bytes.to_owned())),
-                        message.payload().and_then(|bytes| Some(bytes.to_owned())),
-                    ));
+                    let headers = self
+                        .header_keys
+                        .iter()
+                        .map(|k| {
+                            // grab the value of the first header with the matching key, if there is one.
+                            message
+                                .headers()
+                                .and_then(|h| h.iter().find(|i| i.key == k))
+                                .and_then(|h| h.value)
+                                .and_then(|v| str::from_utf8(v).ok())
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| "".to_string())
+                        })
+                        .collect();
+                    actual_bytes.push(Record {
+                        headers,
+                        key: message.key().and_then(|bytes| Some(bytes.to_owned())),
+                        value: message.payload().and_then(|bytes| Some(bytes.to_owned())),
+                    });
                 }
                 Some(Err(e)) => {
                     println!("Received error from Kafka stream consumer: {}", e);
@@ -215,26 +237,30 @@ impl Action for VerifyAction {
                 let value_schema = &value_schema;
 
                 let mut actual_messages = vec![];
-                for (key, value) in actual_bytes {
-                    let key_datum = key_schema
+                for record in actual_bytes {
+                    let key = key_schema
                         .as_ref()
                         .map(|key_schema| {
-                            let bytes = match key {
+                            let bytes = match record.key {
                                 Some(key) => key,
                                 None => bail!("empty message key"),
                             };
                             avro_from_bytes(key_schema, &bytes)
                         })
                         .transpose()?;
-                    let value_datum = match value {
+                    let value = match record.value {
                         None => None,
                         Some(bytes) => Some(avro_from_bytes(value_schema, &bytes)?),
                     };
-                    actual_messages.push((key_datum, value_datum));
+                    actual_messages.push(Record {
+                        headers: record.headers,
+                        key,
+                        value,
+                    });
                 }
 
                 if self.sort_messages {
-                    actual_messages.sort_by_key(|k| format!("{:?}", k.1));
+                    actual_messages.sort_by_key(|r| format!("{:?}", r.value));
                 }
 
                 if self.debug_print_only {
@@ -270,7 +296,11 @@ impl Action for VerifyAction {
                                 Some(avro::from_json(&value, value_schema.top_node())?)
                             }
                         };
-                        Ok((key, value))
+                        Ok(Record {
+                            headers: vec![],
+                            key,
+                            value,
+                        })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
@@ -284,8 +314,8 @@ impl Action for VerifyAction {
             }
             SinkFormat::Json { key: has_key } => {
                 let mut actual_messages = vec![];
-                for (key, value) in actual_bytes {
-                    let key_datum = match key {
+                for record in actual_bytes {
+                    let key = match record.key {
                         Some(bytes) => {
                             if *has_key {
                                 Some(serde_json::from_slice(&bytes).context("decoding json")?)
@@ -295,28 +325,36 @@ impl Action for VerifyAction {
                         }
                         None => None,
                     };
-                    let value_datum = match value {
+                    let value = match record.value {
                         None => None,
                         Some(bytes) => {
                             Some(serde_json::from_slice(&bytes).context("decoding json")?)
                         }
                     };
 
-                    actual_messages.push((key_datum, value_datum));
+                    actual_messages.push(Record {
+                        headers: record.headers,
+                        key,
+                        value,
+                    });
                 }
 
                 if self.sort_messages {
-                    actual_messages.sort_by_key(|k| format!("{:?}", k.1));
+                    actual_messages.sort_by_key(|r| format!("{:?}", r.value));
                 }
 
-                let expected: Vec<(Option<serde_json::Value>, Option<serde_json::Value>)> = self
+                let expected = self
                     .expected_messages
                     .iter()
                     .map(|v| {
                         let mut deserializer = json::parse_many(v)?.into_iter();
                         let key = if *has_key { deserializer.next() } else { None };
                         let value = deserializer.next();
-                        Ok((key, value))
+                        Ok(Record {
+                            headers: vec![],
+                            key,
+                            value,
+                        })
                     })
                     .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
@@ -334,8 +372,8 @@ impl Action for VerifyAction {
 }
 
 pub fn validate_sink_with_partial_search<A: Debug>(
-    expected: &[(Option<A>, Option<A>)],
-    actual: &[(Option<A>, Option<A>)],
+    expected: &[Record<A>],
+    actual: &[Record<A>],
     regex: &Option<Regex>,
     regex_replacement: &String,
     partial_search: bool,
