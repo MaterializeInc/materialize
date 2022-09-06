@@ -8,7 +8,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ set cdcv2-schema=[
   {
@@ -269,8 +269,8 @@ $ kafka-ingest format=avro topic=progress-test-input schema=${cdcv2-schema}
 {"array":[{"data":{"a":2,"b":2},"time":3,"diff":1}]}
 
 $ kafka-verify format=avro sink=materialize.public.compaction_test_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
 $ kafka-verify format=json key=false topic=testdrive-progress-fixed-${testdrive.seed}
 {"timestamp": 1}

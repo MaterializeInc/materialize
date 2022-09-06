@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 > CREATE MATERIALIZED VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
 
@@ -23,7 +23,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.simple_view_sink key=false
-{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"a": 1, "b": 2, "c": 3}}
 
 > CREATE SINK simple_view_upsert FROM simple_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'unnamed-upsert')
@@ -32,7 +32,7 @@ $ kafka-verify format=json sink=materialize.public.simple_view_sink key=false
   ENVELOPE UPSERT
 
 $ kafka-verify format=json sink=materialize.public.simple_view_upsert key=true
-{"b": 2} {"a": 1, "b": 2, "c": 3, "transaction": {"id": "<TIMESTAMP>"}}
+{"b": 2} {"a": 1, "b": 2, "c": 3}
 
 # Standard types
 
@@ -58,7 +58,7 @@ $ kafka-verify format=json sink=materialize.public.simple_view_upsert key=true
 
 # Due to limitations in $ kafka-verify, the entire expected JSON output needs to be provided on a single line
 $ kafka-verify format=json sink=materialize.public.types_sink key=false
-{"before":null,"after":{"c1":true,"c2":false,"c3":null,"c4":123456789,"c5":1234.5678,"c6":"1234.5678","c7":"<TIMESTAMP>","c8":"<TIMESTAMP>","c9":"2011-11-11","c10":"11:11:11.123456","c11":"1 year","c12":"324373a5-7718-46b1-a7ea-4a7c9981fc4e","c13":[209,130,208,181,208,186,209,129,209,130],"c14":{"a":2}},"transaction":{"id":"<TIMESTAMP>"}}
+{"before":null,"after":{"c1":true,"c2":false,"c3":null,"c4":123456789,"c5":1234.5678,"c6":"1234.5678","c7":"1321009871123","c8":"1320966671123","c9":"2011-11-11","c10":"11:11:11.123456","c11":"1 year","c12":"324373a5-7718-46b1-a7ea-4a7c9981fc4e","c13":[209,130,208,181,208,186,209,129,209,130],"c14":{"a":2}}}
 
 # Special characters
 
@@ -70,7 +70,7 @@ $ kafka-verify format=json sink=materialize.public.types_sink key=false
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.special_characters_sink key=false
-{"before":null,"after":{"c1":"текст","c2":"\"","c3":"'","c4":"\\","c5":"a\n\tb"}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before":null,"after":{"c1":"текст","c2":"\"","c3":"'","c4":"\\","c5":"a\n\tb"}}
 
 # Record
 
@@ -81,7 +81,7 @@ $ kafka-verify format=json sink=materialize.public.special_characters_sink key=f
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.record_sink key=false
-{"before":null,"after":{"simple_view":{"a":1,"b":2,"c":3}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before":null,"after":{"simple_view":{"a":1,"b":2,"c":3}}}
 
 # Duplicate column names
 ! CREATE VIEW duplicate_cols AS SELECT 'a1' AS a, 'a1' AS a;
@@ -107,7 +107,7 @@ contains:column "a" specified more than once
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.complex_type_sink key=false
-{"before": null, "after": {"c1": [[1,2],[3,4]], "c2": {"a":{"b":1, "c":2}, "d": {"e":3, "f":4}}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"c1": [[1,2],[3,4]], "c2": {"a":{"b":1, "c":2}, "d": {"e":3, "f":4}}}}
 
 # testdrive will not automatically clean up types, so we need to do that ourselves
 

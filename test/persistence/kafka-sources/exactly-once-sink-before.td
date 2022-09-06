@@ -60,10 +60,10 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
 # Make sure that we have produced stuff to the sink before we restart
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ kafka-verify format=avro sink=materialize.public.exactly_once_sink sort-messages=true
-{"before":null,"after":{"row":{"f1":0,"f2":0}},"transaction":{"id":"<TIMESTAMP>"}}
-{"before":null,"after":{"row":{"f1":1,"f2":1}},"transaction":{"id":"<TIMESTAMP>"}}
-{"before":null,"after":{"row":{"f1":10,"f2":10}},"transaction":{"id":"<TIMESTAMP>"}}
-{"before":null,"after":{"row":{"f1":11,"f2":11}},"transaction":{"id":"<TIMESTAMP>"}}
+{"before":null,"after":{"row":{"f1":0,"f2":0}}}
+{"before":null,"after":{"row":{"f1":1,"f2":1}}}
+{"before":null,"after":{"row":{"f1":10,"f2":10}}}
+{"before":null,"after":{"row":{"f1":11,"f2":11}}}

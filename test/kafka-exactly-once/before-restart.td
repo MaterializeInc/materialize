@@ -109,18 +109,18 @@ $ kafka-ingest format=avro topic=input schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[4],"counts":[{"time":1,"count":4},{"time":2,"count":2},{"time":3,"count":2}]}}
 
 $ kafka-verify format=avro sink=materialize.public.output sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}}
+{"before": null, "after": {"row": {"a": 2, "b": 1}}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}}
 
 $ kafka-verify format=avro sink=materialize.public.output sort-messages=true
-{"before": null, "after": {"row": {"a": 11, "b": 11}}, "transaction": {"id": "2"}}
-{"before": null, "after": {"row": {"a": 22, "b": 11}}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 11, "b": 11}}}
+{"before": null, "after": {"row": {"a": 22, "b": 11}}}
 
 $ kafka-verify format=avro sink=materialize.public.output sort-messages=true
-{"before": null, "after": {"row": {"a": 3, "b": 4}}, "transaction": {"id": "3"}}
-{"before": null, "after": {"row": {"a": 5, "b": 6}}, "transaction": {"id": "3"}}
+{"before": null, "after": {"row": {"a": 3, "b": 4}}}
+{"before": null, "after": {"row": {"a": 5, "b": 6}}}
 
 # Wait a bit to allow timestamp compaction to happen. We need to ensure that we
 # get correct results even with compaction, which re-timestamps earlier data
