@@ -884,7 +884,12 @@ impl MirScalarExpr {
                             }
                         }
                     }
-                    MirScalarExpr::CallVariadic { func, exprs } => {
+                    MirScalarExpr::CallVariadic { .. } => {
+                        e.flatten_associative();
+                        let (func, exprs) = match e {
+                            MirScalarExpr::CallVariadic { func, exprs } => (func, exprs),
+                            _ => unreachable!("`flatten_associative` shouldn't change node type"),
+                        };
                         if *func == VariadicFunc::Coalesce {
                             // If all inputs are null, output is null. This check must
                             // be done before `exprs.retain...` because `e.typ` requires
@@ -957,7 +962,6 @@ impl MirScalarExpr {
                             let top_list_create = exprs.swap_remove(0);
                             *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
                         } else if *func == VariadicFunc::Or || *func == VariadicFunc::And {
-                            e.flatten_associative();
                             e.undistribute_and_or();
                             e.reduce_and_canonicalize_and_or();
                         }

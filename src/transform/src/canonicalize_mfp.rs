@@ -493,7 +493,7 @@ impl CanonicalizeMfp {
     /// This effectively converts to disjunctive normal form (DNF) (i.e., an OR of ANDs), because
     /// [MirScalarExpr::reduce] did Demorgans and double-negation-elimination. So after
     /// [MirScalarExpr::reduce], we get here a tree of AND/OR nodes. A distribution step lifts an OR
-    /// up the tree by 1 level, and a [MirScalarExpr::flatten_and_or] merges two ORs that are at
+    /// up the tree by 1 level, and a [MirScalarExpr::flatten_associative] merges two ORs that are at
     /// adjacent levels, so eventually we'll end up with just one OR that is at the top of the tree,
     /// with ANDs below it.
     /// For example:
@@ -510,7 +510,7 @@ impl CanonicalizeMfp {
     /// (#0 = 1 AND (#1 = 2 OR #1 = 4)) OR (#0 = 8 AND #1 = 5)
     /// And now we distribute the first AND over the first OR in 2 steps: First to
     /// ((#0 = 1 AND #1 = 2) OR (#0 = 1 AND #1 = 4)) OR (#0 = 8 AND #1 = 5)
-    /// then [MirScalarExpr::flatten_and_or]:
+    /// then [MirScalarExpr::flatten_associative]:
     /// (#0 = 1 AND #1 = 2) OR (#0 = 1 AND #1 = 4) OR (#0 = 8 AND #1 = 5)
     ///
     /// Note that [MirScalarExpr::undistribute_and_or] is not exactly an inverse to this because
