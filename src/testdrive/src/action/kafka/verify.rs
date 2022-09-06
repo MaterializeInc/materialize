@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
+use std::fmt::Debug;
 use std::str;
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
+use regex::Regex;
 use tokio::pin;
 use tokio_stream::StreamExt;
 
@@ -237,10 +239,34 @@ impl Action for VerifyAction {
                     );
                 }
 
-                avro::validate_sink_with_partial_search(
-                    key_schema.as_ref(),
-                    value_schema,
-                    &self.expected_messages,
+                let expected = self
+                    .expected_messages
+                    .iter()
+                    .map(|v| {
+                        let mut deserializer =
+                            serde_json::Deserializer::from_str(v.as_ref()).into_iter();
+                        let key = if let Some(key_schema) = &key_schema {
+                            let key: serde_json::Value = match deserializer.next() {
+                                None => bail!("key missing in input line"),
+                                Some(r) => r?,
+                            };
+                            Some(avro::from_json(&key, key_schema.top_node())?)
+                        } else {
+                            None
+                        };
+                        let value = match deserializer.next() {
+                            None => None,
+                            Some(r) => {
+                                let value = r.context("parsing json")?;
+                                Some(avro::from_json(&value, value_schema.top_node())?)
+                            }
+                        };
+                        Ok((key, value))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                validate_sink_with_partial_search(
+                    &expected,
                     &actual_messages,
                     &state.regex,
                     &state.regex_replacement,
@@ -248,14 +274,6 @@ impl Action for VerifyAction {
                 )?
             }
             SinkFormat::Json { key: has_key } => {
-                assert!(
-                    self.partial_search.is_none(),
-                    "partial search not yet implemented for json formatted sinks"
-                );
-                assert!(
-                    !self.debug_print_only,
-                    "print only not yet implemented for json formatted sinks"
-                );
                 let mut actual_messages = vec![];
                 for (key, value) in actual_bytes {
                     let key_datum = match key {
@@ -282,16 +300,91 @@ impl Action for VerifyAction {
                     actual_messages.sort_by_key(|k| format!("{:?}", k.1));
                 }
 
-                json::validate_sink(
-                    *has_key,
-                    &self.expected_messages,
+                let expected: Vec<(Option<serde_json::Value>, Option<serde_json::Value>)> = self
+                    .expected_messages
+                    .iter()
+                    .map(|v| {
+                        let mut deserializer = json::parse_many(v)?.into_iter();
+                        let key = if *has_key { deserializer.next() } else { None };
+                        let value = deserializer.next();
+                        Ok((key, value))
+                    })
+                    .collect::<Result<Vec<_>, anyhow::Error>>()?;
+
+                validate_sink_with_partial_search(
+                    &expected,
                     &actual_messages,
                     &state.regex,
                     &state.regex_replacement,
-                )?
+                    self.partial_search.is_some(),
+                )?;
             }
         }
         Ok(ControlFlow::Continue)
+    }
+}
+
+pub fn validate_sink_with_partial_search<A: Debug>(
+    expected: &[(Option<A>, Option<A>)],
+    actual: &[(Option<A>, Option<A>)],
+    regex: &Option<Regex>,
+    regex_replacement: &String,
+    partial_search: bool,
+) -> Result<(), anyhow::Error> {
+    let mut expected = expected.iter();
+    let mut actual = actual.iter();
+    let mut index = 0..;
+
+    let mut found_beginning = !partial_search;
+    let mut expected_item = expected.next();
+    let mut actual_item = actual.next();
+    loop {
+        let i = index.next().expect("known to exist");
+        match (expected_item, actual_item) {
+            (Some(e), Some(a)) => {
+                let e_str = format!("{:#?}", e);
+                let a_str = match &regex {
+                    Some(regex) => regex
+                        .replace_all(&format!("{:#?}", a).to_string(), regex_replacement.as_str())
+                        .to_string(),
+                    _ => format!("{:#?}", a),
+                };
+
+                if e_str != a_str {
+                    if found_beginning {
+                        bail!(
+                            "record {} did not match\nexpected:\n{}\n\nactual:\n{}",
+                            i,
+                            e_str,
+                            a_str
+                        );
+                    }
+                    actual_item = actual.next();
+                } else {
+                    found_beginning = true;
+                    expected_item = expected.next();
+                    actual_item = actual.next();
+                }
+            }
+            (Some(e), None) => bail!("missing record {}: {:#?}", i, e),
+            (None, Some(a)) => {
+                if !partial_search {
+                    bail!("extra record {}: {:#?}", i, a);
+                }
+                break;
+            }
+            (None, None) => break,
+        }
+    }
+    let expected: Vec<_> = expected.map(|e| format!("{:#?}", e)).collect();
+    let actual: Vec<_> = actual.map(|a| format!("{:#?}", a)).collect();
+
+    if !expected.is_empty() {
+        bail!("missing records:\n{}", expected.join("\n"))
+    } else if !actual.is_empty() && !partial_search {
+        bail!("extra records:\n{}", actual.join("\n"))
+    } else {
+        Ok(())
     }
 }
 
