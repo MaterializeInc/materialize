@@ -75,8 +75,8 @@ contains:cannot drop item mz_catalog.mz_worker_materialization_delays because it
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   id          1           bigint
-SID   worker      2           bigint
+SID   id          1           uint8
+SID   worker      2           uint8
 SID   elapsed_ns  3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
@@ -85,9 +85,9 @@ SID   elapsed_ns  3           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   id          1           bigint
-SID   worker      2           bigint
-SID   duration_ns 3           bigint
+SID   id          1           uint8
+SID   worker      2           uint8
+SID   duration_ns 3           uint8
 SID   count       4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
@@ -96,9 +96,9 @@ SID   count       4           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   worker      1           bigint
-SID   slept_for   2           bigint
-SID   requested   3           bigint
+SID   worker      1           uint8
+SID   slept_for   2           uint8
+SID   requested   3           uint8
 SID   count       4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
@@ -107,9 +107,9 @@ SID   count       4           bigint
   ORDER BY position
 id      name            position    type
 ------------------------------------------
-SID   channel         1           bigint
-SID   source_worker   2           bigint
-SID   target_worker   3           bigint
+SID   channel         1           uint8
+SID   source_worker   2           uint8
+SID   target_worker   3           uint8
 SID   sent            4           bigint
 SID   received        5           bigint
 
@@ -120,10 +120,10 @@ SID   received        5           bigint
 id      name        position    type
 --------------------------------------
 SID   address     1           list
-SID   port        2           bigint
-SID   worker      3           bigint
+SID   port        2           uint8
+SID   worker      3           uint8
 SID   update_type 4           text
-SID   timestamp   5           bigint
+SID   timestamp   5           uint8
 SID   count       6           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
@@ -132,8 +132,8 @@ SID   count       6           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   operator    1           bigint
-SID   worker      2           bigint
+SID   operator    1           uint8
+SID   worker      2           uint8
 SID   records     3           bigint
 SID   batches     4           bigint
 
@@ -143,8 +143,8 @@ SID   batches     4           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   operator    1           bigint
-SID   worker      2           bigint
+SID   operator    1           uint8
+SID   worker      2           uint8
 SID   count       3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
@@ -155,8 +155,8 @@ id      name        position    type
 --------------------------------------
 SID   global_id   1           text
 SID   source      2           text
-SID   worker      3           bigint
-SID   delay_ns    4           bigint
+SID   worker      3           uint8
+SID   delay_ns    4           uint8
 SID   count       5           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
@@ -167,5 +167,5 @@ id      name        position    type
 --------------------------------------
 SID   global_id   1           text
 SID   source      2           text
-SID   worker      3           bigint
+SID   worker      3           uint8
 SID   time        4           bigint

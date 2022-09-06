@@ -23,6 +23,7 @@ use timely::dataflow::operators::capture::EventLink;
 use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
 use mz_compute_client::logging::LoggingConfig;
+use mz_ore::cast::CastFrom;
 use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Diff, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
@@ -127,7 +128,8 @@ pub fn construct<A: Allocate>(
                                 operates_session
                                     .give(&cap, (((event.id, worker), event.name), time_ms, 1));
 
-                                let address_row = (event.id as i64, worker as i64, event.addr);
+                                let address_row =
+                                    (u64::cast_from(event.id), u64::cast_from(worker), event.addr);
                                 addresses_session.give(&cap, (address_row, time_ms, 1));
                             }
                             TimelyEvent::Channels(event) => {
@@ -148,8 +150,11 @@ pub fn construct<A: Allocate>(
                                 );
                                 channels_session.give(&cap, (d, time_ms, 1));
 
-                                let address_row =
-                                    (event.id as i64, worker as i64, event.scope_addr);
+                                let address_row = (
+                                    u64::cast_from(event.id),
+                                    u64::cast_from(worker),
+                                    event.scope_addr,
+                                );
                                 addresses_session.give(&cap, (address_row, time_ms, 1));
                             }
                             TimelyEvent::Shutdown(event) => {
@@ -232,8 +237,8 @@ pub fn construct<A: Allocate>(
                                                 }
 
                                                 let address_row = (
-                                                    event.id as i64,
-                                                    worker as i64,
+                                                    u64::cast_from(event.id),
+                                                    u64::cast_from(worker),
                                                     event.scope_addr,
                                                 );
                                                 addresses_session
@@ -242,7 +247,11 @@ pub fn construct<A: Allocate>(
                                         }
                                     }
 
-                                    let address_row = (event.id as i64, worker as i64, event.addr);
+                                    let address_row = (
+                                        u64::cast_from(event.id),
+                                        u64::cast_from(worker),
+                                        event.addr,
+                                    );
                                     addresses_session.give(&cap, (address_row, time_ms, -1));
                                 }
                             }
@@ -259,7 +268,15 @@ pub fn construct<A: Allocate>(
                                         let pow = duration_ns.next_power_of_two();
                                         parks_session.give(
                                             &cap,
-                                            ((worker, pow as i64, requested), time_ms, 1),
+                                            (
+                                                (
+                                                    u64::cast_from(worker),
+                                                    u64::try_from(pow).expect("pow too big"),
+                                                    requested,
+                                                ),
+                                                time_ms,
+                                                1,
+                                            ),
                                         );
                                     } else {
                                         panic!("Park data not found!");
@@ -349,7 +366,10 @@ pub fn construct<A: Allocate>(
                 "PreArrange Timely duration",
             )
             .as_collection(|(op, worker), _| {
-                Row::pack_slice(&[Datum::Int64(*op as i64), Datum::Int64(*worker as i64)])
+                Row::pack_slice(&[
+                    Datum::UInt64(u64::cast_from(*op)),
+                    Datum::UInt64(u64::cast_from(*worker)),
+                ])
             });
 
         // Accumulate histograms of execution times for each operator.
@@ -361,9 +381,9 @@ pub fn construct<A: Allocate>(
             )
             .as_collection(|(op, worker, pow), _| {
                 let row = Row::pack_slice(&[
-                    Datum::Int64(*op as i64),
-                    Datum::Int64(*worker as i64),
-                    Datum::Int64(*pow as i64),
+                    Datum::UInt64(u64::cast_from(*op)),
+                    Datum::UInt64(u64::cast_from(*worker)),
+                    Datum::UInt64(u64::try_from(*pow).expect("pow too big")),
                 ]);
                 row
             });
@@ -376,8 +396,8 @@ pub fn construct<A: Allocate>(
             )
             .as_collection(move |((id, worker), name), _| {
                 Row::pack_slice(&[
-                    Datum::Int64(*id as i64),
-                    Datum::Int64(*worker as i64),
+                    Datum::UInt64(u64::cast_from(*id)),
+                    Datum::UInt64(u64::cast_from(*worker)),
                     Datum::String(&name),
                 ])
             });
@@ -389,7 +409,7 @@ pub fn construct<A: Allocate>(
                 "PreArrange Timely addresses",
             )
             .as_collection(|(event_id, worker, addr), _| {
-                create_address_row(*event_id as i64, *worker as i64, &addr)
+                create_address_row(*event_id, *worker, &addr)
             });
 
         let parks = parks
@@ -400,10 +420,12 @@ pub fn construct<A: Allocate>(
             )
             .as_collection(|(worker, duration_ns, requested), ()| {
                 Row::pack_slice(&[
-                    Datum::Int64(*worker as i64),
-                    Datum::Int64(*duration_ns),
+                    Datum::UInt64(*worker),
+                    Datum::UInt64(*duration_ns),
                     requested
-                        .map(|requested| Datum::Int64(requested as i64))
+                        .map(|requested| {
+                            Datum::UInt64(requested.try_into().expect("requested too big"))
+                        })
                         .unwrap_or(Datum::Null),
                 ])
             });
@@ -416,9 +438,9 @@ pub fn construct<A: Allocate>(
             )
             .as_collection(move |((channel, source), target), ()| {
                 Row::pack_slice(&[
-                    Datum::Int64(*channel as i64),
-                    Datum::Int64(*source as i64),
-                    Datum::Int64(*target as i64),
+                    Datum::UInt64(u64::cast_from(*channel)),
+                    Datum::UInt64(u64::cast_from(*source)),
+                    Datum::UInt64(u64::cast_from(*target)),
                 ])
             });
 
@@ -430,9 +452,9 @@ pub fn construct<A: Allocate>(
             )
             .as_collection(move |((channel, source), target), ()| {
                 Row::pack_slice(&[
-                    Datum::Int64(*channel as i64),
-                    Datum::Int64(*source as i64),
-                    Datum::Int64(*target as i64),
+                    Datum::UInt64(u64::cast_from(*channel)),
+                    Datum::UInt64(u64::cast_from(*source)),
+                    Datum::UInt64(u64::cast_from(*target)),
                 ])
             });
 
@@ -445,12 +467,12 @@ pub fn construct<A: Allocate>(
             .as_collection(
                 move |((id, worker), source_node, source_port, target_node, target_port), ()| {
                     Row::pack_slice(&[
-                        Datum::Int64(*id as i64),
-                        Datum::Int64(*worker as i64),
-                        Datum::Int64(*source_node as i64),
-                        Datum::Int64(*source_port as i64),
-                        Datum::Int64(*target_node as i64),
-                        Datum::Int64(*target_port as i64),
+                        Datum::UInt64(u64::cast_from(*id)),
+                        Datum::UInt64(u64::cast_from(*worker)),
+                        Datum::UInt64(u64::cast_from(*source_node)),
+                        Datum::UInt64(u64::cast_from(*source_port)),
+                        Datum::UInt64(u64::cast_from(*target_node)),
+                        Datum::UInt64(u64::cast_from(*target_port)),
                     ])
                 },
             );
@@ -511,13 +533,16 @@ pub fn construct<A: Allocate>(
     traces
 }
 
-fn create_address_row(id: i64, worker: i64, address: &[usize]) -> Row {
-    let id_datum = Datum::Int64(id);
-    let worker_datum = Datum::Int64(worker);
+fn create_address_row(id: u64, worker: u64, address: &[usize]) -> Row {
+    let id_datum = Datum::UInt64(id);
+    let worker_datum = Datum::UInt64(worker);
     // we're collecting into a Vec because we need to iterate over the Datums
     // twice: once for determining the size of the row, then again for pushing
     // them
-    let address_datums: Vec<_> = address.iter().map(|i| Datum::Int64(*i as i64)).collect();
+    let address_datums: Vec<_> = address
+        .iter()
+        .map(|i| Datum::UInt64(u64::cast_from(*i)))
+        .collect();
 
     let row_capacity =
         datum_size(&id_datum) + datum_size(&worker_datum) + datum_list_size(&address_datums);
