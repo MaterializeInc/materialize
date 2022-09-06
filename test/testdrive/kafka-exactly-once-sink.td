@@ -144,7 +144,8 @@ $ kafka-create-topic topic=input_dbz
 $ kafka-create-topic topic=input_cdcv2
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+  FOR KAFKA BROKER '${testdrive.kafka-addr}',
+  PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}';
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -237,10 +238,6 @@ contains:input_values_view is a view, which cannot be exported as a sink
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output13-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
-> CREATE SINK output14_custom_consistency_topic FROM input_kafka_cdcv2
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output14-view-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-
 # We need some data -- any data -- to start creating timestamp bindings
 $ kafka-ingest format=avro topic=input_cdcv2 schema=${cdcv2-schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
@@ -249,33 +246,52 @@ $ kafka-ingest format=avro topic=input_cdcv2 schema=${cdcv2-schema}
 $ kafka-ingest format=avro topic=input_dbz schema=${dbz-schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
-# ensure that the sink works with log compaction enabled on the consistency topic
+# verify output of progress topic with fixed timestamps
 
-$ kafka-create-topic topic=compaction-test-input
-
-# create topic with known compaction settings, instead of letting
-# Materialize create it when creating the sink
-$ kafka-create-topic topic=compaction-test-output-consistency compaction=true
+> CREATE CONNECTION kafka_fixed
+  FOR KAFKA BROKER '${testdrive.kafka-addr}',
+  PROGRESS TOPIC 'testdrive-progress-fixed-${testdrive.seed}';
 
 > CREATE SOURCE compaction_test_input
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-compaction-test-input-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-compaction-test-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK compaction_test_sink FROM compaction_test_input
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'compaction-test-output-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_fixed (TOPIC 'compaction-test-output-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
 
+# NB: the final timestamp is incomplete and should be present in neither output nor progress topic
 $ kafka-ingest format=avro topic=compaction-test-input schema=${cdcv2-schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
 {"array":[{"data":{"a":2,"b":2},"time":1,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":2}]}}
-
-# We cannot observe the consistency topic, because compaction is not deterministic.
-# We indirectly test this by verifying that the data output is correct. If this
-# output were not here, something must have gone wrong with comitting to the
-# consistency topic.
+{"array":[{"data":{"a":2,"b":2},"time":3,"diff":1}]}
 
 $ kafka-verify format=avro sink=materialize.public.compaction_test_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
 {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+
+$ kafka-verify format=json key=false topic=testdrive-progress-fixed-${testdrive.seed}
+{"timestamp": 1}
+
+# verify output of progress topic with real-time timestamps
+
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
+$ kafka-create-topic topic=rt-binding-progress-test-input
+
+> CREATE SOURCE rt_binding_progress_test_source
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rt-binding-progress-test-input-${testdrive.seed}')
+  FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
+
+> CREATE SINK rt_binding_progress_test_sink FROM rt_binding_progress_test_source
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'rt-binding-progress-test-output-${testdrive.seed}')
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
+
+$ kafka-ingest format=avro topic=rt-binding-progress-test-input schema=${dbz-schema} timestamp=1
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
+
+$ kafka-verify format=avro sink=materialize.public.rt_binding_progress_test_sink
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
