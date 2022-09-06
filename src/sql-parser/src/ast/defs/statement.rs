@@ -69,19 +69,7 @@ pub enum Statement<T: AstInfo> {
     DropClusterReplicas(DropClusterReplicasStatement),
     SetVariable(SetVariableStatement),
     ResetVariable(ResetVariableStatement),
-    ShowDatabases(ShowDatabasesStatement<T>),
-    ShowSchemas(ShowSchemasStatement<T>),
-    ShowObjects(ShowObjectsStatement<T>),
-    ShowIndexes(ShowIndexesStatement<T>),
-    ShowColumns(ShowColumnsStatement<T>),
-    ShowCreateView(ShowCreateViewStatement<T>),
-    ShowCreateMaterializedView(ShowCreateMaterializedViewStatement<T>),
-    ShowCreateSource(ShowCreateSourceStatement<T>),
-    ShowCreateTable(ShowCreateTableStatement<T>),
-    ShowCreateSink(ShowCreateSinkStatement<T>),
-    ShowCreateIndex(ShowCreateIndexStatement<T>),
-    ShowCreateConnection(ShowCreateConnectionStatement<T>),
-    ShowVariable(ShowVariableStatement),
+    Show(ShowStatement<T>),
     StartTransaction(StartTransactionStatement),
     SetTransaction(SetTransactionStatement),
     Commit(CommitStatement),
@@ -137,19 +125,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::DropClusterReplicas(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
             Statement::ResetVariable(stmt) => f.write_node(stmt),
-            Statement::ShowDatabases(stmt) => f.write_node(stmt),
-            Statement::ShowSchemas(stmt) => f.write_node(stmt),
-            Statement::ShowObjects(stmt) => f.write_node(stmt),
-            Statement::ShowIndexes(stmt) => f.write_node(stmt),
-            Statement::ShowColumns(stmt) => f.write_node(stmt),
-            Statement::ShowCreateView(stmt) => f.write_node(stmt),
-            Statement::ShowCreateMaterializedView(stmt) => f.write_node(stmt),
-            Statement::ShowCreateSource(stmt) => f.write_node(stmt),
-            Statement::ShowCreateTable(stmt) => f.write_node(stmt),
-            Statement::ShowCreateSink(stmt) => f.write_node(stmt),
-            Statement::ShowCreateIndex(stmt) => f.write_node(stmt),
-            Statement::ShowCreateConnection(stmt) => f.write_node(stmt),
-            Statement::ShowVariable(stmt) => f.write_node(stmt),
+            Statement::Show(stmt) => f.write_node(stmt),
             Statement::StartTransaction(stmt) => f.write_node(stmt),
             Statement::SetTransaction(stmt) => f.write_node(stmt),
             Statement::Commit(stmt) => f.write_node(stmt),
@@ -2595,3 +2571,41 @@ impl<T: AstInfo> AstDisplay for AsOf<T> {
     }
 }
 impl_display_t!(AsOf);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ShowStatement<T: AstInfo> {
+    ShowDatabases(ShowDatabasesStatement<T>),
+    ShowSchemas(ShowSchemasStatement<T>),
+    ShowObjects(ShowObjectsStatement<T>),
+    ShowIndexes(ShowIndexesStatement<T>),
+    ShowColumns(ShowColumnsStatement<T>),
+    ShowCreateView(ShowCreateViewStatement<T>),
+    ShowCreateMaterializedView(ShowCreateMaterializedViewStatement<T>),
+    ShowCreateSource(ShowCreateSourceStatement<T>),
+    ShowCreateTable(ShowCreateTableStatement<T>),
+    ShowCreateSink(ShowCreateSinkStatement<T>),
+    ShowCreateIndex(ShowCreateIndexStatement<T>),
+    ShowCreateConnection(ShowCreateConnectionStatement<T>),
+    ShowVariable(ShowVariableStatement),
+}
+
+impl<T: AstInfo> AstDisplay for ShowStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ShowStatement::ShowDatabases(stmt) => f.write_node(stmt),
+            ShowStatement::ShowSchemas(stmt) => f.write_node(stmt),
+            ShowStatement::ShowObjects(stmt) => f.write_node(stmt),
+            ShowStatement::ShowIndexes(stmt) => f.write_node(stmt),
+            ShowStatement::ShowColumns(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateView(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateMaterializedView(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateSource(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateTable(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateSink(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
+            ShowStatement::ShowVariable(stmt) => f.write_node(stmt),
+        }
+    }
+}
+impl_display_t!(ShowStatement);

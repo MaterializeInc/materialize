@@ -303,6 +303,22 @@ type
 function
 secret
 
+> SELECT * FROM (SHOW FULL OBJECTS) ORDER BY name DESC
+bool user
+csr_conn user
+int_list user
+kafka_conn user
+mv user
+pass_secret user
+snk user
+source_data user
+tbl user
+v1 user
+v2 user
+
+> SELECT "Create Table" FROM (SHOW CREATE TABLE tbl)
+"CREATE TABLE \"d\".\"public\".\"tbl\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\")"
+
 # DROP DATABASE does not support both RESTRICT and CASCADE.
 ! DROP DATABASE d RESTRICT CASCADE
 contains:Cannot specify both RESTRICT and CASCADE in DROP
