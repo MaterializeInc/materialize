@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use itertools::izip;
+use mz_sql::ast::display::AstDisplay;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
@@ -108,7 +109,7 @@ impl Client {
         let conn_client = self.new_conn()?;
         let session = Session::new(conn_client.conn_id(), SYSTEM_USER.into());
         let (mut session_client, _) = conn_client.startup(session, false).await?;
-        session_client.simple_execute(stmts).await
+        session_client.simple_execute(vec![(stmts, vec![])]).await
     }
 
     /// Like [`Client::system_execute`], but for cases when `stmt` is known to
@@ -389,54 +390,70 @@ impl SessionClient {
     async fn simple_execute_inner(
         &mut self,
         stmt: Statement<Raw>,
+        raw_params: Vec<&str>,
     ) -> Result<SimpleResult, SimpleResult> {
-        let raw_params: Vec<Option<Vec<u8>>> = vec![];
-
         const EMPTY_PORTAL: &str = "";
 
-        if let Err(e) = self.describe(EMPTY_PORTAL.into(), Some(stmt), vec![]).await {
+        if let Err(e) = self
+            .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
+            .await
+        {
             return Err(SimpleResult::err(e));
         }
 
-        let stmt = match self.get_prepared_statement(&EMPTY_PORTAL).await {
+        let prep_stmt = match self.get_prepared_statement(&EMPTY_PORTAL).await {
             Ok(stmt) => stmt,
             Err(err) => {
                 return Err(SimpleResult::err(err));
             }
         };
 
-        let param_types = &stmt.desc().param_types;
+        let param_types = &prep_stmt.desc().param_types;
+        if param_types.len() != raw_params.len() {
+            let message = format!(
+                "bind message supplies {actual} parameters, \
+                         but {statement} requires {expected}",
+                statement = (&stmt).to_ast_string(),
+                actual = raw_params.len(),
+                expected = param_types.len()
+            );
+
+            return Err(SimpleResult::err(message));
+        }
+
         let param_formats = vec![mz_pgrepr::Format::Text; param_types.len()];
 
         let buf = RowArena::new();
         let mut params = vec![];
         for (raw_param, mz_typ, format) in izip!(raw_params.clone(), param_types, param_formats) {
             let pg_typ = mz_pgrepr::Type::from(mz_typ);
-            let datum = match raw_param {
-                None => Datum::Null,
-                Some(bytes) => match mz_pgrepr::Value::decode(format, &pg_typ, &bytes) {
+            let datum = if raw_param.to_uppercase() == "NULL" {
+                Datum::Null
+            } else {
+                match mz_pgrepr::Value::decode(format, &pg_typ, &raw_param.as_bytes()) {
                     Ok(param) => param.into_datum(&buf, &pg_typ),
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
                         return Err(SimpleResult::err(msg));
                     }
-                },
+                }
             };
             params.push((datum, mz_typ.clone()))
         }
 
         let result_formats = vec![
             mz_pgrepr::Format::Text;
-            stmt.desc()
+            prep_stmt
+                .desc()
                 .relation_desc
                 .clone()
                 .map(|desc| desc.typ().column_types.len())
                 .unwrap_or(0)
         ];
 
-        let desc = stmt.desc().clone();
-        let revision = stmt.catalog_revision;
-        let stmt = stmt.sql().cloned();
+        let desc = prep_stmt.desc().clone();
+        let revision = prep_stmt.catalog_revision;
+        let stmt = prep_stmt.sql().cloned();
         if let Err(err) = self.session().set_portal(
             EMPTY_PORTAL.into(),
             desc,
@@ -519,7 +536,7 @@ impl SessionClient {
                 let rows = match rows.await {
                     PeekResponseUnary::Rows(rows) => rows,
                     PeekResponseUnary::Error(e) => {
-                        return Err(SimpleResult::err(e));
+                        return Err(SimpleResult::err(e.to_string()));
                     }
                     PeekResponseUnary::Canceled => {
                         return Err(SimpleResult::err("statement canceled due to user request"));
@@ -535,7 +552,6 @@ impl SessionClient {
                     let datums = datum_vec.borrow_with(&row);
                     sql_rows.push(datums.iter().map(From::from).collect());
                 }
-
                 Ok(SimpleResult::Rows {
                     rows: sql_rows,
                     col_names,
@@ -576,33 +592,40 @@ impl SessionClient {
     /// after generating a `SimpleResult::err`.
     pub async fn simple_execute(
         &mut self,
-        stmts: &str,
+        requests: Vec<(&str, Vec<&str>)>,
     ) -> Result<SimpleExecuteResponse, AdapterError> {
-        let stmts =
-            mz_sql::parse::parse(&stmts).map_err(|e| AdapterError::Unstructured(e.into()))?;
-
-        let num_stmts = stmts.len();
         let mut results = vec![];
 
-        for stmt in stmts {
+        for (stmts, raw_params) in requests {
             if matches!(self.session().transaction(), TransactionStatus::Failed(_)) {
                 break;
             }
 
+            let stmts =
+                mz_sql::parse::parse(&stmts).map_err(|e| AdapterError::Unstructured(e.into()))?;
+            let num_stmts = stmts.len();
+            if num_stmts > 1 && !raw_params.is_empty() {
+                return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                    "queries with parameters must contain exactly one statement"
+                )));
+            }
+
             self.start_transaction(Some(num_stmts)).await?;
 
-            let res = match self.simple_execute_inner(stmt).await {
-                Ok(res) => {
-                    assert!(!matches!(res, SimpleResult::Err { .. }));
-                    res
-                }
-                Err(res) => {
-                    assert!(matches!(res, SimpleResult::Err { .. }));
-                    self.fail_transaction();
-                    res
-                }
-            };
-            results.push(res);
+            for stmt in stmts {
+                let res = match self.simple_execute_inner(stmt, raw_params.clone()).await {
+                    Ok(res) => {
+                        assert!(!matches!(res, SimpleResult::Err { .. }));
+                        res
+                    }
+                    Err(res) => {
+                        assert!(matches!(res, SimpleResult::Err { .. }));
+                        self.fail_transaction();
+                        res
+                    }
+                };
+                results.push(res);
+            }
         }
 
         // If not in an uncommited explicit transaction, commit.
