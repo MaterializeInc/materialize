@@ -1079,7 +1079,7 @@ dependencies = [
 [[package]]
 name = "columnation"
 version = "0.1.0"
-source = "git+https://github.com/frankmcsherry/columnation#b96e1d827bc245713211b4227e95eadb7f8cd074"
+source = "git+https://github.com/frankmcsherry/columnation#4c5f5e9470fda0e9c9931817b5e47748cc14a5a4"
 dependencies = [
  "paste",
 ]
@@ -6345,7 +6345,7 @@ checksum = "42657b1a6f4d817cda8e7a0ace261fe0cc946cf3a80314390b22cc61ae080792"
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#1f3a315354ce6d41185a8f26c8a71e883adc1ef9"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#204b444f8ad4c78f08585c7ffeb5c318b424d0d2"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -6363,12 +6363,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#1f3a315354ce6d41185a8f26c8a71e883adc1ef9"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#204b444f8ad4c78f08585c7ffeb5c318b424d0d2"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#1f3a315354ce6d41185a8f26c8a71e883adc1ef9"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#204b444f8ad4c78f08585c7ffeb5c318b424d0d2"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -6384,7 +6384,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#1f3a315354ce6d41185a8f26c8a71e883adc1ef9"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#204b444f8ad4c78f08585c7ffeb5c318b424d0d2"
 dependencies = [
  "columnation",
  "serde",
@@ -6393,7 +6393,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#1f3a315354ce6d41185a8f26c8a71e883adc1ef9"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#204b444f8ad4c78f08585c7ffeb5c318b424d0d2"
 
 [[package]]
 name = "tinytemplate"
