@@ -26,7 +26,7 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
-use rdkafka::message::{Message, OwnedMessage, ToBytes};
+use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use rdkafka::{Offset, TopicPartitionList};
@@ -1219,6 +1219,12 @@ where
                         Some(r) => record.key(r),
                         None => record,
                     };
+
+                    let ts_bytes = ts.to_string().into_bytes();
+                    let record = record.headers(OwnedHeaders::new().insert(Header {
+                        key: "mz-timestamp",
+                        value: Some(&ts_bytes),
+                    }));
 
                     // Only fatal errors are returned from send
                     bail_err!(s.send(record).await);
