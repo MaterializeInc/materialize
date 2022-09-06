@@ -17,7 +17,7 @@ anyhow = { version = "1.0.64", optional = true }
 # dependencies and is widely considered to be basically part of the stdlib.
 async-trait = { version = "0.1.57", optional = true }
 bytes = { version = "1.2.1", optional = true }
-chrono = { version = "0.4.20", default-features = false, features = ["std"], optional = true }
+chrono = { version = "0.4.21", default-features = false, features = ["std"], optional = true }
 clap = { version = "3.2.17", features = ["env"], optional = true }
 ctor = { version = "0.1.23", optional = true }
 either = "1.8.0"
