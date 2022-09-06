@@ -31,7 +31,7 @@ use crate::names::{
 };
 use crate::plan::error::PlanError;
 use crate::plan::query;
-use crate::plan::{Params, Plan, PlanContext};
+use crate::plan::{Params, Plan, PlanContext, PlanKind};
 use crate::{normalize, DEFAULT_SCHEMA};
 
 mod ddl;
@@ -236,13 +236,15 @@ pub fn plan(
         .map(|(i, ty)| (i + 1, ty.clone()))
         .collect();
 
+    let permitted_plans = Plan::generated_from((&stmt).into());
+
     let scx = &mut StatementContext {
         pcx,
         catalog,
         param_types: RefCell::new(param_types),
     };
 
-    match stmt {
+    let plan = match stmt {
         // DDL statements.
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
@@ -335,7 +337,13 @@ pub fn plan(
 
         // Other statements.
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
+    };
+
+    if let Ok(plan) = &plan {
+        mz_ore::soft_assert!(permitted_plans.contains(&PlanKind::from(plan)));
     }
+
+    plan
 }
 
 pub fn plan_copy_from(

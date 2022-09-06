@@ -617,6 +617,7 @@ impl ExecuteResponse {
     pub fn generated_from(plan: PlanKind) -> Vec<ExecuteResponseKind> {
         use ExecuteResponseKind::*;
         use PlanKind::*;
+
         match plan {
             AbortTransaction | CommitTransaction => vec![TransactionExited],
             AlterItemRename | AlterNoop | AlterSecret | AlterSource | RotateKeys => {
