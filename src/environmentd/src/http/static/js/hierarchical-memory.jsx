@@ -113,7 +113,7 @@ function Dataflows() {
       setError(error);
       setLoading(false);
     });
-  });
+  }, []);
 
   useEffect(() => {
 
