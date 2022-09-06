@@ -15,7 +15,7 @@ fallible-iterator = "0.2.0"
 futures = "0.3.24"
 junit-report = "0.7.1"
 once_cell = "1.13.1"
-md-5 = "0.10.1"
+md-5 = "0.10.4"
 mz-build-info = { path = "../build-info" }
 mz-controller = { path = "../controller" }
 mz-environmentd = { path = "../environmentd", default-features = false }
