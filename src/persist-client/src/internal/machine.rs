@@ -962,7 +962,7 @@ mod tests {
                                     write!(s, "<run {idx}>\n");
                                     for part in run {
                                         let part_idx = batch
-                                            .keys
+                                            .parts
                                             .iter()
                                             .position(|p| p == part)
                                             .expect("part should exist");

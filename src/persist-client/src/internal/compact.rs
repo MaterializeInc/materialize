@@ -32,8 +32,7 @@ use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
 use crate::fetch::fetch_batch_part;
 use crate::internal::machine::{retry_external, Machine};
-use crate::internal::paths::PartialBatchKey;
-use crate::internal::state::HollowBatch;
+use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::trace::FueledMergeRes;
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
 
@@ -314,7 +313,7 @@ impl Compactor {
             Ok(CompactRes {
                 output: HollowBatch {
                     desc: req.desc.clone(),
-                    keys: all_parts,
+                    parts: all_parts,
                     runs: all_runs,
                     len,
                 },
@@ -345,7 +344,7 @@ impl Compactor {
     ///     b0 runs=[A, B]
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
-    fn order_runs<T, D>(req: &CompactReq<T>) -> Vec<(&HollowBatch<T>, &[PartialBatchKey])>
+    fn order_runs<T, D>(req: &CompactReq<T>) -> Vec<(&HollowBatch<T>, &[HollowBatchPart])>
     where
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
@@ -378,11 +377,11 @@ impl Compactor {
         cfg: &'a PersistConfig,
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
-        runs: Vec<(&'a HollowBatch<T>, &'a [PartialBatchKey])>,
+        runs: Vec<(&'a HollowBatch<T>, &'a [HollowBatchPart])>,
         mut batch_parts: BatchParts<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
-    ) -> Result<(Vec<PartialBatchKey>, Vec<usize>, usize), anyhow::Error>
+    ) -> Result<(Vec<HollowBatchPart>, Vec<usize>, usize), anyhow::Error>
     where
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
@@ -404,24 +403,19 @@ impl Compactor {
 
         // populate our heap with the updates from the first part of each run
         for (index, (batch, parts)) in runs.iter_mut().enumerate() {
-            if let Some(key) = parts.next() {
-                fetch_batch_part(
-                    &shard_id,
-                    blob.as_ref(),
-                    &metrics,
-                    key,
-                    &batch.desc,
-                    |k, v, mut t, d| {
-                        t.advance_by(desc.since().borrow());
-                        let d = D::decode(d);
-                        let k = k.to_vec();
-                        let v = v.to_vec();
-                        // default heap ordering is descending
-                        sorted_updates.push(Reverse((((k, v), t, d), index)));
-                        remaining_updates_by_run[index] += 1;
-                    },
-                )
-                .await?;
+            if let Some(part) = parts.next() {
+                let mut part =
+                    fetch_batch_part(&shard_id, blob.as_ref(), &metrics, &part.key, &batch.desc)
+                        .await?;
+                while let Some((k, v, mut t, d)) = part.next() {
+                    t.advance_by(desc.since().borrow());
+                    let d = D::decode(d);
+                    let k = k.to_vec();
+                    let v = v.to_vec();
+                    // default heap ordering is descending
+                    sorted_updates.push(Reverse((((k, v), t, d), index)));
+                    remaining_updates_by_run[index] += 1;
+                }
             }
         }
 
@@ -433,23 +427,24 @@ impl Compactor {
             if remaining_updates_by_run[index] == 0 {
                 // repopulate from the originating run, if any parts remain
                 let (batch, parts) = &mut runs[index];
-                if let Some(key) = parts.next() {
-                    fetch_batch_part(
+                if let Some(part) = parts.next() {
+                    let mut part = fetch_batch_part(
                         &shard_id,
                         blob.as_ref(),
                         &metrics,
-                        key,
+                        &part.key,
                         &batch.desc,
-                        |k, v, mut t, d| {
-                            t.advance_by(desc.since().borrow());
-                            let d = D::decode(d);
-                            let k = k.to_vec();
-                            let v = v.to_vec();
-                            sorted_updates.push(Reverse((((k, v), t, d), index)));
-                            remaining_updates_by_run[index] += 1;
-                        },
                     )
                     .await?;
+                    while let Some((k, v, mut t, d)) = part.next() {
+                        t.advance_by(desc.since().borrow());
+                        let d = D::decode(d);
+                        let k = k.to_vec();
+                        let v = v.to_vec();
+                        // default heap ordering is descending
+                        sorted_updates.push(Reverse((((k, v), t, d), index)));
+                        remaining_updates_by_run[index] += 1;
+                    }
                 }
             }
 
@@ -612,21 +607,21 @@ pub(crate) struct HollowBatchRunIter<'a, T> {
 }
 
 impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
-    type Item = &'a [PartialBatchKey];
+    type Item = &'a [HollowBatchPart];
 
     fn next(&mut self) -> Option<Self::Item> {
         if !self.emitted_implicit {
             self.emitted_implicit = true;
             return Some(match self.inner.peek() {
-                None => &self.batch.keys,
-                Some(run_end) => &self.batch.keys[0..**run_end],
+                None => &self.batch.parts,
+                Some(run_end) => &self.batch.parts[0..**run_end],
             });
         }
 
         if let Some(run_start) = self.inner.next() {
             return Some(match self.inner.peek() {
-                Some(run_end) => &self.batch.keys[*run_start..**run_end],
-                None => &self.batch.keys[*run_start..],
+                Some(run_end) => &self.batch.parts[*run_start..**run_end],
+                None => &self.batch.parts[*run_start..],
             });
         }
 

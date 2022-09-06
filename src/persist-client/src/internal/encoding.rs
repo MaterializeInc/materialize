@@ -633,6 +633,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
             desc: Some(self.desc.into_proto()),
             parts: self.parts.into_proto(),
             len: self.len.into_proto(),
+            runs: self.runs.into_proto(),
             deprecated_keys: vec![],
         }
     }
@@ -654,6 +655,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
             desc: proto.desc.into_rust_if_some("desc")?,
             parts,
             len: proto.len.into_rust()?,
+            runs: proto.runs.into_rust()?,
         })
     }
 }
@@ -787,6 +789,7 @@ mod tests {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
             }],
+            runs: vec![],
         };
         let mut old = x.into_proto();
         // Old ProtoHollowBatch had keys instead of parts.

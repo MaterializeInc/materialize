@@ -293,6 +293,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             desc: Description::new(lower, upper, since),
             parts: vec![],
             len: 0,
+            runs: vec![],
         })
     }
 
@@ -1114,7 +1115,12 @@ mod tests {
                         let mut s = String::new();
                         trace.spine.map_batches(|b| {
                             let b = match b {
-                                SpineBatch::Merged(HollowBatch { desc, len, parts }) => format!(
+                                SpineBatch::Merged(HollowBatch {
+                                    desc,
+                                    len,
+                                    parts,
+                                    runs: _runs,
+                                }) => format!(
                                     "{:?}{:?}{:?} {}{}\n",
                                     desc.lower().elements(),
                                     desc.upper().elements(),
