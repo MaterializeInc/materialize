@@ -16,6 +16,7 @@ use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::MutableAntichain;
+use timely::progress::Antichain;
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
@@ -51,6 +52,12 @@ use crate::source::types::SourceToken;
 ///
 /// When the source token is dropped, the timestamping_flag is set to false
 /// to terminate any spawned threads in the source operator
+///
+/// `input` is an OPTIONAL input stream. If `Some`, then the logic constructor
+/// will get the input's _frontier_ only (inside a `Some`), as the third
+/// argument. Otherwise, the operator just gets `None`. Inspection of the
+/// data of this input remains unimplemented. Note that this input also
+/// does not effect the progress tracking of the `source` operator.
 pub fn source<G, D, B, L>(
     scope: &G,
     name: String,
@@ -76,7 +83,15 @@ where
     let (mut data_output, data_stream) = builder.new_output();
     builder.set_notify(false);
 
-    let input = input.map(|input| builder.new_input(&input, Pipeline));
+    let input = input.map(|input| {
+        builder.new_input_connection(
+            &input,
+            Pipeline,
+            // As documented, the optional input does not
+            // participate in feedback tracking.
+            vec![Antichain::new()],
+        )
+    });
 
     builder.build(|capabilities| {
         let cap_set = CapabilitySet::from_elem(capabilities.into_element());

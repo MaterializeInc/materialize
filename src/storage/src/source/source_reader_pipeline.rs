@@ -38,6 +38,7 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::feedback::ConnectLoop;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Broadcast, CapabilitySet};
@@ -153,20 +154,21 @@ pub fn create_raw_source<G, S: 'static, R>(
     Option<Rc<dyn Any>>,
 )
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = Timestamp> + Clone,
     S: SourceReader,
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
-    let (resume_stream, downgrade_resume_token) =
+    let (resume_stream, source_reader_feedback_handle, _resume_token) =
         super::resumption::resumption_operator(config.clone(), calc);
 
-    let ((batches, source_upper_summaries), source_reader_token) = source_reader_operator::<G, S>(
-        config.clone(),
-        source_connection,
-        connection_context,
-        resume_stream,
-        downgrade_resume_token,
-    );
+    let ((batches, source_upper_summaries, resumption_feedback_stream), source_reader_token) =
+        source_reader_operator::<G, S>(
+            config.clone(),
+            source_connection,
+            connection_context,
+            resume_stream,
+        );
+    resumption_feedback_stream.connect_loop(source_reader_feedback_handle);
 
     let (remap_stream, remap_token) =
         remap_operator::<G, S>(config.clone(), source_upper_summaries);
@@ -183,13 +185,14 @@ where
 /// [`SourceMessageBatch`]. Also returns a second stream that can be used to
 /// learn about the `source_upper` that all the source reader instances now
 /// about. This second stream will be used by `remap_operator` to mint new
-/// timestamp bindings into the remap shard.
+/// timestamp bindings into the remap shard. The third stream is to feedback
+/// a frontier for the `resumption_operator` to inspect. For now, this
+/// stream produces NO data.
 fn source_reader_operator<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
     source_connection: &SourceConnection,
     connection_context: ConnectionContext,
     resume_stream: timely::dataflow::Stream<G, ()>,
-    downgrade_resume_token: Rc<dyn Any>,
 ) -> (
     (
         timely::dataflow::Stream<
@@ -197,6 +200,7 @@ fn source_reader_operator<G, S: 'static>(
             Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
         >,
         timely::dataflow::Stream<G, SourceUpperSummary>,
+        timely::dataflow::Stream<G, ()>,
     ),
     Option<SourceToken>,
 )
@@ -231,7 +235,6 @@ where
         // The maximal resume_upper we have seen from the resumption operator, starting at the
         // _initial_ resume_upper
         let mut resumption_frontier = resume_upper.clone();
-        let mut downgrade_resume_token = Some(downgrade_resume_token);
 
         let sync_activator = scope.sync_activator_for(&info.address[..]);
         let base_metrics = base_metrics.clone();
@@ -452,10 +455,6 @@ where
                 let update = match res {
                     Some(update) => update,
                     None => {
-                        // If the source gave us `None`, it means its finished, forever, and we
-                        // need to signal the upstream operator to give up, so our
-                        // frontiers can go to `[]`
-                        downgrade_resume_token.take();
                         return;
                     }
                 };
@@ -535,6 +534,7 @@ where
     let mut input = demux_op.new_input(&stream, Pipeline);
     let (mut batch_output, batch_stream) = demux_op.new_output();
     let (mut summary_output, summary_stream) = demux_op.new_output();
+    let (_feedback_output, feedback_stream) = demux_op.new_output();
     let summary_output_port = summary_stream.name().port;
 
     demux_op.build(move |_caps| {
@@ -559,7 +559,10 @@ where
         }
     });
 
-    ((batch_stream, summary_stream), Some(capability))
+    (
+        (batch_stream, summary_stream, feedback_stream),
+        Some(capability),
+    )
 }
 
 /// Mints new contents for the remap shard based on summaries about the source

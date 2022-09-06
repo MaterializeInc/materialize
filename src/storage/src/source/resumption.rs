@@ -15,7 +15,10 @@
 use std::any::Any;
 use std::rc::Rc;
 
-use mz_expr::PartitionId;
+use differential_dataflow::Hashable;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::feedback::Feedback;
+use timely::dataflow::operators::feedback::Handle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
@@ -31,12 +34,22 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 /// Generates a timely `Stream` with no inputs that periodically
 /// downgrades its output `Capability` _to the "resumption frontier"
 /// of the source_. It does not produce meaningful data.
+///
+/// The returned feedback `Handle` is to allow the downstream
+/// operator communicate its frontier back to this operator,
+/// so we can shutdown. This is useful when a source is
+/// static or finished. This operator only inspects its frontier, and it does not
+/// participate in the operator's progress tracking.
 pub fn resumption_operator<G, R>(
     config: RawSourceCreationConfig<G>,
     calc: R,
-) -> (timely::dataflow::Stream<G, ()>, Rc<dyn Any>)
+) -> (
+    timely::dataflow::Stream<G, ()>,
+    Handle<G, ()>,
+    Option<Rc<dyn Any>>,
+)
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = Timestamp> + Clone,
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
     let RawSourceCreationConfig {
@@ -49,24 +62,37 @@ where
         ..
     } = config;
 
-    // This is the same as the calculation for single-instance workers, so that
-    // the "downgrade token" can dropped on the same worker as the active worker
-    let active_worker =
-        crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
+    // Note the `summary` doesn't really matter here, as we only ever inspect the frontier
+    // of this input, to compare it to the empty frontier.
+    //
+    // TODO(guswynn): remove this clone, `Feedback::feedback` erroneously requires `&mut Scope`,
+    // but only needs to clone the scope.
+    let (source_reader_feedback_handle, source_reader_feedback_stream) =
+        config.scope.clone().feedback(1);
+
+    let chosen_worker = (source_id.hashed() % worker_count as u64) as usize;
+    let active_worker = chosen_worker == worker_id;
 
     let operator_name = format!("resumption({})", source_id);
     let mut resume_op = OperatorBuilder::new(operator_name, scope.clone());
-    // we just downgrade the capability
+    // We just downgrade the capability to communicate the frontier, and
+    // don't produce any real data.
     let (_resume_output, resume_stream) = resume_op.new_output();
 
-    let downgrade_token = Rc::new(());
-    let downgrade_token_weak = Rc::downgrade(&downgrade_token);
+    // For now, we never actually read any data from this stream, just inspect its frontier.
+    let _feedback = resume_op.new_input_connection(
+        &source_reader_feedback_stream,
+        Pipeline,
+        // Our progress tracking should not depend on a downstream source, especially as this input is only
+        // used for shutdown.
+        vec![Antichain::new()],
+    );
 
     let mut upper = Antichain::from_elem(Timestamp::minimum());
 
     resume_op.build_async(
         scope.clone(),
-        move |mut capabilities, _frontiers, scheduler| async move {
+        move |mut capabilities, frontiers, scheduler| async move {
             let mut cap_set = if active_worker {
                 CapabilitySet::from_elem(capabilities.pop().expect("missing capability"))
             } else {
@@ -76,7 +102,7 @@ where
             capabilities.clear();
 
             // TODO: determine what interval we want here.
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
 
             // The lock MUST be dropped before we enter the main loop.
             let persist_client = persist_clients
@@ -89,9 +115,14 @@ where
             let mut calc_state = calc.initialize_state(&persist_client).await;
 
             while scheduler.notified().await {
-                if downgrade_token_weak.upgrade().is_none() {
-                    return;
+                // If the downstream source has finished, we exit early.
+                {
+                    let source_reader_feedback_frontier = &frontiers.borrow()[0];
+                    if source_reader_feedback_frontier.elements().is_empty() {
+                        return;
+                    }
                 }
+
                 if !active_worker {
                     continue;
                 }
@@ -118,5 +149,5 @@ where
         },
     );
 
-    (resume_stream, downgrade_token)
+    (resume_stream, source_reader_feedback_handle, None)
 }
