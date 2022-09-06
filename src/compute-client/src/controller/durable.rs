@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use timely::PartialOrder;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -126,44 +127,14 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub(super) async fn apply(&mut self, cmd: Command<T>) -> Result<(), ComputeError> {
-        match cmd {
-            Command::AddReplica {
-                id,
-                addrs,
-                persisted_logs,
-            } => self.add_replica(id, addrs, persisted_logs),
-            Command::RemoveReplica { id } => self.remove_replica(id),
-            Command::CreateDataflows { dataflows } => self.create_dataflows(dataflows).await?,
-            Command::DropCollections { ids } => self.drop_collections(ids).await?,
-            Command::Peek {
-                id,
-                literal_constraints,
-                uuid,
-                timestamp,
-                finishing,
-                map_filter_project,
-                target_replica,
-            } => {
-                self.peek(
-                    id,
-                    literal_constraints,
-                    uuid,
-                    timestamp,
-                    finishing,
-                    map_filter_project,
-                    target_replica,
-                )
-                .await?
-            }
-            Command::CancelPeeks { uuids } => self.cancel_peeks(&uuids).await?,
-            Command::SetReadPolicy { policies } => self.set_read_policy(policies).await?,
-            Command::UpdateWriteFrontiers { updates } => {
-                self.update_write_frontiers(&updates).await?
-            }
-            Command::RemovePeeks { uuids } => self.remove_peeks(uuids).await?,
-        }
+        self.validate_command(&cmd)?;
+        self.log_command(&cmd).await?;
 
-        Ok(())
+        // The command has been made durable, so it must be considered applied (even though its
+        // effects might only manifest eventually). We are not allowed to return an error after
+        // this point. Handling the command must either succeed or panic, in which case it will be
+        // retried upon restart.
+        Ok(self.handle_command(cmd).await)
     }
 }
 
@@ -183,6 +154,65 @@ where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
+    fn validate_command(&self, cmd: &Command<T>) -> Result<(), ComputeError> {
+        match cmd {
+            Command::AddReplica { .. } => Ok(()),
+            Command::RemoveReplica { .. } => Ok(()),
+            Command::CreateDataflows { dataflows } => self.validate_create_dataflows(dataflows),
+            Command::DropCollections { ids } => self.validate_drop_collections(ids),
+            Command::Peek { id, timestamp, .. } => self.validate_peek(*id, timestamp),
+            Command::CancelPeeks { .. } => Ok(()),
+            Command::SetReadPolicy { policies } => self.validate_set_read_policy(policies),
+            Command::UpdateWriteFrontiers { .. } => Ok(()),
+            Command::RemovePeeks { .. } => Ok(()),
+        }
+    }
+
+    async fn log_command(&mut self, cmd: &Command<T>) -> Result<(), ComputeError> {
+        // TODO(teskje): Durably record command to stash.
+        let _ = cmd;
+        Ok(())
+    }
+
+    async fn handle_command(&mut self, cmd: Command<T>) {
+        match cmd {
+            Command::AddReplica {
+                id,
+                addrs,
+                persisted_logs,
+            } => self.add_replica(id, addrs, persisted_logs),
+            Command::RemoveReplica { id } => self.remove_replica(id),
+            Command::CreateDataflows { dataflows } => self.create_dataflows(dataflows).await,
+            Command::DropCollections { ids } => self.drop_collections(ids).await,
+            Command::Peek {
+                id,
+                literal_constraints,
+                uuid,
+                timestamp,
+                finishing,
+                map_filter_project,
+                target_replica,
+            } => {
+                self.peek(
+                    id,
+                    literal_constraints,
+                    uuid,
+                    timestamp,
+                    finishing,
+                    map_filter_project,
+                    target_replica,
+                )
+                .await
+            }
+            Command::CancelPeeks { uuids } => self.cancel_peeks(uuids).await,
+            Command::SetReadPolicy { policies } => self.set_read_policy(policies).await,
+            Command::UpdateWriteFrontiers { updates } => {
+                self.update_write_frontiers(&updates).await
+            }
+            Command::RemovePeeks { uuids } => self.remove_peeks(&uuids).await,
+        }
+    }
+
     fn add_replica(
         &mut self,
         id: ReplicaId,
@@ -219,23 +249,18 @@ where
         self.state.replicas.remove_replica(id);
     }
 
-    async fn create_dataflows(
-        &mut self,
-        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
+    fn validate_create_dataflows(
+        &self,
+        dataflows: &[DataflowDescription<crate::plan::Plan<T>, (), T>],
     ) -> Result<(), ComputeError> {
-        // Validate dataflows as having inputs whose `since` is less or equal to the dataflow's `as_of`.
-        // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
-        for dataflow in dataflows.iter() {
+        for dataflow in dataflows {
             let as_of = dataflow
                 .as_of
                 .as_ref()
                 .ok_or(ComputeError::DataflowMalformed)?;
 
-            // Record all transitive dependencies of the outputs.
-            let mut storage_dependencies = Vec::new();
-            let mut compute_dependencies = Vec::new();
-
             // Validate sources have `since.less_equal(as_of)`.
+            // Validate source storage collections exist.
             for source_id in dataflow.source_imports.keys() {
                 let since = &self
                     .storage_controller
@@ -243,24 +268,40 @@ where
                     .or(Err(ComputeError::IdentifierMissing(*source_id)))?
                     .read_capabilities
                     .frontier();
-                if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
-                    Err(ComputeError::DataflowSinceViolation(*source_id))?;
+                if !(PartialOrder::less_equal(since, &as_of.borrow())) {
+                    return Err(ComputeError::DataflowSinceViolation(*source_id));
                 }
 
-                storage_dependencies.push(*source_id);
+                self.storage_controller.collection(*source_id)?;
             }
 
             // Validate indexes have `since.less_equal(as_of)`.
-            // TODO(mcsherry): Instead, return an error from the constructing method.
             for index_id in dataflow.index_imports.keys() {
                 let collection = self.state.collection(*index_id)?;
                 let since = collection.read_capabilities.frontier();
-                if !(timely::order::PartialOrder::less_equal(&since, &as_of.borrow())) {
-                    Err(ComputeError::DataflowSinceViolation(*index_id))?;
-                } else {
-                    compute_dependencies.push(*index_id);
+                if !(PartialOrder::less_equal(&since, &as_of.borrow())) {
+                    return Err(ComputeError::DataflowSinceViolation(*index_id));
                 }
             }
+        }
+        Ok(())
+    }
+
+    async fn create_dataflows(
+        &mut self,
+        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
+    ) {
+        // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
+        for dataflow in dataflows.iter() {
+            let as_of = dataflow
+                .as_of
+                .as_ref()
+                .expect("checked in validate_create_dataflows");
+
+            // Record all transitive dependencies of the outputs.
+            let mut storage_dependencies: Vec<_> =
+                dataflow.source_imports.keys().copied().collect();
+            let mut compute_dependencies: Vec<_> = dataflow.index_imports.keys().copied().collect();
 
             // Canonicalize dependencies.
             // Probably redundant based on key structure, but doing for sanity.
@@ -282,14 +323,16 @@ where
                 .collect();
             self.storage_controller
                 .update_read_capabilities(&mut storage_read_updates)
-                .await?;
+                .await
+                .expect("storage error");
+
             // Update compute read capabilities for inputs.
             let mut compute_read_updates = compute_dependencies
                 .iter()
                 .map(|id| (*id, changes.clone()))
                 .collect();
             self.update_read_capabilities(&mut compute_read_updates)
-                .await?;
+                .await;
 
             // Install collection state for each of the exports.
             for sink_id in dataflow.sink_exports.keys() {
@@ -320,7 +363,10 @@ where
         for d in dataflows {
             let mut source_imports = BTreeMap::new();
             for (id, (si, monotonic)) in d.source_imports {
-                let collection = self.storage_controller.collection(id)?;
+                let collection = self
+                    .storage_controller
+                    .collection(id)
+                    .expect("checked in validate_create_dataflows");
                 let desc = SourceInstanceDesc {
                     storage_metadata: collection.collection_metadata.clone(),
                     arguments: si.arguments,
@@ -333,14 +379,13 @@ where
             for (id, se) in d.sink_exports {
                 let connection = match se.connection {
                     ComputeSinkConnection::Persist(conn) => {
-                        let metadata = self
+                        let collection = self
                             .storage_controller
-                            .collection(id)?
-                            .collection_metadata
-                            .clone();
+                            .collection(id)
+                            .expect("created above");
                         let conn = PersistSinkConnection {
                             value_desc: conn.value_desc,
-                            storage_metadata: metadata,
+                            storage_metadata: collection.collection_metadata.clone(),
                         };
                         ComputeSinkConnection::Persist(conn)
                     }
@@ -371,19 +416,29 @@ where
         self.state
             .replicas
             .send(ComputeCommand::CreateDataflows(augmented_dataflows));
+    }
 
+    fn validate_drop_collections(&self, ids: &[GlobalId]) -> Result<(), ComputeError> {
+        // Validate that the given collections exist.
+        for id in ids {
+            self.state.collection(*id)?;
+        }
         Ok(())
     }
 
-    async fn drop_collections(
-        &mut self,
-        ids: Vec<GlobalId>,
-    ) -> Result<(), ComputeError> {
-        // Validate that the ids exist.
-        self.validate_ids(ids.iter().cloned())?;
+    async fn drop_collections(&mut self, ids: Vec<GlobalId>) {
+        let policies = ids
+            .into_iter()
+            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
+            .collect();
+        self.set_read_policy(policies).await;
+    }
 
-        let compaction_commands = ids.into_iter().map(|id| (id, Antichain::new())).collect();
-        self.allow_compaction(compaction_commands).await?;
+    fn validate_peek(&self, id: GlobalId, timestamp: &T) -> Result<(), ComputeError> {
+        let since = self.state.collection(id)?.read_capabilities.frontier();
+        if !since.less_equal(timestamp) {
+            Err(ComputeError::PeekSinceViolation(id))?;
+        }
         Ok(())
     }
 
@@ -396,17 +451,11 @@ where
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
-    ) -> Result<(), ComputeError> {
-        let since = self.state.collection(id)?.read_capabilities.frontier();
-
-        if !since.less_equal(&timestamp) {
-            Err(ComputeError::PeekSinceViolation(id))?;
-        }
-
+    ) {
         // Install a compaction hold on `id` at `timestamp`.
         let mut updates = BTreeMap::new();
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
-        self.update_read_capabilities(&mut updates).await?;
+        self.update_read_capabilities(&mut updates).await;
         self.state.peeks.insert(uuid, (id, timestamp.clone()));
 
         self.state.replicas.send(ComputeCommand::Peek(Peek {
@@ -421,60 +470,54 @@ where
             // tree to forward it on to the compute worker.
             otel_ctx: OpenTelemetryContext::obtain(),
         }));
+    }
 
+    async fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) {
+        self.remove_peeks(&uuids).await;
+        self.state
+            .replicas
+            .send(ComputeCommand::CancelPeeks { uuids });
+    }
+
+    fn validate_set_read_policy(
+        &self,
+        policies: &[(GlobalId, ReadPolicy<T>)],
+    ) -> Result<(), ComputeError> {
+        for (id, _) in policies {
+            self.state.collection(*id)?;
+        }
         Ok(())
     }
 
-    async fn cancel_peeks(
-        &mut self,
-        uuids: &BTreeSet<Uuid>,
-    ) -> Result<(), ComputeError> {
-        self.remove_peeks(uuids.iter().cloned()).await?;
-        self.state.replicas.send(ComputeCommand::CancelPeeks {
-            uuids: uuids.clone(),
-        });
-        Ok(())
-    }
-
-    async fn set_read_policy(
-        &mut self,
-        policies: Vec<(GlobalId, ReadPolicy<T>)>,
-    ) -> Result<(), ComputeError> {
+    async fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
-            if let Ok(collection) = self.state.collection_mut(id) {
-                let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
+            let collection = self
+                .state
+                .collection_mut(id)
+                .expect("checked in validate_set_read_policies");
+            let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
 
-                if timely::order::PartialOrder::less_equal(
-                    &collection.implied_capability,
-                    &new_read_capability,
-                ) {
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
-                    if !update.is_empty() {
-                        read_capability_changes.insert(id, update);
-                    }
+            if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
+                let mut update = ChangeBatch::new();
+                update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+                if !update.is_empty() {
+                    read_capability_changes.insert(id, update);
                 }
-
-                collection.read_policy = policy;
-            } else {
-                tracing::error!("Reference to unregistered id: {:?}", id);
             }
+
+            collection.read_policy = policy;
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes)
-                .await?;
+                .await;
         }
-        Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn update_write_frontiers(
-        &mut self,
-        updates: &[(GlobalId, Antichain<T>)],
-    ) -> Result<(), ComputeError> {
+    async fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
         let mut read_capability_changes = BTreeMap::default();
         for (id, new_upper) in updates.iter() {
             let collection = self
@@ -487,10 +530,7 @@ where
             let mut new_read_capability = collection
                 .read_policy
                 .frontier(collection.write_frontier.borrow());
-            if timely::order::PartialOrder::less_equal(
-                &collection.implied_capability,
-                &new_read_capability,
-            ) {
+            if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                 let mut update = ChangeBatch::new();
                 update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
                 std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
@@ -502,7 +542,7 @@ where
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes)
-                .await?;
+                .await;
         }
 
         // Tell the storage controller about new write frontiers for storage
@@ -517,40 +557,25 @@ where
             .collect();
         self.storage_controller
             .update_write_frontiers(&storage_updates)
-            .await?;
-
-        Ok(())
+            .await
+            .expect("storage error");
     }
 
-    async fn remove_peeks(
-        &mut self,
-        peek_ids: impl IntoIterator<Item = uuid::Uuid>,
-    ) -> Result<(), ComputeError> {
+    async fn remove_peeks(&mut self, peek_ids: &BTreeSet<Uuid>) {
         let mut updates = peek_ids
-            .into_iter()
+            .iter()
             .flat_map(|uuid| {
                 self.state
                     .peeks
-                    .remove(&uuid)
+                    .remove(uuid)
                     .map(|(id, time)| (id, ChangeBatch::new_from(time, -1)))
             })
             .collect();
-        self.update_read_capabilities(&mut updates).await?;
-        Ok(())
-    }
-
-    fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
-        for id in ids {
-            self.state.collection(id)?;
-        }
-        Ok(())
+        self.update_read_capabilities(&mut updates).await;
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn update_read_capabilities(
-        &mut self,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
-    ) -> Result<(), ComputeError> {
+    async fn update_read_capabilities(&mut self, updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>) {
         // Locations to record consequences that we need to act on.
         let mut storage_todo = BTreeMap::default();
         let mut compute_net = Vec::default();
@@ -606,23 +631,9 @@ where
         if !storage_todo.is_empty() {
             self.storage_controller
                 .update_read_capabilities(&mut storage_todo)
-                .await?;
+                .await
+                .expect("storage error");
         }
-        Ok(())
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn allow_compaction(
-        &mut self,
-        frontiers: Vec<(GlobalId, Antichain<T>)>,
-    ) -> Result<(), ComputeError> {
-        // Validate that the ids exist.
-        self.validate_ids(frontiers.iter().map(|(id, _)| *id))?;
-        let policies = frontiers
-            .into_iter()
-            .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
-        self.set_read_policy(policies.collect()).await?;
-        Ok(())
     }
 }
 
