@@ -247,13 +247,14 @@ $ kafka-ingest format=avro topic=input_dbz schema=${dbz-schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 # verify output of progress topic with fixed timestamps
+$ kafka-create-topic topic=progress-test-input
 
 > CREATE CONNECTION kafka_fixed
   FOR KAFKA BROKER '${testdrive.kafka-addr}',
   PROGRESS TOPIC 'testdrive-progress-fixed-${testdrive.seed}';
 
 > CREATE SOURCE compaction_test_input
-  FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-compaction-test-input-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-test-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK compaction_test_sink FROM compaction_test_input
@@ -262,7 +263,7 @@ $ kafka-ingest format=avro topic=input_dbz schema=${dbz-schema} timestamp=1
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
 
 # NB: the final timestamp is incomplete and should be present in neither output nor progress topic
-$ kafka-ingest format=avro topic=compaction-test-input schema=${cdcv2-schema}
+$ kafka-ingest format=avro topic=progress-test-input schema=${cdcv2-schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
 {"array":[{"data":{"a":2,"b":2},"time":1,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":2}]}}
