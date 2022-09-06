@@ -22,19 +22,13 @@ SUBCOMMANDS:
 
 ### Install
 
-Clone the repository and run:
+Clone the repository and install the CLI package:
 
 ```bash
-cargo build --package mz --release
+cargo install --path ./src/mz
 ```
 
-After a successful build, the binary is available at:
-
-```bash
-cd ./target/release
-```
-
-**[Install dependencies](#Dependencies)**
+**[Required dependencies](#Dependencies)**
 
 ### Configuration
 
@@ -124,10 +118,19 @@ mz help
 
 ### Dependencies
 
+Install [`rust` and `cargo`](https://doc.rust-lang.org/cargo/getting-started/installation.html):
+
+```bash
+# Linux & macOS
+curl https://sh.rustup.rs -sSf | sh
+
+# Windows
+https://win.rustup.rs/
+```
+
 Install `psql` dependency for the shell command:
 
 ```bash
-
 # Linux (TBC)
 apt-get install postgresql-client
 
