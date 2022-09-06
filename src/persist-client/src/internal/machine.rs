@@ -1016,6 +1016,9 @@ mod tests {
                             if let Some(target_size) = target_size {
                                 cfg.blob_target_size = target_size;
                             };
+                            if let Some(memory_bound) = memory_bound {
+                                cfg.compaction_memory_bound_bytes = memory_bound;
+                            }
                             let req = CompactReq {
                                 shard_id,
                                 desc: Description::new(
@@ -1031,7 +1034,6 @@ mod tests {
                                 Arc::clone(&client.metrics),
                                 Arc::clone(&cpu_heavy_runtime),
                                 req,
-                                memory_bound.unwrap_or(usize::MAX),
                                 WriterId::new(),
                             )
                             .await;

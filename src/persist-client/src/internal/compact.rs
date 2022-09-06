@@ -95,7 +95,6 @@ impl Compactor {
         &self,
         machine: &Machine<K, V, T, D>,
         req: CompactReq<T>,
-        memory_budget_bytes: usize,
     ) -> Option<JoinHandle<()>>
     where
         K: Debug + Codec,
@@ -143,7 +142,6 @@ impl Compactor {
                     Arc::clone(&metrics),
                     Arc::clone(&cpu_heavy_runtime),
                     req,
-                    memory_budget_bytes,
                     writer_id.clone(),
                 )
                 .await;
@@ -209,7 +207,6 @@ impl Compactor {
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         req: CompactReq<T>,
-        memory_bound_bytes: usize,
         writer_id: WriterId,
     ) -> Result<CompactRes<T>, anyhow::Error>
     where
@@ -221,12 +218,12 @@ impl Compactor {
             let () = Compactor::validate_req(&req)?;
 
             // compaction needs memory enough for at least 2 runs and 2 in-progress parts
-            assert!(memory_bound_bytes >= 4 * cfg.blob_target_size);
+            assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.blob_target_size);
             // reserve space for an in-progress part to be held in-mem representation and columnar
             let in_progress_part_reserved_memory_bytes = 2 * cfg.blob_target_size;
             // then remaining memory will go towards pulling down as many runs as we can
             let run_reserved_memory_bytes =
-                memory_bound_bytes - in_progress_part_reserved_memory_bytes;
+                cfg.compaction_memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
             let ordered_runs = Self::order_runs::<T, D>(&req);
             let mut ordered_runs = ordered_runs.iter().peekable();
@@ -243,8 +240,7 @@ impl Compactor {
                 compactable_runs_max_memory_bytes += cfg.blob_target_size;
 
                 match ordered_runs.peek() {
-                    // if we can fit the next run in our batch without
-                    // going over our reserved memory, we should do so
+                    // if we can fit the next run in our batch without going over our reserved memory, we should do so
                     Some(_run)
                         // TODO: use HollowBatch's max parts size instead
                         if compactable_runs_max_memory_bytes + cfg.blob_target_size
@@ -252,8 +248,7 @@ impl Compactor {
                     {
                         continue;
                     }
-                    // otherwise, we've either gathered all remaining runs,
-                    // or as many as will fit in memory
+                    // otherwise, we've either gathered all remaining runs, or as many as will fit in memory
                     None | Some(_) => {}
                 }
 
@@ -688,7 +683,6 @@ mod tests {
             Arc::clone(&write.metrics),
             Arc::new(CpuHeavyRuntime::new()),
             req.clone(),
-            usize::MAX,
             write.writer_id.clone(),
         )
         .await
