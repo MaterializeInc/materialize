@@ -228,21 +228,40 @@ impl Compactor {
             let run_reserved_memory_bytes =
                 memory_bound_bytes - in_progress_part_reserved_memory_bytes;
 
+            let ordered_runs = Self::order_runs::<T, D>(&req);
+            let mut ordered_runs = ordered_runs.iter().peekable();
+
             let mut all_parts = vec![];
             let mut all_runs = vec![];
             let mut len = 0;
 
-            let mut ordered_runs = Self::order_runs::<T, D>(&req);
-            // for now: assume each part is always blob_target_size. in the future, we'll
-            // have a smarter way of deciding how many runs we can pull down at once
-            let run_chunk_size = run_reserved_memory_bytes / usize::max(cfg.blob_target_size, 1);
-            for runs in ordered_runs.chunks_mut(run_chunk_size) {
-                // given the runs we actually have in our chunk, we might have extra memory
+            let mut compactable_runs_max_memory_bytes = 0;
+            let mut compactable_runs = vec![];
+            while let Some(run) = ordered_runs.next() {
+                compactable_runs.push(*run);
+                // TODO: use HollowBatch's max parts size instead: https://github.com/MaterializeInc/materialize/pull/14459
+                compactable_runs_max_memory_bytes += cfg.blob_target_size;
+
+                match ordered_runs.peek() {
+                    // if we can fit the next run in our batch without
+                    // going over our reserved memory, we should do so
+                    Some(_run)
+                        // TODO: use HollowBatch's max parts size instead
+                        if compactable_runs_max_memory_bytes + cfg.blob_target_size
+                            <= run_reserved_memory_bytes =>
+                    {
+                        continue;
+                    }
+                    // otherwise, we've either gathered all remaining runs,
+                    // or as many as will fit in memory
+                    None | Some(_) => {}
+                }
+
+                // given the runs we actually have in our batch, we might have extra memory
                 // available. we reserved enough space to always have 1 in-progress part in
                 // flight, but if we have excess, we can use it to increase our write parallelism
-                let actual_run_memory_requirement = runs.len() * cfg.blob_target_size;
                 let extra_outstanding_parts = (run_reserved_memory_bytes
-                    - actual_run_memory_requirement)
+                    - compactable_runs_max_memory_bytes)
                     / cfg.blob_target_size;
 
                 let batch_parts = BatchParts::new(
@@ -260,13 +279,14 @@ impl Compactor {
                     &cfg,
                     &req.shard_id,
                     &req.desc,
-                    runs,
+                    compactable_runs.drain(..).collect(),
                     batch_parts,
                     Arc::clone(&blob),
                     Arc::clone(&metrics),
                 )
                 .await?;
                 assert!((updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0));
+                compactable_runs_max_memory_bytes = 0;
 
                 if updates == 0 {
                     continue;
@@ -363,7 +383,7 @@ impl Compactor {
         cfg: &'a PersistConfig,
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
-        runs: &'a mut [(&'a HollowBatch<T>, &'a [PartialBatchKey])],
+        runs: Vec<(&'a HollowBatch<T>, &'a [PartialBatchKey])>,
         mut batch_parts: BatchParts<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
