@@ -78,8 +78,10 @@ where
             // TODO: determine what interval we want here.
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
 
-            let mut persist_clients = persist_clients.lock().await;
+            // The lock MUST be dropped before we enter the main loop.
             let persist_client = persist_clients
+                .lock()
+                .await
                 .open(storage_metadata.persist_location)
                 .await
                 .expect("error creating persist client");

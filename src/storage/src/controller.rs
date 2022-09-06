@@ -473,6 +473,10 @@ impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalcu
     async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T> {
         let (remap_write, data_write) = state;
 
+        // Update to latest upper.
+        remap_write.fetch_recent_upper().await;
+        data_write.fetch_recent_upper().await;
+
         self.collection_metadata
             .get_resume_upper_from_handles(remap_write, data_write, &self.source_envelope)
             .await
@@ -492,10 +496,6 @@ impl CollectionMetadata {
     where
         T: timely::progress::Timestamp + Lattice + Codec64,
     {
-        // Update to latest upper.
-        remap_write.fetch_recent_upper().await;
-        data_write.fetch_recent_upper().await;
-
         // Calculate the point at which we can resume ingestion computing the greatest
         // antichain that is less or equal to all state and output shard uppers.
         let mut resume_upper: Antichain<T> = Antichain::new();
