@@ -305,7 +305,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
     for tc in tests {
         let res = Client::new()
             .post(url.clone())
-            .json(&json!({"sql": tc.query}))
+            .json(&json!([{"query": tc.query}]))
             .send()?;
         assert_eq!(res.status(), tc.status);
         assert_eq!(res.text()?, tc.body);
