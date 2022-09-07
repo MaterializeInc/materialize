@@ -553,15 +553,15 @@ where
     /// "frequent" compared to PersistConfig::writer_lease_duration
     pub async fn maybe_heartbeat_writer(&mut self) {
         let min_elapsed = self.cfg.writer_lease_duration / 4;
+        let heartbeat_ts = (self.cfg.now)();
         let elapsed_since_last_heartbeat =
-            Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
+            Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            let heartbeat_timestamp = (self.cfg.now)();
             let (_, maintenance) = self
                 .machine
-                .heartbeat_writer(&self.writer_id, heartbeat_timestamp)
+                .heartbeat_writer(&self.writer_id, heartbeat_ts)
                 .await;
-            self.last_heartbeat = heartbeat_timestamp;
+            self.last_heartbeat = heartbeat_ts;
             maintenance.start_performing(&self.machine, &self.gc);
         }
     }

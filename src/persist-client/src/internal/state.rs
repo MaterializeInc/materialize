@@ -42,6 +42,9 @@ pub struct ReaderState<T> {
     pub since: Antichain<T>,
     /// UNIX_EPOCH timestamp (in millis) of this reader's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
+    /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
+    /// after which this reader may be expired
+    pub lease_duration_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -166,6 +169,7 @@ where
         &mut self,
         reader_id: &ReaderId,
         seqno: SeqNo,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, (Upper<T>, ReaderState<T>)> {
         // TODO: Handle if the reader or writer already exist (probably with a
@@ -174,6 +178,8 @@ where
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+            lease_duration_ms: u64::try_from(lease_duration.as_millis())
+                .expect("lease duration as millis should fit within u64"),
         };
         self.readers.insert(reader_id.clone(), read_cap.clone());
         Continue((Upper(self.trace.upper().clone()), read_cap))
@@ -198,6 +204,7 @@ where
         &mut self,
         new_reader_id: &ReaderId,
         seqno: SeqNo,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, ReaderState<T>> {
         // TODO: Handle if the reader already exists (probably with a retry).
@@ -205,6 +212,8 @@ where
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+            lease_duration_ms: u64::try_from(lease_duration.as_millis())
+                .expect("lease duration as millis should fit within u64"),
         };
         self.readers.insert(new_reader_id.clone(), read_cap.clone());
         Continue(read_cap)
@@ -629,18 +638,11 @@ where
         &self,
         now_ms: EpochMillis,
     ) -> (Vec<ReaderId>, Vec<WriterId>) {
-        // TODO: Give lots of extra leeway in this temporary hack version of
-        // automatic expiry.
-        let read_lease_duration = PersistConfig::FAKE_READ_LEASE_DURATION * 15;
-
         let mut readers = Vec::new();
         for (reader, state) in self.collections.readers.iter() {
-            // TODO: We likely want to store the lease duration in state, so the
-            // answer to which readers are considered expired doesn't depend on
-            // the version of the code running.
             let time_since_last_heartbeat_ms =
                 now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
-            if Duration::from_millis(time_since_last_heartbeat_ms) > read_lease_duration {
+            if time_since_last_heartbeat_ms > state.lease_duration_ms {
                 readers.push(reader.clone());
             }
         }
@@ -718,7 +720,9 @@ mod tests {
         let reader = ReaderId::new();
         let seqno = SeqNo::minimum();
         let now = SYSTEM_TIME.clone();
-        let _ = state.collections.register_reader(&reader, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader, seqno, Duration::from_secs(10), now());
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
@@ -762,7 +766,9 @@ mod tests {
 
         // Create a second reader.
         let reader2 = ReaderId::new();
-        let _ = state.collections.register_reader(&reader2, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader2, seqno, Duration::from_secs(10), now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
@@ -795,7 +801,9 @@ mod tests {
 
         // Create a third reader.
         let reader3 = ReaderId::new();
-        let _ = state.collections.register_reader(&reader3, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader3, seqno, Duration::from_secs(10), now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
@@ -929,9 +937,12 @@ mod tests {
 
         let reader = ReaderId::new();
         // Advance the since to 2.
-        let _ = state
-            .collections
-            .register_reader(&reader, SeqNo::minimum(), now());
+        let _ = state.collections.register_reader(
+            &reader,
+            SeqNo::minimum(),
+            Duration::from_secs(10),
+            now(),
+        );
         assert_eq!(
             state.collections.downgrade_since(
                 &reader,
