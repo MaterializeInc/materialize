@@ -181,16 +181,7 @@ impl Action for SqlAction {
             | DropDatabase(_)
             | DropObjects(_)
             | SetVariable(_)
-            | ShowDatabases(_)
-            | ShowObjects(_)
-            | ShowIndexes(_)
-            | ShowColumns(_)
-            | ShowCreateView(_)
-            | ShowCreateSource(_)
-            | ShowCreateTable(_)
-            | ShowCreateSink(_)
-            | ShowCreateIndex(_)
-            | ShowVariable(_) => false,
+            | Show(_) => false,
             _ => true,
         };
 

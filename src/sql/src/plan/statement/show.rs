@@ -19,6 +19,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement};
+use query::QueryContext;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
@@ -32,8 +33,9 @@ use crate::names::{
     self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedSchemaName,
 };
 use crate::parse;
+use crate::plan::scope::Scope;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
-use crate::plan::{Params, Plan, PlanError, SendRowsPlan};
+use crate::plan::{query, HirRelationExpr, Params, Plan, PlanError, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -47,20 +49,20 @@ pub fn describe_show_create_view(
 }
 
 pub fn plan_show_create_view(
-    scx: &mut StatementContext,
+    scx: &StatementContext,
     ShowCreateViewStatement { view_name }: ShowCreateViewStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<SendRowsPlan, PlanError> {
     let view = scx.get_item_by_resolved_name(&view_name)?;
     match view.item_type() {
         CatalogItemType::View => {
             let name = view_name.full_name_str();
             let create_sql = simplify_names(scx.catalog, view.create_sql())?;
-            Ok(Plan::SendRows(SendRowsPlan {
+            Ok(SendRowsPlan {
                 rows: vec![Row::pack_slice(&[
                     Datum::String(&name),
                     Datum::String(&create_sql),
                 ])],
-            }))
+            })
         }
         CatalogItemType::MaterializedView => Err(PlanError::ShowCreateViewOnMaterializedView(
             view_name.full_name_str(),
@@ -84,20 +86,20 @@ pub fn describe_show_create_materialized_view(
 }
 
 pub fn plan_show_create_materialized_view(
-    scx: &mut StatementContext,
+    scx: &StatementContext,
     stmt: ShowCreateMaterializedViewStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<SendRowsPlan, PlanError> {
     let name = stmt.materialized_view_name;
     let mview = scx.get_item_by_resolved_name(&name)?;
     if let CatalogItemType::MaterializedView = mview.item_type() {
         let full_name = name.full_name_str();
         let create_sql = simplify_names(scx.catalog, mview.create_sql())?;
-        Ok(Plan::SendRows(SendRowsPlan {
+        Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&full_name),
                 Datum::String(&create_sql),
             ])],
-        }))
+        })
     } else {
         sql_bail!("{} is not a materialized view", name.full_name_str());
     }
@@ -115,19 +117,19 @@ pub fn describe_show_create_table(
 }
 
 pub fn plan_show_create_table(
-    scx: &mut StatementContext,
+    scx: &StatementContext,
     ShowCreateTableStatement { table_name }: ShowCreateTableStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<SendRowsPlan, PlanError> {
     let table = scx.get_item_by_resolved_name(&table_name)?;
     if let CatalogItemType::Table = table.item_type() {
         let name = table_name.full_name_str();
         let create_sql = simplify_names(scx.catalog, table.create_sql())?;
-        Ok(Plan::SendRows(SendRowsPlan {
+        Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
                 Datum::String(&create_sql),
             ])],
-        }))
+        })
     } else {
         sql_bail!("{} is not a table", table_name.full_name_str());
     }
@@ -147,17 +149,17 @@ pub fn describe_show_create_source(
 pub fn plan_show_create_source(
     scx: &StatementContext,
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<SendRowsPlan, PlanError> {
     let source = scx.get_item_by_resolved_name(&source_name)?;
     if let CatalogItemType::Source = source.item_type() {
         let name = source_name.full_name_str();
         let create_sql = simplify_names(scx.catalog, source.create_sql())?;
-        Ok(Plan::SendRows(SendRowsPlan {
+        Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
                 Datum::String(&create_sql),
             ])],
-        }))
+        })
     } else {
         sql_bail!("{} is not a source", source_name.full_name_str());
     }
@@ -177,17 +179,17 @@ pub fn describe_show_create_sink(
 pub fn plan_show_create_sink(
     scx: &StatementContext,
     ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<SendRowsPlan, PlanError> {
     let sink = scx.get_item_by_resolved_name(&sink_name)?;
     if let CatalogItemType::Sink = sink.item_type() {
         let name = sink_name.full_name_str();
         let create_sql = simplify_names(scx.catalog, sink.create_sql())?;
-        Ok(Plan::SendRows(SendRowsPlan {
+        Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
                 Datum::String(&create_sql),
             ])],
-        }))
+        })
     } else {
         sql_bail!("'{}' is not a sink", sink_name.full_name_str());
     }
@@ -207,17 +209,17 @@ pub fn describe_show_create_index(
 pub fn plan_show_create_index(
     scx: &StatementContext,
     ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<SendRowsPlan, PlanError> {
     let index = scx.get_item_by_resolved_name(&index_name)?;
     if let CatalogItemType::Index = index.item_type() {
         let name = index_name.full_name_str();
         let create_sql = simplify_names(scx.catalog, index.create_sql())?;
-        Ok(Plan::SendRows(SendRowsPlan {
+        Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
                 Datum::String(&create_sql),
             ])],
-        }))
+        })
     } else {
         sql_bail!("'{}' is not an index", index_name.full_name_str());
     }
@@ -237,17 +239,17 @@ pub fn describe_show_create_connection(
 pub fn plan_show_create_connection(
     scx: &StatementContext,
     ShowCreateConnectionStatement { connection_name }: ShowCreateConnectionStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<SendRowsPlan, PlanError> {
     let connection = scx.get_item_by_resolved_name(&connection_name)?;
     if let CatalogItemType::Connection = connection.item_type() {
         let name = connection_name.full_name_str();
         let create_sql = simplify_names(scx.catalog, connection.create_sql())?;
-        Ok(Plan::SendRows(SendRowsPlan {
+        Ok(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
                 Datum::String(&create_sql),
             ])],
-        }))
+        })
     } else {
         sql_bail!("'{}' is not a connection", connection_name.full_name_str());
     }
@@ -770,6 +772,17 @@ impl<'a> ShowSelect<'a> {
     /// Converts this `ShowSelect` into a [`Plan`].
     pub fn plan(self) -> Result<Plan, PlanError> {
         dml::plan_select(self.scx, self.stmt, &Params::empty(), None)
+    }
+
+    /// Converts this `ShowSelect` into a [`(HirRelationExpr, Scope)`].
+    pub fn plan_hir(self, qcx: &QueryContext) -> Result<(HirRelationExpr, Scope), PlanError> {
+        let query::PlannedQuery {
+            expr,
+            desc,
+            finishing: _,
+        } = query::plan_root_query(self.scx, self.stmt.query, qcx.lifetime)?;
+        let scope = Scope::from_source(None, desc.iter_names());
+        Ok((expr, scope))
     }
 }
 
