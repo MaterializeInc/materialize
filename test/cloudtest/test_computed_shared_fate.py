@@ -12,7 +12,10 @@ from textwrap import dedent
 
 from materialize.cloudtest.application import MaterializeApplication
 
-CLUSTER_SIZE = 16
+# We would like to use large clusters here, e.g. SIZE=16, in order to get a pronounced
+# "thundering herd" effect when restarting, but due to https://github.com/MaterializeInc/materialize/issues/14689
+# clusters of sizes 8 and 16 can not be reliably started, let alone restarted.
+CLUSTER_SIZE = 4
 
 
 def populate(mz: MaterializeApplication, seed: int) -> None:
@@ -127,7 +130,7 @@ def test_kill_first_computed(mz: MaterializeApplication) -> None:
 def test_kill_all_but_one_computed(mz: MaterializeApplication) -> None:
     """Kill all computeds except one"""
     populate(mz, 4)
-    for compute_id in list(range(0, 4)) + list(range(5, CLUSTER_SIZE)):
+    for compute_id in list(range(0, 2)) + list(range(3, CLUSTER_SIZE)):
         kill_computed(mz, compute_id)
 
     validate(mz, 4)
