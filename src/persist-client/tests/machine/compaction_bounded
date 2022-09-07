@@ -9,17 +9,17 @@
 
 # Compaction with memory bounds
 
-write-batch output=b0 lower=0 upper=3 target_size=0 parts_size_override=20
-aaaa 0 1
-bbbb 1 1
-cccc 2 1
+write-batch output=b0 lower=0 upper=3 target_size=0 parts_size_override=25
+a 0 1
+b 1 1
+c 2 1
 ----
 parts=3 len=3
 
-write-batch output=b1 lower=3 upper=6 target_size=0 parts_size_override=20
-aaaa 3 1
-bbbb 4 1
-dddd 5 1
+write-batch output=b1 lower=3 upper=6 target_size=0 parts_size_override=25
+a 3 1
+b 4 1
+d 5 1
 ----
 parts=3 len=3
 
@@ -31,38 +31,38 @@ parts=1 len=4
 fetch-batch input=b0_1
 ----
 <part 0>
-aaaa 6 2
-bbbb 6 2
-cccc 6 1
-dddd 6 1
+a 6 2
+b 6 2
+c 6 1
+d 6 1
 <run 0>
 part 0
 
 # compact b0 and b1 with enough memory for both runs, but a target size that can only hold 2 parts/keys in mem at a time.
 # most importantly, we expect there to be a single run, as each input has a single run of ordered parts
-compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=40 memory_bound=10000
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=50 memory_bound=10000
 ----
 parts=3 len=4
 
 fetch-batch input=b0_1
 ----
 <part 0>
-aaaa 6 2
+a 6 2
 <part 1>
-bbbb 6 2
+b 6 2
 <part 2>
-cccc 6 1
-dddd 6 1
+c 6 1
+d 6 1
 <run 0>
 part 0
 part 1
 part 2
 
 # introduce a new batch, that is *gasp* unordered
-write-batch output=b2 lower=6 upper=9 target_size=0 parts_size_override=20
-ffff 7 1
-eeee 6 1
-aaaa 8 1
+write-batch output=b2 lower=6 upper=9 target_size=0 parts_size_override=25
+f 7 1
+e 6 1
+a 8 1
 ----
 parts=3 len=3
 
@@ -74,35 +74,35 @@ parts=1 len=6
 fetch-batch input=b0_1_2
 ----
 <part 0>
-aaaa 8 3
-bbbb 8 2
-cccc 8 1
-dddd 8 1
-eeee 8 1
-ffff 8 1
+a 8 3
+b 8 2
+c 8 1
+d 8 1
+e 8 1
+f 8 1
 <run 0>
 part 0
 
 # compact b0, b1, b2 with enough memory for all runs, but a target size that can only hold 2 keys in mem at a time.
 # because b2 is out of order, we expect its entry for `aaaa` to appear in a separate run
-compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=40 memory_bound=1000
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=1000
 ----
 parts=5 len=7
 
 fetch-batch input=b0_1_2
 ----
 <part 0>
-aaaa 8 2
+a 8 2
 <part 1>
-bbbb 8 2
+b 8 2
 <part 2>
-cccc 8 1
-dddd 8 1
+c 8 1
+d 8 1
 <part 3>
-eeee 8 1
-ffff 8 1
+e 8 1
+f 8 1
 <part 4>
-aaaa 8 1
+a 8 1
 <run 0>
 part 0
 part 1
@@ -135,14 +135,14 @@ parts=2 len=7
 fetch-batch input=b0_1_2
 ----
 <part 0>
-aaaa 8 2
-bbbb 8 2
-cccc 8 1
-dddd 8 1
+a 8 2
+b 8 2
+c 8 1
+d 8 1
 <part 1>
-aaaa 8 1
-eeee 8 1
-ffff 8 1
+a 8 1
+e 8 1
+f 8 1
 <run 0>
 part 0
 <run 1>
@@ -151,36 +151,36 @@ part 1
 # compact b0, b1, b2 with enough memory for only 2 runs at a time, and a target size that can only hold 2 keys in mem at a time.
 # this means b0 and b1 will be physically compacted together, and then b2 compacted in isolation. evaluating b2 should
 # produce a new run, and then because of its out-of-order `aaaa` key, a third run should be created
-set-batch-parts-size input=b0 size=40
+set-batch-parts-size input=b0 size=50
 ----
 ok
 
-set-batch-parts-size input=b1 size=40
+set-batch-parts-size input=b1 size=50
 ----
 ok
 
-set-batch-parts-size input=b2 size=40
+set-batch-parts-size input=b2 size=50
 ----
 ok
 
-compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=40 memory_bound=160
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=200
 ----
 parts=5 len=7
 
 fetch-batch input=b0_1_2
 ----
 <part 0>
-aaaa 8 2
+a 8 2
 <part 1>
-bbbb 8 2
+b 8 2
 <part 2>
-cccc 8 1
-dddd 8 1
+c 8 1
+d 8 1
 <part 3>
-eeee 8 1
-ffff 8 1
+e 8 1
+f 8 1
 <part 4>
-aaaa 8 1
+a 8 1
 <run 0>
 part 0
 part 1

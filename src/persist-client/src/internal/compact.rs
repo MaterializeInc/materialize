@@ -20,7 +20,9 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::indexed::columnar::{ColumnarRecordsVecBuilder, KEY_VAL_DATA_MAX_LEN};
+use mz_persist::indexed::columnar::{
+    ColumnarRecordsBuilder, ColumnarRecordsVecBuilder, KEY_VAL_DATA_MAX_LEN,
+};
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
@@ -496,8 +498,7 @@ impl Compactor {
                 }
             }
 
-            // both T and D are Codec64, ergo 8 bytes a piece
-            let update_size_bytes = k.len() + v.len() + 16;
+            let update_size_bytes = ColumnarRecordsBuilder::columnar_record_size(&k, &v);
 
             // flush the buffer if adding this latest update would cause it to exceed our target size
             if update_size_bytes + update_buffer_size_bytes > cfg.blob_target_size {
