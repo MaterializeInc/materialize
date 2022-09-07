@@ -93,7 +93,8 @@ class MonotonicTopK(Check):
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE monotonic_topk_source
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-monotonic-topk-${testdrive.seed}')
+                  FROM KAFKA CONNECTION kafka_conn
+                  TOPIC 'testdrive-monotonic-topk-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
             """
@@ -159,7 +160,8 @@ class MonotonicTop1(Check):
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE monotonic_top1_source
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-monotonic-top1-${testdrive.seed}')
+                  FROM KAFKA CONNECTION kafka_conn
+                  TOPIC 'testdrive-monotonic-top1-${testdrive.seed}'
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
             """

@@ -54,7 +54,6 @@ pub fn validate_options_for_context<T: AstInfo>(
             GroupIdPrefix => None,
             IsolationLevel => None,
             StatisticsIntervalMs => None,
-            Topic => None,
             TopicMetadataRefreshIntervalMs => None,
             TransactionTimeoutMs => None,
             StartTimestamp => Some(Source),
@@ -93,7 +92,6 @@ generate_extracted_config!(
         Default(String::from("read_committed"))
     ),
     (StatisticsIntervalMs, i32, Default(1_000)),
-    (Topic, String),
     (TopicMetadataRefreshIntervalMs, i32),
     (TransactionTimeoutMs, i32),
     (StartTimestamp, i64),

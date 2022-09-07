@@ -40,10 +40,8 @@ $ kafka-ingest format=avro topic=partition-change key-format=avro key-schema=${k
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE partition_change
-  FROM KAFKA CONNECTION kafka_conn (
-    TOPIC 'testdrive-partition-change-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL MS = 100
-  )
+  FROM KAFKA CONNECTION kafka_conn (TOPIC METADATA REFRESH INTERVAL MS = 100)
+  TOPIC 'testdrive-partition-change-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 

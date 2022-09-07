@@ -33,7 +33,8 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
             > CREATE CONNECTION kafka FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
             > CREATE SOURCE s1
-              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-shared-fate-${{testdrive.seed}}')
+              FROM KAFKA CONNECTION kafka
+              TOPIC 'testdrive-shared-fate-${{testdrive.seed}}'
               FORMAT BYTES
               ENVELOPE NONE;
 

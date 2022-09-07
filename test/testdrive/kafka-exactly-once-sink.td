@@ -151,11 +151,11 @@ $ kafka-create-topic topic=input_cdcv2
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE input_kafka_cdcv2
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_cdcv2-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input_cdcv2-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
 > CREATE SOURCE input_kafka_dbz
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_dbz-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input_dbz-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
 
 > CREATE TABLE input_table (a bigint, b bigint)
@@ -184,61 +184,62 @@ New York,NY,10004
 "bad,place""",CA,92679
 
 > CREATE SOURCE input_csv
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-static-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn
+  TOPIC 'testdrive-static-${testdrive.seed}'
   FORMAT CSV WITH 3 COLUMNS
 
 > CREATE SINK output1 FROM input_kafka_cdcv2
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output1-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output1-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output2 FROM input_kafka_dbz
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output2-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output2-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output3 FROM input_table
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output3-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output3-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output4 FROM input_kafka_cdcv2_mview
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output4-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output4-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output4_view FROM input_kafka_cdcv2_mview_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output4b-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output4b-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 ! CREATE SINK output5 FROM input_kafka_dbz_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output5-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output5-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:input_kafka_dbz_view is a view, which cannot be exported as a sink
 
 > CREATE SINK output5_view FROM input_kafka_dbz_view_mview
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output5b-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output5b-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output6 FROM input_table_mview
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output6-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output6-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 ! CREATE SINK output7 FROM input_values_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output7-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output7-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:input_values_view is a view, which cannot be exported as a sink
 
 > CREATE SINK output8 FROM input_values_mview
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output8-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output8-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output12 FROM input_kafka_dbz_derived_table
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output12-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output12-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output13 FROM input_csv
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output13-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output13-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output14_custom_consistency_topic FROM input_kafka_cdcv2
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output14-view-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'output14-view-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # We need some data -- any data -- to start creating timestamp bindings
@@ -258,11 +259,11 @@ $ kafka-create-topic topic=compaction-test-input
 $ kafka-create-topic topic=compaction-test-output-consistency compaction=true
 
 > CREATE SOURCE compaction_test_input
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-compaction-test-input-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-compaction-test-input-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK compaction_test_sink FROM compaction_test_input
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'compaction-test-output-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn TOPIC 'compaction-test-output-${testdrive.seed}'
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
 

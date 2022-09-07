@@ -15,7 +15,8 @@ $ kafka-create-topic topic=input_proto
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE SOURCE input_csv (first, second)
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_csv-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn
+  TOPIC 'testdrive-input_csv-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS;
 
 $ kafka-ingest format=bytes topic=input_csv
@@ -35,7 +36,8 @@ $ kafka-ingest format=bytes topic=input_csv_partitioned partition=1
 2,3
 
 > CREATE SOURCE input_csv_partitioned (first, second)
-  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1,0], TOPIC 'testdrive-input_csv_partitioned-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1,0])
+  TOPIC 'testdrive-input_csv_partitioned-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS;
 
 > SELECT * FROM input_csv_partitioned
