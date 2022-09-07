@@ -449,7 +449,6 @@ where
                     desc: desc.clone(),
                     parts,
                     len: num_updates,
-                    // WIP: should we compute runs while appending batches?
                     runs: vec![],
                 },
                 &self.writer_id,
