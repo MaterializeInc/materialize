@@ -308,7 +308,7 @@ impl CatalogState {
                     }
                     mz_storage::types::connections::Connection::Postgres { .. } => "postgres",
                     mz_storage::types::connections::Connection::Aws(..) => "aws",
-                    mz_storage::types::connections::Connection::Ssh { .. } => "ssh",
+                    mz_storage::types::connections::Connection::Ssh { .. } => "ssh-tunnel",
                 }),
             ]),
             diff,
