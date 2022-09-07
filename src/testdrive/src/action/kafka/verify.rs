@@ -278,8 +278,8 @@ impl Action for VerifyAction {
                     .expected_messages
                     .iter()
                     .map(|v| {
-                        let mut deserializer =
-                            serde_json::Deserializer::from_str(v.as_ref()).into_iter();
+                        let (headers, v) = split_headers(v, self.header_keys.len())?;
+                        let mut deserializer = serde_json::Deserializer::from_str(v).into_iter();
                         let key = if let Some(key_schema) = &key_schema {
                             let key: serde_json::Value = match deserializer.next() {
                                 None => bail!("key missing in input line"),
@@ -297,7 +297,7 @@ impl Action for VerifyAction {
                             }
                         };
                         Ok(Record {
-                            headers: vec![],
+                            headers,
                             key,
                             value,
                         })
@@ -343,15 +343,27 @@ impl Action for VerifyAction {
                     actual_messages.sort_by_key(|r| format!("{:?}", r.value));
                 }
 
+                if self.debug_print_only {
+                    bail!(
+                        "records in sink:\n{}",
+                        actual_messages
+                            .into_iter()
+                            .map(|a| format!("{:#?}", a))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                }
+
                 let expected = self
                     .expected_messages
                     .iter()
                     .map(|v| {
+                        let (headers, v) = split_headers(v, self.header_keys.len())?;
                         let mut deserializer = json::parse_many(v)?.into_iter();
                         let key = if *has_key { deserializer.next() } else { None };
                         let value = deserializer.next();
                         Ok(Record {
-                            headers: vec![],
+                            headers,
                             key,
                             value,
                         })
@@ -369,6 +381,30 @@ impl Action for VerifyAction {
         }
         Ok(ControlFlow::Continue)
     }
+}
+
+/// Expect and split out `n` whitespace-delimited headers before the main contents of the 'expect' row.
+fn split_headers(input: &str, n_headers: usize) -> anyhow::Result<(Vec<String>, &str)> {
+    let whitespace = Regex::new("\\s+").expect("building known-valid regex");
+    let mut parts = whitespace.splitn(input, n_headers + 1);
+    let mut headers = Vec::with_capacity(n_headers);
+    for _ in 0..n_headers {
+        headers.push(
+            parts
+                .next()
+                .context("expected another header in the input")?
+                .to_string(),
+        )
+    }
+    let rest = parts
+        .next()
+        .context("expected some contents after any message headers")?;
+
+    if parts.next() != None {
+        bail!("more than n+1 elements from a call to splitn(_, n+1)")
+    }
+
+    Ok((headers, rest))
 }
 
 pub fn validate_sink_with_partial_search<A: Debug>(
