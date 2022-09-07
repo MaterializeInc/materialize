@@ -3,6 +3,6 @@
     "launch_script": "true",
     "instance_type": "r6id.32xlarge",
     "ami": "ami-09d56f8956ab235b3",
-    "size_gb": 256,
+    "size_gb": 512,
     "tags": {}
 }
