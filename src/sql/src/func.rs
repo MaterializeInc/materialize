@@ -1780,6 +1780,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, 2100;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, 2101;
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, 2102;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, oid::FUNC_AVG_UINT64_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, oid::FUNC_AVG_UINT32_OID;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, oid::FUNC_AVG_UINT16_OID;
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Float64, 2104;
             params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Float64, 2105;
             params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Interval, 2106;
@@ -2028,6 +2031,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16, Int16) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => Int16, 940;
             params!(Int32, Int32) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => Int32, 941;
             params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => Int64, 947;
+            params!(UInt16, UInt16) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => UInt16, oid::FUNC_MOD_UINT16_OID;
+            params!(UInt32, UInt32) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => UInt32, oid::FUNC_MOD_UINT32_OID;
+            params!(UInt64, UInt64) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => UInt64, oid::FUNC_MOD_UINT64_OID;
         },
         "now" => Scalar {
             params!() => UnmaterializableFunc::CurrentTimestamp, 1299;
@@ -2260,13 +2266,19 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, 2156;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, 2155;
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, 2154;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, oid::FUNC_STDDEV_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, oid::FUNC_STDDEV_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, oid::FUNC_STDDEV_UINT64_OID;
         },
         "stddev_pop" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Float64, 2727;
             params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Float64, 2728;
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, 2726;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, 2725;
-            params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric , 2724;
+            params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, 2724;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, oid::FUNC_STDDEV_POP_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, oid::FUNC_STDDEV_POP_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, oid::FUNC_STDDEV_POP_UINT64_OID;
         },
         "stddev_samp" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Float64, 2715;
@@ -2274,6 +2286,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, 2714;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, 2713;
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, 2712;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, oid::FUNC_STDDEV_SAMP_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, oid::FUNC_STDDEV_SAMP_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, oid::FUNC_STDDEV_SAMP_UINT64_OID;
         },
         "substr" => Scalar {
             params!(String, Int64) => VariadicFunc::Substr, 883;
@@ -2358,6 +2373,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, 2150;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, 2149;
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, 2148;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, oid::FUNC_VARIANCE_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, oid::FUNC_VARIANCE_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, oid::FUNC_VARIANCE_UINT64_OID;
         },
         "var_pop" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Float64, 2721;
@@ -2365,6 +2383,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, 2720;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, 2719;
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, 2718;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, oid::FUNC_VAR_POP_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, oid::FUNC_VAR_POP_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, oid::FUNC_VAR_POP_UINT64_OID;
         },
         "var_samp" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Float64, 2644;
@@ -2372,6 +2393,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, 2643;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, 2642;
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, 2641;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, oid::FUNC_VAR_SAMP_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, oid::FUNC_VAR_SAMP_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, oid::FUNC_VAR_SAMP_UINT64_OID;
         },
         "version" => Scalar {
             params!() => UnmaterializableFunc::Version, 89;
@@ -2412,6 +2436,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => AggregateFunc::MaxInt16, 2117;
             params!(Int32) => AggregateFunc::MaxInt32, 2116;
             params!(Int64) => AggregateFunc::MaxInt64, 2115;
+            params!(UInt16) => AggregateFunc::MaxUInt16, oid::FUNC_MAX_UINT16_OID;
+            params!(UInt32) => AggregateFunc::MaxUInt32, oid::FUNC_MAX_UINT32_OID;
+            params!(UInt64) => AggregateFunc::MaxUInt64, oid::FUNC_MAX_UINT64_OID;
             params!(Float32) => AggregateFunc::MaxFloat32, 2119;
             params!(Float64) => AggregateFunc::MaxFloat64, 2120;
             params!(String) => AggregateFunc::MaxString, 2129;
@@ -2427,6 +2454,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => AggregateFunc::MinInt32, 2133;
             params!(Int32) => AggregateFunc::MinInt32, 2132;
             params!(Int64) => AggregateFunc::MinInt64, 2131;
+            params!(UInt16) => AggregateFunc::MinUInt16, oid::FUNC_MIN_UINT16_OID;
+            params!(UInt32) => AggregateFunc::MinUInt32, oid::FUNC_MIN_UINT32_OID;
+            params!(UInt64) => AggregateFunc::MinUInt64, oid::FUNC_MIN_UINT64_OID;
             params!(Float32) => AggregateFunc::MinFloat32, 2135;
             params!(Float64) => AggregateFunc::MinFloat64, 2136;
             params!(String) => AggregateFunc::MinString, 2145;
@@ -2499,6 +2529,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => AggregateFunc::SumInt16, 2109;
             params!(Int32) => AggregateFunc::SumInt32, 2108;
             params!(Int64) => AggregateFunc::SumInt64, 2107;
+            params!(UInt16) => AggregateFunc::SumUInt16, oid::FUNC_SUM_UINT16_OID;
+            params!(UInt32) => AggregateFunc::SumUInt32, oid::FUNC_SUM_UINT32_OID;
+            params!(UInt64) => AggregateFunc::SumUInt64, oid::FUNC_SUM_UINT64_OID;
             params!(Float32) => AggregateFunc::SumFloat32, 2110;
             params!(Float64) => AggregateFunc::SumFloat64, 2111;
             params!(Numeric) => AggregateFunc::SumNumeric, 2114;
@@ -2958,6 +2991,16 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }), oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
+            params!(UInt16) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }), oid::FUNC_MZ_AVG_PROMOTION_U16_OID;
+            params!(UInt32) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }), oid::FUNC_MZ_AVG_PROMOTION_U32_OID;
         },
         "mz_classify_object_id" => Scalar {
             params!(String) => sql_impl_func(
@@ -3255,6 +3298,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16) => UnaryFunc::BitNotInt16(func::BitNotInt16), 1877;
             params!(Int32) => UnaryFunc::BitNotInt32(func::BitNotInt32), 1883;
             params!(Int64) => UnaryFunc::BitNotInt64(func::BitNotInt64), 1889;
+            params!(UInt16) => UnaryFunc::BitNotUint16(func::BitNotUint16), oid::FUNC_BIT_NOT_UINT16_OID;
+            params!(UInt32) => UnaryFunc::BitNotUint32(func::BitNotUint32), oid::FUNC_BIT_NOT_UINT32_OID;
+            params!(UInt64) => UnaryFunc::BitNotUint64(func::BitNotUint64), oid::FUNC_BIT_NOT_UINT64_OID;
             params!(String, String) => IsRegexpMatch { case_insensitive: false }, 641;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
@@ -3400,6 +3446,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Lt, 94;
             params!(Int32, Int32) => BinaryFunc::Lt, 97;
             params!(Int64, Int64) => BinaryFunc::Lt, 412;
+            params!(UInt16, UInt16) => BinaryFunc::Lt, oid::FUNC_LT_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Lt, oid::FUNC_LT_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Lt, oid::FUNC_LT_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Lt, 622;
             params!(Float64, Float64) => BinaryFunc::Lt, 672;
             params!(Oid, Oid) => BinaryFunc::Lt, 609;
@@ -3423,6 +3472,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Lte, 522;
             params!(Int32, Int32) => BinaryFunc::Lte, 523;
             params!(Int64, Int64) => BinaryFunc::Lte, 414;
+            params!(UInt16, UInt16) => BinaryFunc::Lte, oid::FUNC_LTE_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Lte, oid::FUNC_LTE_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Lte, oid::FUNC_LTE_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Lte, 624;
             params!(Float64, Float64) => BinaryFunc::Lte, 673;
             params!(Oid, Oid) => BinaryFunc::Lte, 611;
@@ -3446,6 +3498,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Gt, 520;
             params!(Int32, Int32) => BinaryFunc::Gt, 521;
             params!(Int64, Int64) => BinaryFunc::Gt, 413;
+            params!(UInt16, UInt16) => BinaryFunc::Gt, oid::FUNC_GT_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Gt, oid::FUNC_GT_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Gt, oid::FUNC_GT_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Gt, 623;
             params!(Float64, Float64) => BinaryFunc::Gt, 674;
             params!(Oid, Oid) => BinaryFunc::Gt, 610;
@@ -3469,6 +3524,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Gte, 524;
             params!(Int32, Int32) => BinaryFunc::Gte, 525;
             params!(Int64, Int64) => BinaryFunc::Gte, 415;
+            params!(UInt16, UInt16) => BinaryFunc::Gte, oid::FUNC_GT_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Gte, oid::FUNC_GT_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Gte, oid::FUNC_GT_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Gte, 625;
             params!(Float64, Float64) => BinaryFunc::Gte, 675;
             params!(Oid, Oid) => BinaryFunc::Gte, 612;
@@ -3495,6 +3553,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Eq, 94;
             params!(Int32, Int32) => BinaryFunc::Eq, 96;
             params!(Int64, Int64) => BinaryFunc::Eq, 410;
+            params!(UInt16, UInt16) => BinaryFunc::Eq, oid::FUNC_EQ_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Eq, oid::FUNC_EQ_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Eq, oid::FUNC_EQ_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Eq, 620;
             params!(Float64, Float64) => BinaryFunc::Eq, 670;
             params!(Oid, Oid) => BinaryFunc::Eq, 607;
@@ -3519,6 +3580,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::NotEq, 519;
             params!(Int32, Int32) => BinaryFunc::NotEq, 518;
             params!(Int64, Int64) => BinaryFunc::NotEq, 411;
+            params!(UInt16, UInt16) => BinaryFunc::NotEq, oid::FUNC_NOT_EQ_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::NotEq, oid::FUNC_NOT_EQ_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::NotEq, oid::FUNC_NOT_EQ_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::NotEq, 621;
             params!(Float64, Float64) => BinaryFunc::NotEq, 671;
             params!(Oid, Oid) => BinaryFunc::NotEq, 608;

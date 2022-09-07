@@ -33,7 +33,7 @@ use crate::internal::state_diff::{
 };
 use crate::internal::trace::Trace;
 use crate::read::ReaderId;
-use crate::{ShardId, WriterId};
+use crate::{PersistConfig, ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
     let uuid_encoded = match encoded.strip_prefix(id_prefix) {
@@ -198,27 +198,14 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             &self.readers,
             &mut field_diffs,
             |k| k.into_proto().encode_to_vec(),
-            |v| {
-                ProtoReaderState {
-                    since: Some(v.since.into_proto()),
-                    seqno: v.seqno.into_proto(),
-                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                }
-                .encode_to_vec()
-            },
+            |v| v.into_proto().encode_to_vec(),
         );
         field_diffs_into_proto(
             ProtoStateField::Writers,
             &self.writers,
             &mut field_diffs,
             |k| k.into_proto().encode_to_vec(),
-            |v| {
-                ProtoWriterState {
-                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                    lease_duration_ms: v.lease_duration_ms,
-                }
-                .encode_to_vec()
-            },
+            |v| v.into_proto().encode_to_vec(),
         );
         field_diffs_into_proto(
             ProtoStateField::Since,
@@ -286,13 +273,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                             diff,
                             &mut state_diff.readers,
                             |k| k.into_rust(),
-                            |v| {
-                                Ok(ReaderState {
-                                    since: v.since.into_rust_if_some("since")?,
-                                    seqno: v.seqno.into_rust()?,
-                                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                                })
-                            },
+                            |v| v.into_rust(),
                         )?
                     }
                     ProtoStateField::Writers => {
@@ -300,12 +281,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                             diff,
                             &mut state_diff.writers,
                             |k| k.into_rust(),
-                            |v| {
-                                Ok(WriterState {
-                                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                                    lease_duration_ms: v.lease_duration_ms,
-                                })
-                            },
+                            |v| v.into_rust(),
                         )?
                     }
                     ProtoStateField::Since => {
@@ -611,14 +587,26 @@ impl<T: Timestamp + Codec64> RustType<ProtoReaderState> for ReaderState<T> {
             seqno: self.seqno.into_proto(),
             since: Some(self.since.into_proto()),
             last_heartbeat_timestamp_ms: self.last_heartbeat_timestamp_ms.into_proto(),
+            lease_duration_ms: self.lease_duration_ms.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoReaderState) -> Result<Self, TryFromProtoError> {
+        let mut lease_duration_ms = proto.lease_duration_ms.into_rust()?;
+        // MIGRATION: If the lease_duration_ms is empty, then the proto field
+        // was missing and we need to fill in a default. This would ideally be
+        // based on the actual value in PersistConfig, but it's only here for a
+        // short time and this is way easier.
+        if lease_duration_ms == 0 {
+            lease_duration_ms =
+                u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis())
+                    .expect("lease duration as millis should fit within u64");
+        }
         Ok(ReaderState {
             seqno: proto.seqno.into_rust()?,
             since: proto.since.into_rust_if_some("ProtoReaderState::since")?,
             last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms.into_rust()?,
+            lease_duration_ms,
         })
     }
 }
@@ -787,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn hollow_batch_migration() {
+    fn hollow_batch_migration_keys() {
         let x = HollowBatch {
             desc: Description::new(
                 Antichain::from_elem(1u64),
@@ -816,5 +804,23 @@ mod tests {
             encoded_size_bytes: 0,
         });
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
+    }
+
+    #[test]
+    fn reader_state_migration_lease_duration() {
+        let x = ReaderState {
+            seqno: SeqNo(1),
+            since: Antichain::from_elem(2u64),
+            last_heartbeat_timestamp_ms: 3,
+            // Old ProtoReaderState had no lease_duration_ms field
+            lease_duration_ms: 0,
+        };
+        let old = x.into_proto();
+        let mut expected = x;
+        // We fill in DEFAULT_READ_LEASE_DURATION for lease_duration_ms when we
+        // migrate from unset.
+        expected.lease_duration_ms =
+            u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis()).unwrap();
+        assert_eq!(<ReaderState<u64>>::from_proto(old).unwrap(), expected);
     }
 }

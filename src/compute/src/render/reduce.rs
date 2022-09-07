@@ -1146,6 +1146,18 @@ where
                         accum: i128::from(i),
                         non_nulls: 1,
                     },
+                    Datum::UInt16(u) => AccumInner::SimpleNumber {
+                        accum: i128::from(u),
+                        non_nulls: 1,
+                    },
+                    Datum::UInt32(u) => AccumInner::SimpleNumber {
+                        accum: i128::from(u),
+                        non_nulls: 1,
+                    },
+                    Datum::UInt64(u) => AccumInner::SimpleNumber {
+                        accum: i128::from(u),
+                        non_nulls: 1,
+                    },
                     Datum::Null => AccumInner::SimpleNumber {
                         accum: 0,
                         non_nulls: 0,
@@ -1276,6 +1288,18 @@ where
                             (AggregateFunc::SumInt64, AccumInner::SimpleNumber { accum, .. }) => {
                                 Datum::from(*accum)
                             }
+                            (
+                                AggregateFunc::SumUInt16,
+                                AccumInner::SimpleNumber { accum, .. },
+                            )
+                            | (
+                                AggregateFunc::SumUInt32,
+                                AccumInner::SimpleNumber { accum, .. },
+                            ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function"))),
+                            (
+                                AggregateFunc::SumUInt64,
+                                AccumInner::SimpleNumber { accum, .. },
+                            ) => Datum::from(u128::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function"))),
                             (
                                 AggregateFunc::SumFloat32,
                                 AccumInner::Float {
@@ -1453,6 +1477,9 @@ pub mod monoids {
             | AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxUInt16
+            | AggregateFunc::MaxUInt32
+            | AggregateFunc::MaxUInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
             | AggregateFunc::MaxBool
@@ -1464,6 +1491,9 @@ pub mod monoids {
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
+            | AggregateFunc::MinUInt16
+            | AggregateFunc::MinUInt32
+            | AggregateFunc::MinUInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
             | AggregateFunc::MinBool
@@ -1474,6 +1504,9 @@ pub mod monoids {
             AggregateFunc::SumInt16
             | AggregateFunc::SumInt32
             | AggregateFunc::SumInt64
+            | AggregateFunc::SumUInt16
+            | AggregateFunc::SumUInt32
+            | AggregateFunc::SumUInt64
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric

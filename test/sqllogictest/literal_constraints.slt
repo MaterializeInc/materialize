@@ -388,16 +388,123 @@ SELECT pk FROM tab0 WHERE (((col4 >= 660.98) AND ((col4 IN (724.71,445.29,441.2,
 1
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/14548
+# Also tests the situation when `constraints_to_residual_sets` has multiple elements in the sets.
 
 statement ok
 CREATE INDEX idx_t1_b ON t1(b)
 
 query I
-SELECT a FROM t1 WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
+SELECT a FROM t1
+WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
 ----
 1
 2
 3
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_b
+| | Lookup values [("l1"); ("l2"); ("l3"); ("l9")]
+| Filter ((#1 < 3) OR (#1 > 0))
+| Project (#1)
+
+EOF
+
+# More tricky tests for `remove_literal_constraints`
+
+query I
+SELECT a FROM t1
+WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l%' OR a > 5)
+----
+1
+2
+3
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l%' OR a > 5)
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_b
+| | Lookup values [("l1"); ("l2"); ("l3"); ("l9")]
+| Filter ((#1 < 3) OR (#1 < 7) OR (#1 > 0)), ("l%" ~~(#0) OR (#1 > 5))
+| Project (#1)
+
+EOF
+
+query IT
+SELECT * FROM t1
+WHERE ((b = 'l1' AND a = 1) OR (a = 2 AND b = 'l2')) AND (b like 'nonono' OR (b like 'l%' AND a < 10))
+----
+1  l1
+2  l2
+
+query T multiline
+EXPLAIN SELECT * FROM t1
+WHERE ((b = 'l1' AND a = 1) OR (a = 2 AND b = 'l2')) AND (b like 'nonono' OR (b like 'l%' AND a < 10))
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_a_b
+| | Lookup values [(1, "l1"); (2, "l2")]
+| Filter ("nonono" ~~(#1) OR ("l%" ~~(#1) AND (#0 < 10)))
+| Project (#0, #1)
+
+EOF
+
+# Even more tricky test for `remove_literal_constraints`: has multiple fields in the IN list and MFP CSE
+
+query I
+SELECT a FROM t1
+WHERE (a % 3 = 0 OR a % 3 = 1) AND (a,b) IN ((1,'l1'), (2,'l2'), (3,'l3'), (9,'l9'))
+----
+1
+3
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE (a % 3 = 0 OR a % 3 = 1) AND (a,b) IN ((1,'l1'), (2,'l2'), (3,'l3'), (9,'l9'))
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_a_b
+| | Lookup values [(1, "l1"); (2, "l2"); (3, "l3"); (9, "l9")]
+| Map (#0 % 3)
+| Filter ((#4 = 0) OR (#4 = 1))
+| Project (#0)
+
+EOF
+
+# Negative test for `remove_literal_constraints` when `constraints_to_residual_sets` has multiple elements in the sets.
+# There is also an impossible constraint to remove by `remove_impossible_or_args`.
+
+query I
+SELECT a FROM t1
+WHERE (
+    (a = 1 AND b like 'nope') OR
+    (a = 2) OR
+    (a = 1 AND a = 2)
+) AND
+(b like 'l%' OR b like 'aaa')
+----
+2
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE (
+    (a = 1 AND b like 'nope') OR
+    (a = 2)
+) AND
+(b like 'l%' OR b like 'aaa')
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_a
+| | Lookup values [(1); (2)]
+| Filter ("aaa" ~~(#1) OR "l%" ~~(#1)), ((#0 = 2) OR ("nope" ~~(#1) AND (#0 = 1)))
+| Project (#0)
+
+EOF
 
 # Impossible predicates (exercise `remove_impossible_or_args`)
 

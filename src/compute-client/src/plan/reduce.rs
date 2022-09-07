@@ -835,6 +835,9 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         AggregateFunc::SumInt16
         | AggregateFunc::SumInt32
         | AggregateFunc::SumInt64
+        | AggregateFunc::SumUInt16
+        | AggregateFunc::SumUInt32
+        | AggregateFunc::SumUInt64
         | AggregateFunc::SumFloat32
         | AggregateFunc::SumFloat64
         | AggregateFunc::SumNumeric
@@ -846,6 +849,9 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MaxInt16
         | AggregateFunc::MaxInt32
         | AggregateFunc::MaxInt64
+        | AggregateFunc::MaxUInt16
+        | AggregateFunc::MaxUInt32
+        | AggregateFunc::MaxUInt64
         | AggregateFunc::MaxFloat32
         | AggregateFunc::MaxFloat64
         | AggregateFunc::MaxBool
@@ -857,6 +863,9 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MinInt16
         | AggregateFunc::MinInt32
         | AggregateFunc::MinInt64
+        | AggregateFunc::MinUInt16
+        | AggregateFunc::MinUInt32
+        | AggregateFunc::MinUInt64
         | AggregateFunc::MinFloat32
         | AggregateFunc::MinFloat64
         | AggregateFunc::MinBool

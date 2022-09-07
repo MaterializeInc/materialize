@@ -3706,6 +3706,9 @@ derive_unary!(
     BitNotInt16,
     BitNotInt32,
     BitNotInt64,
+    BitNotUint16,
+    BitNotUint32,
+    BitNotUint64,
     NegInt16,
     NegInt32,
     NegInt64,
@@ -4006,6 +4009,9 @@ impl Arbitrary for UnaryFunc {
             BitNotInt16::arbitrary().prop_map_into(),
             BitNotInt32::arbitrary().prop_map_into(),
             BitNotInt64::arbitrary().prop_map_into(),
+            BitNotUint16::arbitrary().prop_map_into(),
+            BitNotUint32::arbitrary().prop_map_into(),
+            BitNotUint64::arbitrary().prop_map_into(),
             NegInt16::arbitrary().prop_map_into(),
             NegInt32::arbitrary().prop_map_into(),
             NegInt64::arbitrary().prop_map_into(),
@@ -4316,6 +4322,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::BitNotInt16(_) => BitNotInt16(()),
             UnaryFunc::BitNotInt32(_) => BitNotInt32(()),
             UnaryFunc::BitNotInt64(_) => BitNotInt64(()),
+            UnaryFunc::BitNotUint16(_) => BitNotUint16(()),
+            UnaryFunc::BitNotUint32(_) => BitNotUint32(()),
+            UnaryFunc::BitNotUint64(_) => BitNotUint64(()),
             UnaryFunc::NegInt16(_) => NegInt16(()),
             UnaryFunc::NegInt32(_) => NegInt32(()),
             UnaryFunc::NegInt64(_) => NegInt64(()),
@@ -4623,6 +4632,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 BitNotInt16(()) => Ok(impls::BitNotInt16.into()),
                 BitNotInt32(()) => Ok(impls::BitNotInt32.into()),
                 BitNotInt64(()) => Ok(impls::BitNotInt64.into()),
+                BitNotUint16(()) => Ok(impls::BitNotUint16.into()),
+                BitNotUint32(()) => Ok(impls::BitNotUint32.into()),
+                BitNotUint64(()) => Ok(impls::BitNotUint64.into()),
                 NegInt16(()) => Ok(impls::NegInt16.into()),
                 NegInt32(()) => Ok(impls::NegInt32.into()),
                 NegInt64(()) => Ok(impls::NegInt64.into()),
@@ -6250,6 +6262,38 @@ impl VariadicFunc {
             )),
             VariadicFunc::And => and(datums, temp_storage, exprs),
             VariadicFunc::Or => or(datums, temp_storage, exprs),
+        }
+    }
+
+    pub fn is_associative(&self) -> bool {
+        match self {
+            VariadicFunc::Coalesce
+            | VariadicFunc::Greatest
+            | VariadicFunc::Least
+            | VariadicFunc::Concat
+            | VariadicFunc::And
+            | VariadicFunc::Or => true,
+
+            VariadicFunc::MakeTimestamp
+            | VariadicFunc::PadLeading
+            | VariadicFunc::Substr
+            | VariadicFunc::Replace
+            | VariadicFunc::JsonbBuildArray
+            | VariadicFunc::JsonbBuildObject
+            | VariadicFunc::ArrayCreate { elem_type: _ }
+            | VariadicFunc::ArrayToString { elem_type: _ }
+            | VariadicFunc::ArrayIndex { offset: _ }
+            | VariadicFunc::ListCreate { elem_type: _ }
+            | VariadicFunc::RecordCreate { field_names: _ }
+            | VariadicFunc::ListIndex
+            | VariadicFunc::ListSliceLinear
+            | VariadicFunc::SplitPart
+            | VariadicFunc::RegexpMatch
+            | VariadicFunc::HmacString
+            | VariadicFunc::HmacBytes
+            | VariadicFunc::ErrorIfNull
+            | VariadicFunc::DateBinTimestamp
+            | VariadicFunc::DateBinTimestampTz => false,
         }
     }
 

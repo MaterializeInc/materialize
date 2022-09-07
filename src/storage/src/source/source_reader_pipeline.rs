@@ -915,7 +915,8 @@ where
                     .expect("there can be at most one element for totally ordered times")
                     .map(|c| c.time())
                     .cloned()
-                    .unwrap_or(Timestamp::MAX),
+                    .unwrap_or(Timestamp::MAX)
+                    .into(),
             );
 
             // It can happen that our view of the global source_upper is not yet
@@ -925,7 +926,7 @@ where
             if let Ok(new_ts_upper) = timestamper.reclock_frontier(&global_source_upper) {
                 let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
                 for partition_metrics in source_metrics.partition_metrics.values_mut() {
-                    partition_metrics.closed_ts.set(ts);
+                    partition_metrics.closed_ts.set(ts.into());
                 }
 
                 if !cap_set.is_empty() {

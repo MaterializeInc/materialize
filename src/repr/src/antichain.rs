@@ -17,11 +17,13 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.antichain.rs"));
 impl RustType<ProtoU64Antichain> for Antichain<Timestamp> {
     fn into_proto(&self) -> ProtoU64Antichain {
         ProtoU64Antichain {
-            elements: self.elements().to_vec(),
+            elements: self.elements().iter().map(Into::into).collect(),
         }
     }
 
     fn from_proto(proto: ProtoU64Antichain) -> Result<Self, TryFromProtoError> {
-        Ok(Antichain::from(proto.elements))
+        Ok(Antichain::from_iter(
+            proto.elements.into_iter().map(Timestamp::from),
+        ))
     }
 }

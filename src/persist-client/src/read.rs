@@ -12,11 +12,12 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
+use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
@@ -396,7 +397,7 @@ where
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     pub(crate) since: Antichain<T>,
-    pub(crate) last_heartbeat: Instant,
+    pub(crate) last_heartbeat: EpochMillis,
     pub(crate) explicitly_expired: bool,
 
     pub(crate) leased_seqnos: BTreeMap<SeqNo, usize>,
@@ -431,19 +432,15 @@ where
         // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
         let outstanding_seqno = self.leased_seqnos.keys().next().cloned();
 
+        let heartbeat_ts = (self.cfg.now)();
         let (_seqno, current_reader_since, maintenance) = self
             .machine
-            .downgrade_since(
-                &self.reader_id,
-                outstanding_seqno,
-                new_since,
-                (self.cfg.now)(),
-            )
+            .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
             .await;
         self.since = current_reader_since.0;
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
-        self.last_heartbeat = Instant::now();
+        self.last_heartbeat = heartbeat_ts;
         maintenance.start_performing(&self.machine, &self.gc);
     }
 
@@ -605,7 +602,10 @@ where
     pub async fn clone(&self) -> Self {
         let new_reader_id = ReaderId::new();
         let mut machine = self.machine.clone();
-        let read_cap = machine.clone_reader(&new_reader_id, (self.cfg.now)()).await;
+        let heartbeat_ts = (self.cfg.now)();
+        let read_cap = machine
+            .clone_reader(&new_reader_id, self.cfg.reader_lease_duration, heartbeat_ts)
+            .await;
         let new_reader = ReadHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
@@ -614,7 +614,7 @@ where
             gc: self.gc.clone(),
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
-            last_heartbeat: Instant::now(),
+            last_heartbeat: heartbeat_ts,
             explicitly_expired: false,
             leased_seqnos: BTreeMap::new(),
         };
@@ -634,8 +634,9 @@ where
         // NB: min_elapsed is intentionally smaller than the one in
         // maybe_heartbeat_reader (this is the preferential treatment mentioned
         // above).
-        let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 4;
-        let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
+        let min_elapsed = self.cfg.reader_lease_duration / 4;
+        let elapsed_since_last_heartbeat =
+            Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
             self.downgrade_since(&new_since).await;
         }
@@ -648,14 +649,16 @@ where
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
     async fn maybe_heartbeat_reader(&mut self) {
-        let min_elapsed = PersistConfig::FAKE_READ_LEASE_DURATION / 2;
-        let elapsed_since_last_heartbeat = self.last_heartbeat.elapsed();
+        let min_elapsed = self.cfg.reader_lease_duration / 2;
+        let heartbeat_ts = (self.cfg.now)();
+        let elapsed_since_last_heartbeat =
+            Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
             let (_, maintenance) = self
                 .machine
-                .heartbeat_reader(&self.reader_id, (self.cfg.now)())
+                .heartbeat_reader(&self.reader_id, heartbeat_ts)
                 .await;
-            self.last_heartbeat = Instant::now();
+            self.last_heartbeat = heartbeat_ts;
             maintenance.start_performing(&self.machine, &self.gc);
         }
     }
