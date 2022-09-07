@@ -10,6 +10,7 @@
 //! Integration tests for Materialize server.
 
 use bytes::Buf;
+use serde::Serialize;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
@@ -307,6 +308,124 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             .post(url.clone())
             .json(&json!([{"query": tc.query}]))
             .send()?;
+        assert_eq!(res.status(), tc.status);
+        assert_eq!(res.text()?, tc.body);
+    }
+
+    // Parameter-based queries
+
+    struct TestCaseParams {
+        requests: Vec<(&'static str, Vec<&'static str>)>,
+        status: StatusCode,
+        body: &'static str,
+    }
+
+    let param_test_cases = vec![
+        // Parameterized queries work
+        TestCaseParams {
+            requests: vec![("select $1+$2::int as col", vec!["1", "2"])],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
+        },
+        // Parameters can be present and empty
+        TestCaseParams {
+            requests: vec![("select 3 as col", vec![])],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
+        },
+        // Multiple statements
+        TestCaseParams {
+            requests: vec![
+                ("select 1 as col", vec![]),
+                ("select $1+$2::int as col", vec!["1", "2"]),
+            ],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"rows":[[3]],"col_names":["col"]}]}"#,
+        },
+        TestCaseParams {
+            requests: vec![
+                ("select $1+$2::int as col", vec!["1", "2"]),
+                ("select 1 as col", vec![]),
+            ],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]},{"rows":[[1]],"col_names":["col"]}]}"#,
+        },
+        TestCaseParams {
+            requests: vec![
+                ("select $1+$2::int as col", vec!["1", "2"]),
+                ("select $1*$2::int as col", vec!["2", "3"]),
+            ],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]},{"rows":[[6]],"col_names":["col"]}]}"#,
+        },
+        // Quotes escaped
+        TestCaseParams {
+            requests: vec![("select length($1), length($2)", vec!["abc", "'abc'"])],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[3,5]],"col_names":["length","length"]}]}"#,
+        },
+        // All parameters values treated as strings
+        TestCaseParams {
+            requests: vec![(
+                "select length($1), length($2)",
+                vec!["sum(a)", "SELECT * FROM t;"],
+            )],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[6,16]],"col_names":["length","length"]}]}"#,
+        },
+        // Too many parameters
+        TestCaseParams {
+            requests: vec![("select $1 as col", vec!["1", "2"])],
+            status: StatusCode::BAD_REQUEST,
+            body: r#"request supplied 2 parameters, but SELECT $1 AS col requires 1"#,
+        },
+        // Too few parameters
+        TestCaseParams {
+            requests: vec![("select $1+$2::int as col", vec!["1"])],
+            status: StatusCode::BAD_REQUEST,
+            body: r#"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2"#,
+        },
+        // NaN
+        TestCaseParams {
+            requests: vec![("select $1::decimal+2 as col", vec!["nan"])],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[["NaN"]],"col_names":["col"]}]}"#,
+        },
+        // Null string value parameters
+        TestCaseParams {
+            requests: vec![("select $1+$2::int as col", vec!["1", "null"])],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[null]],"col_names":["col"]}]}"#,
+        },
+    ];
+
+    #[derive(Serialize, Debug)]
+    pub struct SqlRequestParam {
+        value: String,
+    }
+
+    #[derive(Serialize, Debug)]
+    pub struct SqlRequest {
+        query: String,
+        params: Option<Vec<SqlRequestParam>>,
+    }
+
+    for tc in param_test_cases {
+        let mut requests = vec![];
+        for (query, params) in tc.requests {
+            requests.push(SqlRequest {
+                query: query.to_string(),
+                params: Some(
+                    params
+                        .into_iter()
+                        .map(|p| SqlRequestParam {
+                            value: p.to_string(),
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+            });
+        }
+        let res = Client::new().post(url.clone()).json(&requests).send()?;
         assert_eq!(res.status(), tc.status);
         assert_eq!(res.text()?, tc.body);
     }

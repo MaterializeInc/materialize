@@ -411,26 +411,27 @@ impl SessionClient {
         let param_types = &prep_stmt.desc().param_types;
         if param_types.len() != raw_params.len() {
             let message = format!(
-                "bind message supplies {actual} parameters, \
+                "request supplied {actual} parameters, \
                          but {statement} requires {expected}",
                 statement = (&stmt).to_ast_string(),
                 actual = raw_params.len(),
                 expected = param_types.len()
             );
-
             return Err(SimpleResult::err(message));
         }
 
-        let param_formats = vec![mz_pgrepr::Format::Text; param_types.len()];
-
         let buf = RowArena::new();
         let mut params = vec![];
-        for (raw_param, mz_typ, format) in izip!(raw_params.clone(), param_types, param_formats) {
+        for (raw_param, mz_typ) in izip!(raw_params.clone(), param_types) {
             let pg_typ = mz_pgrepr::Type::from(mz_typ);
             let datum = if raw_param.to_uppercase() == "NULL" {
                 Datum::Null
             } else {
-                match mz_pgrepr::Value::decode(format, &pg_typ, &raw_param.as_bytes()) {
+                match mz_pgrepr::Value::decode(
+                    mz_pgrepr::Format::Text,
+                    &pg_typ,
+                    &raw_param.as_bytes(),
+                ) {
                     Ok(param) => param.into_datum(&buf, &pg_typ),
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
@@ -610,9 +611,8 @@ impl SessionClient {
                 )));
             }
 
-            self.start_transaction(Some(num_stmts)).await?;
-
             for stmt in stmts {
+                self.start_transaction(Some(num_stmts)).await?;
                 let res = match self.simple_execute_inner(stmt, raw_params.clone()).await {
                     Ok(res) => {
                         assert!(!matches!(res, SimpleResult::Err { .. }));
