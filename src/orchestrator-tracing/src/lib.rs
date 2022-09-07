@@ -81,6 +81,11 @@ pub struct TracingCliArgs {
         default_value = "info"
     )]
     pub log_filter: SerializableTargets,
+    /// Skip forwarding `--log-filter` to other services. This can be useful
+    /// when debugging locally. Currently this only applies to the
+    /// stderr log filter.
+    #[clap(long, env = "DONT_FORWARD_LOG_FILTER")]
+    pub dont_forward_log_filter: bool,
     /// An optional prefix for each stderr log line.
     #[clap(long, env = "LOG_INCLUDE_SERVICE_NAME")]
     pub log_prefix: Option<String>,
@@ -285,6 +290,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             let mut args = (service_config.args)(assigned);
             let TracingCliArgs {
                 log_filter,
+                dont_forward_log_filter,
                 log_prefix,
                 opentelemetry_endpoint,
                 opentelemetry_header,
@@ -298,7 +304,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 #[cfg(feature = "tokio-console")]
                 tokio_console_retention,
             } = &self.tracing_args;
-            args.push(format!("--log-filter={log_filter}"));
+
+            if !dont_forward_log_filter {
+                args.push(format!("--log-filter={log_filter}"));
+            }
             if log_prefix.is_some() {
                 args.push(format!("--log-prefix={}-{}", self.namespace, id));
             }
