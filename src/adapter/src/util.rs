@@ -86,13 +86,8 @@ impl<T: Transmittable> ClientTransmitter<T> {
     /// Sets `self` so that the next call to [`Self::send`] will [`soft_assert`]
     /// that, if `Ok`, the value is one of `allowed`, as determined by
     /// [`Transmittable::to_allowed`].
-    ///
-    /// This function ignores input where `allowed.is_empty()`, which would
-    /// error on sending any value.
     pub fn set_allowed(&mut self, allowed: Vec<T::Allowed>) {
-        if !allowed.is_empty() {
-            self.allowed = Some(allowed);
-        }
+        self.allowed = Some(allowed);
     }
 }
 

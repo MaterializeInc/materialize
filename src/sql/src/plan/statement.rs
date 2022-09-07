@@ -340,7 +340,12 @@ pub fn plan(
     };
 
     if let Ok(plan) = &plan {
-        mz_ore::soft_assert!(permitted_plans.contains(&PlanKind::from(plan)));
+        mz_ore::soft_assert!(
+            permitted_plans.contains(&PlanKind::from(plan)),
+            "plan {:?}, permitted plans {:?}",
+            plan,
+            permitted_plans
+        );
     }
 
     plan

@@ -202,7 +202,7 @@ impl Plan {
             StatementKind::Raise => vec![PlanKind::Raise],
             StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
-            StatementKind::Select => vec![PlanKind::Peek, PlanKind::SendDiffs],
+            StatementKind::Select => vec![PlanKind::Peek],
             StatementKind::SetTransaction => vec![],
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![

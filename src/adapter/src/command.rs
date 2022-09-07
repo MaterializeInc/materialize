@@ -670,12 +670,11 @@ impl ExecuteResponse {
             Explain | Peek | SendRows | ShowAllVariables | ShowVariable => {
                 vec![CopyTo, SendingRows]
             }
-            Execute => vec![],
+            Execute | ReadThenWrite | SendDiffs => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
             Insert => vec![Inserted, SendingRows],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raise],
-            ReadThenWrite | SendDiffs => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
             Tail => vec![Tailing, CopyTo],
             StartTransaction => vec![StartedTransaction],
