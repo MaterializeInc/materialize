@@ -27,8 +27,8 @@
             mz_worker_materialization_delays AS delays
         WHERE
             views.name = 'mv' AND
-            views.id = mats.global_id AND
-            mats.global_id = delays.global_id)
+            views.id = mats.object_id AND
+            mats.object_id = delays.object_id)
 true
 
 > SELECT time > 0
@@ -38,20 +38,20 @@ true
     mz_materialization_source_frontiers AS sf
   WHERE
     views.name = 'mv' AND
-    views.id = mats.global_id AND
-    mats.global_id = sf.global_id
+    views.id = mats.object_id AND
+    mats.object_id = sf.object_id
 true
 
 > CREATE VIEW vv AS SELECT * FROM t
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.global_id, delays.source
+  FROM (SELECT DISTINCT delays.object_id, delays.source
         FROM
             mz_worker_materialization_delays AS delays)
 1
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.global_id, sf.source
+  FROM (SELECT DISTINCT sf.object_id, sf.source
         FROM
             mz_worker_materialization_source_frontiers AS sf)
 1
@@ -59,13 +59,13 @@ true
 > CREATE DEFAULT INDEX ON vv
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.global_id, delays.source
+  FROM (SELECT DISTINCT delays.object_id, delays.source
         FROM
             mz_worker_materialization_delays AS delays)
 2
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.global_id, sf.source
+  FROM (SELECT DISTINCT sf.object_id, sf.source
         FROM
             mz_worker_materialization_source_frontiers AS sf)
 2
@@ -80,8 +80,8 @@ true
         WHERE
             views.name = 'vv' AND
             views.id = indexes.on_id AND
-            indexes.id = mats.global_id AND
-            mats.global_id = delays.global_id)
+            indexes.id = mats.object_id AND
+            mats.object_id = delays.object_id)
 true
 
 > SELECT time > 0
@@ -93,20 +93,20 @@ true
   WHERE
     views.name = 'vv' AND
     views.id = indexes.on_id AND
-    indexes.id = mats.global_id AND
-    mats.global_id = sf.global_id
+    indexes.id = mats.object_id AND
+    mats.object_id = sf.object_id
 true
 
 > DROP INDEX vv_primary_idx
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.global_id, delays.source
+  FROM (SELECT DISTINCT delays.object_id, delays.source
         FROM
             mz_worker_materialization_delays AS delays)
 1
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.global_id, sf.source
+  FROM (SELECT DISTINCT sf.object_id, sf.source
         FROM
             mz_worker_materialization_source_frontiers AS sf)
 1
@@ -114,13 +114,13 @@ true
 > DROP MATERIALIZED VIEW mv
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.global_id, delays.source
+  FROM (SELECT DISTINCT delays.object_id, delays.source
         FROM
             mz_worker_materialization_delays AS delays)
 0
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.global_id, sf.source
+  FROM (SELECT DISTINCT sf.object_id, sf.source
         FROM
             mz_worker_materialization_source_frontiers AS sf)
 0

@@ -109,7 +109,7 @@ async fn get_topic(
     topic_field: &str,
     state: &mut State,
 ) -> Result<String, anyhow::Error> {
-    let query = format!("SELECT {} FROM mz_catalog_names JOIN mz_kafka_sinks ON global_id = sink_id WHERE name = $1", topic_field);
+    let query = format!("SELECT {} FROM mz_catalog_names JOIN mz_kafka_sinks ON object_id = sink_id WHERE name = $1", topic_field);
     let result = state
         .pgclient
         .query_one(query.as_str(), &[&sink])

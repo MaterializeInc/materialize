@@ -1021,7 +1021,7 @@ pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_view_keys",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("global_id", ScalarType::String.nullable(false))
+        .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("column", ScalarType::Int64.nullable(false))
         .with_column("key_group", ScalarType::Int64.nullable(false)),
 });
@@ -1361,7 +1361,7 @@ pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
     name: "mz_catalog_names",
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_catalog_names AS SELECT
-    o.id AS global_id,
+    o.id AS object_id,
     coalesce(d.name || '.', '') || s.name || '.' || o.name AS name
 FROM mz_catalog.mz_objects o
 JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
@@ -1436,18 +1436,18 @@ pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_materialization_frontiers",
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_materialization_frontiers AS SELECT
-    global_id, pg_catalog.min(time) AS time
+    object_id, pg_catalog.min(time) AS time
 FROM mz_catalog.mz_worker_materialization_frontiers
-GROUP BY global_id",
+GROUP BY object_id",
 };
 
 pub const MZ_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_materialization_source_frontiers",
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_materialization_source_frontiers AS SELECT
-    global_id, source, pg_catalog.min(time) AS time
+    object_id, source, pg_catalog.min(time) AS time
 FROM mz_catalog.mz_worker_materialization_source_frontiers
-GROUP BY global_id, source",
+GROUP BY object_id, source",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {

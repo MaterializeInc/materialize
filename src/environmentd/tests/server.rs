@@ -108,7 +108,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     assert_eq!(
         client
             .query(
-                "SELECT global_id FROM mz_catalog_names WHERE global_id LIKE 'u%' ORDER BY 1",
+                "SELECT object_id FROM mz_catalog_names WHERE object_id LIKE 'u%' ORDER BY 1",
                 &[]
             )?
             .into_iter()
