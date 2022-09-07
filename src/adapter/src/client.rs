@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use itertools::izip;
-use mz_sql::ast::display::AstDisplay;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
@@ -21,11 +21,12 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{Datum, GlobalId, Row, RowArena, ScalarType};
+use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement};
 
 use crate::catalog::SYSTEM_USER;
 use crate::command::{
-    Canceled, Command, ExecuteResponse, Response, SimpleExecuteResponse, SimpleResult,
+    Canceled, Command, ExecuteResponse, Response, SimpleResult, SqlHttpExecuteResponse,
     StartupResponse,
 };
 use crate::coord::peek::PeekResponseUnary;
@@ -103,13 +104,19 @@ impl Client {
         })
     }
 
-    /// Executes SQL statements, as if by [`SessionClient::simple_execute`], as
-    /// a system user.
-    pub async fn system_execute(&self, stmts: &str) -> Result<SimpleExecuteResponse, AdapterError> {
+    /// Executes SQL statements, as if by
+    /// [`SessionClient::execute_sql_http_request`], as a system user.
+    pub async fn system_execute(
+        &self,
+        stmts: &str,
+    ) -> Result<SqlHttpExecuteResponse, AdapterError> {
         let conn_client = self.new_conn()?;
         let session = Session::new(conn_client.conn_id(), SYSTEM_USER.into());
         let (mut session_client, _) = conn_client.startup(session, false).await?;
-        session_client.simple_execute(vec![(stmts, vec![])]).await
+        let req = HttpSqlRequest::Simple {
+            query: stmts.to_string(),
+        };
+        session_client.execute_sql_http_request(req).await
     }
 
     /// Like [`Client::system_execute`], but for cases when `stmt` is known to
@@ -218,6 +225,28 @@ impl Drop for ConnClient {
     fn drop(&mut self) {
         self.inner.id_alloc.free(self.conn_id);
     }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ExtendedRequest {
+    #[serde(alias = "sql")]
+    /// 0 or 1 queries
+    pub query: String,
+    /// Optional parameters for the query
+    pub params: Option<Vec<Option<String>>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(untagged)]
+pub enum HttpSqlRequest {
+    /// 0 or more queries delimited by semicolons in the same strings. Do not
+    /// support parameters.
+    Simple {
+        #[serde(alias = "sql")]
+        query: String,
+    },
+    /// 0 or more [`ExtendedRequest`]s.
+    Extended { queries: Vec<ExtendedRequest> },
 }
 
 /// A coordinator client that is bound to a connection.
@@ -387,24 +416,23 @@ impl SessionClient {
         .await
     }
 
-    async fn simple_execute_inner(
+    async fn execute_stmt(
         &mut self,
         stmt: Statement<Raw>,
-        raw_params: Vec<&str>,
-    ) -> Result<SimpleResult, SimpleResult> {
+        raw_params: Vec<Option<String>>,
+    ) -> SimpleResult {
         const EMPTY_PORTAL: &str = "";
-
         if let Err(e) = self
             .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
             .await
         {
-            return Err(SimpleResult::err(e));
+            return SimpleResult::err(e);
         }
 
         let prep_stmt = match self.get_prepared_statement(&EMPTY_PORTAL).await {
             Ok(stmt) => stmt,
             Err(err) => {
-                return Err(SimpleResult::err(err));
+                return SimpleResult::err(err);
             }
         };
 
@@ -417,25 +445,26 @@ impl SessionClient {
                 actual = raw_params.len(),
                 expected = param_types.len()
             );
-            return Err(SimpleResult::err(message));
+            return SimpleResult::err(message);
         }
 
         let buf = RowArena::new();
         let mut params = vec![];
-        for (raw_param, mz_typ) in izip!(raw_params.clone(), param_types) {
+        for (raw_param, mz_typ) in izip!(raw_params, param_types) {
             let pg_typ = mz_pgrepr::Type::from(mz_typ);
-            let datum = if raw_param.to_uppercase() == "NULL" {
-                Datum::Null
-            } else {
-                match mz_pgrepr::Value::decode(
-                    mz_pgrepr::Format::Text,
-                    &pg_typ,
-                    &raw_param.as_bytes(),
-                ) {
-                    Ok(param) => param.into_datum(&buf, &pg_typ),
-                    Err(err) => {
-                        let msg = format!("unable to decode parameter: {}", err);
-                        return Err(SimpleResult::err(msg));
+            let datum = match raw_param {
+                None => Datum::Null,
+                Some(raw_param) => {
+                    match mz_pgrepr::Value::decode(
+                        mz_pgrepr::Format::Text,
+                        &pg_typ,
+                        &raw_param.as_bytes(),
+                    ) {
+                        Ok(param) => param.into_datum(&buf, &pg_typ),
+                        Err(err) => {
+                            let msg = format!("unable to decode parameter: {}", err);
+                            return SimpleResult::err(msg);
+                        }
                     }
                 }
             };
@@ -463,7 +492,7 @@ impl SessionClient {
             result_formats,
             revision,
         ) {
-            return Err(SimpleResult::err(err.to_string()));
+            return SimpleResult::err(err.to_string());
         }
 
         let desc = self
@@ -476,13 +505,13 @@ impl SessionClient {
         let res = match self.execute(EMPTY_PORTAL.into()).await {
             Ok(res) => res,
             Err(e) => {
-                return Err(SimpleResult::err(e));
+                return SimpleResult::err(e);
             }
         };
 
         match res {
             ExecuteResponse::Canceled => {
-                Err(SimpleResult::err("statement canceled due to user request"))
+                SimpleResult::err("statement canceled due to user request")
             }
             res @ (ExecuteResponse::CreatedConnection { existed: _ }
             | ExecuteResponse::CreatedDatabase { existed: _ }
@@ -529,7 +558,7 @@ impl SessionClient {
             | ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredSystemConfiguraion
             | ExecuteResponse::Deallocate { all: _ }
-            | ExecuteResponse::Prepare) => Ok(SimpleResult::ok(res)),
+            | ExecuteResponse::Prepare) => SimpleResult::ok(res),
             ExecuteResponse::SendingRows {
                 future: rows,
                 span: _,
@@ -537,10 +566,10 @@ impl SessionClient {
                 let rows = match rows.await {
                     PeekResponseUnary::Rows(rows) => rows,
                     PeekResponseUnary::Error(e) => {
-                        return Err(SimpleResult::err(e.to_string()));
+                        return SimpleResult::err(e);
                     }
                     PeekResponseUnary::Canceled => {
-                        return Err(SimpleResult::err("statement canceled due to user request"));
+                        return SimpleResult::err("statement canceled due to user request");
                     }
                 };
                 let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
@@ -553,10 +582,10 @@ impl SessionClient {
                     let datums = datum_vec.borrow_with(&row);
                     sql_rows.push(datums.iter().map(From::from).collect());
                 }
-                Ok(SimpleResult::Rows {
+                SimpleResult::Rows {
                     rows: sql_rows,
                     col_names,
-                })
+                }
             }
             ExecuteResponse::Fetch { .. }
             | ExecuteResponse::SetVariable { .. }
@@ -572,68 +601,74 @@ impl SessionClient {
                 // glance, though, ignoring the execute response in all of
                 // the above situations seems safe enough, and it's a more
                 // target allowlist than the code that was here before.
-                Err(SimpleResult::err(
-                    "executing statements of this type is unsupported via this API",
-                ))
+                SimpleResult::err("executing statements of this type is unsupported via this API")
             }
         }
     }
 
-    /// Executes SQL statements using a simple protocol that does not involve
-    /// portals.
+    /// Executes an [`HttpSqlRequest`].
     ///
-    /// The standard flow for executing a SQL statement requires parsing the
-    /// statement, binding it into a portal, and then executing that portal.
-    /// This function is a wrapper around that complexity with a simpler
-    /// interface. The provided `stmts` are executed directly, and their results
+    /// The provided `stmts` are executed directly, and their results
     /// are returned as a vector of rows, where each row is a vector of JSON
     /// objects.
-    ///
-    /// n.b. To handle committing statements, this process requires breaking
-    /// after generating a `SimpleResult::err`.
-    pub async fn simple_execute(
+    pub async fn execute_sql_http_request(
         &mut self,
-        requests: Vec<(&str, Vec<&str>)>,
-    ) -> Result<SimpleExecuteResponse, AdapterError> {
+        request: HttpSqlRequest,
+    ) -> Result<SqlHttpExecuteResponse, AdapterError> {
         let mut results = vec![];
 
-        for (stmts, raw_params) in requests {
-            if matches!(self.session().transaction(), TransactionStatus::Failed(_)) {
-                break;
-            }
+        match request {
+            HttpSqlRequest::Simple { query } => {
+                let stmts = mz_sql::parse::parse(&query)
+                    .map_err(|e| AdapterError::Unstructured(e.into()))?;
+                let num_stmts = stmts.len();
 
-            let stmts =
-                mz_sql::parse::parse(&stmts).map_err(|e| AdapterError::Unstructured(e.into()))?;
-            let num_stmts = stmts.len();
-            if num_stmts > 1 && !raw_params.is_empty() {
-                return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                    "queries with parameters must contain exactly one statement"
-                )));
-            }
-
-            for stmt in stmts {
-                self.start_transaction(Some(num_stmts)).await?;
-                let res = match self.simple_execute_inner(stmt, raw_params.clone()).await {
-                    Ok(res) => {
-                        assert!(!matches!(res, SimpleResult::Err { .. }));
-                        res
+                for stmt in stmts {
+                    if matches!(self.session().transaction(), TransactionStatus::Failed(_)) {
+                        break;
                     }
-                    Err(res) => {
-                        assert!(matches!(res, SimpleResult::Err { .. }));
+                    // Mirror the behavior of the PostgreSQL simple query protocol.
+                    // See the pgwire::protocol::StateMachine::query method for details.
+                    self.start_transaction(Some(num_stmts)).await?;
+                    let res = self.execute_stmt(stmt, vec![]).await;
+                    if matches!(res, SimpleResult::Err { .. }) {
                         self.fail_transaction();
-                        res
                     }
-                };
-                results.push(res);
+                    results.push(res);
+                }
+            }
+            HttpSqlRequest::Extended { queries } => {
+                for ExtendedRequest { query, params } in queries {
+                    let mut stmts = mz_sql::parse::parse(&query)
+                        .map_err(|e| AdapterError::Unstructured(e.into()))?;
+                    if stmts.len() > 1 {
+                        results.push(SimpleResult::err(
+                            "each query can contain at most 1 statement",
+                        ));
+                        continue;
+                    }
+                    match stmts.pop() {
+                        Some(stmt) => {
+                            // Mirror the behavior of the PostgreSQL simple query protocol.
+                            // See the pgwire::protocol::StateMachine::query method for details.
+                            self.start_transaction(Some(1)).await?;
+                            results.push(self.execute_stmt(stmt, params.unwrap_or_default()).await);
+                        }
+                        None => {
+                            if !params.unwrap_or_default().is_empty() {
+                                return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                                    "cannot provide parameters to an empty query"
+                                )));
+                            }
+                        }
+                    }
+                }
             }
         }
-
-        // If not in an uncommited explicit transaction, commit.
         if self.session().transaction().is_implicit() {
             self.end_transaction(EndTransactionAction::Commit).await?;
         }
-
-        Ok(SimpleExecuteResponse { results })
+        Ok(SqlHttpExecuteResponse { results })
     }
 
     /// Returns a mutable reference to the session bound to this client.

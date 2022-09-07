@@ -594,9 +594,9 @@ impl ExecuteResponse {
     }
 }
 
-/// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).
+/// The response to [`crate::SessionClient::execute_sql_http_request`].
 #[derive(Debug, Serialize)]
-pub struct SimpleExecuteResponse {
+pub struct SqlHttpExecuteResponse {
     pub results: Vec<SimpleResult>,
 }
 
