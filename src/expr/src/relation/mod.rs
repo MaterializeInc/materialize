@@ -757,13 +757,18 @@ impl MirRelationExpr {
                                         {
                                             if first_id == second_id {
                                                 result.extend(
-                                                    inputs[0].typ().keys.drain(..).filter(|key| {
-                                                        key.iter().all(|c| {
-                                                            outputs.get(*c) == Some(c)
-                                                                && base_projection.get(*c)
-                                                                    == Some(c)
+                                                    input_keys
+                                                        .next()
+                                                        .unwrap()
+                                                        .iter()
+                                                        .filter(|key| {
+                                                            key.iter().all(|c| {
+                                                                outputs.get(*c) == Some(c)
+                                                                    && base_projection.get(*c)
+                                                                        == Some(c)
+                                                            })
                                                         })
-                                                    }),
+                                                        .cloned(),
                                                 );
                                             }
                                         }
