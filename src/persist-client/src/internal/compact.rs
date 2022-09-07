@@ -389,10 +389,13 @@ impl Compactor {
     /// to prioritize compacting runs from different batches, rather than runs from within
     /// a single batch.
     ///
-    /// ex.   inputs                                        output
+    /// ex.
+    /// ```text
+    ///        inputs                                        output
     ///     b0 runs=[A, B]
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
+    /// ```
     fn order_runs<T, D>(req: &CompactReq<T>) -> Vec<(&Description<T>, &[HollowBatchPart])>
     where
         T: Timestamp + Lattice + Codec64,
@@ -671,9 +674,10 @@ impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::PersistLocation;
     use timely::progress::Antichain;
 
-    use crate::tests::{all_ok, expect_fetch_part, new_test_client};
+    use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
 
     use super::*;
 
@@ -690,8 +694,15 @@ mod tests {
             (("1".to_owned(), "one".to_owned()), 1, 1),
         ];
 
-        let (mut write, _) = new_test_client()
+        let mut cache = new_test_client_cache();
+        cache.cfg.blob_target_size = 100;
+        let (mut write, _) = cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
             .await
+            .expect("client construction failed")
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
         let b0 = write
