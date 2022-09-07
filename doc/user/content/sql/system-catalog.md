@@ -75,7 +75,7 @@ the system.
 Field         | Type       | Meaning
 --------------|------------|--------
 `operator_id` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`worker_id`   | [`bigint`] | The ID of the worker hosting the arrangement.
+`worker_id`   | [`bigint`] | The ID of the worker thread hosting the arrangement.
 `records`     | [`bigint`] | The number of records in the arrangement.
 `batches`     | [`bigint`] | The number of batches in the arrangement.
 
@@ -136,10 +136,10 @@ Field           | Type       | Meaning
 ----------------|------------|--------
 `id`            | [`bigint`] | The ID of the channel.
 `worker_id`     | [`bigint`] | The ID of the worker thread hosting the channel.
-`source_node_id`| [`bigint`] | The ID of the source operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`source_port`   | [`bigint`] | The source operator's output port.
-`target_node_id`| [`bigint`] | The ID of the target operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`target_port`   | [`bigint`] | The target operator's input port.
+`from_index`    | [`bigint`] | The scope-local index of the source operator. Corresponds to an address in [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
+`from_port`      | [`bigint`] | The source operator's output port.
+`to_index`      | [`bigint`] | The scope-local index of the target operator. Corresponds to an address in [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
+`to_port`       | [`bigint`] | The target operator's input port.
 
 ### `mz_dataflows`
 
@@ -257,21 +257,21 @@ dataflow channels in the system.
 Field             | Type       | Meaning
 ------------------|------------|--------
 `channel_id`      | [`bigint`] | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).
-`source_worker_id`| [`bigint`] | The ID of the worker thread sending the message.
-`target_worker_id`| [`bigint`] | The ID of the worker thread receiving the message.
+`from_worker_id`  | [`bigint`] | The ID of the worker thread sending the message.
+`to_worker_id`    | [`bigint`] | The ID of the worker thread receiving the message.
 `sent`            | [`bigint`] | The number of messages sent.
 `received`        | [`bigint`] | The number of messages received.
 
 ### `mz_materialization_dependencies`
 
 The `mz_materialization_dependencies` source describes the dependency structure between each [dataflow] and
-the sources of their data. To create a complete dependency structure, the source column includes also
+the sources of their data. To create a complete dependency structure, the `import_id` column includes alsos
 other dataflows.
 
 Field      | Type       | Meaning
 -----------|------------|--------
-`dataflow` | [`text`]   | The ID of the index that created the dataflow. Corresponds to [`mz_materializations.global_id`](#mz_materializations).
-`source_id`| [`text`]   | The ID of the source. Corresponds to [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materializations.global_id`](#mz_materializations).
+`export_id`| [`text`]   | The ID of the object that created the dataflow. Corresponds to [`mz_materializations.global_id`](#mz_materializations).
+`import_id`| [`text`]   | The ID of the storage source. Corresponds to [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materializations.global_id`](#mz_materializations).
 `worker_id`| [`bigint`] | The ID of the worker thread hosting the dataflow.
 
 ### `mz_materialization_frontiers`

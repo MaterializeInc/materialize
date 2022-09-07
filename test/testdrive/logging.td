@@ -108,8 +108,8 @@ SID   count       4           bigint
 id      name              position    type
 --------------------------------------------
 SID   channel_id        1           bigint
-SID   source_worker_id  2           bigint
-SID   target_worker_id  3           bigint
+SID   from_worker_id    2           bigint
+SID   to_worker_id      3           bigint
 SID   sent              4           bigint
 SID   received          5           bigint
 

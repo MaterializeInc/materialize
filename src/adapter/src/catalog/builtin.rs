@@ -1845,32 +1845,32 @@ pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
 WITH sent_cte AS (
     SELECT
         channel_id,
-        source_worker_id,
-        target_worker_id,
+        from_worker_id,
+        to_worker_id,
         pg_catalog.count(*) AS sent
     FROM
         mz_catalog.mz_message_counts_sent_internal
     GROUP BY
-        channel_id, source_worker_id, target_worker_id
+        channel_id, from_worker_id, to_worker_id
 ),
 received_cte AS (
     SELECT
         channel_id,
-        source_worker_id,
-        target_worker_id,
+        from_worker_id,
+        to_worker_id,
         pg_catalog.count(*) AS received
     FROM
         mz_catalog.mz_message_counts_received_internal
     GROUP BY
-        channel_id, source_worker_id, target_worker_id
+        channel_id, from_worker_id, to_worker_id
 )
 SELECT
     sent_cte.channel_id,
-    sent_cte.source_worker_id,
-    sent_cte.target_worker_id,
+    sent_cte.from_worker_id,
+    sent_cte.to_worker_id,
     sent_cte.sent,
     received_cte.received
-FROM sent_cte JOIN received_cte USING (channel_id, source_worker_id, target_worker_id)",
+FROM sent_cte JOIN received_cte USING (channel_id, from_worker_id, to_worker_id)",
 };
 
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {

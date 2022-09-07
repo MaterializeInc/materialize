@@ -221,7 +221,7 @@ function View(props) {
             );
 
         SELECT
-          id, source_node_id, target_node_id, sum(sent) as sent
+          id, from_index, to_index, sum(sent) as sent
         FROM
           mz_catalog.mz_dataflow_channels AS channels
           LEFT JOIN mz_catalog.mz_message_counts AS counts
@@ -244,7 +244,7 @@ function View(props) {
                         id = ${props.dataflow_id}
                     )
             )
-        GROUP BY id, source_node_id, target_node_id
+        GROUP BY id, from_index, to_index
         ;
 
         SELECT

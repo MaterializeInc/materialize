@@ -424,32 +424,32 @@ impl LogView {
                 "WITH sent_cte AS (
                     SELECT
                         channel_id,
-                        source_worker_id,
-                        target_worker_id,
+                        from_worker_id,
+                        to_worker_id,
                         pg_catalog.count(*) AS sent
                     FROM
                         mz_catalog.mz_message_counts_sent_internal_{}
                     GROUP BY
-                        channel_id, source_worker_id, target_worker_id
+                        channel_id, from_worker_id, to_worker_id
                 ),
                 received_cte AS (
                     SELECT
                         channel_id,
-                        source_worker_id,
-                        target_worker_id,
+                        from_worker_id,
+                        to_worker_id,
                         pg_catalog.count(*) AS received
                     FROM
                         mz_catalog.mz_message_counts_received_internal_{}
                     GROUP BY
-                        channel_id, source_worker_id, target_worker_id
+                        channel_id, from_worker_id, to_worker_id
                 )
                 SELECT
                     sent_cte.channel_id,
-                    sent_cte.source_worker_id,
-                    sent_cte.target_worker_id,
+                    sent_cte.from_worker_id,
+                    sent_cte.to_worker_id,
                     sent_cte.sent,
                     received_cte.received
-                FROM sent_cte JOIN received_cte USING (channel_id, source_worker_id, target_worker_id)",
+                FROM sent_cte JOIN received_cte USING (channel_id, from_worker_id, to_worker_id)",
                 "mz_message_counts_{}",
             ),
 
@@ -571,10 +571,10 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
                 .with_column("id", ScalarType::Int64.nullable(false))
                 .with_column("worker_id", ScalarType::Int64.nullable(false))
-                .with_column("source_node_id", ScalarType::Int64.nullable(false))
-                .with_column("source_port", ScalarType::Int64.nullable(false))
-                .with_column("target_node_id", ScalarType::Int64.nullable(false))
-                .with_column("target_port", ScalarType::Int64.nullable(false))
+                .with_column("from_index", ScalarType::Int64.nullable(false))
+                .with_column("from_port", ScalarType::Int64.nullable(false))
+                .with_column("to_index", ScalarType::Int64.nullable(false))
+                .with_column("to_port", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
@@ -606,13 +606,13 @@ impl LogVariant {
 
             LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::empty()
                 .with_column("channel_id", ScalarType::Int64.nullable(false))
-                .with_column("source_worker_id", ScalarType::Int64.nullable(false))
-                .with_column("target_worker_id", ScalarType::Int64.nullable(false)),
+                .with_column("from_worker_id", ScalarType::Int64.nullable(false))
+                .with_column("to_worker_id", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::MessagesSent) => RelationDesc::empty()
                 .with_column("channel_id", ScalarType::Int64.nullable(false))
-                .with_column("source_worker_id", ScalarType::Int64.nullable(false))
-                .with_column("target_worker_id", ScalarType::Int64.nullable(false)),
+                .with_column("from_worker_id", ScalarType::Int64.nullable(false))
+                .with_column("to_worker_id", ScalarType::Int64.nullable(false)),
 
             LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::empty()
                 .with_column(
@@ -641,7 +641,7 @@ impl LogVariant {
 
             LogVariant::Compute(ComputeLog::DataflowDependency) => RelationDesc::empty()
                 .with_column("dataflow", ScalarType::String.nullable(false))
-                .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::Int64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
