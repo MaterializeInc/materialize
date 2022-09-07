@@ -56,7 +56,7 @@ use crate::BUILD_INFO;
 mod catalog;
 mod memory;
 mod root;
-mod sql;
+pub(crate) mod sql;
 
 #[derive(Debug, Clone)]
 pub struct Config {
