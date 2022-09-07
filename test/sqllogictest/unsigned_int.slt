@@ -916,6 +916,30 @@ SELECT 13::uint8 % 5::uint8
 query error division by zero
 SELECT 66::uint8 % 0::uint8
 
+query I
+SELECT MOD(13::uint2, 5::uint2)
+----
+3
+
+query error division by zero
+SELECT MOD(66::uint2, 0::uint2)
+
+query I
+SELECT MOD(13::uint4, 5::uint4)
+----
+3
+
+query error division by zero
+SELECT MOD(66::uint4, 0::uint4)
+
+query I
+SELECT MOD(13::uint8, 5::uint8)
+----
+3
+
+query error division by zero
+SELECT MOD(66::uint8, 0::uint8)
+
 # And
 
 query I
@@ -1000,3 +1024,415 @@ query I
 SELECT 64::uint8 >> 1::uint4
 ----
 32
+
+# Not
+
+query I
+SELECT ~42::uint2
+----
+65493
+
+query I
+SELECT ~42::uint4
+----
+4294967253
+
+query I
+SELECT ~42::uint8
+----
+18446744073709551573
+
+# LT
+
+query B
+SELECT 1::uint2 < 2::uint2
+----
+true
+
+query B
+SELECT 5::uint2 < 2::uint2
+----
+false
+
+query B
+SELECT 1::uint4 < 2::uint4
+----
+true
+
+query B
+SELECT 5::uint4 < 2::uint4
+----
+false
+
+query B
+SELECT 1::uint8 < 2::uint8
+----
+true
+
+query B
+SELECT 5::uint8 < 2::uint8
+----
+false
+
+# LTE
+
+query B
+SELECT 1::uint2 <= 2::uint2
+----
+true
+
+query B
+SELECT 5::uint2 <= 2::uint2
+----
+false
+
+query B
+SELECT 23::uint2 <= 23::uint2
+----
+true
+
+query B
+SELECT 1::uint4 <= 2::uint4
+----
+true
+
+query B
+SELECT 5::uint4 <= 2::uint4
+----
+false
+
+query B
+SELECT 23::uint4 <= 23::uint4
+----
+true
+
+query B
+SELECT 1::uint8 <= 2::uint8
+----
+true
+
+query B
+SELECT 5::uint8 <= 2::uint8
+----
+false
+
+query B
+SELECT 23::uint8 <= 23::uint8
+----
+true
+
+# GT
+
+query B
+SELECT 1::uint2 > 2::uint2
+----
+false
+
+query B
+SELECT 5::uint2 > 2::uint2
+----
+true
+
+query B
+SELECT 1::uint4 > 2::uint4
+----
+false
+
+query B
+SELECT 5::uint4 > 2::uint4
+----
+true
+
+query B
+SELECT 1::uint8 > 2::uint8
+----
+false
+
+query B
+SELECT 5::uint8 > 2::uint8
+----
+true
+
+# GTE
+
+query B
+SELECT 1::uint2 >= 2::uint2
+----
+false
+
+query B
+SELECT 5::uint2 >= 2::uint2
+----
+true
+
+query B
+SELECT 23::uint2 >= 23::uint2
+----
+true
+
+query B
+SELECT 1::uint4 >= 2::uint4
+----
+false
+
+query B
+SELECT 5::uint4 >= 2::uint4
+----
+true
+
+query B
+SELECT 23::uint4 >= 23::uint4
+----
+true
+
+query B
+SELECT 1::uint8 >= 2::uint8
+----
+false
+
+query B
+SELECT 5::uint8 >= 2::uint8
+----
+true
+
+query B
+SELECT 23::uint8 >= 23::uint8
+----
+true
+
+# EQ
+
+query B
+SELECT 18::uint2 = 18::uint2
+----
+true
+
+query B
+SELECT 18::uint2 = 36::uint2
+----
+false
+
+query B
+SELECT 18::uint4 = 18::uint4
+----
+true
+
+query B
+SELECT 18::uint8 = 36::uint8
+----
+false
+
+query B
+SELECT 18::uint8 = 18::uint8
+----
+true
+
+query B
+SELECT 18::uint8 = 36::uint8
+----
+false
+
+# Not EQ
+
+query B
+SELECT 18::uint2 <> 18::uint2
+----
+false
+
+query B
+SELECT 18::uint2 <> 36::uint2
+----
+true
+
+query B
+SELECT 18::uint4 <> 18::uint4
+----
+false
+
+query B
+SELECT 18::uint8 <> 36::uint8
+----
+true
+
+query B
+SELECT 18::uint8 <> 18::uint8
+----
+false
+
+query B
+SELECT 18::uint8 <> 36::uint8
+----
+true
+
+# Max
+
+query I
+SELECT MAX(a) FROM t2
+----
+32768
+
+query I
+SELECT MAX(a) FROM t4
+----
+2147483648
+
+query I
+SELECT MAX(a) FROM t8
+----
+9223372036854775808
+
+# Min
+
+query I
+SELECT MIN(a) FROM t2
+----
+13
+
+query I
+SELECT MIN(a) FROM t4
+----
+13
+
+query I
+SELECT MIN(a) FROM t8
+----
+13
+
+# Avg
+
+query R
+SELECT AVG(a) FROM t2
+----
+16390.500
+
+query R
+SELECT AVG(a) FROM t4
+----
+715849732.333
+
+query R
+SELECT AVG(a) FROM t8
+----
+2305843010287452160.000
+
+# Stddev
+
+query R
+SELECT STDDEV(a) FROM t2
+----
+23161.283
+
+query R
+SELECT STDDEV(a) FROM t4
+----
+1239831340.320
+
+# Avoid overflow (known issue https://github.com/MaterializeInc/materialize/issues/14695)
+statement ok
+DROP TABLE t8
+
+statement ok
+CREATE TABLE t8 (a uint8)
+
+statement ok
+INSERT INTO t8 VALUES (23), (55)
+
+query R
+SELECT STDDEV(a) FROM t8
+----
+22.627
+
+# Stddev Pop
+
+query R
+SELECT STDDEV_POP(a) FROM t2
+----
+16377.5
+
+query R
+SELECT STDDEV_POP(a) FROM t4
+----
+1012318050.298
+
+query R
+SELECT STDDEV_POP(a) FROM t8
+----
+16.000
+
+# Stddev Samp
+
+query R
+SELECT STDDEV_SAMP(a) FROM t2
+----
+23161.283
+
+query R
+SELECT STDDEV_SAMP(a) FROM t4
+----
+1239831340.320
+
+query R
+SELECT STDDEV_SAMP(a) FROM t8
+----
+22.627
+
+# Variance
+
+query R
+SELECT VARIANCE(a) FROM t2
+----
+536445012.5
+
+query R
+SELECT VARIANCE(a) FROM t4
+----
+1537181752438620216.333
+
+query R
+SELECT VARIANCE(a) FROM t8
+----
+512.000
+
+# Var Pop
+
+query R
+SELECT VAR_POP(a) FROM t2
+----
+268222506.25
+
+query R
+SELECT VAR_POP(a) FROM t4
+----
+1024787834959080144.222
+
+query R
+SELECT VAR_POP(a) FROM t8
+----
+256.000
+
+# Var Samp
+
+query R
+SELECT VAR_SAMP(a) FROM t2
+----
+536445012.5
+
+query R
+SELECT VAR_SAMP(a) FROM t4
+----
+1537181752438620216.333
+
+query R
+SELECT VAR_SAMP(a) FROM t8
+----
+512.000
+
+# Dropping rows
+
+statement ok
+DELETE FROM t2 WHERE a = 13
+
+query I
+SELECT SUM(a) FROM t2;
+----
+32768

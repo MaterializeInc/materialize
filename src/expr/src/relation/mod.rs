@@ -1663,6 +1663,9 @@ impl AggregateExpr {
             AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxUInt16
+            | AggregateFunc::MaxUInt32
+            | AggregateFunc::MaxUInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
             | AggregateFunc::MaxBool
@@ -1673,6 +1676,9 @@ impl AggregateExpr {
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
+            | AggregateFunc::MinUInt16
+            | AggregateFunc::MinUInt32
+            | AggregateFunc::MinUInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
             | AggregateFunc::MinBool
@@ -1717,6 +1723,23 @@ impl AggregateExpr {
             AggregateFunc::SumInt64 => self.expr.clone().call_unary(UnaryFunc::CastInt64ToNumeric(
                 scalar_func::CastInt64ToNumeric(Some(NumericMaxScale::ZERO)),
             )),
+
+            // SumUInt16 takes UInt16s as input, but outputs UInt64s.
+            AggregateFunc::SumUInt16 => self.expr.clone().call_unary(
+                UnaryFunc::CastUint16ToUint64(scalar_func::CastUint16ToUint64),
+            ),
+
+            // SumUInt32 takes UInt32s as input, but outputs UInt64s.
+            AggregateFunc::SumUInt32 => self.expr.clone().call_unary(
+                UnaryFunc::CastUint32ToUint64(scalar_func::CastUint32ToUint64),
+            ),
+
+            // SumUInt64 takes UInt64s as input, but outputs numerics.
+            AggregateFunc::SumUInt64 => {
+                self.expr.clone().call_unary(UnaryFunc::CastUint64ToNumeric(
+                    scalar_func::CastUint64ToNumeric(Some(NumericMaxScale::ZERO)),
+                ))
+            }
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
             AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
@@ -2001,6 +2024,9 @@ impl AggregateExpr {
             | AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxUInt16
+            | AggregateFunc::MaxUInt32
+            | AggregateFunc::MaxUInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
             | AggregateFunc::MaxBool
@@ -2012,6 +2038,9 @@ impl AggregateExpr {
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
+            | AggregateFunc::MinUInt16
+            | AggregateFunc::MinUInt32
+            | AggregateFunc::MinUInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
             | AggregateFunc::MinBool

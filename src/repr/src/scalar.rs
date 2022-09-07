@@ -877,6 +877,12 @@ impl<'a> From<i128> for Datum<'a> {
     }
 }
 
+impl<'a> From<u128> for Datum<'a> {
+    fn from(d: u128) -> Datum<'a> {
+        Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
+    }
+}
+
 impl<'a> From<Numeric> for Datum<'a> {
     fn from(n: Numeric) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(n))

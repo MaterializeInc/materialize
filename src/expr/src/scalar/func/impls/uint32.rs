@@ -19,6 +19,13 @@ use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
 
 sqlfunc!(
+    #[sqlname = "~"]
+    fn bit_not_uint32(a: u32) -> u32 {
+        !a
+    }
+);
+
+sqlfunc!(
     #[sqlname = "uint4_to_real"]
     fn cast_uint32_to_float32(a: u32) -> f32 {
         a as f32
