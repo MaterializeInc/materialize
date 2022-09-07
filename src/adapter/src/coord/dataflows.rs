@@ -22,6 +22,9 @@ use tracing::warn;
 
 use mz_compute_client::command::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::controller::{ComputeController, ComputeInstanceId};
+use mz_compute_client::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
+};
 use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
@@ -32,9 +35,6 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
-use mz_storage::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
-};
 
 use crate::catalog::{CatalogItem, CatalogState, MaterializedView, View};
 use crate::coord::ddl::CatalogTxn;

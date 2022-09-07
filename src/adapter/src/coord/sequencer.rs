@@ -26,6 +26,9 @@ use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
+use mz_compute_client::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, TailSinkConnection,
+};
 use mz_controller::{ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
@@ -40,7 +43,6 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Ti
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
-
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
@@ -54,14 +56,9 @@ use mz_sql::plan::{
     OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
     RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
 };
-
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
-
-use mz_storage::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, StorageSinkConnectionBuilder,
-    TailSinkConnection,
-};
+use mz_storage::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage::types::sources::IngestionDescription;
 
 use crate::catalog::{
