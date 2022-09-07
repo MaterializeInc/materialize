@@ -642,6 +642,10 @@ impl SessionClient {
             }
             HttpSqlRequest::Extended { queries } => {
                 for ExtendedRequest { query, params } in queries {
+                    if matches!(self.session().transaction(), TransactionStatus::Failed(_)) {
+                        break;
+                    }
+
                     let mut stmts = match mz_sql::parse::parse(&query) {
                         Ok(stmts) => stmts,
                         Err(e) => {
@@ -659,11 +663,6 @@ impl SessionClient {
 
                     match stmts.pop() {
                         Some(stmt) => {
-                            if self.session().transaction().is_implicit()
-                                && matches!(stmt, Statement::StartTransaction(..))
-                            {
-                                self.end_transaction(EndTransactionAction::Commit).await?;
-                            }
                             // Mirror the behavior of the PostgreSQL simple query protocol.
                             // See the pgwire::protocol::StateMachine::query method for details.
                             if let Err(e) = self.start_transaction(Some(1)).await {
