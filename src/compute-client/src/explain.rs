@@ -218,7 +218,10 @@ impl<'a> ViewFormatter<OptimizedMirRelationExpr> for DataflowGraphFormatter<'a> 
         if !filter.is_empty() {
             writeln!(f, "| Filter {}", separated(", ", filter.iter()))?;
         }
-        writeln!(f, "| Project {}", bracketed("(", ")", Indices(&project)))?;
+        if project.len() != operator.input_arity || project.iter().enumerate().any(|(i, p)| i != *p)
+        {
+            writeln!(f, "| Project {}", bracketed("(", ")", Indices(&project)))?;
+        }
         Ok(())
     }
 

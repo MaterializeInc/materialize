@@ -209,10 +209,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, 10)
 ----
-Source materialize.public.x (u2):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.x (u2)
 | ArrangeBy ()
@@ -229,10 +225,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
-Source materialize.public.x (u2):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.x (u2)
 | FlatMap generate_series(1, #0, 1)
@@ -244,7 +236,6 @@ EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.
 ----
 Source materialize.public.x (u2):
 | Filter (#1) IS NOT NULL
-| Project (#0, #1)
 
 Query:
 %0 = Let l0 =
@@ -269,7 +260,6 @@ EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.
 ----
 Source materialize.public.x (u2):
 | Filter (#1) IS NOT NULL
-| Project (#0, #1)
 
 Query:
 %0 = Let l0 =
@@ -296,7 +286,6 @@ EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) 
 ----
 Source materialize.public.x (u2):
 | Filter (#1) IS NOT NULL
-| Project (#0, #1)
 
 Query:
 %0 = Let l0 =
@@ -1371,10 +1360,6 @@ WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY genera
 query T multiline
 EXPLAIN PLAN FOR SELECT jsonb_object_keys(a) FROM y;
 ----
-Source materialize.public.y (u1):
-| Project (#0)
-
-Query:
 %0 =
 | Get materialize.public.y (u1)
 | FlatMap jsonb_object_keys(#0)

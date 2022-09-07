@@ -90,8 +90,6 @@ Explained Query
   Get::PassArrangements materialize.public.u
     raw=true
 
-Source materialize.public.u
-
 EOF
 
 # GetArrangement plan (linear transform of an arranged input).

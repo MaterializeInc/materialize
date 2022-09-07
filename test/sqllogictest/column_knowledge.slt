@@ -29,7 +29,6 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = t1.f2
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123), (#0 = #1)
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -45,11 +44,9 @@ EXPLAIN SELECT * FROM t1 , t2 WHERE t1.f1 = 123 AND t1.f1 = t2.f1
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Source materialize.public.t2 (u2):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -76,11 +73,9 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Source materialize.public.t2 (u2):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Query:
 %0 = Let l0 =
@@ -118,11 +113,9 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Source materialize.public.t2 (u2):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -166,11 +159,9 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (TRUE) WHERE t1.f1 = t2.f1 AND t1.f1 = 
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Source materialize.public.t2 (u2):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -195,15 +186,12 @@ EXPLAIN SELECT * FROM t1, t2, t3 WHERE t1.f1 = 123 AND t1.f1 = t2.f1 AND t2.f1 =
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Source materialize.public.t2 (u2):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Source materialize.public.t3 (u3):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -232,14 +220,10 @@ query T multiline
 EXPLAIN SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1 = 123;
 ----
 Source materialize.public.t1 (u1):
-| Map dummy
 | Filter (#0 = 123)
-| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
-| Map dummy
 | Filter (#0 = 123)
-| Project (#0, #2)
 
 Query:
 %0 =
@@ -268,14 +252,10 @@ query T multiline
 EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 123;
 ----
 Source materialize.public.t1 (u1):
-| Map dummy
 | Filter (#0 = 123)
-| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
-| Map dummy
 | Filter (#0 = 123)
-| Project (#0, #2)
 
 Query:
 %0 = Let l0 =
@@ -318,14 +298,8 @@ EOF
 query T multiline
 EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 ----
-Source materialize.public.t1 (u1):
-| Map dummy
-| Project (#0, #2)
-
 Source materialize.public.t2 (u2):
-| Map dummy
 | Filter (#0 = 123)
-| Project (#0, #2)
 
 Query:
 %0 =
@@ -379,12 +353,9 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Map dummy
 | Filter (#0 = 123)
-| Project (#0, #2)
 
 Query:
 %0 =
@@ -408,17 +379,12 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Map dummy
 | Filter (#0 = 123)
-| Project (#0, #2)
 
 Source materialize.public.t3 (u3):
-| Map dummy
 | Filter (#0 = 123)
-| Project (#0, #2)
 
 Query:
 %0 =
@@ -448,12 +414,9 @@ EXPLAIN SELECT * FROM t1, (SELECT t2.f1 FROM t2) AS dt1 WHERE dt1.f1 = t1.f1 AND
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Source materialize.public.t2 (u2):
-| Map dummy
 | Filter (#0 = 123)
-| Project (#0, #2)
 
 Query:
 %0 =
@@ -475,14 +438,6 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
 ----
-Source materialize.public.t1 (u1):
-| Project (#0, #1)
-
-Source materialize.public.t2 (u2):
-| Map dummy
-| Project (#0, #2)
-
-Query:
 %0 =
 | Get materialize.public.t1 (u1)
 | ArrangeBy ()
@@ -514,11 +469,6 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123)
-| Project (#0, #1)
-
-Source materialize.public.t2 (u2):
-| Map dummy
-| Project (#0, #2)
 
 Query:
 %0 =
@@ -561,7 +511,6 @@ EXPLAIN SELECT * FROM t4 AS a1, t4 AS a2 WHERE a1.f1 = 123 AND a1.f2 = 234 AND a
 ----
 Source materialize.public.t4 (u4):
 | Filter (#0 = 123), (#1 = 234)
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -576,7 +525,6 @@ EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 1
 ----
 Source materialize.public.t4 (u4):
 | Filter (#0 = 123), (#1 = 234)
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -594,7 +542,6 @@ EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 1
 ----
 Source materialize.public.t4 (u4):
 | Filter (#0 = 123), (#1 = 234)
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -634,11 +581,9 @@ EXPLAIN SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1 > t2.f1;
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0 = 123)
-| Project (#0, #1)
 
 Source materialize.public.t2 (u2):
 | Filter (123 > #0)
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -669,10 +614,6 @@ explain select * from int_table, double_table where int_table.int_col = double_t
 ----
 Source materialize.public.double_table (u5):
 | Filter (#0) IS NOT NULL
-| Project (#0)
-
-Source materialize.public.int_table (u6):
-| Project (#0)
 
 Query:
 %0 =

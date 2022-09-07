@@ -18,7 +18,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use mz_compute_client::command::DataflowDesc;
 use mz_expr::visit::Visit;
-use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr};
+use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
 use mz_ore::id_gen::IdGen;
 
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
@@ -237,38 +237,6 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
         &mut demand,
     )?;
 
-    // Push demand information into the SourceDesc.
-    for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
-        if let Some(columns) = demand.get(&Id::Global(*source_id)).clone() {
-            // Install no-op demand information if none exists.
-            if source.arguments.operators.is_none() {
-                source.arguments.operators = Some(MapFilterProject::new(source.typ.arity()));
-            }
-            // Restrict required columns by those identified as demanded.
-            if let Some(operator) = source.arguments.operators.take() {
-                // Assemble a transform that replaces some columns with dummy values.
-                let arity = source.typ.arity();
-                let mut dummies = Vec::new();
-                let mut demand_projection = Vec::new();
-                for (column, typ) in source.typ.column_types.iter().enumerate() {
-                    if columns.contains(&column) {
-                        demand_projection.push(column);
-                    } else {
-                        demand_projection.push(arity + dummies.len());
-                        dummies.push(MirScalarExpr::literal_ok(
-                            mz_repr::Datum::Dummy,
-                            typ.scalar_type.clone(),
-                        ));
-                    }
-                }
-
-                // Introduce and reposition `Datum::Dummy` values.
-                source.arguments.operators = Some(operator.map(dummies).project(demand_projection));
-                source.arguments.operators.as_mut().map(|x| x.optimize());
-            }
-        }
-    }
-
     Ok(())
 }
 
@@ -333,17 +301,19 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
     // Push predicate information into the SourceDesc.
     for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
         if let Some(list) = predicates.remove(&Id::Global(*source_id)) {
-            // Canonicalize the order of predicates, for stable plans.
-            let mut list = list.into_iter().collect::<Vec<_>>();
-            list.sort();
-            // Install no-op predicate information if none exists.
-            if source.arguments.operators.is_none() {
-                source.arguments.operators = Some(MapFilterProject::new(source.typ.arity()));
-            }
-            // Add any predicates that can be pushed to the source.
-            if let Some(operator) = source.arguments.operators.take() {
-                source.arguments.operators = Some(operator.filter(list));
-                source.arguments.operators.as_mut().map(|x| x.optimize());
+            if !list.is_empty() {
+                // Canonicalize the order of predicates, for stable plans.
+                let mut list = list.into_iter().collect::<Vec<_>>();
+                list.sort();
+                // Install no-op predicate information if none exists.
+                if source.arguments.operators.is_none() {
+                    source.arguments.operators = Some(MapFilterProject::new(source.typ.arity()));
+                }
+                // Add any predicates that can be pushed to the source.
+                if let Some(operator) = source.arguments.operators.take() {
+                    source.arguments.operators = Some(operator.filter(list));
+                    source.arguments.operators.as_mut().map(|x| x.optimize());
+                }
             }
         }
     }

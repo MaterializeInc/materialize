@@ -130,10 +130,6 @@ Explained Query
           Project (#1) // { non_negative: true }
             Get materialize.public.mv // { non_negative: true }
 
-Source materialize.public.mv
-  project=(#2, #1)
-  map=(dummy)
-
 Used Indexes:
   - materialize.public.t_a_idx
 
@@ -152,10 +148,6 @@ Explained Query
       Negate // { non_negative: false }
         Project (#1) // { non_negative: true }
           Get materialize.public.mv // { non_negative: true }
-
-Source materialize.public.mv
-  project=(#2, #1)
-  map=(dummy)
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -273,8 +265,6 @@ Explained Query
                             Get materialize.public.t // { non_negative: true }
                       Project (#0) // { non_negative: true }
                         Get materialize.public.mv // { non_negative: true }
-
-Source materialize.public.mv
 
 Used Indexes:
   - materialize.public.t_a_idx

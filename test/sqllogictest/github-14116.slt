@@ -30,12 +30,8 @@ select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1
 query T multiline
 explain select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
 ----
-Source materialize.public.test1 (u1):
-| Project (#0, #1)
-
 Source materialize.public.test2 (u2):
 | Filter (#0 = #0), (#1 = #1)
-| Project (#0, #1)
 
 Query:
 %0 = Let l0 =

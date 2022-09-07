@@ -246,14 +246,6 @@ mode standard
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
-Source materialize.public.t1 (u9):
-| Project (#0)
-
-Source materialize.public.t2 (u10):
-| Map dummy
-| Project (#1)
-
-Query:
 %0 =
 | Get materialize.public.t1 (u9)
 
@@ -272,17 +264,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
-Source materialize.public.t1 (u9):
-| Project (#0)
-
-Source materialize.public.t2 (u10):
-| Map dummy
-| Project (#1)
-
-Source materialize.public.t3 (u11):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.t1 (u9)
 | ArrangeBy (#0)
@@ -306,16 +287,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
 ----
-Source materialize.public.t1 (u9):
-| Project (#0)
-
-Source materialize.public.t2 (u10):
-| Project (#0)
-
-Source materialize.public.t3 (u11):
-| Project (#0, #1)
-
-Query:
 %0 =
 | Get materialize.public.t1 (u9)
 | ArrangeBy (#0)
@@ -353,11 +324,9 @@ SELECT age, ascii_num * 2 as result FROM (
 ----
 Source materialize.public.likes (u3):
 | Filter (#0) IS NOT NULL
-| Project (#0, #1)
 
 Source materialize.public.age (u5):
 | Filter (#0) IS NOT NULL
-| Project (#0, #1)
 
 Query:
 %0 =
@@ -480,13 +449,6 @@ true
 query T multiline
 EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 ----
-Source materialize.public.x (u13):
-| Project (#0)
-
-Source materialize.public.y (u14):
-| Project (#0)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.y (u14)
 | Distinct group=(#0)
@@ -536,13 +498,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 ----
-Source materialize.public.x (u13):
-| Project (#0)
-
-Source materialize.public.y (u14):
-| Project (#0)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.y (u14)
 | Distinct group=(#0)
@@ -594,13 +549,6 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 ----
-Source materialize.public.x (u13):
-| Project (#0)
-
-Source materialize.public.y (u14):
-| Project (#0)
-
-Query:
 %0 = Let l0 =
 | Get materialize.public.y (u14)
 | Distinct group=(#0)
@@ -742,15 +690,6 @@ WHERE a IN (9, 0)
   )
   GROUP BY TRUE;
 ----
-Source materialize.public.x (u13):
-| Map dummy
-| Project (#1)
-
-Source materialize.public.y (u14):
-| Map dummy
-| Project (#1)
-
-Query:
 %0 =
 | Get materialize.public.y (u14)
 | Project ()

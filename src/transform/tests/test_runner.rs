@@ -231,7 +231,6 @@ mod tests {
             "ColumnKnowledge" => Ok(Box::new(
                 mz_transform::column_knowledge::ColumnKnowledge::default(),
             )),
-            "Demand" => Ok(Box::new(mz_transform::demand::Demand::default())),
             "FilterFusion" => Ok(Box::new(mz_transform::fusion::filter::Filter)),
             "FoldConstants" => Ok(Box::new(mz_transform::reduction::FoldConstants {
                 limit: None,

@@ -48,14 +48,6 @@ INSERT INTO t3 VALUES (1), (2), (3)
 query T multiline
 EXPLAIN SELECT (SELECT * FROM t1), (SELECT * FROM t1) FROM t2
 ----
-Source materialize.public.t1 (u1):
-| Project (#0)
-
-Source materialize.public.t2 (u2):
-| Map dummy
-| Project (#1)
-
-Query:
 %0 =
 | Get materialize.public.t1 (u1)
 
@@ -108,10 +100,6 @@ EXPLAIN SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * FROM t1 WHERE 
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0)
-
-Source materialize.public.t2 (u2):
-| Project (#0)
 
 Query:
 %0 = Let l0 =
@@ -187,10 +175,6 @@ EXPLAIN SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0)
-
-Source materialize.public.t2 (u2):
-| Project (#0)
 
 Query:
 %0 = Let l0 =
@@ -269,10 +253,6 @@ EXPLAIN SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1) , (SELECT * FROM t1 WH
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0)
-
-Source materialize.public.t2 (u2):
-| Project (#0)
 
 Query:
 %0 = Let l0 =
@@ -381,10 +361,6 @@ EXPLAIN SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f1) , (SELECT f1 + 2 FROM
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0)
-
-Source materialize.public.t2 (u2):
-| Project (#0)
 
 Query:
 %0 = Let l0 =
@@ -476,10 +452,6 @@ EXPLAIN SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.f1) , (SELECT MAX(f1) FR
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0)
-
-Source materialize.public.t2 (u2):
-| Project (#0)
 
 Query:
 %0 = Let l0 =
@@ -585,14 +557,9 @@ EXPLAIN SELECT (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0)
 
 Source materialize.public.t2 (u2):
 | Filter (#0) IS NOT NULL
-| Project (#0)
-
-Source materialize.public.t3 (u3):
-| Project (#0)
 
 Query:
 %0 = Let l0 =
@@ -718,10 +685,6 @@ EXPLAIN SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0)
-
-Source materialize.public.t2 (u2):
-| Project (#0)
 
 Query:
 %0 = Let l0 =
@@ -867,14 +830,9 @@ FROM t3
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0)
 
 Source materialize.public.t2 (u2):
 | Filter (#0) IS NOT NULL
-| Project (#0)
-
-Source materialize.public.t3 (u3):
-| Project (#0)
 
 Query:
 %0 = Let l0 =
@@ -961,13 +919,6 @@ FROM t2, t3
 ----
 Source materialize.public.t1 (u1):
 | Filter (#0) IS NOT NULL
-| Project (#0)
-
-Source materialize.public.t2 (u2):
-| Project (#0)
-
-Source materialize.public.t3 (u3):
-| Project (#0)
 
 Query:
 %0 =

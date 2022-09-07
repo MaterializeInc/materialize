@@ -777,36 +777,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
       }
     }
   ],
-  "sources": [
-    {
-      "id": "materialize.public.mv",
-      "op": {
-        "expressions": [
-          {
-            "Literal": [
-              {
-                "Ok": {
-                  "data": [
-                    28
-                  ]
-                }
-              },
-              {
-                "scalar_type": "Int32",
-                "nullable": false
-              }
-            ]
-          }
-        ],
-        "predicates": [],
-        "projection": [
-          2,
-          1
-        ],
-        "input_arity": 2
-      }
-    }
-  ]
+  "sources": []
 }
 EOF
 
@@ -893,36 +864,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
       }
     }
   ],
-  "sources": [
-    {
-      "id": "materialize.public.mv",
-      "op": {
-        "expressions": [
-          {
-            "Literal": [
-              {
-                "Ok": {
-                  "data": [
-                    28
-                  ]
-                }
-              },
-              {
-                "scalar_type": "Int32",
-                "nullable": false
-              }
-            ]
-          }
-        ],
-        "predicates": [],
-        "projection": [
-          2,
-          1
-        ],
-        "input_arity": 2
-      }
-    }
-  ]
+  "sources": []
 }
 EOF
 
@@ -1784,20 +1726,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
       }
     }
   ],
-  "sources": [
-    {
-      "id": "materialize.public.mv",
-      "op": {
-        "expressions": [],
-        "predicates": [],
-        "projection": [
-          0,
-          1
-        ],
-        "input_arity": 2
-      }
-    }
-  ]
+  "sources": []
 }
 EOF
 

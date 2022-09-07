@@ -38,8 +38,6 @@ Explained Query
     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
       Get materialize.public.v // { types: "(double precision?, boolean?)" }
 
-Source materialize.public.v
-
 EOF
 
 # Union that does propagate a null
@@ -52,8 +50,6 @@ Explained Query
       Get materialize.public.v // { types: "(double precision?, boolean?)" }
     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
       Get materialize.public.v // { types: "(double precision?, boolean?)" }
-
-Source materialize.public.v
 
 EOF
 
@@ -73,8 +69,6 @@ Explained Query
             Get materialize.public.t // { types: "(integer?, text?, date?)" }
       Constant // { types: "(bigint?, text?, date?)" }
         - (1, "hello", null)
-
-Source materialize.public.t
 
 EOF
 
@@ -112,7 +106,6 @@ Explained Query
 
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
-Source materialize.public.u
 
 EOF
 
@@ -146,7 +139,6 @@ Explained Query
       Constant // { types: "(boolean?, bigint)" }
         - (null, 10)
 
-Source materialize.public.u
 Source materialize.public.v
   filter=((#0) IS NOT NULL)
 

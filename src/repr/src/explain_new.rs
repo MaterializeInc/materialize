@@ -831,7 +831,6 @@ mod tests {
             (Datum::True, "true"),
             (Datum::False, "false"),
             (Datum::Null, "null"),
-            (Datum::Dummy, r#""Dummy""#),
             (Datum::JsonNull, r#""JsonNull""#),
             (Datum::UInt8(32), "32"),
             (Datum::from(0.1_f32), "0.1"),

@@ -874,11 +874,6 @@ pub enum AggregateFunc {
     StringAgg {
         order_by: Vec<ColumnOrder>,
     },
-    /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
-    ///
-    /// Useful for removing an expensive aggregation while maintaining the shape
-    /// of a reduce operator.
-    Dummy,
 }
 
 impl AggregateFunc {
@@ -927,7 +922,6 @@ impl AggregateFunc {
                 mz_expr::AggregateFunc::ListConcat { order_by }
             }
             AggregateFunc::StringAgg { order_by } => mz_expr::AggregateFunc::StringAgg { order_by },
-            AggregateFunc::Dummy => mz_expr::AggregateFunc::Dummy,
         }
     }
 
@@ -937,7 +931,6 @@ impl AggregateFunc {
         match self {
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
-            AggregateFunc::Dummy => Datum::Dummy,
             AggregateFunc::ArrayConcat { .. } => Datum::empty_array(),
             AggregateFunc::ListConcat { .. } => Datum::empty_list(),
             _ => Datum::Null,
