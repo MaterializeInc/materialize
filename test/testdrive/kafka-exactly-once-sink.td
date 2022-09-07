@@ -144,8 +144,7 @@ $ kafka-create-topic topic=input_dbz
 $ kafka-create-topic topic=input_cdcv2
 
 > CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}',
-  PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}';
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -276,7 +275,7 @@ $ kafka-verify format=avro sink=materialize.public.compaction_test_sink sort-mes
 $ kafka-verify format=json key=false topic=testdrive-progress-fixed-${testdrive.seed}
 {"timestamp": 1}
 
-# verify output of progress topic with real-time timestamps
+# verify output with real-time timestamps
 
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
