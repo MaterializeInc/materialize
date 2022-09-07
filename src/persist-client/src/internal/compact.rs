@@ -362,7 +362,7 @@ impl Compactor {
                     .max()
                     .unwrap_or(cfg.blob_target_size);
 
-                // if we can fit the next run in our batch without going over our reserved memory, we should do so
+                // if we can fit the next run in our chunk without going over our reserved memory, we should do so
                 if current_chunk_max_memory_usage + next_run_greatest_part_size
                     <= run_reserved_memory_bytes
                 {
@@ -371,7 +371,7 @@ impl Compactor {
             }
 
             chunks.push((
-                current_chunk.drain(..).collect(),
+                std::mem::take(&mut current_chunk),
                 current_chunk_max_memory_usage,
             ));
             current_chunk_max_memory_usage = 0;
@@ -423,6 +423,7 @@ impl Compactor {
     ///
     /// Maximum possible memory usage is `(# runs + 2) * [crate::PersistConfig::blob_target_size]`
     async fn compact_runs<'a, T, D>(
+        // note: 'a cannot be elided due to https://github.com/rust-lang/rust/issues/63033
         cfg: &'a PersistConfig,
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
@@ -497,12 +498,11 @@ impl Compactor {
 
             // flush the buffer if adding this latest update would cause it to exceed our target size
             if update_size_bytes + update_buffer_size_bytes > cfg.blob_target_size {
-                Self::consolidate_run(
+                total_updates += Self::consolidate_run(
                     &mut update_buffer,
                     &mut compaction_runs,
                     compaction_parts_count,
                     &mut greatest_kv,
-                    &mut total_updates,
                 );
                 Self::write_run(
                     &mut batch_parts,
@@ -519,12 +519,11 @@ impl Compactor {
         }
 
         if update_buffer.len() > 0 {
-            Self::consolidate_run(
+            total_updates += Self::consolidate_run(
                 &mut update_buffer,
                 &mut compaction_runs,
                 compaction_parts_count,
                 &mut greatest_kv,
-                &mut total_updates,
             );
             Self::write_run(
                 &mut batch_parts,
@@ -548,13 +547,12 @@ impl Compactor {
         compaction_runs: &mut Vec<usize>,
         number_of_compacted_runs: usize,
         greatest_kv: &mut Option<(Vec<u8>, Vec<u8>)>,
-        total_updates: &mut usize,
-    ) where
+    ) -> usize
+    where
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
         consolidate_updates(updates);
-        *total_updates += updates.len();
 
         match (&greatest_kv, updates.last()) {
             // our updates contain a key that exists within the range of a run we've
@@ -567,7 +565,9 @@ impl Compactor {
             }
             (_, Some(greatest_kv_in_batch)) => *greatest_kv = Some(greatest_kv_in_batch.0.clone()),
             (Some(_), None) | (None, None) => {}
-        }
+        };
+
+        updates.len()
     }
 
     /// Encodes `updates` into columnar format and writes its parts out to blob.
@@ -590,13 +590,10 @@ impl Compactor {
         let mut builder = ColumnarRecordsVecBuilder::new_with_len(KEY_VAL_DATA_MAX_LEN);
         for ((k, v), t, d) in updates.drain(..) {
             builder.push(((&k, &v), T::encode(&t), D::encode(&d)));
-            for chunk in builder.take_filled() {
-                batch_parts
-                    .write(chunk, desc.upper().clone(), desc.since().clone())
-                    .await;
-            }
         }
-        for chunk in builder.finish() {
+        let chunks = builder.finish();
+        debug_assert_eq!(chunks.len(), 1);
+        for chunk in chunks {
             batch_parts
                 .write(chunk, desc.upper().clone(), desc.since().clone())
                 .await;
