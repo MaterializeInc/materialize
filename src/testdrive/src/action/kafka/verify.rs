@@ -259,10 +259,14 @@ impl Action for VerifyAction {
                 let mut actual_messages = vec![];
                 for (key, value) in actual_bytes {
                     let key_datum = match key {
-                        Some(bytes) if *has_key => {
-                            Some(serde_json::from_slice(&bytes).context("decoding json")?)
+                        Some(bytes) => {
+                            if *has_key {
+                                Some(serde_json::from_slice(&bytes).context("decoding json")?)
+                            } else {
+                                None
+                            }
                         }
-                        _ => None,
+                        None => None,
                     };
                     let value_datum = match value {
                         None => None,
