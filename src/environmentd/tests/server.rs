@@ -213,105 +213,115 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             status: StatusCode::OK,
             body: r#"{"results":[{"ok":"DELETE 0"}]}"#,
         },
-        // // # Txns
-        // // ## Txns, read only
-        // TestCase {
-        //     query: "begin; select 1; commit",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"}]}"#,
-        // },
-        // TestCase {
-        //     query: "begin; select 1; commit; select 2;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"},{"rows":[[2]],"col_names":["?column?"]}]}"#,
-        // },
-        // TestCase {
-        //     query: "select 1; begin; select 2; commit;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"ok":"BEGIN"},{"rows":[[2]],"col_names":["?column?"]},{"ok":"COMMIT"}]}"#,
-        // },
-        // TestCase {
-        //     query: "begin; select 1/0; commit; select 2;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"ok":"BEGIN"},{"error":"division by zero"}]}"#,
-        // },
-        // TestCase {
-        //     query: "begin; select 1; commit; select 1/0;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"},{"error":"division by zero"}]}"#,
-        // },
-        // TestCase {
-        //     query: "select 1/0; begin; select 2; commit;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"error":"division by zero"}]}"#,
-        // },
-        // TestCase {
-        //     query: "select 1; begin; select 1/0; commit;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"ok":"BEGIN"},{"error":"division by zero"}]}"#,
-        // },
-        // // ## Txns w/ writes
-        // // Implicit txn aborted on first error
-        // TestCase {
-        //     query: "insert into t values (1); select 1/0; insert into t values (2)",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
-        // },
-        // // Values not successfully written due to aborted txn
-        // TestCase {
-        //     query: "select * from t;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
-        // },
-        // // Explicit txn invocation commits values w/in txn, irrespective of results outside txn
-        // TestCase {
-        //     query: "begin; insert into t values (1); commit; insert into t values (2); select 1/0;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"COMMIT"},{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
-        // },
-        // TestCase {
-        //     query: "select * from t;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"rows":[[1]],"col_names":["a"]}]}"#,
-        // },
-        // TestCase {
-        //     query: "delete from t;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"ok":"DELETE 1"}]}"#,
-        // },
-        // TestCase {
-        //     query: "delete from t;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"ok":"DELETE 0"}]}"#,
-        // },
-        // TestCase {
-        //     query: "select * from t;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
-        // },
-        // // Explicit txn must be terminated to commit
-        // TestCase {
-        //     query: "begin; insert into t values (1)",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"}]}"#,
-        // },
-        // TestCase {
-        //     query: "select * from t;",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
-        // },
-        // // Syntax errors fail the request.
-        // TestCase {
-        //     query: "",
-        //     status: StatusCode::OK,
-        //     body: r#"{"results":[]}"#,
-        // },
-        // // Syntax errors fail the request.
-        // TestCase {
-        //     query: "select $1",
-        //     status: StatusCode::BAD_REQUEST,
-        //     body: r#"request supplied 0 parameters, but SELECT $1 requires 1"#,
-        // },
+        // # Txns
+        // ## Txns, read only
+        TestCase {
+            query: "begin; select 1; commit",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"}]}"#,
+        },
+        TestCase {
+            query: "begin; select 1; commit; select 2;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"},{"rows":[[2]],"col_names":["?column?"]}]}"#,
+        },
+        TestCase {
+            query: "select 1; begin; select 2; commit;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"ok":"BEGIN"},{"rows":[[2]],"col_names":["?column?"]},{"ok":"COMMIT"}]}"#,
+        },
+        TestCase {
+            query: "begin; select 1/0; commit; select 2;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"error":"division by zero"}]}"#,
+        },
+        TestCase {
+            query: "begin; select 1; commit; select 1/0;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"},{"error":"division by zero"}]}"#,
+        },
+        TestCase {
+            query: "select 1/0; begin; select 2; commit;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"division by zero"}]}"#,
+        },
+        TestCase {
+            query: "select 1; begin; select 1/0; commit;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"ok":"BEGIN"},{"error":"division by zero"}]}"#,
+        },
+        // ## Txns w/ writes
+        // Implicit txn aborted on first error
+        TestCase {
+            query: "insert into t values (1); select 1/0; insert into t values (2)",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
+        },
+        // Values not successfully written due to aborted txn
+        TestCase {
+            query: "select * from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
+        },
+        // Explicit txn invocation commits values w/in txn, irrespective of results outside txn
+        TestCase {
+            query: "begin; insert into t values (1); commit; insert into t values (2); select 1/0;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"COMMIT"},{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
+        },
+        TestCase {
+            query: "select * from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["a"]}]}"#,
+        },
+        TestCase {
+            query: "delete from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"DELETE 1"}]}"#,
+        },
+        TestCase {
+            query: "delete from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"DELETE 0"}]}"#,
+        },
+        TestCase {
+            query: "insert into t values (1); begin; insert into t values (2); insert into t values (3); commit;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"INSERT 0 1"},{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"INSERT 0 1"},{"ok":"COMMIT"}]}"#,
+        },
+        TestCase {
+            query: "select * from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"]}]}"#,
+        },
+        TestCase {
+            query: "delete from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"DELETE 3"}]}"#,
+        },
+        // Explicit txn must be terminated to commit
+        TestCase {
+            query: "begin; insert into t values (1)",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"}]}"#,
+        },
+        TestCase {
+            query: "select * from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
+        },
+        // Syntax errors fail the request.
+        TestCase {
+            query: "",
+            status: StatusCode::OK,
+            body: r#"{"results":[]}"#,
+        },
+        // Syntax errors fail the request.
+        TestCase {
+            query: "select $1",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"request supplied 0 parameters, but SELECT $1 requires 1"}]}"#,
+        },
     ];
 
     for tc in tests {
@@ -390,14 +400,14 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         // Too many parameters
         TestCaseParams {
             requests: vec![("select $1 as col", Some(vec![Some("1"), Some("2")]))],
-            status: StatusCode::BAD_REQUEST,
-            body: r#"request supplied 2 parameters, but SELECT $1 AS col requires 1"#,
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"request supplied 2 parameters, but SELECT $1 AS col requires 1"}]}"#,
         },
         // Too few parameters
         TestCaseParams {
             requests: vec![("select $1+$2::int as col", Some(vec![Some("1")]))],
-            status: StatusCode::BAD_REQUEST,
-            body: r#"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2"#,
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2"}]}"#,
         },
         // NaN
         TestCaseParams {
@@ -425,19 +435,81 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         // Empty query w/ param
         TestCaseParams {
             requests: vec![("", Some(vec![Some("1")]))],
-            status: StatusCode::BAD_REQUEST,
-            body: r#"cannot provide parameters to an empty query"#,
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"cannot provide parameters to an empty query"}]}"#,
         },
         TestCaseParams {
-            requests: vec![("", Some(vec![None]))],
-            status: StatusCode::BAD_REQUEST,
-            body: r#"cannot provide parameters to an empty query"#,
+            requests: vec![("select 1 as col", None), ("", Some(vec![None]))],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"error":"cannot provide parameters to an empty query"}]}"#,
         },
         // Multiple statements
         TestCaseParams {
-            requests: vec![("select 1; select 2;", Some(vec![None]))],
-            status: StatusCode::BAD_REQUEST,
-            body: r#"each query can contain at most 1 statement"#,
+            requests: vec![
+                ("select 1 as col", None),
+                ("select 1; select 2;", Some(vec![None])),
+            ],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"error":"each query can contain at most 1 statement"}]}"#,
+        },
+        // Txns
+        // - Rolledback
+        TestCaseParams {
+            requests: vec![
+                ("begin;", None),
+                ("insert into t values (1);", None),
+                ("rollback", None),
+            ],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"ROLLBACK"}]}"#,
+        },
+        // - Implicit txn
+        TestCaseParams {
+            requests: vec![("insert into t values (1);", None), ("select 1/0;", None)],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
+        },
+        // - Errors prevent commit + further execution
+        TestCaseParams {
+            requests: vec![
+                ("begin;", None),
+                ("insert into t values (1);", None),
+                ("select 1/0;", None),
+                ("select * from t", None),
+                ("commit", None),
+            ],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
+        },
+        // - Requires explicit commit in explicit txn
+        TestCaseParams {
+            requests: vec![("begin;", None), ("insert into t values (1);", None)],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"}]}"#,
+        },
+        TestCaseParams {
+            requests: vec![("select * from t", None)],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
+        },
+        // Writes
+        // TODO: add this to pg test
+        TestCaseParams {
+            requests: vec![
+                ("insert into t values ($1);", Some(vec![Some("1")])),
+                ("begin;", None),
+                ("insert into t values ($1);", Some(vec![Some("2")])),
+                ("insert into t values ($1);", Some(vec![Some("3")])),
+                ("commit;", None),
+                ("select 1/0", None),
+            ],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"INSERT 0 1"},{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"INSERT 0 1"},{"ok":"COMMIT"},{"error":"division by zero"}]}"#,
+        },
+        TestCaseParams {
+            requests: vec![("select * from t", None)],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"]}]}"#,
         },
     ];
 
@@ -455,8 +527,8 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         }
         let req = mz_adapter::client::HttpSqlRequest::Extended { queries };
         let res = Client::new().post(url.clone()).json(&req).send()?;
-        assert_eq!(res.status(), tc.status);
-        assert_eq!(res.text()?, tc.body);
+        assert_eq!(res.status(), tc.status, "{:?}: {:?}", req, res.text());
+        assert_eq!(res.text()?, tc.body, "{:?}", req);
     }
 
     Ok(())
