@@ -58,6 +58,8 @@ use crate::source::types::SourceToken;
 /// argument. Otherwise, the operator just gets `None`. Inspection of the
 /// data of this input remains unimplemented. Note that this input also
 /// does not effect the progress tracking of the `source` operator.
+//
+// TODO(guswynn): refactor this to clean up its various callsites
 pub fn source<G, D, B, L>(
     scope: &G,
     name: String,
@@ -88,7 +90,7 @@ where
             &input,
             Pipeline,
             // As documented, the optional input does not
-            // participate in feedback tracking.
+            // participate in progress tracking.
             vec![Antichain::new()],
         )
     });

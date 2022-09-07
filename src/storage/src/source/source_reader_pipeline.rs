@@ -158,7 +158,7 @@ where
     S: SourceReader,
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
-    let (resume_stream, source_reader_feedback_handle, _resume_token) =
+    let (resume_stream, source_reader_feedback_handle) =
         super::resumption::resumption_operator(config.clone(), calc);
 
     let ((batches, source_upper_summaries, resumption_feedback_stream), source_reader_token) =

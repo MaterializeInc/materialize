@@ -12,9 +12,6 @@
 //!
 //! TODO(guswynn): link to design doc when its merged
 
-use std::any::Any;
-use std::rc::Rc;
-
 use differential_dataflow::Hashable;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::feedback::Feedback;
@@ -35,19 +32,15 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 /// downgrades its output `Capability` _to the "resumption frontier"
 /// of the source_. It does not produce meaningful data.
 ///
-/// The returned feedback `Handle` is to allow the downstream
-/// operator communicate its frontier back to this operator,
-/// so we can shutdown. This is useful when a source is
-/// static or finished. This operator only inspects its frontier, and it does not
-/// participate in the operator's progress tracking.
+/// The returned feedback `Handle` is to allow the downstream operator to
+/// communicate a frontier back to this operator, so we can shutdown when that
+/// frontier becomes the empty antichain.
+///
+/// This is useful when a source is finite or finishes for other reasons.
 pub fn resumption_operator<G, R>(
     config: RawSourceCreationConfig<G>,
     calc: R,
-) -> (
-    timely::dataflow::Stream<G, ()>,
-    Handle<G, ()>,
-    Option<Rc<dyn Any>>,
-)
+) -> (timely::dataflow::Stream<G, ()>, Handle<G, ()>)
 where
     G: Scope<Timestamp = Timestamp> + Clone,
     R: ResumptionFrontierCalculator<Timestamp> + 'static,
@@ -68,7 +61,7 @@ where
     // TODO(guswynn): remove this clone, `Feedback::feedback` erroneously requires `&mut Scope`,
     // but only needs to clone the scope.
     let (source_reader_feedback_handle, source_reader_feedback_stream) =
-        config.scope.clone().feedback(1);
+        config.scope.clone().feedback(Timestamp::new(1));
 
     let chosen_worker = (source_id.hashed() % worker_count as u64) as usize;
     let active_worker = chosen_worker == worker_id;
@@ -102,7 +95,7 @@ where
             capabilities.clear();
 
             // TODO: determine what interval we want here.
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
 
             // The lock MUST be dropped before we enter the main loop.
             let persist_client = persist_clients
@@ -149,5 +142,5 @@ where
         },
     );
 
-    (resume_stream, source_reader_feedback_handle, None)
+    (resume_stream, source_reader_feedback_handle)
 }
