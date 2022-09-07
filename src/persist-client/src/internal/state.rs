@@ -76,10 +76,13 @@ pub struct HollowBatch<T> {
     pub parts: Vec<HollowBatchPart>,
     /// The number of updates in the batch.
     pub len: usize,
-    /// Runs of sequential sorted batch parts, stored as indices into [keys].
-    /// ex. keys=[k1, k2, k3], runs=[]     --> run  is  [k1, k2, k2]
-    ///     keys=[k1, k2, k3], runs=[1]    --> runs are [k1] and [k2, k3]
-    ///     keys=[k1, k2, k3], runs=[1, 2] --> runs are [k1], [k2], [k3]
+    /// Runs of sequential sorted batch parts, stored as indices into `parts`.
+    /// ex.
+    /// ```text
+    ///     parts=[p1, p2, p3], runs=[]     --> run  is  [p1, p2, p2]
+    ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
+    ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
+    /// ```
     pub runs: Vec<usize>,
 }
 
