@@ -788,18 +788,16 @@ impl KafkaSinkState {
             let mut latest_ts = None;
             let mut latest_offset = None;
 
+            let progress_key_bytes = progress_key.as_bytes();
             while let Some((key, message, offset)) = get_next_message(&mut consumer, timeout)? {
                 debug_assert!(offset >= latest_offset.unwrap_or(0));
                 latest_offset = Some(offset);
 
-                let timestamp_opt = {
-                    match std::str::from_utf8(&key) {
-                        Ok(str_key) if str_key == progress_key => {
-                            let progress: ProgressRecord = serde_json::from_slice(&message)?;
-                            Some(progress.timestamp)
-                        }
-                        _ => None,
-                    }
+                let timestamp_opt = if &key == progress_key_bytes {
+                    let progress: ProgressRecord = serde_json::from_slice(&message)?;
+                    Some(progress.timestamp)
+                } else {
+                    None
                 };
 
                 if let Some(ts) = timestamp_opt {
