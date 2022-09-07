@@ -140,16 +140,16 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn try_group_commit(&mut self) {
         let timestamp = self.peek_local_write_ts();
-        let now = (self.catalog.config().now)();
+        let now = Timestamp::from((self.catalog.config().now)());
         if timestamp > now {
             // Cap retry time to 1s. In cases where the system clock has retreated by
             // some large amount of time, this prevents against then waiting for that
             // large amount of time in case the system clock then advances back to near
             // what it was.
-            let remaining_ms = std::cmp::min(timestamp.saturating_sub(now), 1_000);
+            let remaining_ms = std::cmp::min(timestamp.saturating_sub(now), 1_000.into());
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(|| "group_commit_initiate", async move {
-                tokio::time::sleep(Duration::from_millis(remaining_ms)).await;
+                tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
                 // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
                 let result = internal_cmd_tx.send(Message::GroupCommitInitiate);
                 if let Err(e) = result {

@@ -66,6 +66,7 @@ impl PendingTail {
                     .into_iter()
                     .map(|(time, row, diff)| {
                         let mut packer = row_buf.packer();
+                        // TODO: Change to MzTimestamp.
                         packer.push(Datum::from(numeric::Numeric::from(time)));
                         if self.emit_progress {
                             // When sinking with PROGRESS, the output

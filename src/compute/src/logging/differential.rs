@@ -50,7 +50,7 @@ pub fn construct<A: Allocate>(
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000) as Timestamp;
+    let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000);
 
     let traces = worker.dataflow_named("Dataflow: differential logging", move |scope| {
         let (logs, token) = Some(linked).mz_replay(
@@ -84,8 +84,9 @@ pub fn construct<A: Allocate>(
                     data.swap(&mut demux_buffer);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
-                        let time_ms = (((time.as_millis() as Timestamp / interval_ms) + 1)
-                            * interval_ms) as Timestamp;
+                        let time_ms = (((time.as_millis() / interval_ms) + 1) * interval_ms)
+                            .try_into()
+                            .expect("must fit");
 
                         match datum {
                             DifferentialEvent::Batch(event) => {

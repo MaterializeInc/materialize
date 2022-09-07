@@ -226,7 +226,7 @@ async fn truncate_persist_shard(shard_id: ShardId, persist_client: &PersistClien
             .into_iter()
             .map(|((k, v), _ts, diff)| ((k.unwrap(), v.unwrap()), upper_ts, diff * -1));
 
-        let new_upper = Antichain::from_elem(upper_ts + 1);
+        let new_upper = Antichain::from_elem(upper_ts.step_forward());
         write
             .compare_and_append(retractions, upper, new_upper)
             .await

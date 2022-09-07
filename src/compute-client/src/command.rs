@@ -145,7 +145,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
-                    proptest::collection::vec(any::<u64>(), 1..4)
+                    proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4)
                 ),
                 1..4
             )
@@ -394,7 +394,7 @@ proptest::prop_compose! {
             1..3,
         ),
         as_of_some in any::<bool>(),
-        as_of in proptest::collection::vec(any::<u64>(), 1..5),
+        as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
         debug_name in ".*",
     ) -> DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
@@ -864,7 +864,7 @@ impl RustType<ProtoPeek> for Peek {
                 None => Vec::<Row>::new().into_proto(),
             },
             uuid: Some(self.uuid.into_proto()),
-            timestamp: self.timestamp,
+            timestamp: self.timestamp.into(),
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
             target_replica: self.target_replica,
@@ -884,7 +884,7 @@ impl RustType<ProtoPeek> for Peek {
                 }
             },
             uuid: x.uuid.into_rust_if_some("ProtoPeek::uuid")?,
-            timestamp: x.timestamp,
+            timestamp: x.timestamp.into(),
             finishing: x.finishing.into_rust_if_some("ProtoPeek::finishing")?,
             map_filter_project: x
                 .map_filter_project

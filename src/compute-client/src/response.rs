@@ -227,7 +227,7 @@ impl Arbitrary for TailResponse<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
             any::<TailBatch<mz_repr::Timestamp>>().prop_map(TailResponse::Batch),
-            proptest::collection::vec(any::<u64>(), 1..4)
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4)
                 .prop_map(|antichain| TailResponse::DroppedAt(Antichain::from(antichain)))
         ]
         .boxed()
@@ -255,7 +255,7 @@ impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
                 .updates
                 .iter()
                 .map(|(t, r, d)| ProtoUpdate {
-                    timestamp: *t,
+                    timestamp: t.into(),
                     row: Some(r.into_proto()),
                     diff: *d,
                 })
@@ -272,7 +272,7 @@ impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
                 .into_iter()
                 .map(|update| {
                     Ok((
-                        update.timestamp,
+                        update.timestamp.into(),
                         update.row.into_rust_if_some("ProtoUpdate::row")?,
                         update.diff,
                     ))
@@ -288,8 +288,8 @@ impl Arbitrary for TailBatch<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            proptest::collection::vec(any::<u64>(), 1..4),
-            proptest::collection::vec(any::<u64>(), 1..4),
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
             proptest::collection::vec(
                 (any::<mz_repr::Timestamp>(), any::<Row>(), any::<Diff>()),
                 1..4,

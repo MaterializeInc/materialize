@@ -412,7 +412,7 @@ impl SourceMetrics {
                 self.source_id,
                 &partition,
                 offset.offset,
-                timestamp as i64,
+                u64::from(timestamp) as i64,
             );
         }
     }

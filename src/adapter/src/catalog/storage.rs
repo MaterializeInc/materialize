@@ -1553,7 +1553,7 @@ struct TimestampKey {
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct TimestampValue {
-    ts: u64,
+    ts: mz_repr::Timestamp,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
