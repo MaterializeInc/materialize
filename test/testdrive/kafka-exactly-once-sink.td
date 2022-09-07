@@ -268,16 +268,14 @@ $ kafka-ingest format=avro topic=progress-test-input schema=${cdcv2-schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":2}]}}
 {"array":[{"data":{"a":2,"b":2},"time":3,"diff":1}]}
 
-$ kafka-verify format=avro sink=materialize.public.compaction_test_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}}
+$ kafka-verify headers=mz-timestamp format=avro sink=materialize.public.compaction_test_sink sort-messages=true
+1	{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
 $ kafka-verify format=json key=false topic=testdrive-progress-fixed-${testdrive.seed}
 {"timestamp": 1}
 
 # verify output with real-time timestamps
-
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 $ kafka-create-topic topic=rt-binding-progress-test-input
 
@@ -294,4 +292,4 @@ $ kafka-ingest format=avro topic=rt-binding-progress-test-input schema=${dbz-sch
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 $ kafka-verify format=avro sink=materialize.public.rt_binding_progress_test_sink
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
