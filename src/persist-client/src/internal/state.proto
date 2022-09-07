@@ -22,14 +22,16 @@ message ProtoU64Description {
 }
 
 message ProtoHollowBatchPart {
-    ProtoU64Description desc = 1;
-    string key = 2;
+    string key = 1;
+    uint64 encoded_size_bytes = 2;
 }
 
 message ProtoHollowBatch {
     ProtoU64Description desc = 1;
-    repeated string keys = 2;
+    repeated ProtoHollowBatchPart parts = 4;
     uint64 len = 3;
+
+    repeated string deprecated_keys = 2;
 }
 
 message ProtoTrace {

@@ -714,6 +714,7 @@ pub struct ShardsMetrics {
     // later in favor of only having the latter.
     batch_count: mz_ore::metrics::UIntGaugeVec,
     update_count: mz_ore::metrics::UIntGaugeVec,
+    encoded_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
@@ -779,6 +780,13 @@ impl ShardsMetrics {
                     var_labels: ["shard"],
                 ),
             ),
+            encoded_batch_size: registry.register(
+                metric!(
+                    name: "mz_persist_shard_encoded_batch_size",
+                    help: "total encoded batch size of all active shards on this process",
+                    var_labels: ["shard"],
+                ),
+            ),
             seqnos_held: registry.register(
                 metric!(
                     name: "mz_persist_shard_seqnos_held",
@@ -834,6 +842,7 @@ pub struct ShardMetrics {
     encoded_diff_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    encoded_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
@@ -859,6 +868,9 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             update_count: shards_metrics
                 .update_count
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            encoded_batch_size: shards_metrics
+                .encoded_batch_size
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             seqnos_held: shards_metrics
                 .seqnos_held
@@ -906,6 +918,11 @@ impl ShardMetrics {
 
     pub fn set_update_count(&self, update_count: usize) {
         self.update_count.set(u64::cast_from(update_count))
+    }
+
+    pub fn set_encoded_batch_size(&self, encoded_batch_size: usize) {
+        self.encoded_batch_size
+            .set(u64::cast_from(encoded_batch_size))
     }
 
     pub fn set_seqnos_held(&self, seqnos_held: usize) {

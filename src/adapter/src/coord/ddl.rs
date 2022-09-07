@@ -269,7 +269,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .into_group_map();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
+            if let Some(mut compute) = self.controller.active_compute(compute_instance) {
                 compute.drop_collections(ids).await.unwrap();
             }
         }
@@ -300,7 +300,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         for (compute_instance, ids) in by_compute_instance {
             self.controller
-                .compute_mut(compute_instance)
+                .active_compute(compute_instance)
                 .unwrap()
                 .drop_collections(ids)
                 .await
@@ -327,7 +327,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // TODO(chae): Drop storage sinks when they're moved over
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
+            if let Some(mut compute) = self.controller.active_compute(compute_instance) {
                 compute.drop_collections(ids).await.unwrap();
             }
         }

@@ -486,8 +486,8 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             key: ins,
             val: StateFieldValDiff::Insert(()),
         }] => {
-            if del.keys.len() == 0
-                && ins.keys.len() == 0
+            if del.parts.len() == 0
+                && ins.parts.len() == 0
                 && del.desc.lower() == ins.desc.lower()
                 && PartialOrder::less_than(del.desc.upper(), ins.desc.upper())
             {
@@ -502,7 +502,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
                         // frontier is for these batches (nothing in them, so nothing could have been compacted.
                         Antichain::from_elem(T::minimum()),
                     ),
-                    keys: vec![],
+                    parts: vec![],
                     len: 0,
                 });
                 metrics.state.apply_spine_fast_path.inc();

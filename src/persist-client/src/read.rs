@@ -302,14 +302,15 @@ where
         let (parts, progress) = self.next_parts().await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
-            let (part, updates) = fetch_leased_part(
+            let (part, fetched_part) = fetch_leased_part(
                 part,
                 self.handle.blob.as_ref(),
-                &self.handle.metrics,
+                Arc::clone(&self.handle.metrics),
                 Some(&self.handle.reader_id),
             )
             .await;
             self.handle.process_returned_leased_part(part);
+            let updates = fetched_part.collect::<Vec<_>>();
             if !updates.is_empty() {
                 ret.push(ListenEvent::Updates(updates));
             }
@@ -518,16 +519,16 @@ where
         let snap = self.snapshot(as_of).await?;
 
         let mut contents = Vec::new();
-        for batch in snap {
-            let (batch, mut r) = fetch_leased_part(
-                batch,
+        for part in snap {
+            let (part, fetched_part) = fetch_leased_part(
+                part,
                 self.blob.as_ref(),
-                &self.metrics,
+                Arc::clone(&self.metrics),
                 Some(&self.reader_id),
             )
             .await;
-            self.process_returned_leased_part(batch);
-            contents.append(&mut r);
+            self.process_returned_leased_part(part);
+            contents.extend(fetched_part);
         }
         Ok(contents)
     }
@@ -552,12 +553,12 @@ where
         batch: HollowBatch<T>,
         metadata: SerdeLeasedBatchPartMetadata,
     ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
-        batch.keys.into_iter().map(move |key| LeasedBatchPart {
+        batch.parts.into_iter().map(move |part| LeasedBatchPart {
             shard_id: self.machine.shard_id(),
             reader_id: self.reader_id.clone(),
             metadata: metadata.clone(),
             desc: batch.desc.clone(),
-            key,
+            key: part.key,
             leased_seqno: Some(self.lease_seqno()),
         })
     }

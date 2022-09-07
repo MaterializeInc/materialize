@@ -520,7 +520,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         let dataflow_plan =
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
                         self.controller
-                            .compute_mut(idx.compute_instance)
+                            .active_compute(idx.compute_instance)
                             .unwrap()
                             .create_dataflows(dataflow_plan)
                             .await

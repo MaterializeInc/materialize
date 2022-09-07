@@ -245,7 +245,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(COPY) => Ok(self.parse_copy()?),
                 Token::Keyword(SET) => Ok(self.parse_set()?),
                 Token::Keyword(RESET) => Ok(self.parse_reset()?),
-                Token::Keyword(SHOW) => Ok(self.parse_show()?),
+                Token::Keyword(SHOW) => Ok(Statement::Show(self.parse_show()?)),
                 Token::Keyword(START) => Ok(self.parse_start_transaction()?),
                 // `BEGIN` is a nonstandard but common alias for the
                 // standard `START TRANSACTION` statement. It is supported
@@ -4377,6 +4377,8 @@ impl<'a> Parser<'a> {
             SetExpr::Query(Box::new(subquery))
         } else if self.parse_keyword(VALUES) {
             SetExpr::Values(self.parse_values()?)
+        } else if self.parse_keyword(SHOW) {
+            SetExpr::Show(self.parse_show()?)
         } else {
             return self.expected(
                 self.peek_pos(),
@@ -4580,9 +4582,9 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_show(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_show(&mut self) -> Result<ShowStatement<Raw>, ParserError> {
         if self.parse_keyword(DATABASES) {
-            return Ok(Statement::ShowDatabases(ShowDatabasesStatement {
+            return Ok(ShowStatement::ShowDatabases(ShowDatabasesStatement {
                 filter: self.parse_show_statement_filter()?,
             }));
         }
@@ -4638,7 +4640,7 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            Ok(Statement::ShowSchemas(ShowSchemasStatement {
+            Ok(ShowStatement::ShowSchemas(ShowSchemasStatement {
                 from,
                 extended,
                 full,
@@ -4666,7 +4668,7 @@ impl<'a> Parser<'a> {
                     if self.parse_keyword(REPLICAS) {
                         ObjectType::ClusterReplica
                     } else {
-                        return Ok(Statement::ShowVariable(ShowVariableStatement {
+                        return Ok(ShowStatement::ShowVariable(ShowVariableStatement {
                             variable: Ident::from("cluster"),
                         }));
                     }
@@ -4709,7 +4711,7 @@ impl<'a> Parser<'a> {
                 None => (None, None),
             };
 
-            Ok(Statement::ShowObjects(ShowObjectsStatement {
+            Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
                 object_type,
                 extended,
                 full,
@@ -4739,40 +4741,40 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            Ok(Statement::ShowIndexes(ShowIndexesStatement {
+            Ok(ShowStatement::ShowIndexes(ShowIndexesStatement {
                 table_name,
                 in_cluster,
                 extended,
                 filter,
             }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
-            Ok(Statement::ShowCreateView(ShowCreateViewStatement {
+            Ok(ShowStatement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, MATERIALIZED, VIEW]) {
-            Ok(Statement::ShowCreateMaterializedView(
+            Ok(ShowStatement::ShowCreateMaterializedView(
                 ShowCreateMaterializedViewStatement {
                     materialized_view_name: self.parse_raw_name()?,
                 },
             ))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
-            Ok(Statement::ShowCreateSource(ShowCreateSourceStatement {
+            Ok(ShowStatement::ShowCreateSource(ShowCreateSourceStatement {
                 source_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, TABLE]) {
-            Ok(Statement::ShowCreateTable(ShowCreateTableStatement {
+            Ok(ShowStatement::ShowCreateTable(ShowCreateTableStatement {
                 table_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, SINK]) {
-            Ok(Statement::ShowCreateSink(ShowCreateSinkStatement {
+            Ok(ShowStatement::ShowCreateSink(ShowCreateSinkStatement {
                 sink_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, INDEX]) {
-            Ok(Statement::ShowCreateIndex(ShowCreateIndexStatement {
+            Ok(ShowStatement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
             }))
         } else if self.parse_keywords(&[CREATE, CONNECTION]) {
-            Ok(Statement::ShowCreateConnection(
+            Ok(ShowStatement::ShowCreateConnection(
                 ShowCreateConnectionStatement {
                     connection_name: self.parse_raw_name()?,
                 },
@@ -4785,7 +4787,9 @@ impl<'a> Parser<'a> {
             } else {
                 self.parse_identifier()?
             };
-            Ok(Statement::ShowVariable(ShowVariableStatement { variable }))
+            Ok(ShowStatement::ShowVariable(ShowVariableStatement {
+                variable,
+            }))
         }
     }
 
@@ -4793,14 +4797,14 @@ impl<'a> Parser<'a> {
         &mut self,
         extended: bool,
         full: bool,
-    ) -> Result<Statement<Raw>, ParserError> {
+    ) -> Result<ShowStatement<Raw>, ParserError> {
         self.expect_one_of_keywords(&[FROM, IN])?;
         let table_name = self.parse_raw_name()?;
         // MySQL also supports FROM <database> here. In other words, MySQL
         // allows both FROM <table> FROM <database> and FROM <database>.<table>,
         // while we only support the latter for now.
         let filter = self.parse_show_statement_filter()?;
-        Ok(Statement::ShowColumns(ShowColumnsStatement {
+        Ok(ShowStatement::ShowColumns(ShowColumnsStatement {
             extended,
             full,
             table_name,
