@@ -10,41 +10,16 @@
 use axum::response::IntoResponse;
 use axum::Json;
 use http::StatusCode;
-use serde::Deserialize;
+
+use mz_adapter::client::HttpSqlRequest;
 
 use crate::http::AuthedClient;
 
-#[derive(Deserialize, Debug)]
-pub struct SqlRequestParam {
-    value: String,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct SqlRequest {
-    query: String,
-    params: Option<Vec<SqlRequestParam>>,
-}
-
 pub async fn handle_sql(
     AuthedClient(mut client): AuthedClient,
-    Json(request): Json<Vec<SqlRequest>>,
+    Json(request): Json<HttpSqlRequest>,
 ) -> impl IntoResponse {
-    let mut requests = vec![];
-    for SqlRequest { query, params } in &request {
-        requests.push((
-            query.as_str(),
-            params
-                .as_ref()
-                .map(|params| {
-                    params
-                        .iter()
-                        .map(|SqlRequestParam { value }| value.as_str())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default(),
-        ));
-    }
-    match client.simple_execute(requests).await {
+    match client.execute_sql_http_request(request).await {
         Ok(res) => Ok(Json(res)),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }
