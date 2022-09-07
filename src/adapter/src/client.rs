@@ -629,7 +629,10 @@ impl SessionClient {
                     }
                     // Mirror the behavior of the PostgreSQL simple query protocol.
                     // See the pgwire::protocol::StateMachine::query method for details.
-                    self.start_transaction(Some(num_stmts)).await?;
+                    if let Err(e) = self.start_transaction(Some(num_stmts)).await {
+                        results.push(SimpleResult::err(e));
+                        break;
+                    }
                     let res = self.execute_stmt(stmt, vec![]).await;
                     if matches!(res, SimpleResult::Err { .. }) {
                         self.fail_transaction();
@@ -639,26 +642,46 @@ impl SessionClient {
             }
             HttpSqlRequest::Extended { queries } => {
                 for ExtendedRequest { query, params } in queries {
-                    let mut stmts = mz_sql::parse::parse(&query)
-                        .map_err(|e| AdapterError::Unstructured(e.into()))?;
+                    let mut stmts = match mz_sql::parse::parse(&query) {
+                        Ok(stmts) => stmts,
+                        Err(e) => {
+                            results.push(SimpleResult::err(e));
+                            break;
+                        }
+                    };
+
                     if stmts.len() > 1 {
                         results.push(SimpleResult::err(
                             "each query can contain at most 1 statement",
                         ));
-                        continue;
+                        break;
                     }
+
                     match stmts.pop() {
                         Some(stmt) => {
+                            if self.session().transaction().is_implicit()
+                                && matches!(stmt, Statement::StartTransaction(..))
+                            {
+                                self.end_transaction(EndTransactionAction::Commit).await?;
+                            }
                             // Mirror the behavior of the PostgreSQL simple query protocol.
                             // See the pgwire::protocol::StateMachine::query method for details.
-                            self.start_transaction(Some(1)).await?;
-                            results.push(self.execute_stmt(stmt, params.unwrap_or_default()).await);
+                            if let Err(e) = self.start_transaction(Some(1)).await {
+                                results.push(SimpleResult::err(e));
+                                break;
+                            }
+                            let res = self.execute_stmt(stmt, params).await;
+                            if matches!(res, SimpleResult::Err { .. }) {
+                                self.fail_transaction();
+                            }
+                            results.push(res);
                         }
                         None => {
-                            if !params.unwrap_or_default().is_empty() {
-                                return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                    "cannot provide parameters to an empty query"
-                                )));
+                            if !params.is_empty() {
+                                results.push(SimpleResult::err(
+                                    "cannot provide parameters to an empty query",
+                                ));
+                                break;
                             }
                         }
                     }
