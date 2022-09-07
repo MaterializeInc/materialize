@@ -1,0 +1,8 @@
+{
+    "name": "one-off experiments - r6i",
+    "launch_script": "true",
+    "instance_type": "r6id.2xlarge",
+    "ami": "ami-09d56f8956ab235b3",
+    "size_gb": 64,
+    "tags": {}
+}
