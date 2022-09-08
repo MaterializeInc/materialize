@@ -382,7 +382,7 @@ pub struct Args {
     usage_snapshot_url: Option<Url>,
     /// How often to write usage snapshots, in seconds
     #[clap(long, env = "USAGE_SNAPSHOT_INTERVAL", default_value = "5")]
-    usage_snapshot_interval: Option<u32>,
+    usage_snapshot_interval: u64,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -711,6 +711,8 @@ max log level: {max_log_level}",
         tracing_target_callbacks,
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
         segment_api_key: args.segment_api_key,
+        usage_snapshot_url: args.usage_snapshot_url,
+        usage_snapshot_interval: args.usage_snapshot_interval,
     }))?;
 
     println!(

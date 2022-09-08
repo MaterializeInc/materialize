@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
+use aws_sdk_s3::Client as S3Client;
 use aws_smithy_http::endpoint::Endpoint;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
@@ -29,6 +30,8 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 use tracing::error;
+use url::Url;
+use uuid::Uuid;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
@@ -47,6 +50,7 @@ use crate::tcp_connection::ConnectionHandler;
 
 pub mod http;
 pub mod tcp_connection;
+mod usage;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 // TODO: should storage usage default go here?
@@ -117,9 +121,10 @@ pub struct Config {
     /// Callbacks used to modify tracing/logging filters
     pub tracing_target_callbacks: TracingTargetCallbacks,
 
-    /// Where to send usage snapshots
-    pub usage_snapshot_url: Option<String>,
-    // TODO: make the interval configurable
+    /// (S3-compatible) URL to which to send usage snapshots
+    pub usage_snapshot_url: Option<Url>,
+    /// How often (in seconds) to send snapshots
+    pub usage_snapshot_interval: u64,
 
     // === Testing options. ===
     /// A now generation function for mocking time.
@@ -333,6 +338,44 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         (internal_sql_drain_trigger, internal_sql_local_addr)
     };
 
+    if let Some(url) = config.usage_snapshot_url {
+        if let None = url.host() {
+            bail!("missing S3 bucket: {}", &url.as_str());
+        }
+        let bucket = url.host().unwrap().to_string();
+        let prefix = url
+            .path()
+            .strip_prefix('/')
+            .unwrap_or_else(|| url.path())
+            .to_string();
+
+        let adapter_client2 = adapter_client.clone();
+
+        task::spawn(|| "usage_snapshotter", {
+            async move {
+                let mut loader = aws_config::from_env();
+                for (k, v) in url.query_pairs() {
+                    if k == "endpoint" {
+                        loader = loader.endpoint_resolver(Endpoint::immutable(
+                            v.parse().expect("valid S3 endpoint URI"),
+                        ));
+                    }
+                }
+                let s3_client = S3Client::new(&loader.load().await);
+                let cfg = usage::Config {
+                    interval: Duration::from_secs(config.usage_snapshot_interval),
+                    s3_bucket: bucket,
+                    s3_prefix: prefix,
+                    s3_client,
+                    adapter_client: adapter_client2,
+                };
+
+                let usage_snapshot_task = usage::Snapshotter::new(cfg);
+                usage_snapshot_task.run_forever().await;
+            }
+        });
+    }
+
     let (http_drain_trigger, http_drain_tripwire) = oneshot::channel();
     task::spawn(|| "http_server", {
         async move {
@@ -349,38 +392,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     });
 
-    if let Some(url) = self.usage_snapshot_url {
-        task::spawn(|| "usage_snapshotter", {
-            async move {
-                let mut loader = aws_config::from_env();
-                for (k, v) in url.query_pairs() {
-                    if k == "endpoint" {
-                        loader = loader.endpoint_resolver(Endpoint::immutable(
-                            v.parse().expect("valid S3 endpoint URI"),
-                        ));
-                    }
-                }
-                let bucket = url
-                    .host()
-                    .ok_or_else(|| bail!("missing bucket: {}", &url.as_str()))?
-                    .to_string();
-                let prefix = url
-                    .path()
-                    .strip_prefix('/')
-                    .unwrap_or_else(|| url.path())
-                    .to_string();
-                let s3_client = aws_sdk_s3::Client::new(&loader.load().await);
-                let usage_snapshot_task = usage::Snapshotter::new(usage::Config {
-                    interval: Duration::from_secs(self.usage_snapshot_interval),
-                    s3_bucket: bucket,
-                    s3_prefix: prefix,
-                    s3_client: s3_client,
-                    adapter_client: adapter_client,
-                });
-                usage_snapshot_task.run_forever().await;
-            }
-        });
-    }
     Ok(Server {
         sql_local_addr,
         http_local_addr,
