@@ -103,32 +103,6 @@ impl Client {
             inner: self.clone(),
         })
     }
-
-    /// Executes SQL statements, as if by
-    /// [`SessionClient::execute_sql_http_request`], as a system user.
-    pub async fn system_execute(
-        &self,
-        stmts: &str,
-    ) -> Result<SqlHttpExecuteResponse, AdapterError> {
-        let conn_client = self.new_conn()?;
-        let session = Session::new(conn_client.conn_id(), SYSTEM_USER.into());
-        let (mut session_client, _) = conn_client.startup(session, false).await?;
-        let req = HttpSqlRequest::Simple {
-            query: stmts.to_string(),
-        };
-        session_client.execute_sql_http_request(req).await
-    }
-
-    /// Like [`Client::system_execute`], but for cases when `stmt` is known to
-    /// contain just one statement.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `stmt` parses to more than one SQL statement.
-    pub async fn system_execute_one(&self, stmt: &str) -> Result<SimpleResult, AdapterError> {
-        let response = self.system_execute(stmt).await?;
-        Ok(response.results.into_element())
-    }
 }
 
 /// A coordinator client that is bound to a connection.
