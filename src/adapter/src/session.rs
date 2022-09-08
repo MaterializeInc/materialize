@@ -104,7 +104,7 @@ impl<T: CoordTimestamp> Session<T> {
         isolation_level: Option<TransactionIsolationLevel>,
     ) -> Self {
         match self.transaction {
-            TransactionStatus::Default | TransactionStatus::Started(_) => {
+            TransactionStatus::Default => {
                 self.transaction = TransactionStatus::InTransaction(Transaction {
                     pcx: PlanContext::new(wall_time, self.vars.qgm_optimizations()),
                     ops: TransactionOps::None,
@@ -112,7 +112,7 @@ impl<T: CoordTimestamp> Session<T> {
                     access,
                 });
             }
-            TransactionStatus::InTransactionImplicit(txn) => {
+            TransactionStatus::Started(txn) | TransactionStatus::InTransactionImplicit(txn) => {
                 self.transaction = TransactionStatus::InTransaction(txn);
             }
             TransactionStatus::InTransaction(_) => {}
