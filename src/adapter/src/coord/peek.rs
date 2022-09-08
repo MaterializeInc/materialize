@@ -483,7 +483,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
-                    .active_compute(compute_instance)
+                    .active_compute()
+                    .instance(compute_instance)
                     .unwrap()
                     .create_dataflows(vec![dataflow])
                     .await
@@ -552,7 +553,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let (id, literal_constraints, timestamp, _finishing, map_filter_project) = peek_command;
 
         self.controller
-            .active_compute(compute_instance)
+            .active_compute()
+            .instance(compute_instance)
             .unwrap()
             .peek(
                 id,
@@ -604,7 +606,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             }
             for (compute_instance, uuids) in inverse {
                 self.controller
-                    .active_compute(compute_instance)
+                    .active_compute()
+                    .instance(compute_instance)
                     .unwrap()
                     .cancel_peeks(&uuids)
                     .await

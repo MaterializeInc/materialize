@@ -294,7 +294,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let append_fut = self
             .controller
-            .storage_mut()
+            .storage
             .append(appends)
             .expect("invalid updates");
         if should_block {

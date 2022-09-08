@@ -88,8 +88,7 @@ use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_compute_client::command::ReplicaId;
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_controller::ComputeInstanceEvent;
+use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::stack;
@@ -372,12 +371,12 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut persisted_source_ids = vec![];
         for instance in self.catalog.compute_instances() {
             self.controller
+                .compute
                 .create_instance(
                     instance.id,
                     instance.logging.clone(),
                     self.catalog.system_config().max_result_size(),
-                )
-                .await;
+                );
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config
@@ -390,7 +389,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // Create collections does not recreate existing collections, so it is safe to
                 // always call it.
                 self.controller
-                    .storage_mut()
+                    .storage
                     .create_collections(introspection_collections)
                     .await
                     .unwrap();
@@ -398,6 +397,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids().iter());
 
                 self.controller
+                    .active_compute()
                     .add_replica_to_instance(instance.id, replica_id, replica.config)
                     .await
                     .unwrap();
@@ -412,15 +412,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Migrate builtin objects.
         self.controller
-            .storage_mut()
+            .storage
             .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids)
             .await?;
         self.controller
-            .storage_mut()
+            .storage
             .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids)
             .await?;
         self.controller
-            .storage_mut()
+            .storage
             .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids)
             .await?;
 
@@ -478,7 +478,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
 
                     self.controller
-                        .storage_mut()
+                        .storage
                         .create_collections(vec![(
                             entry.id(),
                             CollectionDescription {
@@ -497,7 +497,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 CatalogItem::Table(table) => {
                     let collection_desc = table.desc.clone().into();
                     self.controller
-                        .storage_mut()
+                        .storage
                         .create_collections(vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap();
@@ -525,7 +525,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         let dataflow_plan =
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
                         self.controller
-                            .active_compute(idx.compute_instance)
+                            .active_compute()
+                            .instance(idx.compute_instance)
                             .unwrap()
                             .create_dataflows(dataflow_plan)
                             .await
@@ -537,7 +538,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     // Re-create the storage collection.
                     let collection_desc = mview.desc.clone().into();
                     self.controller
-                        .storage_mut()
+                        .storage
                         .create_collections(vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap();
@@ -588,7 +589,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 CatalogItem::StorageCollection(coll) => {
                     let collection_desc = coll.desc.clone().into();
                     self.controller
-                        .storage_mut()
+                        .storage
                         .create_collections(vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap();
@@ -675,7 +676,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .map(|entry| (entry.id(), Vec::new(), advance_to))
             .collect();
         self.controller
-            .storage_mut()
+            .storage
             .append(appends)
             .expect("invalid updates")
             .await
@@ -690,7 +691,7 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             let current_contents = self
                 .controller
-                .storage_mut()
+                .storage
                 .snapshot(system_table.id(), read_ts)
                 .await
                 .unwrap();
@@ -733,7 +734,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut advance_timelines_interval =
             tokio::time::interval(self.catalog.config().timestamp_interval);
         // Watcher that listens for and reports compute service status changes.
-        let mut compute_events = self.controller.watch_compute_services();
+        let mut compute_events = self.controller.compute.watch_services();
 
         // Trigger a storage usage metric collection on configured interval.
         let mut storage_usage_update_interval =

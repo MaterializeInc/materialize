@@ -28,14 +28,14 @@ use mz_audit_log::{
 };
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::{
+    ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceReplicaAllocation,
+    ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLocation,
+    ConcreteComputeInstanceReplicaLogging,
+};
 use mz_compute_client::logging::{
     LogVariant, LogView, LoggingConfig as DataflowLoggingConfig, DEFAULT_LOG_VARIANTS,
     DEFAULT_LOG_VIEWS,
-};
-use mz_controller::{
-    ComputeInstanceEvent, ComputeInstanceReplicaAllocation, ConcreteComputeInstanceReplicaConfig,
-    ConcreteComputeInstanceReplicaLocation, ConcreteComputeInstanceReplicaLogging,
 };
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
