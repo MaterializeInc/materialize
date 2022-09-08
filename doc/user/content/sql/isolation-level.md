@@ -9,10 +9,16 @@ menu:
     weight: 160
 ---
 
-The SQL standard defines four levels of transaction isolation. In order of least strict to most strict they are Read
-Uncommitted, Read Committed, Repeatable Read, and Serializable. In Materialize, you can request any of these isolation
+The SQL standard defines four levels of transaction isolation. In order of least strict to most strict they are:
+
+  * Read Uncommitted
+  * Read Committed
+  * Repeatable Read
+  * Serializable. 
+
+In Materialize, you can request any of these isolation
 levels, but they all behave the same as the Serializable isolation level. In addition to the four levels defined in the
-SQL Standard, Materialize also defines a Strict Serializable isolation level.
+SQL Standard, Materialize also defines a [Strict Serializable](#strict-serializable) isolation level.
 
 Isolation level is a per session configurable variable. To set the current session’s isolation level you can
 execute `SET TRANSACTION_ISOLATION TO '<isolation-level>';`. The default isolation level is Strict Serializable.
@@ -65,10 +71,10 @@ of the rows that were seen by T1.
 It’s important to note that the linearizable guarantee only applies to transactions (including single statement SQL
 queries which are implicitly single statement transactions), not to data written while ingesting from upstream sources.
 So if some piece of data has been fully ingested from an upstream source, then it is not guaranteed to appear in the
-next read transaction. See https://github.com/MaterializeInc/materialize/issues/11531
-and https://github.com/MaterializeInc/materialize/issues/13107 for more details. If some piece of data has been
-fully ingested from an upstream source AND is included in the results of some read transaction THEN all subsequent read
-transactions are guaranteed to see that piece of data.
+next read transaction. See [real-time recency](https://github.com/MaterializeInc/materialize/issues/11531)
+and [strengthening correctness](https://github.com/MaterializeInc/materialize/issues/13107) for more details. If some
+piece of data has been fully ingested from an upstream source AND is included in the results of some read transaction
+THEN all subsequent read transactions are guaranteed to see that piece of data.
 
 ## Choosing the Right Isolation Level
 
@@ -80,8 +86,11 @@ Strict Serializable provides stronger consistency guarantees but may have slower
 because Strict Serializable may need to wait for writes to propagate through materialized views and indexes, while
 Serializable does not.
 
-See the [PostgreSQL documentation](https://www.postgresql.org/docs/current/transaction-iso.html) for more information on
-isolation levels.
 
-See the [Jepsen Consistency Models documentation](https://jepsen.io/consistency) for more information on consistency
-models.
+## Learn more
+
+Check out:
+
+- [PostgreSQL documentation](https://www.postgresql.org/docs/current/transaction-iso.html) for more information on
+  isolation levels.
+- [Jepsen Consistency Models documentation](https://jepsen.io/consistency) for more information on consistency models.
