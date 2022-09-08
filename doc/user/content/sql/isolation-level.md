@@ -14,7 +14,7 @@ The SQL standard defines four levels of transaction isolation. In order of least
   * Read Uncommitted
   * Read Committed
   * Repeatable Read
-  * Serializable. 
+  * Serializable
 
 In Materialize, you can request any of these isolation
 levels, but they all behave the same as the Serializable isolation level. In addition to the four levels defined in the
