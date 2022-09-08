@@ -3341,6 +3341,7 @@ dependencies = [
  "mz-prof",
  "mz-repr",
  "mz-secrets",
+ "mz-sql",
  "mz-stash",
  "mz-storage",
  "nix",

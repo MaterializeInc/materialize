@@ -40,11 +40,13 @@ mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
+mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire = { path = "../pgwire" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+mz-sql = { path = "../sql" }
 mz-stash = { path = "../stash" }
 mz-storage = { path = "../storage" }
 nix = "0.25.0"
