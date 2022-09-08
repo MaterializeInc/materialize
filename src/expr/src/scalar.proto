@@ -382,6 +382,9 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_uint64_to_int64 = 261;
         google.protobuf.Empty cast_uint64_to_string = 262;
         mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_uint64_to_numeric = 263;
+        google.protobuf.Empty bit_not_uint16 = 264;
+        google.protobuf.Empty bit_not_uint32 = 265;
+        google.protobuf.Empty bit_not_uint64 = 266;
     }
 }
 

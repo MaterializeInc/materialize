@@ -133,6 +133,9 @@ struct MetricsVecs {
     encode_seconds: CounterVec,
     decode_count: IntCounterVec,
     decode_seconds: CounterVec,
+
+    /// A minimal set of metrics imported into honeycomb for alerting.
+    alerts_metrics: Arc<AlertsMetrics>,
 }
 
 impl MetricsVecs {
@@ -247,6 +250,8 @@ impl MetricsVecs {
                 help: "time spent in op decodes",
                 var_labels: ["op"],
             )),
+
+            alerts_metrics: Arc::new(AlertsMetrics::new(registry)),
         }
     }
 
@@ -368,6 +373,7 @@ impl MetricsVecs {
             failed: self.external_op_failed.with_label_values(&[op]),
             bytes: self.external_op_bytes.with_label_values(&[op]),
             seconds: self.external_op_seconds.with_label_values(&[op]),
+            alerts_metrics: Arc::clone(&self.alerts_metrics),
         }
     }
 }
@@ -930,6 +936,30 @@ impl ShardMetrics {
     }
 }
 
+/// A minimal set of metrics imported into honeycomb for alerting.
+#[derive(Debug)]
+pub struct AlertsMetrics {
+    pub(crate) blob_failures: IntCounter,
+    pub(crate) consensus_failures: IntCounter,
+}
+
+impl AlertsMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        AlertsMetrics {
+            blob_failures: registry.register(metric!(
+                name: "mz_persist_blob_failures",
+                help: "count of all blob operation failures",
+                const_labels: {"honeycomb" => "import"},
+            )),
+            consensus_failures: registry.register(metric!(
+                name: "mz_persist_consensus_failures",
+                help: "count of determinate consensus operation failures",
+                const_labels: {"honeycomb" => "import"},
+            )),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ExternalOpMetrics {
     started: IntCounter,
@@ -937,13 +967,19 @@ pub struct ExternalOpMetrics {
     failed: IntCounter,
     bytes: IntCounter,
     seconds: Counter,
+    alerts_metrics: Arc<AlertsMetrics>,
 }
 
 impl ExternalOpMetrics {
-    async fn run_op<R, F, OpFn>(&self, op_fn: OpFn) -> Result<R, ExternalError>
+    async fn run_op<R, F, OpFn, ErrFn>(
+        &self,
+        op_fn: OpFn,
+        on_err_fn: ErrFn,
+    ) -> Result<R, ExternalError>
     where
         F: std::future::Future<Output = Result<R, ExternalError>>,
         OpFn: FnOnce() -> F,
+        ErrFn: FnOnce(&AlertsMetrics, &ExternalError),
     {
         self.started.inc();
         let start = Instant::now();
@@ -951,7 +987,10 @@ impl ExternalOpMetrics {
         self.seconds.inc_by(start.elapsed().as_secs_f64());
         match res.as_ref() {
             Ok(_) => self.succeeded.inc(),
-            Err(_) => self.failed.inc(),
+            Err(err) => {
+                self.failed.inc();
+                on_err_fn(&self.alerts_metrics, err);
+            }
         };
         res
     }
@@ -976,12 +1015,21 @@ impl MetricsBlob {
     pub fn new(blob: Arc<dyn Blob + Send + Sync>, metrics: Arc<Metrics>) -> Self {
         MetricsBlob { blob, metrics }
     }
+
+    fn on_err(alerts_metrics: &AlertsMetrics, _err: &ExternalError) {
+        alerts_metrics.blob_failures.inc()
+    }
 }
 
 #[async_trait]
 impl Blob for MetricsBlob {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        let res = self.metrics.blob.get.run_op(|| self.blob.get(key)).await;
+        let res = self
+            .metrics
+            .blob
+            .get
+            .run_op(|| self.blob.get(key), Self::on_err)
+            .await;
         if let Ok(Some(value)) = res.as_ref() {
             self.metrics
                 .blob
@@ -1007,10 +1055,13 @@ impl Blob for MetricsBlob {
             .metrics
             .blob
             .list_keys
-            .run_op(|| {
-                self.blob
-                    .list_keys_and_metadata(key_prefix, &mut instrumented)
-            })
+            .run_op(
+                || {
+                    self.blob
+                        .list_keys_and_metadata(key_prefix, &mut instrumented)
+                },
+                Self::on_err,
+            )
             .await;
 
         self.metrics.blob.list_keys.bytes.inc_by(byte_total);
@@ -1024,7 +1075,7 @@ impl Blob for MetricsBlob {
             .metrics
             .blob
             .set
-            .run_op(|| self.blob.set(key, value, atomic))
+            .run_op(|| self.blob.set(key, value, atomic), Self::on_err)
             .await;
         if res.is_ok() {
             self.metrics.blob.set.bytes.inc_by(u64::cast_from(bytes));
@@ -1037,7 +1088,7 @@ impl Blob for MetricsBlob {
             .metrics
             .blob
             .delete
-            .run_op(|| self.blob.delete(key))
+            .run_op(|| self.blob.delete(key), Self::on_err)
             .await?;
         if let Some(bytes) = bytes {
             self.metrics.blob.delete.bytes.inc_by(u64::cast_from(bytes));
@@ -1069,6 +1120,15 @@ impl MetricsConsensus {
     pub fn new(consensus: Arc<dyn Consensus + Send + Sync>, metrics: Arc<Metrics>) -> Self {
         MetricsConsensus { consensus, metrics }
     }
+
+    fn on_err(alerts_metrics: &AlertsMetrics, err: &ExternalError) {
+        // As of 2022-09-06, regular determinate errors are expected in
+        // Consensus (i.e. "txn conflict, please retry"), so only count the
+        // indeterminate ones.
+        if let ExternalError::Indeterminate(_) = err {
+            alerts_metrics.consensus_failures.inc()
+        }
+    }
 }
 
 #[async_trait]
@@ -1078,7 +1138,7 @@ impl Consensus for MetricsConsensus {
             .metrics
             .consensus
             .head
-            .run_op(|| self.consensus.head(key))
+            .run_op(|| self.consensus.head(key), Self::on_err)
             .await;
         if let Ok(Some(data)) = res.as_ref() {
             self.metrics
@@ -1101,7 +1161,10 @@ impl Consensus for MetricsConsensus {
             .metrics
             .consensus
             .compare_and_set
-            .run_op(|| self.consensus.compare_and_set(key, expected, new))
+            .run_op(
+                || self.consensus.compare_and_set(key, expected, new),
+                Self::on_err,
+            )
             .await;
         match res.as_ref() {
             Ok(Ok(())) => self
@@ -1131,7 +1194,7 @@ impl Consensus for MetricsConsensus {
             .metrics
             .consensus
             .scan
-            .run_op(|| self.consensus.scan(key, from))
+            .run_op(|| self.consensus.scan(key, from), Self::on_err)
             .await;
         if let Ok(dataz) = res.as_ref() {
             let bytes = dataz.iter().map(|x| x.data.len()).sum();
@@ -1149,7 +1212,7 @@ impl Consensus for MetricsConsensus {
             .metrics
             .consensus
             .truncate
-            .run_op(|| self.consensus.truncate(key, seqno))
+            .run_op(|| self.consensus.truncate(key, seqno), Self::on_err)
             .await?;
         self.metrics
             .consensus

@@ -43,6 +43,7 @@ message ProtoReaderState {
     ProtoU64Antichain since = 1;
     uint64 seqno = 2;
     uint64 last_heartbeat_timestamp_ms = 3;
+    uint64 lease_duration_ms = 4;
 }
 
 message ProtoWriterState {

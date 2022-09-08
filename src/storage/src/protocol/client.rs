@@ -460,7 +460,7 @@ impl RustType<ProtoFrontierUppersKind> for Vec<(GlobalId, Antichain<mz_repr::Tim
     }
 }
 
-impl RustType<ProtoCompaction> for (GlobalId, Antichain<u64>) {
+impl RustType<ProtoCompaction> for (GlobalId, Antichain<mz_repr::Timestamp>) {
     fn into_proto(&self) -> ProtoCompaction {
         ProtoCompaction {
             id: Some(self.0.into_proto()),

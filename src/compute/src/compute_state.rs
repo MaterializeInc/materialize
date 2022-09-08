@@ -140,14 +140,19 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
             // Initialize frontiers for each object, and optionally log their construction.
             for (object_id, collection_id) in exported_ids {
-                self.compute_state
-                    .reported_frontiers
-                    .insert(object_id, Antichain::from_elem(0));
+                self.compute_state.reported_frontiers.insert(
+                    object_id,
+                    Antichain::from_elem(timely::progress::Timestamp::minimum()),
+                );
 
                 // Log dataflow construction, frontier construction, and any dependencies.
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(object_id, true));
-                    logger.log(ComputeEvent::Frontier(object_id, 0, 1));
+                    logger.log(ComputeEvent::Frontier(
+                        object_id,
+                        timely::progress::Timestamp::minimum(),
+                        1,
+                    ));
                     for import_id in dataflow.depends_on(collection_id) {
                         logger.log(ComputeEvent::DataflowDependency {
                             dataflow: object_id,
@@ -264,7 +269,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         use crate::logging::BatchLogger;
         use timely::dataflow::operators::capture::event::link::EventLink;
 
-        let interval = std::cmp::max(1, logging.interval_ns / 1_000_000) as Timestamp;
+        let interval = std::cmp::max(1, logging.interval_ns / 1_000_000)
+            .try_into()
+            .expect("must fit");
 
         // Track time relative to the Unix epoch, rather than when the server
         // started, so that the logging sources can be joined with tables and
@@ -499,10 +506,15 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let index_ids = logging.active_logs.values().copied();
         let sink_ids = logging.sink_logs.values().map(|(id, _)| *id);
         for id in index_ids.chain(sink_ids) {
-            self.compute_state
-                .reported_frontiers
-                .insert(id, Antichain::from_elem(0));
-            logger.log(ComputeEvent::Frontier(id, 0, 1));
+            self.compute_state.reported_frontiers.insert(
+                id,
+                Antichain::from_elem(timely::progress::Timestamp::minimum()),
+            );
+            logger.log(ComputeEvent::Frontier(
+                id,
+                timely::progress::Timestamp::minimum(),
+                1,
+            ));
         }
 
         self.compute_state.compute_logger = Some(logger);

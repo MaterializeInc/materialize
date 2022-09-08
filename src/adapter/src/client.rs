@@ -28,7 +28,7 @@ use crate::command::{
 };
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
-use crate::session::{EndTransactionAction, PreparedStatement, Session};
+use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionStatus};
 
 /// An abstraction allowing us to name different connections.
 pub type ConnectionId = u32;
@@ -385,6 +385,133 @@ impl SessionClient {
         .await
     }
 
+    async fn simple_execute_inner(
+        &mut self,
+        stmt: Statement<Raw>,
+    ) -> Result<SimpleResult, SimpleResult> {
+        const EMPTY_PORTAL: &str = "";
+
+        if let Err(e) = self.declare(EMPTY_PORTAL.into(), stmt, vec![]).await {
+            return Err(SimpleResult::err(e));
+        }
+
+        let desc = self
+            .session()
+            // We do not need to verify here because `self.execute` verifies below.
+            .get_portal_unverified(EMPTY_PORTAL)
+            .map(|portal| portal.desc.clone())
+            .expect("unnamed portal should be present");
+        if !desc.param_types.is_empty() {
+            return Err(SimpleResult::err("query parameters are not supported"));
+        }
+
+        let res = match self.execute(EMPTY_PORTAL.into()).await {
+            Ok(res) => res,
+            Err(e) => {
+                return Err(SimpleResult::err(e));
+            }
+        };
+
+        match res {
+            ExecuteResponse::Canceled => {
+                Err(SimpleResult::err("statement canceled due to user request"))
+            }
+            res @ (ExecuteResponse::CreatedConnection { existed: _ }
+            | ExecuteResponse::CreatedDatabase { existed: _ }
+            | ExecuteResponse::CreatedSchema { existed: _ }
+            | ExecuteResponse::CreatedRole
+            | ExecuteResponse::CreatedComputeInstance { existed: _ }
+            | ExecuteResponse::CreatedComputeInstanceReplica { existed: _ }
+            | ExecuteResponse::CreatedTable { existed: _ }
+            | ExecuteResponse::CreatedIndex { existed: _ }
+            | ExecuteResponse::CreatedSecret { existed: _ }
+            | ExecuteResponse::CreatedSource { existed: _ }
+            | ExecuteResponse::CreatedSources
+            | ExecuteResponse::CreatedSink { existed: _ }
+            | ExecuteResponse::CreatedView { existed: _ }
+            | ExecuteResponse::CreatedViews { existed: _ }
+            | ExecuteResponse::CreatedMaterializedView { existed: _ }
+            | ExecuteResponse::CreatedType
+            | ExecuteResponse::Deleted(_)
+            | ExecuteResponse::DiscardedTemp
+            | ExecuteResponse::DiscardedAll
+            | ExecuteResponse::DroppedDatabase
+            | ExecuteResponse::DroppedSchema
+            | ExecuteResponse::DroppedRole
+            | ExecuteResponse::DroppedComputeInstance
+            | ExecuteResponse::DroppedComputeInstanceReplicas
+            | ExecuteResponse::DroppedSource
+            | ExecuteResponse::DroppedIndex
+            | ExecuteResponse::DroppedSink
+            | ExecuteResponse::DroppedTable
+            | ExecuteResponse::DroppedView
+            | ExecuteResponse::DroppedMaterializedView
+            | ExecuteResponse::DroppedType
+            | ExecuteResponse::DroppedSecret
+            | ExecuteResponse::DroppedConnection
+            | ExecuteResponse::EmptyQuery
+            | ExecuteResponse::Inserted(_)
+            | ExecuteResponse::StartedTransaction { duplicated: _ }
+            | ExecuteResponse::TransactionExited {
+                tag: _,
+                was_implicit: _,
+            }
+            | ExecuteResponse::Updated(_)
+            | ExecuteResponse::AlteredObject(_)
+            | ExecuteResponse::AlteredIndexLogicalCompaction
+            | ExecuteResponse::AlteredSystemConfiguraion
+            | ExecuteResponse::Deallocate { all: _ }
+            | ExecuteResponse::Prepare) => Ok(SimpleResult::ok(res)),
+            ExecuteResponse::SendingRows {
+                future: rows,
+                span: _,
+            } => {
+                let rows = match rows.await {
+                    PeekResponseUnary::Rows(rows) => rows,
+                    PeekResponseUnary::Error(e) => {
+                        return Err(SimpleResult::err(e));
+                    }
+                    PeekResponseUnary::Canceled => {
+                        return Err(SimpleResult::err("statement canceled due to user request"));
+                    }
+                };
+                let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
+                let col_names = match desc.relation_desc {
+                    Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
+                    None => vec![],
+                };
+                let mut datum_vec = mz_repr::DatumVec::new();
+                for row in rows {
+                    let datums = datum_vec.borrow_with(&row);
+                    sql_rows.push(datums.iter().map(From::from).collect());
+                }
+
+                Ok(SimpleResult::Rows {
+                    rows: sql_rows,
+                    col_names,
+                })
+            }
+            ExecuteResponse::Fetch { .. }
+            | ExecuteResponse::SetVariable { .. }
+            | ExecuteResponse::Tailing { .. }
+            | ExecuteResponse::CopyTo { .. }
+            | ExecuteResponse::CopyFrom { .. }
+            | ExecuteResponse::Raise { .. }
+            | ExecuteResponse::DeclaredCursor
+            | ExecuteResponse::ClosedCursor => {
+                // NOTE(benesch): it is a bit scary to ignore the response
+                // to these types of planning *after* they have been
+                // planned, as they may have mutated state. On a quick
+                // glance, though, ignoring the execute response in all of
+                // the above situations seems safe enough, and it's a more
+                // target allowlist than the code that was here before.
+                Err(SimpleResult::err(
+                    "executing statements of this type is unsupported via this API",
+                ))
+            }
+        }
+    }
+
     /// Executes SQL statements using a simple protocol that does not involve
     /// portals.
     ///
@@ -394,147 +521,45 @@ impl SessionClient {
     /// interface. The provided `stmts` are executed directly, and their results
     /// are returned as a vector of rows, where each row is a vector of JSON
     /// objects.
+    ///
+    /// n.b. To handle committing statements, this process requires breaking
+    /// after generating a `SimpleResult::err`.
     pub async fn simple_execute(
         &mut self,
         stmts: &str,
     ) -> Result<SimpleExecuteResponse, AdapterError> {
         let stmts =
             mz_sql::parse::parse(&stmts).map_err(|e| AdapterError::Unstructured(e.into()))?;
+
         let num_stmts = stmts.len();
-        const EMPTY_PORTAL: &str = "";
         let mut results = vec![];
+
         for stmt in stmts {
-            // Mirror the behavior of the PostgreSQL simple query protocol.
-            // See the pgwire::protocol::StateMachine::query method for details.
+            if matches!(self.session().transaction(), TransactionStatus::Failed(_)) {
+                break;
+            }
+
             self.start_transaction(Some(num_stmts)).await?;
 
-            if let Err(e) = self.declare(EMPTY_PORTAL.into(), stmt, vec![]).await {
-                results.push(SimpleResult::err(e));
-                continue;
-            }
-
-            let desc = self
-                .session()
-                // We do not need to verify here because `self.execute` verifies below.
-                .get_portal_unverified(EMPTY_PORTAL)
-                .map(|portal| portal.desc.clone())
-                .expect("unnamed portal should be present");
-            if !desc.param_types.is_empty() {
-                results.push(SimpleResult::err("query parameters are not supported"));
-                continue;
-            }
-
-            let res = match self.execute(EMPTY_PORTAL.into()).await {
-                Ok(res) => res,
-                Err(e) => {
-                    results.push(SimpleResult::err(e));
-                    continue;
+            let res = match self.simple_execute_inner(stmt).await {
+                Ok(res) => {
+                    assert!(!matches!(res, SimpleResult::Err { .. }));
+                    res
+                }
+                Err(res) => {
+                    assert!(matches!(res, SimpleResult::Err { .. }));
+                    self.fail_transaction();
+                    res
                 }
             };
-
-            match res {
-                ExecuteResponse::Canceled => {
-                    results.push(SimpleResult::err("statement canceled due to user request"));
-                }
-                res @ (ExecuteResponse::CreatedConnection { existed: _ }
-                | ExecuteResponse::CreatedDatabase { existed: _ }
-                | ExecuteResponse::CreatedSchema { existed: _ }
-                | ExecuteResponse::CreatedRole
-                | ExecuteResponse::CreatedComputeInstance { existed: _ }
-                | ExecuteResponse::CreatedComputeInstanceReplica { existed: _ }
-                | ExecuteResponse::CreatedTable { existed: _ }
-                | ExecuteResponse::CreatedIndex { existed: _ }
-                | ExecuteResponse::CreatedSecret { existed: _ }
-                | ExecuteResponse::CreatedSource { existed: _ }
-                | ExecuteResponse::CreatedSources
-                | ExecuteResponse::CreatedSink { existed: _ }
-                | ExecuteResponse::CreatedView { existed: _ }
-                | ExecuteResponse::CreatedViews { existed: _ }
-                | ExecuteResponse::CreatedMaterializedView { existed: _ }
-                | ExecuteResponse::CreatedType
-                | ExecuteResponse::Deleted(_)
-                | ExecuteResponse::DiscardedTemp
-                | ExecuteResponse::DiscardedAll
-                | ExecuteResponse::DroppedDatabase
-                | ExecuteResponse::DroppedSchema
-                | ExecuteResponse::DroppedRole
-                | ExecuteResponse::DroppedComputeInstance
-                | ExecuteResponse::DroppedComputeInstanceReplicas
-                | ExecuteResponse::DroppedSource
-                | ExecuteResponse::DroppedIndex
-                | ExecuteResponse::DroppedSink
-                | ExecuteResponse::DroppedTable
-                | ExecuteResponse::DroppedView
-                | ExecuteResponse::DroppedMaterializedView
-                | ExecuteResponse::DroppedType
-                | ExecuteResponse::DroppedSecret
-                | ExecuteResponse::DroppedConnection
-                | ExecuteResponse::EmptyQuery
-                | ExecuteResponse::Inserted(_)
-                | ExecuteResponse::StartedTransaction { duplicated: _ }
-                | ExecuteResponse::TransactionExited {
-                    tag: _,
-                    was_implicit: _,
-                }
-                | ExecuteResponse::Updated(_)
-                | ExecuteResponse::AlteredObject(_)
-                | ExecuteResponse::AlteredIndexLogicalCompaction
-                | ExecuteResponse::AlteredSystemConfiguraion
-                | ExecuteResponse::Deallocate { all: _ }
-                | ExecuteResponse::Prepare) => {
-                    results.push(SimpleResult::ok(res));
-                }
-                ExecuteResponse::SendingRows {
-                    future: rows,
-                    span: _,
-                } => {
-                    let rows = match rows.await {
-                        PeekResponseUnary::Rows(rows) => rows,
-                        PeekResponseUnary::Error(e) => {
-                            results.push(SimpleResult::err(e.to_string()));
-                            continue;
-                        }
-                        PeekResponseUnary::Canceled => {
-                            results
-                                .push(SimpleResult::err("statement canceled due to user request"));
-                            continue;
-                        }
-                    };
-                    let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
-                    let col_names = match desc.relation_desc {
-                        Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
-                        None => vec![],
-                    };
-                    let mut datum_vec = mz_repr::DatumVec::new();
-                    for row in rows {
-                        let datums = datum_vec.borrow_with(&row);
-                        sql_rows.push(datums.iter().map(From::from).collect());
-                    }
-                    results.push(SimpleResult::Rows {
-                        rows: sql_rows,
-                        col_names,
-                    });
-                }
-                ExecuteResponse::Fetch { .. }
-                | ExecuteResponse::SetVariable { .. }
-                | ExecuteResponse::Tailing { .. }
-                | ExecuteResponse::CopyTo { .. }
-                | ExecuteResponse::CopyFrom { .. }
-                | ExecuteResponse::Raise { .. }
-                | ExecuteResponse::DeclaredCursor
-                | ExecuteResponse::ClosedCursor => {
-                    // NOTE(benesch): it is a bit scary to ignore the response
-                    // to these types of planning *after* they have been
-                    // planned, as they may have mutated state. On a quick
-                    // glance, though, ignoring the execute response in all of
-                    // the above situations seems safe enough, and it's a more
-                    // target allowlist than the code that was here before.
-                    results.push(SimpleResult::err(
-                        "executing statements of this type is unsupported via this API",
-                    ));
-                }
-            };
+            results.push(res);
         }
+
+        // If not in an uncommited explicit transaction, commit.
+        if self.session().transaction().is_implicit() {
+            self.end_transaction(EndTransactionAction::Commit).await?;
+        }
+
         Ok(SimpleExecuteResponse { results })
     }
 

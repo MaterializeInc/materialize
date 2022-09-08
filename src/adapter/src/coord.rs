@@ -143,7 +143,8 @@ mod timeline;
 mod timestamp_selection;
 
 /// The default is set to a second to track the default timestamp frequency for sources.
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<mz_repr::Timestamp> =
+    Some(Timestamp::new(1_000));
 
 /// The default interval at which to collect storage usage information.
 pub const DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL: Duration = Duration::from_secs(3600);
@@ -876,7 +877,7 @@ pub async fn serve<S: Append + 'static>(
                     let now = now.clone();
                     handle.block_on(timeline::DurableTimestampOracle::new(
                         initial_timestamp,
-                        move || (*&(now))(),
+                        move || (*&(now))().into(),
                         *timeline::TIMESTAMP_PERSIST_INTERVAL,
                         |ts| catalog.persist_timestamp(&timeline, ts),
                     ))

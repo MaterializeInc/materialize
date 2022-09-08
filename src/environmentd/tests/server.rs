@@ -177,13 +177,128 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCase {
             query: "create view v1 as select 1; create view v2 as select 1",
             status: StatusCode::OK,
-            body: r#"{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block"},{"error":"CREATE VIEW v2 AS SELECT 1 cannot be run inside a transaction block"}]}"#,
+            body: r#"{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block"}]}"#,
         },
         // Syntax errors fail the request.
         TestCase {
             query: "'",
             status: StatusCode::BAD_REQUEST,
             body: r#"unterminated quoted string"#,
+        },
+        // Tables
+        TestCase {
+            query: "create table t (a int);",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"CREATE TABLE"}]}"#,
+        },
+        TestCase {
+            query: "insert into t values (1)",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"INSERT 0 1"}]}"#,
+        },
+        // n.b. this used to fail because the insert was treated as an
+        // uncommitted explicit transaction
+        TestCase {
+            query: "select * from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["a"]}]}"#,
+        },
+        TestCase {
+            query: "delete from t",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"DELETE 1"}]}"#,
+        },
+        TestCase {
+            query: "delete from t",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"DELETE 0"}]}"#,
+        },
+        // # Txns
+        // ## Txns, read only
+        TestCase {
+            query: "begin; select 1; commit",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"}]}"#,
+        },
+        TestCase {
+            query: "begin; select 1; commit; select 2;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"},{"rows":[[2]],"col_names":["?column?"]}]}"#,
+        },
+        TestCase {
+            query: "select 1; begin; select 2; commit;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"ok":"BEGIN"},{"rows":[[2]],"col_names":["?column?"]},{"ok":"COMMIT"}]}"#,
+        },
+        TestCase {
+            query: "begin; select 1/0; commit; select 2;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"error":"division by zero"}]}"#,
+        },
+        TestCase {
+            query: "begin; select 1; commit; select 1/0;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"rows":[[1]],"col_names":["?column?"]},{"ok":"COMMIT"},{"error":"division by zero"}]}"#,
+        },
+        TestCase {
+            query: "select 1/0; begin; select 2; commit;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"error":"division by zero"}]}"#,
+        },
+        TestCase {
+            query: "select 1; begin; select 1/0; commit;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["?column?"]},{"ok":"BEGIN"},{"error":"division by zero"}]}"#,
+        },
+        // ## Txns w/ writes
+        // Implicit txn aborted on first error
+        TestCase {
+            query: "insert into t values (1); select 1/0; insert into t values (2)",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
+        },
+        // Values not successfully written due to aborted txn
+        TestCase {
+            query: "select * from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
+        },
+        // Explicit txn invocation commits values w/in txn, irrespective of results outside txn
+        TestCase {
+            query: "begin; insert into t values (1); commit; insert into t values (2); select 1/0;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"COMMIT"},{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
+        },
+        TestCase {
+            query: "select * from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["a"]}]}"#,
+        },
+        TestCase {
+            query: "delete from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"DELETE 1"}]}"#,
+        },
+        TestCase {
+            query: "delete from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"DELETE 0"}]}"#,
+        },
+        TestCase {
+            query: "select * from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
+        },
+        // Explicit txn must be terminated to commit
+        TestCase {
+            query: "begin; insert into t values (1)",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"}]}"#,
+        },
+        TestCase {
+            query: "select * from t;",
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
         },
     ];
 

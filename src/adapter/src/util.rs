@@ -7,13 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
-
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::ComputeInstanceId;
-use mz_repr::{RelationDesc, Row, ScalarType, Timestamp};
+use mz_repr::{RelationDesc, Row, ScalarType};
 use mz_sql::names::FullObjectName;
 use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -145,19 +143,6 @@ pub fn index_sql(
         if_not_exists: false,
     }
     .to_ast_string_stable()
-}
-
-/// Converts a Duration to a Timestamp representing the number
-/// of milliseconds contained in that Duration
-pub(crate) fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
-    let millis = d.as_millis();
-    if millis > Timestamp::MAX as u128 {
-        Timestamp::MAX
-    } else if millis < Timestamp::MIN as u128 {
-        Timestamp::MIN
-    } else {
-        millis as Timestamp
-    }
 }
 
 /// Creates a description of the statement `stmt`.

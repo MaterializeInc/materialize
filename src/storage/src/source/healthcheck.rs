@@ -129,7 +129,7 @@ impl Healthchecker {
         if self.active && self.current_status.can_transition(&status_update.status) {
             loop {
                 let next_ts = (self.now)();
-                let new_upper = Antichain::from_elem(next_ts + 1);
+                let new_upper = Antichain::from_elem(Timestamp::from(next_ts).step_forward());
 
                 let updates = self.prepare_row_update(&status_update, next_ts);
                 match self
@@ -286,7 +286,12 @@ impl Healthchecker {
             metadata,
         ]);
 
-        vec![((SourceData(Ok(row)), ()), ts, 1)]
+        vec![(
+            (SourceData(Ok(row)), ()),
+            ts.try_into()
+                .expect("timestamp does not fit into MzTimestamp"),
+            1,
+        )]
     }
 }
 
