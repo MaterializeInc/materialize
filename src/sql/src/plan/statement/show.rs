@@ -265,12 +265,7 @@ pub fn show_databases<'a>(
 
 pub fn show_schemas<'a>(
     scx: &'a StatementContext<'a>,
-    ShowSchemasStatement {
-        from,
-        extended,
-        full,
-        filter,
-    }: ShowSchemasStatement<Aug>,
+    ShowSchemasStatement { from, filter }: ShowSchemasStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let database_id = match from {
         Some(ResolvedDatabaseName::Database { id, .. }) => id.0,
@@ -282,41 +277,18 @@ pub fn show_schemas<'a>(
             unreachable!("should have been handled in name resolution")
         }
     };
-    let query = if !full & !extended {
-        format!(
-            "SELECT name FROM mz_catalog.mz_schemas WHERE database_id = {}",
-            &database_id,
-        )
-    } else if full & !extended {
-        format!(
-            "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
+    let query = format!(
+        "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
             FROM mz_catalog.mz_schemas
             WHERE database_id = {}",
-            &database_id,
-        )
-    } else if !full & extended {
-        format!(
-            "SELECT name
-            FROM mz_catalog.mz_schemas
-            WHERE database_id = {} OR database_id IS NULL",
-            &database_id,
-        )
-    } else {
-        format!(
-            "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
-            FROM mz_catalog.mz_schemas
-            WHERE database_id = {} OR database_id IS NULL",
-            &database_id,
-        )
-    };
+        &database_id,
+    );
     ShowSelect::new(scx, query, filter, None, None)
 }
 
 pub fn show_objects<'a>(
     scx: &'a StatementContext<'a>,
     ShowObjectsStatement {
-        extended,
-        full,
         object_type,
         from,
         in_cluster,
@@ -324,132 +296,87 @@ pub fn show_objects<'a>(
     }: ShowObjectsStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     match object_type {
-        ObjectType::Table => show_tables(scx, extended, full, from, filter),
-        ObjectType::Source => show_sources(scx, full, from, filter),
-        ObjectType::View => show_views(scx, full, from, filter),
-        ObjectType::MaterializedView => {
-            show_materialized_views(scx, full, from, in_cluster, filter)
-        }
-        ObjectType::Sink => show_sinks(scx, full, from, filter),
-        ObjectType::Type => show_types(scx, extended, full, from, filter),
-        ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
+        ObjectType::Table => show_tables(scx, from, filter),
+        ObjectType::Source => show_sources(scx, from, filter),
+        ObjectType::View => show_views(scx, from, filter),
+        ObjectType::MaterializedView => show_materialized_views(scx, from, in_cluster, filter),
+        ObjectType::Sink => show_sinks(scx, from, filter),
+        ObjectType::Type => show_types(scx, from, filter),
+        ObjectType::Object => show_all_objects(scx, from, filter),
         ObjectType::Role => bail_unsupported!("SHOW ROLES"),
         ObjectType::Cluster => show_clusters(scx, filter),
         ObjectType::ClusterReplica => show_cluster_replicas(scx, filter),
         ObjectType::Secret => show_secrets(scx, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
-        ObjectType::Connection => show_connections(scx, extended, full, from, filter),
+        ObjectType::Connection => show_connections(scx, from, filter),
     }
 }
 
 fn show_connections<'a>(
     scx: &'a StatementContext<'a>,
-    extended: bool,
-    full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
-    let mut query = format!(
+    let query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
         FROM mz_catalog.mz_connections t
         JOIN mz_catalog.mz_schemas s on t.schema_id = s.id
-        WHERE schema_id = {}",
-        schema_spec,
+        WHERE schema_id = {schema_spec}",
     );
-    if extended {
-        query += " OR s.database_id IS NULL";
-    }
-    if !full {
-        query = format!("SELECT name FROM ({})", query);
-    }
     ShowSelect::new(scx, query, filter, None, None)
 }
 
 fn show_tables<'a>(
     scx: &'a StatementContext<'a>,
-    extended: bool,
-    full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
-
-    let mut query = format!(
+    let query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
         FROM mz_catalog.mz_tables t
         JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
-        WHERE schema_id = {}",
-        schema_spec,
+        WHERE schema_id = {schema_spec}",
     );
-    if extended {
-        query += " OR s.database_id IS NULL";
-    }
-    if !full {
-        query = format!("SELECT name FROM ({})", query);
-    }
-
     ShowSelect::new(scx, query, filter, None, None)
 }
 
 fn show_sources<'a>(
     scx: &'a StatementContext<'a>,
-    full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
-
-    let query = if full {
-        format!(
-            "SELECT
+    let query = format!(
+        "SELECT
                  name,
                  mz_internal.mz_classify_object_id(id) AS type,
                  type
              FROM mz_catalog.mz_sources
              WHERE schema_id = {schema_spec}"
-        )
-    } else {
-        format!(
-            "SELECT name
-             FROM mz_catalog.mz_sources
-             WHERE schema_id = {schema_spec}"
-        )
-    };
-
+    );
     ShowSelect::new(scx, query, filter, None, None)
 }
 
 fn show_views<'a>(
     scx: &'a StatementContext<'a>,
-    full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
-
-    let query = if full {
-        format!(
-            "SELECT
+    let query = format!(
+        "SELECT
                 name,
                 mz_internal.mz_classify_object_id(id) AS type
              FROM mz_catalog.mz_views
              WHERE schema_id = {schema_spec}"
-        )
-    } else {
-        format!(
-            "SELECT name
-            FROM mz_catalog.mz_views
-            WHERE schema_id = {schema_spec}"
-        )
-    };
-
+    );
     ShowSelect::new(scx, query, filter, None, None)
 }
 
 fn show_materialized_views<'a>(
     scx: &'a StatementContext<'a>,
-    full: bool,
     from: Option<ResolvedSchemaName>,
     in_cluster: Option<ResolvedClusterName>,
     filter: Option<ShowStatementFilter<Aug>>,
@@ -462,9 +389,8 @@ fn show_materialized_views<'a>(
             .expect("write on string cannot fail");
     }
 
-    let query = if full {
-        format!(
-            "SELECT
+    let query = format!(
+        "SELECT
                 clusters.name AS cluster,
                 mviews.name,
                 mz_internal.mz_classify_object_id(mviews.id) AS type
@@ -472,21 +398,13 @@ fn show_materialized_views<'a>(
              JOIN mz_clusters AS clusters
                 ON clusters.id = mviews.cluster_id
              WHERE {where_clause}"
-        )
-    } else {
-        format!(
-            "SELECT name
-             FROM mz_catalog.mz_materialized_views
-             WHERE {where_clause}"
-        )
-    };
+    );
 
     ShowSelect::new(scx, query, filter, None, None)
 }
 
 fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
-    full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
@@ -500,96 +418,57 @@ fn show_sinks<'a>(
 
     let query_filters = itertools::join(query_filters.iter(), " AND ");
 
-    let query = if full {
-        format!(
-            "SELECT
+    let query = format!(
+        "SELECT
             sinks.name,
             mz_internal.mz_classify_object_id(sinks.id) AS type
         FROM
             mz_catalog.mz_sinks AS sinks
         WHERE {}",
-            query_filters
-        )
-    } else {
-        format!(
-            "SELECT
-            sinks.name
-        FROM
-            mz_catalog.mz_sinks AS sinks
-        WHERE {}",
-            query_filters
-        )
-    };
+        query_filters
+    );
     ShowSelect::new(scx, query, filter, None, None)
 }
 
 fn show_types<'a>(
     scx: &'a StatementContext<'a>,
-    extended: bool,
-    full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
-
-    let mut query = format!(
+    let query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
         FROM mz_catalog.mz_types t
         JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
-        WHERE t.schema_id = {}",
-        schema_spec,
+        WHERE t.schema_id = {schema_spec}",
     );
-    if extended {
-        query += " OR s.database_id IS NULL";
-    }
-    if !full {
-        query = format!("SELECT name FROM ({})", query);
-    }
-
     ShowSelect::new(scx, query, filter, None, None)
 }
 
 fn show_all_objects<'a>(
     scx: &'a StatementContext<'a>,
-    extended: bool,
-    full: bool,
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
-
-    let mut query = format!(
+    let query = format!(
         "SELECT o.name, mz_internal.mz_classify_object_id(o.id) AS type
         FROM mz_catalog.mz_objects o
         JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
-        WHERE o.schema_id = {}",
-        schema_spec,
+        WHERE o.schema_id = {schema_spec}",
     );
-    if extended {
-        query += " OR s.database_id IS NULL";
-    }
-    if !full {
-        query = format!("SELECT name FROM ({})", query);
-    }
-
     ShowSelect::new(scx, query, filter, None, None)
 }
 
 pub fn show_indexes<'a>(
     scx: &'a StatementContext<'a>,
     ShowIndexesStatement {
-        extended,
         in_cluster,
         table_name,
         filter,
     }: ShowIndexesStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    // Exclude system indexes unless `EXTENDED` is requested.
-    let mut query_filter = if extended {
-        vec!["TRUE".into()]
-    } else {
-        vec!["idxs.on_id NOT LIKE 's%'".into()]
-    };
+    let mut query_filter = vec!["idxs.on_id NOT LIKE 's%'".into()];
 
     if let Some(table_name) = table_name {
         let from = scx.get_item_by_resolved_name(&table_name)?;
@@ -637,20 +516,8 @@ pub fn show_indexes<'a>(
 
 pub fn show_columns<'a>(
     scx: &'a StatementContext<'a>,
-    ShowColumnsStatement {
-        extended,
-        full,
-        table_name,
-        filter,
-    }: ShowColumnsStatement<Aug>,
+    ShowColumnsStatement { table_name, filter }: ShowColumnsStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    if extended {
-        bail_unsupported!("SHOW EXTENDED COLUMNS");
-    }
-    if full {
-        bail_unsupported!("SHOW FULL COLUMNS");
-    }
-
     let entry = scx.get_item_by_resolved_name(&table_name)?;
 
     let query = format!(

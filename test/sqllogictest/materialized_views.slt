@@ -76,7 +76,7 @@ statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
 query TTT colnames,rowsort
-SHOW FULL MATERIALIZED VIEWS
+SHOW MATERIALIZED VIEWS
 ----
 cluster name     type
 default mv       user
@@ -262,22 +262,15 @@ materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query T colnames,rowsort
-SHOW MATERIALIZED VIEWS
-----
-name
-mv
-other_mv
-
 query TTT colnames,rowsort
-SHOW FULL MATERIALIZED VIEWS
+SHOW MATERIALIZED VIEWS
 ----
 cluster name     type
 default mv       user
 other   other_mv user
 
 query TTT colnames,rowsort
-SHOW FULL MATERIALIZED VIEWS IN CLUSTER other
+SHOW MATERIALIZED VIEWS IN CLUSTER other
 ----
 cluster name     type
 other   other_mv user
@@ -325,12 +318,12 @@ SELECT count(*) FROM mz_materialized_views
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT 1
 
-query T colnames,rowsort
+query TT colnames,rowsort
 SHOW OBJECTS
 ----
-name
-mv
-t
+name type
+mv   user
+t    user
 
 
 # Test: Indexes on materialized views show in `SHOW INDEXES`.

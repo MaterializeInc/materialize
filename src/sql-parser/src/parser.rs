@@ -4589,51 +4589,8 @@ impl<'a> Parser<'a> {
             }));
         }
 
-        let extended = self.parse_keyword(EXTENDED);
-        if extended {
-            self.expect_one_of_keywords(&[
-                COLUMNS,
-                CONNECTIONS,
-                FULL,
-                INDEX,
-                INDEXES,
-                KEYS,
-                OBJECTS,
-                SCHEMAS,
-                TABLES,
-                TYPES,
-            ])?;
-            self.prev_token();
-        }
-
-        let full = self.parse_keyword(FULL);
-        if full {
-            if extended {
-                self.expect_one_of_keywords(&[COLUMNS, OBJECTS, SCHEMAS, TABLES, TYPES])?;
-            } else {
-                let kw = self.expect_one_of_keywords(&[
-                    COLUMNS,
-                    CONNECTIONS,
-                    MATERIALIZED,
-                    OBJECTS,
-                    ROLES,
-                    SCHEMAS,
-                    SINKS,
-                    SOURCES,
-                    TABLES,
-                    TYPES,
-                    VIEWS,
-                ])?;
-                if kw == MATERIALIZED {
-                    self.expect_keyword(VIEWS)?;
-                    self.prev_token();
-                }
-            }
-            self.prev_token();
-        }
-
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
-            self.parse_show_columns(extended, full)
+            self.parse_show_columns()
         } else if self.parse_keyword(SCHEMAS) {
             let from = if self.parse_keyword(FROM) {
                 Some(self.parse_database_name()?)
@@ -4642,8 +4599,6 @@ impl<'a> Parser<'a> {
             };
             Ok(ShowStatement::ShowSchemas(ShowSchemasStatement {
                 from,
-                extended,
-                full,
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
@@ -4713,8 +4668,6 @@ impl<'a> Parser<'a> {
 
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
                 object_type,
-                extended,
-                full,
                 from,
                 in_cluster,
                 filter: self.parse_show_statement_filter()?,
@@ -4744,7 +4697,6 @@ impl<'a> Parser<'a> {
             Ok(ShowStatement::ShowIndexes(ShowIndexesStatement {
                 table_name,
                 in_cluster,
-                extended,
                 filter,
             }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
@@ -4793,11 +4745,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_show_columns(
-        &mut self,
-        extended: bool,
-        full: bool,
-    ) -> Result<ShowStatement<Raw>, ParserError> {
+    fn parse_show_columns(&mut self) -> Result<ShowStatement<Raw>, ParserError> {
         self.expect_one_of_keywords(&[FROM, IN])?;
         let table_name = self.parse_raw_name()?;
         // MySQL also supports FROM <database> here. In other words, MySQL
@@ -4805,8 +4753,6 @@ impl<'a> Parser<'a> {
         // while we only support the latter for now.
         let filter = self.parse_show_statement_filter()?;
         Ok(ShowStatement::ShowColumns(ShowColumnsStatement {
-            extended,
-            full,
             table_name,
             filter,
         }))

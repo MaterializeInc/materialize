@@ -12,8 +12,8 @@ materialize
 "some database"
 
 > SHOW SCHEMAS FROM "some database";
-public
-"some schema"
+public          user
+"some schema"   user
 
 > SELECT * FROM "some database"."some schema".t1;
 

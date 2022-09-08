@@ -34,13 +34,6 @@ user
 > CREATE TYPE test_schema.bool AS MAP (key_type=text, value_type=float4)
 
 > SHOW TYPES
-name
-----
-another_custom
-bool
-custom
-
-> SHOW FULL TYPES
 name             type
 ----------------------
 bool             user
@@ -48,9 +41,9 @@ custom           user
 another_custom   user
 
 > SHOW TYPES FROM test_schema
-name
-----
-bool
+name    type
+------------
+bool    user
 
 ! DROP TYPE bool
 contains:cannot drop item pg_catalog.bool because it is required by the database system

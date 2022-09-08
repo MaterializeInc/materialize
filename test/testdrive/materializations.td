@@ -41,15 +41,12 @@ $ kafka-create-topic topic=data
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b
 
-> SHOW FULL VIEWS
+> SHOW VIEWS
 name        type
 ----------------
 data_view   user
 
 > SHOW MATERIALIZED VIEWS
-test1
-
-> SHOW FULL MATERIALIZED VIEWS
 cluster   name     type
 -----------------------
 default   test1    user
@@ -77,7 +74,7 @@ b     false   bigint
 sum   false   numeric
 
 > SHOW VIEWS LIKE '%data%'
-data_view
+data_view   user
 
 > SHOW CREATE MATERIALIZED VIEW test1
 "Materialized View"       "Create Materialized View"
@@ -336,12 +333,6 @@ a  b
 1  2
 
 > SHOW SOURCES
-name
---------
-data
-mat_data
-
-> SHOW FULL SOURCES
 name     type type
 -------------------
 data     user kafka

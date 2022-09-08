@@ -14,11 +14,11 @@
 > CREATE VIEWS FROM SOURCE demo
 
 > SHOW VIEWS
- accounts
- auctions
- bids
- organizations
- users
+ accounts       user
+ auctions       user
+ bids           user
+ organizations  user
+ users          user
 
 > SHOW COLUMNS FROM auctions
 end_time true "timestamp with time zone"

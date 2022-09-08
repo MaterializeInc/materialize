@@ -38,9 +38,9 @@ my_db
 SHOW SCHEMAS FROM my_db
 ```
 ```nofmt
- name
-------
-public
+  name  | type
+--------+------
+ public | user
 ```
 
 ## Related pages

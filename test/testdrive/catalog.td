@@ -30,15 +30,15 @@ Indexes:
 
 # What schemas do we have by default?
 > SHOW SCHEMAS
-public
-> SHOW EXTENDED SCHEMAS
-name
--------
-information_schema
-public
-mz_catalog
-mz_internal
-pg_catalog
+public  user
+> SELECT name, 'system' FROM mz_catalog.mz_schemas WHERE database_id IS NULL
+name                type
+--------------------------
+information_schema  system
+public              system
+mz_catalog          system
+mz_internal         system
+pg_catalog          system
 $ psql-execute command=\dn
 \   List of schemas
     Name     | Owner
@@ -63,20 +63,16 @@ $ psql-execute command="\dn mz_*"
 
 # What objects do we have by default?
 > SHOW OBJECTS
-name
-----
-
-> SHOW FULL OBJECTS
 name   type
 -----------
 
 # Creating a schema should be reflected in the output of SHOW SCHEMAS.
 > CREATE SCHEMA s
 > SHOW SCHEMAS
-name
-----
-public
-s
+name    type
+------------
+public  user
+s       user
 
 # Creating a schema with a name that already exists should fail.
 ! CREATE SCHEMA s
@@ -96,9 +92,9 @@ contains:schema 'materialize.s' cannot be dropped without CASCADE while it conta
 
 # What databases do we have by default?
 > SHOW DATABASES
-name
-----
-materialize
+name        type
+----------------
+materialize user
 
 > SELECT name FROM mz_databases
 name
@@ -108,10 +104,10 @@ materialize
 # Creating a database should be reflected in the output of SHOW DATABASES.
 > CREATE DATABASE d
 > SHOW DATABASES
-name
-----
-d
-materialize
+name        type
+----------------
+d           user
+materialize user
 
 # ...and also in `\l`
 $ psql-execute command="\l"
@@ -139,14 +135,14 @@ d
 # WHERE clause.
 > SHOW DATABASES LIKE 'foo'
 > SHOW DATABASES LIKE 'd'
-d
+d   user
 > SHOW DATABASES LIKE 'mat%'
-materialize
+materialize user
 > SHOW DATABASES WHERE (SELECT name = name)
 materialize
-d
+d   user
 > SHOW DATABASES WHERE (name = (SELECT min(name) FROM mz_databases))
-d
+d   user
 ! SHOW DATABASES WHERE 7
 contains:WHERE clause must have type boolean, not type integer
 
@@ -156,53 +152,53 @@ contains:database 'd' already exists
 
 # The new database should have a default public schema.
 > SHOW SCHEMAS FROM d
-name
-----
-public
+name    type
+------------
+public  user
 
 # New schemas in the database should appear in the output of SHOW SCHEMAS FROM.
 > CREATE SCHEMA d.s
 > SHOW SCHEMAS FROM d
-name
-------
-public
-s
+name    type
+------------
+public  user
+s       user
 
 # SHOW SCHEMAS should filter its output based on the provided LIKE or WHERE
 # clause.
 > SHOW SCHEMAS LIKE 'pub%'
-public
+public  user
 > SHOW SCHEMAS LIKE 'private'
 > SHOW SCHEMAS WHERE name = 'public'
-public
+public  user
 
 # New views in the database should work.
 > CREATE VIEW d.public.v1 AS SELECT 1
 > SHOW VIEWS FROM d.public
-name
-----
-v1
+name    type
+------------
+v1      user
 
 # Setting the session database should update name resolution appropriately.
 > SET DATABASE = d
 > SHOW DATABASE
-d
+d user
 > SHOW SCHEMAS
 public
-s
+s user
 > CREATE VIEW v2 AS SELECT 2
 > SHOW VIEWS
-v1
-v2
+v1 user
+v2 user
 > SELECT * FROM v1 UNION ALL SELECT * FROM v2
 1
 2
 
 > SHOW OBJECTS
-name
-----
-v1
-v2
+name    type
+------------
+v1      user
+v2      user
 
 # Test minimizing name qualification
 
@@ -237,7 +233,7 @@ public.bool
 ! DROP OBJECT v1
 contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or MATERIALIZED or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
 
-> SHOW FULL OBJECTS
+> SHOW OBJECTS
 name            type
 --------------------------
 bool            user
@@ -274,7 +270,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-catalog-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 
-> SHOW FULL OBJECTS
+> SHOW OBJECTS
 name            type
 --------------------------
 bool            user
@@ -303,7 +299,7 @@ type
 function
 secret
 
-> SELECT * FROM (SHOW FULL OBJECTS) ORDER BY name DESC
+> SELECT * FROM (SHOW OBJECTS) ORDER BY name DESC
 bool user
 csr_conn user
 int_list user
@@ -334,20 +330,20 @@ contains:database 'd' cannot be dropped with RESTRICT while it contains schemas
 > DROP DATABASE d
 # SHOW DATABASES should work, even if the current database has been dropped.
 > SHOW DATABASES
-name
-----
-materialize
+name        type
+----------------
+materialize user
 
 > SELECT name FROM mz_databases
-name
------------
-materialize
+name        type
+----------------
+materialize user
 
 # The session database should remain set to the dropped database, but future
 # queries that depend on the session database should fail with sensible error
 # messages.
 > SHOW DATABASE
-d
+d   user
 ! SELECT * FROM v
 contains:unknown catalog item 'v'
 
@@ -405,65 +401,25 @@ contains:unknown database 'noexist_db'
 > CREATE VIEW d2.public.t AS SELECT * FROM d1.public.t;
 > DROP DATABASE d1;
 > SHOW DATABASES
-name
-----
-d
-d2
-materialize
+name        type
+----------------
+d           user
+d2          user
+materialize user
 > SELECT name FROM mz_databases
-name
------------
-materialize
-d
-d2
+name        type
+----------------
+materialize user
+d           user
+d2          user
 
 > SHOW VIEWS FROM d2.public;
- name
-------
+ name   type
+------------
 
 # Check default sources, tables, and views in mz_catalog.
 
 > SHOW SOURCES FROM mz_catalog
-mz_arrangement_batches_internal
-mz_arrangement_batches_internal_1
-mz_arrangement_records_internal
-mz_arrangement_records_internal_1
-mz_arrangement_sharing_internal
-mz_arrangement_sharing_internal_1
-mz_dataflow_channels
-mz_dataflow_channels_1
-mz_dataflow_addresses
-mz_dataflow_addresses_1
-mz_dataflow_operator_reachability_internal
-mz_dataflow_operator_reachability_internal_1
-mz_dataflow_operators
-mz_dataflow_operators_1
-mz_materialization_dependencies
-mz_materialization_dependencies_1
-mz_materializations
-mz_materializations_1
-mz_message_counts_received_internal
-mz_message_counts_received_internal_1
-mz_message_counts_sent_internal
-mz_message_counts_sent_internal_1
-mz_peek_active
-mz_peek_active_1
-mz_peek_durations
-mz_peek_durations_1
-mz_scheduling_elapsed_internal
-mz_scheduling_elapsed_internal_1
-mz_scheduling_histogram_internal
-mz_scheduling_histogram_internal_1
-mz_scheduling_parks_internal
-mz_scheduling_parks_internal_1
-mz_worker_materialization_delays
-mz_worker_materialization_delays_1
-mz_worker_materialization_frontiers
-mz_worker_materialization_frontiers_1
-mz_worker_materialization_source_frontiers
-mz_worker_materialization_source_frontiers_1
-
-> SHOW FULL SOURCES FROM mz_catalog
 name                                          type   type
 ---------------------------------------------------------
 mz_arrangement_batches_internal               system log
@@ -506,38 +462,6 @@ mz_worker_materialization_source_frontiers    system log
 mz_worker_materialization_source_frontiers_1  system log
 
 > SHOW TABLES FROM mz_catalog
-mz_array_types
-mz_audit_events
-mz_base_types
-mz_clusters
-mz_cluster_replicas_base
-mz_cluster_replica_heartbeats
-mz_cluster_replica_statuses
-mz_columns
-mz_connections
-mz_databases
-mz_functions
-mz_index_columns
-mz_indexes
-mz_kafka_sinks
-mz_list_types
-mz_map_types
-mz_materialized_views
-mz_pseudo_types
-mz_roles
-mz_schemas
-mz_secrets
-mz_sinks
-mz_sources
-mz_ssh_tunnel_connections
-mz_storage_usage
-mz_tables
-mz_types
-mz_view_foreign_keys
-mz_view_keys
-mz_views
-
-> SHOW FULL TABLES FROM mz_catalog
 name                        type
 ----------------------------------
 mz_array_types                system
@@ -563,7 +487,7 @@ mz_schemas                    system
 mz_secrets                    system
 mz_sinks                      system
 mz_sources                    system
-mz_ssh_tunnel_connections system
+mz_ssh_tunnel_connections     system
 mz_storage_usage              system
 mz_tables                     system
 mz_types                      system
@@ -575,74 +499,9 @@ mz_views                      system
 
 > SHOW TABLES FROM tester
 
-> SHOW EXTENDED tables FROM tester
-mz_array_types
-mz_audit_events
-mz_base_types
-mz_clusters
-mz_cluster_replicas_base
-mz_cluster_replica_heartbeats
-mz_cluster_replica_statuses
-mz_columns
-mz_connections
-mz_databases
-mz_functions
-mz_index_columns
-mz_indexes
-mz_kafka_sinks
-mz_list_types
-mz_map_types
-mz_materialized_views
-mz_pseudo_types
-mz_roles
-mz_schemas
-mz_secrets
-mz_sinks
-mz_sources
-mz_ssh_tunnel_connections
-mz_storage_usage
-mz_tables
-mz_types
-mz_view_foreign_keys
-mz_view_keys
-mz_views
-
 > CREATE TABLE tester.test_table (a int)
 
 > SHOW TABLES FROM tester
-test_table
-
-> SHOW EXTENDED tables FROM tester
-mz_array_types
-mz_audit_events
-mz_base_types
-mz_clusters
-mz_cluster_replicas_base
-mz_cluster_replica_heartbeats
-mz_cluster_replica_statuses
-mz_columns
-mz_connections
-mz_databases
-mz_functions
-mz_index_columns
-mz_indexes
-mz_kafka_sinks
-mz_list_types
-mz_map_types
-mz_materialized_views
-mz_pseudo_types
-mz_roles
-mz_schemas
-mz_secrets
-mz_sinks
-mz_sources
-mz_ssh_tunnel_connections
-mz_storage_usage
-mz_tables
-mz_types
-mz_view_foreign_keys
-mz_view_keys
-mz_views
 test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
@@ -654,39 +513,6 @@ test_table
 19
 
 > SHOW VIEWS FROM mz_catalog
-mz_arrangement_sharing
-mz_arrangement_sharing_1
-mz_arrangement_sizes
-mz_arrangement_sizes_1
-mz_catalog_names
-mz_cluster_replicas
-mz_dataflows
-mz_dataflows_1
-mz_dataflow_operator_dataflows
-mz_dataflow_operator_dataflows_1
-mz_dataflow_operator_reachability
-mz_dataflow_operator_reachability_1
-mz_materialization_frontiers
-mz_materialization_frontiers_1
-mz_materialization_source_frontiers
-mz_message_counts
-mz_message_counts_1
-mz_objects
-mz_records_per_dataflow
-mz_records_per_dataflow_1
-mz_records_per_dataflow_global
-mz_records_per_dataflow_global_1
-mz_records_per_dataflow_operator
-mz_records_per_dataflow_operator_1
-mz_relations
-mz_scheduling_elapsed
-mz_scheduling_elapsed_1
-mz_scheduling_histogram
-mz_scheduling_histogram_1
-mz_scheduling_parks
-mz_scheduling_parks_1
-
-> SHOW FULL VIEWS FROM mz_catalog
 name                                 type
 -------------------------------------------
 mz_arrangement_sharing               system
@@ -722,10 +548,10 @@ mz_scheduling_parks                  system
 mz_scheduling_parks_1                system
 
 > SHOW SOURCES FROM mz_catalog LIKE '%peek%';
-mz_peek_active
-mz_peek_active_1
-mz_peek_durations
-mz_peek_durations_1
+mz_peek_active      system
+mz_peek_active_1    system
+mz_peek_durations   system
+mz_peek_durations_1 system
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

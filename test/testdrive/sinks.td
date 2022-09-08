@@ -49,8 +49,8 @@ goofus,gallant
 contains:Expected one of SNAPSHOT
 
 > SHOW SINKS
-name
-----
+name   type
+-----------
 
 # # We should refuse to create a sink with an invalid schema registry URL.
 #
@@ -85,8 +85,8 @@ name
 # contains:v2 is a view, which cannot be exported as a sink
 
 > SHOW SINKS
-name
-----
+name    type
+------------
 
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
@@ -104,13 +104,6 @@ name
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > SHOW SINKS
-name
-----
-snk1
-snk2
-snk3
-
-> SHOW FULL SINKS
 name   type
 -----------
 snk1   user
@@ -189,7 +182,7 @@ $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
 {"before": null, "after": {"row":{"column1": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
 
-> SHOW FULL SINKS
+> SHOW SINKS
 name        type
 ----------------
 snk1        user

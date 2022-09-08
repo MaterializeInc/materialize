@@ -14,8 +14,8 @@ menu:
 
 Field | Use
 ------|-----
-`EXTENDED` |  Returns system types as well as user-created types. By default, only user-created types are returned.
-`FULL`| Returns the creator of the data type (user or system).
+_schema&lowbar;name_ | The schema to show types from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+
 
 ## Examples
 
@@ -25,26 +25,9 @@ Field | Use
 SHOW TYPES;
 ```
 ```
-      name
-----------------
-  int4_list
-```
-
-### Show all data types
-
-```sql
-SHOW EXTENDED FULL TYPES;
-```
-```
      name       |  type
 ----------------+--------
- _bool          | system
- _bytea         | system
- _date          | system
- _float4        | system
- _float8        | system
  int4_list      | user
-...
 ```
 
 ## Related pages

@@ -12,80 +12,9 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 # Without EXTENDED, SHOW TYPES shouldn't have anything to return.
 > SHOW TYPES
 
-> SHOW FULL TYPES
+> SHOW TYPES
 
-> SHOW EXTENDED TYPES
-name
-----
-_bool
-_bpchar
-_bytea
-_char
-_date
-_float4
-_float8
-_int2
-_int2vector
-_int4
-_int8
-_uint2
-_uint4
-_uint8
-_interval
-_jsonb
-_numeric
-_oid
-_record
-_regclass
-_regproc
-_regtype
-_text
-_time
-_timestamp
-_timestamptz
-_uuid
-_varchar
-any
-anyarray
-anycompatible
-anycompatiblearray
-anycompatiblelist
-anycompatiblemap
-anycompatiblenonarray
-anyelement
-anynonarray
-bool
-bpchar
-bytea
-char
-date
-float4
-float8
-int2
-int2vector
-int4
-int8
-uint2
-uint4
-uint8
-interval
-jsonb
-list
-map
-numeric
-oid
-record
-regclass
-regproc
-regtype
-text
-time
-timestamp
-timestamptz
-uuid
-varchar
-
-> SHOW EXTENDED FULL TYPES
+> SHOW TYPES FROM pg_catalog
 name             type
 ----------------------
 _bool                       system
@@ -227,7 +156,7 @@ ALTER SYSTEM SET max_tables = 10000
 > CREATE TYPE int_list_list_c AS LIST (element_type=int_list_c);
 > CREATE TYPE int_record_record_c AS (j1 int, j2 int_record_c);
 
-> SHOW FULL TYPES
+> SHOW TYPES
 name                type
 ------------------------
 int_list_c          user
@@ -258,7 +187,7 @@ int_record_record_c user
 > CREATE TYPE other.other_int_map_c AS MAP (key_type=text, value_type=int4);
 > CREATE TYPE other.other_record_c AS (a int, b text);
 
-> SHOW FULL TYPES FROM other;
+> SHOW TYPES FROM other;
 name                type
 -------------------------
 other_int_list_c    user
