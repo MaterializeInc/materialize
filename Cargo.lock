@@ -3206,6 +3206,7 @@ version = "0.26.1-dev"
 dependencies = [
  "anyhow",
  "axum",
+ "bytesize",
  "clap",
  "crossbeam-channel",
  "dec",
@@ -3389,6 +3390,7 @@ dependencies = [
  "aho-corasick",
  "anyhow",
  "bytes",
+ "bytesize",
  "chrono",
  "criterion",
  "csv",

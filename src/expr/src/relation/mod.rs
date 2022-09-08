@@ -14,6 +14,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::num::NonZeroUsize;
 
+use bytesize::ByteSize;
 use itertools::Itertools;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -2298,7 +2299,8 @@ impl RowSetFinishing {
                 total_bytes += new_row.byte_len();
                 if total_bytes > max_result_size {
                     return Err(format!(
-                        "result exceeds max size of {max_result_size} bytes"
+                        "result exceeds max size of {}",
+                        ByteSize::b(u64::cast_from(max_result_size)).to_string()
                     ));
                 }
                 ret.push(new_row);

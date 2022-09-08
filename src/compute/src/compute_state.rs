@@ -14,6 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytesize::ByteSize;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
@@ -834,7 +835,8 @@ impl PendingPeek {
                             .saturating_add(count_byte_size);
                         if total_size > max_result_size {
                             return Err(format!(
-                                "result exceeds max size of {max_result_size} bytes"
+                                "result exceeds max size of {}",
+                                ByteSize::b(u64::cast_from(max_result_size)).to_string()
                             ));
                         }
                         results.push((result, copies));
