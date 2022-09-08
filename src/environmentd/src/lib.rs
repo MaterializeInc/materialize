@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
+use aws_smithy_http::endpoint::Endpoint;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
@@ -361,7 +362,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 }
                 let bucket = url
                     .host()
-                    .ok_or_else(|| anyhow!("missing bucket: {}", &url.as_str()))?
+                    .ok_or_else(|| bail!("missing bucket: {}", &url.as_str()))?
                     .to_string();
                 let prefix = url
                     .path()
@@ -370,7 +371,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                     .to_string();
                 let s3_client = aws_sdk_s3::Client::new(&loader.load().await);
                 let usage_snapshot_task = usage::Snapshotter::new(usage::Config {
-                    interval: Duration::from_secs(2),
+                    interval: Duration::from_secs(self.usage_snapshot_interval),
                     s3_bucket: bucket,
                     s3_prefix: prefix,
                     s3_client: s3_client,

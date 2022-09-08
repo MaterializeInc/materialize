@@ -377,9 +377,12 @@ pub struct Args {
     /// An API key for Segment. Enables export of audit events to Segment.
     #[clap(long, env = "SEGMENT_API_KEY")]
     segment_api_key: Option<String>,
-    /// Where usage snapshots should be written
+    /// (S3-compatible) URL where to write usage snapshots
     #[clap(long, env = "USAGE_SNAPSHOT_URL")]
     usage_snapshot_url: Option<Url>,
+    /// How often to write usage snapshots, in seconds
+    #[clap(long, env = "USAGE_SNAPSHOT_INTERVAL", default_value = "5")]
+    usage_snapshot_interval: Option<u32>,
 
     // === Tracing options. ===
     #[clap(flatten)]
