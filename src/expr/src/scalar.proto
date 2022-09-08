@@ -703,5 +703,6 @@ message ProtoEvalError {
         google.protobuf.Empty uint16_out_of_range = 55;
         google.protobuf.Empty uint32_out_of_range = 56;
         google.protobuf.Empty uint64_out_of_range = 57;
+        google.protobuf.Empty date_out_of_range = 58;
     }
 }

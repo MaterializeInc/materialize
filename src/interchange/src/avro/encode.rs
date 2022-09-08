@@ -310,7 +310,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         scale: usize::cast_from(scale),
                     })
                 }
-                ScalarType::Date => Value::Date(datum.unwrap_date()),
+                ScalarType::Date => Value::Date(datum.unwrap_date().unix_epoch_days()),
                 ScalarType::Time => Value::Long({
                     let time = datum.unwrap_time();
                     (time.num_seconds_from_midnight() * 1_000_000) as i64

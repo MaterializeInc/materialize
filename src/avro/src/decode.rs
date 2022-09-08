@@ -1284,10 +1284,7 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
             }
             SchemaPiece::Date => {
                 let days = zag_i32(r)?;
-                let val = NaiveDate::from_ymd(1970, 1, 1)
-                    .checked_add_signed(chrono::Duration::days(days.into()))
-                    .ok_or(AvroError::Decode(DecodeError::BadDate(days)))?;
-                d.scalar(Scalar::Date(val))
+                d.scalar(Scalar::Date(days))
             }
             SchemaPiece::TimestampMilli => {
                 let total_millis = zag_i64(r)?;

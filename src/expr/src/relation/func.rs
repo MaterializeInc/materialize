@@ -12,10 +12,11 @@
 use std::fmt;
 use std::iter;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::date::Date;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
 use proptest::prelude::{Arbitrary, Just};
@@ -184,7 +185,7 @@ fn max_date<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<NaiveDate> = datums
+    let x: Option<Date> = datums
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_date())
@@ -354,7 +355,7 @@ fn min_date<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<NaiveDate> = datums
+    let x: Option<Date> = datums
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_date())

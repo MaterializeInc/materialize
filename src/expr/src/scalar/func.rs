@@ -322,21 +322,19 @@ fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let date = a.unwrap_date();
     let time = b.unwrap_time();
 
-    Datum::Timestamp(
-        NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms_nano(
-            time.hour(),
-            time.minute(),
-            time.second(),
-            time.nanosecond(),
-        ),
-    )
+    Datum::Timestamp(NaiveDate::from(date).and_hms_nano(
+        time.hour(),
+        time.minute(),
+        time.second(),
+        time.nanosecond(),
+    ))
 }
 
 fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, interval.months)?;
     Ok(Datum::Timestamp(
         dt.checked_add_signed(interval.duration_as_chrono())
@@ -773,7 +771,7 @@ fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn sub_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from((a.unwrap_date() - b.unwrap_date()).num_days() as i32)
+    Datum::from(a.unwrap_date() - b.unwrap_date())
 }
 
 fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -792,7 +790,7 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
     let dt = interval
         .months
         .checked_neg()
@@ -1839,7 +1837,7 @@ where
 fn extract_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date())?.into()),
+        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date().into())?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }

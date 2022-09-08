@@ -41,11 +41,12 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::{Buf, BytesMut};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
 use mz_persist_client::cache::PersistClientCache;
+use mz_repr::adt::date::Date;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
@@ -333,7 +334,9 @@ impl<'a> FromSql<'a> for Slt {
             ))),
             PgType::FLOAT4 => Self(Value::Float4(types::float4_from_sql(raw)?)),
             PgType::FLOAT8 => Self(Value::Float8(types::float8_from_sql(raw)?)),
-            PgType::DATE => Self(Value::Date(NaiveDate::from_sql(ty, raw)?)),
+            PgType::DATE => Self(Value::Date(Date::from_pg_epoch(types::int4_from_sql(
+                raw,
+            )?)?)),
             PgType::INT2 => Self(Value::Int2(types::int2_from_sql(raw)?)),
             PgType::INT4 => Self(Value::Int4(types::int4_from_sql(raw)?)),
             PgType::INT8 => Self(Value::Int8(types::int8_from_sql(raw)?)),

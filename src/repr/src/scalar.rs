@@ -15,7 +15,7 @@ use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
@@ -30,6 +30,7 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::{Array, ArrayDimension};
 use crate::adt::char::{Char, CharLength};
+use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
@@ -71,7 +72,7 @@ pub enum Datum<'a> {
     /// A 64-bit floating point number.
     Float64(OrderedFloat<f64>),
     /// A date.
-    Date(NaiveDate),
+    Date(Date),
     /// A time.
     Time(NaiveTime),
     /// A date and time, without a timezone.
@@ -151,7 +152,7 @@ impl<'a> Serialize for Datum<'a> {
             UInt64(u) => serializer.serialize_u64(*u),
             Float32(f) => serializer.serialize_f32(**f),
             Float64(f) => serializer.serialize_f64(**f),
-            Date(d) => d.serialize(serializer),
+            Date(d) => chrono::NaiveDate::from(d).serialize(serializer),
             Time(t) => t.serialize(serializer),
             Timestamp(ts) => ts.serialize(serializer),
             TimestampTz(tstz) => tstz.serialize(serializer),
@@ -541,14 +542,14 @@ impl<'a> Datum<'a> {
     ///
     /// Panics if the datum is not [`Datum::Date`].
     #[track_caller]
-    pub fn unwrap_date(&self) -> chrono::NaiveDate {
+    pub fn unwrap_date(&self) -> Date {
         match self {
             Datum::Date(d) => *d,
             _ => panic!("Datum::unwrap_date called on {:?}", self),
         }
     }
 
-    /// Unwraps the time value within this datum.
+    /// Unwraps the time vaqlue within this datum.
     ///
     /// # Panics
     ///
@@ -914,8 +915,8 @@ impl<'a> From<&'a [u8]> for Datum<'a> {
     }
 }
 
-impl<'a> From<NaiveDate> for Datum<'a> {
-    fn from(d: NaiveDate) -> Datum<'a> {
+impl<'a> From<Date> for Datum<'a> {
+    fn from(d: Date) -> Datum<'a> {
         Datum::Date(d)
     }
 }
@@ -1479,7 +1480,7 @@ impl_datum_type_copy!(u16, UInt16);
 impl_datum_type_copy!(u32, UInt32);
 impl_datum_type_copy!(u64, UInt64);
 impl_datum_type_copy!(Interval, Interval);
-impl_datum_type_copy!(NaiveDate, Date);
+impl_datum_type_copy!(Date, Date);
 impl_datum_type_copy!(NaiveTime, Time);
 impl_datum_type_copy!(NaiveDateTime, Timestamp);
 impl_datum_type_copy!(DateTime<Utc>, TimestampTz);
@@ -2313,7 +2314,7 @@ pub enum PropDatum {
     Float32(f32),
     Float64(f64),
 
-    Date(chrono::NaiveDate),
+    Date(Date),
     Time(chrono::NaiveTime),
     Timestamp(chrono::NaiveDateTime),
     TimestampTz(chrono::DateTime<chrono::Utc>),
@@ -2346,7 +2347,7 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         any::<i64>().prop_map(PropDatum::Int64),
         any::<f32>().prop_map(PropDatum::Float32),
         any::<f64>().prop_map(PropDatum::Float64),
-        add_arb_duration(chrono::NaiveDate::from_ymd(2000, 1, 1)).prop_map(PropDatum::Date),
+        arb_date().prop_map(PropDatum::Date),
         add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropDatum::Time),
         add_arb_duration(chrono::NaiveDateTime::from_timestamp(0, 0))
             .prop_map(PropDatum::Timestamp),
@@ -2434,6 +2435,12 @@ fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDic
             row.packer().push_dict(entry_iter.into_iter());
             PropDict(row, entries)
         })
+        .boxed()
+}
+
+fn arb_date() -> BoxedStrategy<Date> {
+    (Date::LOW_DAYS..Date::HIGH_DAYS)
+        .prop_map(move |days| Date::from_pg_epoch(days).unwrap())
         .boxed()
 }
 
