@@ -132,7 +132,7 @@ SID   count       6           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   operator    1           bigint
+SID   operator_id 1           bigint
 SID   worker_id   2           bigint
 SID   records     3           bigint
 SID   batches     4           bigint
@@ -143,7 +143,7 @@ SID   batches     4           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   operator    1           bigint
+SID   operator_id 1           bigint
 SID   worker_id   2           bigint
 SID   count       3           bigint
 
@@ -154,7 +154,7 @@ SID   count       3           bigint
 id      name        position    type
 --------------------------------------
 SID   global_id   1           text
-SID   source      2           text
+SID   source_id   2           text
 SID   worker_id   3           bigint
 SID   delay_ns    4           bigint
 SID   count       5           bigint
@@ -166,6 +166,6 @@ SID   count       5           bigint
 id      name        position    type
 --------------------------------------
 SID   global_id   1           text
-SID   source      2           text
+SID   source_id   2           text
 SID   worker_id   3           bigint
 SID   time        4           bigint

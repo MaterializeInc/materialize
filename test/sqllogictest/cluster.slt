@@ -109,11 +109,11 @@ bar  v  v_primary_idx  1  ?column?  NULL  false
 query TTTTTTT
 SHOW EXTENDED INDEXES IN CLUSTER bar;
 ----
-bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  1  operator  NULL  false
+bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  1  operator_id  NULL  false
 bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_records_internal  mz_arrangement_records_internal_4_primary_idx  1  operator  NULL  false
+bar  mz_arrangement_records_internal  mz_arrangement_records_internal_4_primary_idx  1  operator_id  NULL  false
 bar  mz_arrangement_records_internal  mz_arrangement_records_internal_4_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_4_primary_idx  1  operator  NULL  false
+bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_4_primary_idx  1  operator_id  NULL  false
 bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_4_primary_idx  2  worker_id  NULL  false
 bar  mz_dataflow_addresses  mz_dataflow_addresses_4_primary_idx  1  id  NULL  false
 bar  mz_dataflow_addresses  mz_dataflow_addresses_4_primary_idx  2  worker_id  NULL  false
@@ -126,7 +126,7 @@ bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachabili
 bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  5  timestamp  NULL  true
 bar  mz_dataflow_operators  mz_dataflow_operators_4_primary_idx  1  id  NULL  false
 bar  mz_dataflow_operators  mz_dataflow_operators_4_primary_idx  2  worker_id  NULL  false
-bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  1  dataflow  NULL  false
+bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  1  export_id  NULL  false
 bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  2  import_id  NULL  false
 bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  3  worker_id  NULL  false
 bar  mz_materializations  mz_materializations_4_primary_idx  1  global_id  NULL  false
@@ -150,14 +150,14 @@ bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  1
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  2  slept_for  NULL  false
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  3  requested  NULL  false
 bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  1  global_id  NULL  false
-bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  2  source  NULL  false
+bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  2  source_id  NULL  false
 bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  3  worker_id  NULL  false
 bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  4  delay_ns  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  1  global_id  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  2  worker_id  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  3  time  NULL  false
 bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  1  global_id  NULL  false
-bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  2  source  NULL  false
+bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  2  source_id  NULL  false
 bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  3  worker_id  NULL  false
 bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  4  time  NULL  false
 bar  v  v_primary_idx  1  ?column?  NULL  false
