@@ -537,6 +537,36 @@ impl SessionClient {
         let mut results = vec![];
 
         for stmt in stmts {
+            let execute_responses = Plan::generated_from((&stmt).into())
+                .into_iter()
+                .map(ExecuteResponse::generated_from)
+                .flatten()
+                .collect::<Vec<_>>();
+
+            if execute_responses.iter().any(|execute_response| {
+                matches!(
+                    execute_response,
+                    ExecuteResponseKind::Fetch
+                        | ExecuteResponseKind::SetVariable
+                        | ExecuteResponseKind::Tailing
+                        | ExecuteResponseKind::CopyTo
+                        | ExecuteResponseKind::CopyFrom
+                        | ExecuteResponseKind::Raise
+                        | ExecuteResponseKind::DeclaredCursor
+                        | ExecuteResponseKind::ClosedCursor
+                )
+            }) && !matches!(
+                stmt,
+                // Both `SelectStatement` and `CopyStatement` generate
+                // `PeekPlan`, but `SELECT` should be permitted and `COPY` not.
+                Statement::Select(SelectStatement { query: _, as_of: _ })
+            ) {
+                results.push(SimpleResult::err(format!(
+                    "unsupported via this API: {}",
+                    stmt.to_ast_string()
+                )));
+            }
+
             if matches!(self.session().transaction(), TransactionStatus::Failed(_)) {
                 break;
             }

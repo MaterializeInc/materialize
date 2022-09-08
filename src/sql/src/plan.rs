@@ -147,7 +147,7 @@ impl Plan {
     /// Expresses which [`StatementKind`] can generate which set of
     /// [`PlanKind`].
     pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
-        match stmt {
+        match dbg!(stmt) {
             StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
             StatementKind::AlterIndex => vec![
                 PlanKind::AlterIndexResetOptions,
@@ -168,7 +168,12 @@ impl Plan {
             StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
-            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Peek, PlanKind::SendDiffs],
+            StatementKind::Copy => vec![
+                PlanKind::CopyFrom,
+                PlanKind::Peek,
+                PlanKind::SendDiffs,
+                PlanKind::Tail,
+            ],
             StatementKind::CreateCluster => vec![PlanKind::CreateComputeInstance],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateComputeInstanceReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
@@ -207,6 +212,7 @@ impl Plan {
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
                 PlanKind::Peek,
+                PlanKind::SendRows,
                 PlanKind::ShowVariable,
                 PlanKind::ShowAllVariables,
             ],
