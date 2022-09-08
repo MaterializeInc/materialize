@@ -11,12 +11,10 @@ use axum::response::IntoResponse;
 use axum::Json;
 use http::StatusCode;
 
-use mz_adapter::client::HttpSqlRequest;
-
-use crate::http::AuthedClient;
+use crate::http::{AuthedClient, HttpSqlRequest};
 
 pub async fn handle_sql(
-    AuthedClient(mut client): AuthedClient,
+    mut client: AuthedClient,
     Json(request): Json<HttpSqlRequest>,
 ) -> impl IntoResponse {
     match client.execute_sql_http_request(request).await {

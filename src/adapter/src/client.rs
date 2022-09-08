@@ -7,31 +7,21 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::convert::From;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
-use itertools::izip;
-use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
-use mz_repr::{Datum, GlobalId, Row, RowArena, ScalarType};
-use mz_sql::ast::display::AstDisplay;
+use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
-use crate::catalog::SYSTEM_USER;
-use crate::command::{
-    Canceled, Command, ExecuteResponse, Response, SimpleResult, SqlHttpExecuteResponse,
-    StartupResponse,
-};
-use crate::coord::peek::PeekResponseUnary;
+use crate::command::{Canceled, Command, ExecuteResponse, Response, StartupResponse};
 use crate::error::AdapterError;
-use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionStatus};
+use crate::session::{EndTransactionAction, PreparedStatement, Session};
 
 /// An abstraction allowing us to name different connections.
 pub type ConnectionId = u32;
@@ -201,29 +191,6 @@ impl Drop for ConnClient {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ExtendedRequest {
-    #[serde(alias = "sql")]
-    /// 0 or 1 queries
-    pub query: String,
-    /// Optional parameters for the query
-    #[serde(default)]
-    pub params: Vec<Option<String>>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(untagged)]
-pub enum HttpSqlRequest {
-    /// 0 or more queries delimited by semicolons in the same strings. Do not
-    /// support parameters.
-    Simple {
-        #[serde(alias = "sql")]
-        query: String,
-    },
-    /// 0 or more [`ExtendedRequest`]s.
-    Extended { queries: Vec<ExtendedRequest> },
-}
-
 /// A coordinator client that is bound to a connection.
 ///
 /// See also [`Client`].
@@ -389,283 +356,6 @@ impl SessionClient {
             tx,
         })
         .await
-    }
-
-    async fn execute_stmt(
-        &mut self,
-        stmt: Statement<Raw>,
-        raw_params: Vec<Option<String>>,
-    ) -> SimpleResult {
-        const EMPTY_PORTAL: &str = "";
-        if let Err(e) = self
-            .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
-            .await
-        {
-            return SimpleResult::err(e);
-        }
-
-        let prep_stmt = match self.get_prepared_statement(&EMPTY_PORTAL).await {
-            Ok(stmt) => stmt,
-            Err(err) => {
-                return SimpleResult::err(err);
-            }
-        };
-
-        let param_types = &prep_stmt.desc().param_types;
-        if param_types.len() != raw_params.len() {
-            let message = format!(
-                "request supplied {actual} parameters, \
-                         but {statement} requires {expected}",
-                statement = (&stmt).to_ast_string(),
-                actual = raw_params.len(),
-                expected = param_types.len()
-            );
-            return SimpleResult::err(message);
-        }
-
-        let buf = RowArena::new();
-        let mut params = vec![];
-        for (raw_param, mz_typ) in izip!(raw_params, param_types) {
-            let pg_typ = mz_pgrepr::Type::from(mz_typ);
-            let datum = match raw_param {
-                None => Datum::Null,
-                Some(raw_param) => {
-                    match mz_pgrepr::Value::decode(
-                        mz_pgrepr::Format::Text,
-                        &pg_typ,
-                        &raw_param.as_bytes(),
-                    ) {
-                        Ok(param) => param.into_datum(&buf, &pg_typ),
-                        Err(err) => {
-                            let msg = format!("unable to decode parameter: {}", err);
-                            return SimpleResult::err(msg);
-                        }
-                    }
-                }
-            };
-            params.push((datum, mz_typ.clone()))
-        }
-
-        let result_formats = vec![
-            mz_pgrepr::Format::Text;
-            prep_stmt
-                .desc()
-                .relation_desc
-                .clone()
-                .map(|desc| desc.typ().column_types.len())
-                .unwrap_or(0)
-        ];
-
-        let desc = prep_stmt.desc().clone();
-        let revision = prep_stmt.catalog_revision;
-        let stmt = prep_stmt.sql().cloned();
-        if let Err(err) = self.session().set_portal(
-            EMPTY_PORTAL.into(),
-            desc,
-            stmt,
-            params,
-            result_formats,
-            revision,
-        ) {
-            return SimpleResult::err(err.to_string());
-        }
-
-        let desc = self
-            .session()
-            // We do not need to verify here because `self.execute` verifies below.
-            .get_portal_unverified(EMPTY_PORTAL)
-            .map(|portal| portal.desc.clone())
-            .expect("unnamed portal should be present");
-
-        let res = match self.execute(EMPTY_PORTAL.into()).await {
-            Ok(res) => res,
-            Err(e) => {
-                return SimpleResult::err(e);
-            }
-        };
-
-        match res {
-            ExecuteResponse::Canceled => {
-                SimpleResult::err("statement canceled due to user request")
-            }
-            res @ (ExecuteResponse::CreatedConnection { existed: _ }
-            | ExecuteResponse::CreatedDatabase { existed: _ }
-            | ExecuteResponse::CreatedSchema { existed: _ }
-            | ExecuteResponse::CreatedRole
-            | ExecuteResponse::CreatedComputeInstance { existed: _ }
-            | ExecuteResponse::CreatedComputeInstanceReplica { existed: _ }
-            | ExecuteResponse::CreatedTable { existed: _ }
-            | ExecuteResponse::CreatedIndex { existed: _ }
-            | ExecuteResponse::CreatedSecret { existed: _ }
-            | ExecuteResponse::CreatedSource { existed: _ }
-            | ExecuteResponse::CreatedSources
-            | ExecuteResponse::CreatedSink { existed: _ }
-            | ExecuteResponse::CreatedView { existed: _ }
-            | ExecuteResponse::CreatedViews { existed: _ }
-            | ExecuteResponse::CreatedMaterializedView { existed: _ }
-            | ExecuteResponse::CreatedType
-            | ExecuteResponse::Deleted(_)
-            | ExecuteResponse::DiscardedTemp
-            | ExecuteResponse::DiscardedAll
-            | ExecuteResponse::DroppedDatabase
-            | ExecuteResponse::DroppedSchema
-            | ExecuteResponse::DroppedRole
-            | ExecuteResponse::DroppedComputeInstance
-            | ExecuteResponse::DroppedComputeInstanceReplicas
-            | ExecuteResponse::DroppedSource
-            | ExecuteResponse::DroppedIndex
-            | ExecuteResponse::DroppedSink
-            | ExecuteResponse::DroppedTable
-            | ExecuteResponse::DroppedView
-            | ExecuteResponse::DroppedMaterializedView
-            | ExecuteResponse::DroppedType
-            | ExecuteResponse::DroppedSecret
-            | ExecuteResponse::DroppedConnection
-            | ExecuteResponse::EmptyQuery
-            | ExecuteResponse::Inserted(_)
-            | ExecuteResponse::StartedTransaction { duplicated: _ }
-            | ExecuteResponse::TransactionExited {
-                tag: _,
-                was_implicit: _,
-            }
-            | ExecuteResponse::Updated(_)
-            | ExecuteResponse::AlteredObject(_)
-            | ExecuteResponse::AlteredIndexLogicalCompaction
-            | ExecuteResponse::AlteredSystemConfiguraion
-            | ExecuteResponse::Deallocate { all: _ }
-            | ExecuteResponse::Prepare) => SimpleResult::ok(res),
-            ExecuteResponse::SendingRows {
-                future: rows,
-                span: _,
-            } => {
-                let rows = match rows.await {
-                    PeekResponseUnary::Rows(rows) => rows,
-                    PeekResponseUnary::Error(e) => {
-                        return SimpleResult::err(e);
-                    }
-                    PeekResponseUnary::Canceled => {
-                        return SimpleResult::err("statement canceled due to user request");
-                    }
-                };
-                let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
-                let col_names = match desc.relation_desc {
-                    Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
-                    None => vec![],
-                };
-                let mut datum_vec = mz_repr::DatumVec::new();
-                for row in rows {
-                    let datums = datum_vec.borrow_with(&row);
-                    sql_rows.push(datums.iter().map(From::from).collect());
-                }
-                SimpleResult::Rows {
-                    rows: sql_rows,
-                    col_names,
-                }
-            }
-            ExecuteResponse::Fetch { .. }
-            | ExecuteResponse::SetVariable { .. }
-            | ExecuteResponse::Tailing { .. }
-            | ExecuteResponse::CopyTo { .. }
-            | ExecuteResponse::CopyFrom { .. }
-            | ExecuteResponse::Raise { .. }
-            | ExecuteResponse::DeclaredCursor
-            | ExecuteResponse::ClosedCursor => {
-                // NOTE(benesch): it is a bit scary to ignore the response
-                // to these types of planning *after* they have been
-                // planned, as they may have mutated state. On a quick
-                // glance, though, ignoring the execute response in all of
-                // the above situations seems safe enough, and it's a more
-                // target allowlist than the code that was here before.
-                SimpleResult::err("executing statements of this type is unsupported via this API")
-            }
-        }
-    }
-
-    /// Executes an [`HttpSqlRequest`].
-    ///
-    /// The provided `stmts` are executed directly, and their results
-    /// are returned as a vector of rows, where each row is a vector of JSON
-    /// objects.
-    pub async fn execute_sql_http_request(
-        &mut self,
-        request: HttpSqlRequest,
-    ) -> Result<SqlHttpExecuteResponse, AdapterError> {
-        let mut results = vec![];
-
-        match request {
-            HttpSqlRequest::Simple { query } => {
-                let stmts = mz_sql::parse::parse(&query)
-                    .map_err(|e| AdapterError::Unstructured(e.into()))?;
-                let num_stmts = stmts.len();
-
-                for stmt in stmts {
-                    if matches!(self.session().transaction(), TransactionStatus::Failed(_)) {
-                        break;
-                    }
-                    // Mirror the behavior of the PostgreSQL simple query protocol.
-                    // See the pgwire::protocol::StateMachine::query method for details.
-                    if let Err(e) = self.start_transaction(Some(num_stmts)).await {
-                        results.push(SimpleResult::err(e));
-                        break;
-                    }
-                    let res = self.execute_stmt(stmt, vec![]).await;
-                    if matches!(res, SimpleResult::Err { .. }) {
-                        self.fail_transaction();
-                    }
-                    results.push(res);
-                }
-            }
-            HttpSqlRequest::Extended { queries } => {
-                for ExtendedRequest { query, params } in queries {
-                    if matches!(self.session().transaction(), TransactionStatus::Failed(_)) {
-                        break;
-                    }
-
-                    let mut stmts = match mz_sql::parse::parse(&query) {
-                        Ok(stmts) => stmts,
-                        Err(e) => {
-                            results.push(SimpleResult::err(e));
-                            break;
-                        }
-                    };
-
-                    if stmts.len() > 1 {
-                        results.push(SimpleResult::err(
-                            "each query can contain at most 1 statement",
-                        ));
-                        break;
-                    }
-
-                    match stmts.pop() {
-                        Some(stmt) => {
-                            // Mirror the behavior of the PostgreSQL simple query protocol.
-                            // See the pgwire::protocol::StateMachine::query method for details.
-                            if let Err(e) = self.start_transaction(Some(1)).await {
-                                results.push(SimpleResult::err(e));
-                                break;
-                            }
-                            let res = self.execute_stmt(stmt, params).await;
-                            if matches!(res, SimpleResult::Err { .. }) {
-                                self.fail_transaction();
-                            }
-                            results.push(res);
-                        }
-                        None => {
-                            if !params.is_empty() {
-                                results.push(SimpleResult::err(
-                                    "cannot provide parameters to an empty query",
-                                ));
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if self.session().transaction().is_implicit() {
-            self.end_transaction(EndTransactionAction::Commit).await?;
-        }
-        Ok(SqlHttpExecuteResponse { results })
     }
 
     /// Returns a mutable reference to the session bound to this client.

@@ -496,7 +496,6 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
         },
         // Writes
-        // TODO: add this to pg test
         TestCaseParams {
             requests: vec![
                 ("insert into t values ($1);", vec![Some("1")]),
@@ -514,17 +513,35 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"]}]}"#,
         },
+        TestCaseParams {
+            requests: vec![
+                ("insert into t values ($1);", vec![Some("4")]),
+                ("begin;", vec![]),
+                ("select 1/0;", vec![]),
+                ("commit;", vec![]),
+            ],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"ok":"INSERT 0 1"},{"ok":"BEGIN"},{"error":"division by zero"}]}"#,
+        },
+        TestCaseParams {
+            requests: vec![("select * from t", vec![])],
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"]}]}"#,
+        },
     ];
 
     for tc in param_test_cases {
         let mut queries = vec![];
         for (query, params) in tc.requests.into_iter() {
-            queries.push(mz_adapter::client::ExtendedRequest {
+            queries.push(mz_environmentd::http::ExtendedRequest {
                 query: query.to_string(),
-                params: p.iter().map(|p| p.map(str::to_string)).collect::<Vec<_>>(),
+                params: params
+                    .iter()
+                    .map(|p| p.map(str::to_string))
+                    .collect::<Vec<_>>(),
             });
         }
-        let req = mz_adapter::client::HttpSqlRequest::Extended { queries };
+        let req = mz_environmentd::http::HttpSqlRequest::Extended { queries };
         let res = Client::new().post(url.clone()).json(&req).send()?;
         assert_eq!(res.status(), tc.status, "{:?}: {:?}", req, res.text());
         assert_eq!(res.text()?, tc.body, "{:?}", req);
