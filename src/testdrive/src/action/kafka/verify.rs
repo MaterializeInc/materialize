@@ -12,9 +12,10 @@ use std::fmt::Debug;
 use std::str;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, ensure, Context};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
+use itertools::Itertools;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::{Headers, Message};
 use regex::Regex;
@@ -187,20 +188,25 @@ impl Action for VerifyAction {
                         .header_keys
                         .iter()
                         .map(|k| {
-                            // grab the value of the first header with the matching key, if there is one.
-                            message
-                                .headers()
-                                .and_then(|h| h.iter().find(|i| i.key == k))
-                                .and_then(|h| h.value)
-                                .and_then(|v| str::from_utf8(v).ok())
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| "".to_string())
+                            // Expect a unique header with the given key and a UTF8-formatted body.
+                            let headers =
+                                message.headers().context("expected headers for message")?;
+                            let header = headers
+                                .iter()
+                                .filter(|i| i.key == k)
+                                .exactly_one()
+                                .map_err(|_| {
+                                    anyhow!("expected exactly one header with the given key")
+                                })?;
+                            let value =
+                                str::from_utf8(header.value.context("expected value for header")?)?;
+                            Ok(value.to_owned())
                         })
-                        .collect();
+                        .collect::<anyhow::Result<Vec<_>>>()?;
                     actual_bytes.push(Record {
                         headers,
-                        key: message.key().and_then(|bytes| Some(bytes.to_owned())),
-                        value: message.payload().and_then(|bytes| Some(bytes.to_owned())),
+                        key: message.key().map(|b| b.to_owned()),
+                        value: message.payload().map(|b| b.to_owned()),
                     });
                 }
                 Some(Err(e)) => {
@@ -296,6 +302,10 @@ impl Action for VerifyAction {
                                 Some(avro::from_json(&value, value_schema.top_node())?)
                             }
                         };
+                        ensure!(
+                            deserializer.next().is_none(),
+                            "at most two avro records per expect line"
+                        );
                         Ok(Record {
                             headers,
                             key,
@@ -362,6 +372,10 @@ impl Action for VerifyAction {
                         let mut deserializer = json::parse_many(v)?.into_iter();
                         let key = if *has_key { deserializer.next() } else { None };
                         let value = deserializer.next();
+                        ensure!(
+                            deserializer.next().is_none(),
+                            "at most two avro records per expect line"
+                        );
                         Ok(Record {
                             headers,
                             key,
@@ -400,9 +414,10 @@ fn split_headers(input: &str, n_headers: usize) -> anyhow::Result<(Vec<String>, 
         .next()
         .context("expected some contents after any message headers")?;
 
-    if parts.next() != None {
-        bail!("more than n+1 elements from a call to splitn(_, n+1)")
-    }
+    ensure!(
+        parts.next().is_none(),
+        "more than n+1 elements from a call to splitn(_, n+1)"
+    );
 
     Ok((headers, rest))
 }
