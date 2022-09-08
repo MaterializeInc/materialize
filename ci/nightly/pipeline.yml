@@ -30,8 +30,8 @@ steps:
           - { value: testdrive-workers-1 }
           - { value: testdrive-workers-32 }
           - { value: testdrive-partitions-5 }
-          - { value: feature-benchmark-single-node }
-          - { value: feature-benchmark-cluster }
+#          - { value: feature-benchmark-single-node }
+#          - { value: feature-benchmark-cluster }
           - { value: zippy-kafka-sources }
           - { value: zippy-user-tables }
           - { value: secrets }
@@ -62,39 +62,40 @@ steps:
 
   - wait: ~
 
-  - id: feature-benchmark-single-node
-    label: "Feature benchmark (single node)"
-    timeout_in_minutes: 360
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args:
-            - --this-nodes
-            - 1
-            - --this-workers
-            - 4
-            - --other-tag
-            - latest
-            - --other-options
-            - --workers 4
+# Disabled until we formulate a general performance strategy
+#  - id: feature-benchmark-single-node
+#    label: "Feature benchmark (single node)"
+#    timeout_in_minutes: 360
+#    agents:
+#      queue: linux-x86_64
+#    plugins:
+#      - ./ci/plugins/mzcompose:
+#          composition: feature-benchmark
+#          args:
+#            - --this-nodes
+#            - 1
+#            - --this-workers
+#            - 4
+#            - --other-tag
+#            - latest
+#            - --other-options
+#            - --workers 4
 
-  - id: feature-benchmark-cluster
-    label: "Feature benchmark (cluster)"
-    timeout_in_minutes: 360
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args:
-            - --this-nodes
-            - 4
-            - --other-tag
-            - latest
-            - --other-options
-            - --workers 4
+#  - id: feature-benchmark-cluster
+#    label: "Feature benchmark (cluster)"
+#    timeout_in_minutes: 360
+#    agents:
+#      queue: linux-x86_64
+#    plugins:
+#      - ./ci/plugins/mzcompose:
+#          composition: feature-benchmark
+#          args:
+#            - --this-nodes
+#            - 4
+#            - --other-tag
+#            - latest
+#            - --other-options
+#            - --workers 4
 
   - id: coverage
     label: Code coverage
