@@ -2295,7 +2295,7 @@ impl RowSetFinishing {
                         .extend(self.project.iter().map(|i| &datums[*i]));
                     row_buf.clone()
                 };
-                total_bytes += new_row.data().len();
+                total_bytes += new_row.byte_len();
                 if total_bytes > max_result_size {
                     return Err(format!(
                         "result exceeds max size of {max_result_size} bytes"
