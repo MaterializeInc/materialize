@@ -489,6 +489,7 @@ WHERE l_quantity = 17
 ----
 %0 =
 | Get materialize.public.lineitem (u7)
+| Filter ((#4 = 7) OR (#4 = 17) OR (#4 = 33))
 | Project (#0, #4)
 | ArrangeBy ()
 
