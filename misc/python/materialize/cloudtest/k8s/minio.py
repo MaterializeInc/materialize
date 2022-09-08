@@ -38,6 +38,7 @@ class Minio(K8sResource):
         )
 
         self.create_bucket("persist")
+        self.create_bucket("usage")
 
     def create_bucket(self, bucket: str) -> None:
         self.kubectl(
