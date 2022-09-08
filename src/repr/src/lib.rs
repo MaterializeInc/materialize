@@ -341,6 +341,10 @@ impl TryFrom<Numeric> for Timestamp {
     }
 }
 
+impl columnation::Columnation for Timestamp {
+    type InnerRegion = columnation::CloneRegion<Timestamp>;
+}
+
 /// System-wide record count difference type.
 pub type Diff = i64;
 
