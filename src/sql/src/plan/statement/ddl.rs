@@ -1850,10 +1850,9 @@ pub fn plan_create_materialized_view(
 }
 
 pub fn describe_create_sink(
-    scx: &StatementContext,
+    _: &StatementContext,
     _: CreateSinkStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    scx.require_unsafe_mode("CREATE SINK")?;
     Ok(StatementDesc::new(None))
 }
 
@@ -1863,8 +1862,6 @@ pub fn plan_create_sink(
     scx: &StatementContext,
     stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_unsafe_mode("CREATE SINK")?;
-
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
         name,
