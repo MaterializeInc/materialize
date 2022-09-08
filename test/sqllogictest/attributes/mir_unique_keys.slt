@@ -24,7 +24,7 @@ CREATE TABLE u (
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR SELECT sum(a) FROM t
 ----
-Explained Query
+Explained Query:
   Let // { keys: "([])" }
     Union // { keys: "([])" }
       Get l0 // { keys: "([])" }
@@ -52,7 +52,7 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(keys, no_fast_path) AS TEXT FOR SELECT * FROM (VALUES (1, 2, 3), (4, 2, 4));
 ----
-Explained Query
+Explained Query:
   Constant // { keys: "([0], [2])" }
     - (1, 2, 3)
     - (4, 2, 4)
@@ -75,7 +75,7 @@ INNER JOIN
 (SELECT * FROM v WHERE c = d) u
 ON t.b = u.d;
 ----
-Explained Query
+Explained Query:
   Project (#1, #0, #2, #0) // { keys: "([1])" }
     Join on=(#0 = #3) type=differential // { keys: "([0])" }
       ArrangeBy keys=[[#0]] // { keys: "([0])" }
@@ -107,7 +107,7 @@ EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR
 EXCEPT ALL
 (SELECT c, d::double FROM v WHERE c = 1)
 ----
-Explained Query
+Explained Query:
   Threshold // { keys: "()" }
     Union // { keys: "()" }
       Project (#1, #2) // { keys: "([1])" }
@@ -144,7 +144,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR
 SELECT 1 = (Select * FROM generate_series(1, 100000) limit 3)
 ----
-Explained Query
+Explained Query:
   Let // { keys: "()" }
     Project (#1) // { keys: "()" }
       Map ((#0 = 1)) // { keys: "()" }

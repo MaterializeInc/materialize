@@ -42,7 +42,7 @@ ORDER BY t.b LIMIT 10 OFFSET 1);
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR VIEW test1
 ----
-Explained Query
+Explained Query:
   Let // { arity: 4 }
     Threshold // { arity: 4 }
       Union // { arity: 4 }
@@ -90,12 +90,10 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
 SELECT sum(e * f), max(f) FROM v GROUP BY mod(e, 5)
 ----
-Explained Query
+Explained Query:
   Project (#1, #2) // { arity: 2 }
     Reduce group_by=[(#0 % 5)] aggregates=[sum((#0 * #1)), max(#1)] // { arity: 3 }
       Get materialize.public.v // { arity: 2 }
-
-Source materialize.public.v
 
 EOF
 
@@ -106,7 +104,7 @@ EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
 WITH u AS (select u.c + 1 as g from u)
 SELECT u.g as g, w.g as h FROM u, u as w WHERE u.g = w.g
 ----
-Explained Query
+Explained Query:
   Let // { arity: 2 }
     Project (#0, #0) // { arity: 2 }
       Join on=(#0 = #1) type=differential // { arity: 2 }
@@ -131,7 +129,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
 SELECT * FROM u WHERE (SELECT f FROM v WHERE v.e = u.d) = 1
 ----
-Explained Query
+Explained Query:
   Let // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
       Join on=(#1 = #2) type=differential // { arity: 3 }
