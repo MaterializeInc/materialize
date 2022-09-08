@@ -31,13 +31,13 @@ use mz_proto::{any_uuid, IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, Try
 use mz_repr::{GlobalId, RelationType, Row};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::protocol::client::ProtoAllowCompaction;
-use mz_storage::types::sinks::ComputeSinkDesc;
 
 use crate::command::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
 use crate::logging::LoggingConfig;
 use crate::plan::Plan;
+use crate::sinks::ComputeSinkDesc;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 

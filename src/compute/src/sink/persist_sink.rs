@@ -23,10 +23,10 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
 
+use mz_compute_client::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_storage::types::sources::SourceData;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
