@@ -279,7 +279,7 @@ pub enum Atomicity {
     AllowNonAtomic,
 }
 
-/// An abstraction for a single arbitrarily-sized binary blob and a associated
+/// An abstraction for a single arbitrarily-sized binary blob and an associated
 /// version number (sequence number).
 #[derive(Debug, Clone, PartialEq)]
 pub struct VersionedData {
