@@ -233,7 +233,8 @@ pub struct ExtendedRequest {
     /// 0 or 1 queries
     pub query: String,
     /// Optional parameters for the query
-    pub params: Option<Vec<Option<String>>>,
+    #[serde(default)]
+    pub params: Vec<Option<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

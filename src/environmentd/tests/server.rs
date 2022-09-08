@@ -336,7 +336,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
     // Parameter-based queries
 
     struct TestCaseParams {
-        requests: Vec<(&'static str, Option<Vec<Option<&'static str>>>)>,
+        requests: Vec<(&'static str, Vec<Option<&'static str>>)>,
         status: StatusCode,
         body: &'static str,
     }
@@ -344,37 +344,37 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
     let param_test_cases = vec![
         // Parameterized queries work
         TestCaseParams {
-            requests: vec![("select $1+$2::int as col", Some(vec![Some("1"), Some("2")]))],
+            requests: vec![("select $1+$2::int as col", vec![Some("1"), Some("2")])],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
         },
         // Parameters can be present and empty
         TestCaseParams {
-            requests: vec![("select 3 as col", Some(vec![]))],
+            requests: vec![("select 3 as col", vec![])],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
         },
         // Multiple statements
         TestCaseParams {
             requests: vec![
-                ("select 1 as col", None),
-                ("select $1+$2::int as col", Some(vec![Some("1"), Some("2")])),
+                ("select 1 as col", vec![]),
+                ("select $1+$2::int as col", vec![Some("1"), Some("2")]),
             ],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"rows":[[3]],"col_names":["col"]}]}"#,
         },
         TestCaseParams {
             requests: vec![
-                ("select $1+$2::int as col", Some(vec![Some("1"), Some("2")])),
-                ("select 1 as col", Some(vec![])),
+                ("select $1+$2::int as col", vec![Some("1"), Some("2")]),
+                ("select 1 as col", vec![]),
             ],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[3]],"col_names":["col"]},{"rows":[[1]],"col_names":["col"]}]}"#,
         },
         TestCaseParams {
             requests: vec![
-                ("select $1+$2::int as col", Some(vec![Some("1"), Some("2")])),
-                ("select $1*$2::int as col", Some(vec![Some("2"), Some("3")])),
+                ("select $1+$2::int as col", vec![Some("1"), Some("2")]),
+                ("select $1*$2::int as col", vec![Some("2"), Some("3")]),
             ],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[3]],"col_names":["col"]},{"rows":[[6]],"col_names":["col"]}]}"#,
@@ -383,7 +383,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCaseParams {
             requests: vec![(
                 "select length($1), length($2)",
-                Some(vec![Some("abc"), Some("'abc'")]),
+                vec![Some("abc"), Some("'abc'")],
             )],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[3,5]],"col_names":["length","length"]}]}"#,
@@ -392,62 +392,62 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCaseParams {
             requests: vec![(
                 "select length($1), length($2)",
-                Some(vec![Some("sum(a)"), Some("SELECT * FROM t;")]),
+                vec![Some("sum(a)"), Some("SELECT * FROM t;")],
             )],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[6,16]],"col_names":["length","length"]}]}"#,
         },
         // Too many parameters
         TestCaseParams {
-            requests: vec![("select $1 as col", Some(vec![Some("1"), Some("2")]))],
+            requests: vec![("select $1 as col", vec![Some("1"), Some("2")])],
             status: StatusCode::OK,
             body: r#"{"results":[{"error":"request supplied 2 parameters, but SELECT $1 AS col requires 1"}]}"#,
         },
         // Too few parameters
         TestCaseParams {
-            requests: vec![("select $1+$2::int as col", Some(vec![Some("1")]))],
+            requests: vec![("select $1+$2::int as col", vec![Some("1")])],
             status: StatusCode::OK,
             body: r#"{"results":[{"error":"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2"}]}"#,
         },
         // NaN
         TestCaseParams {
-            requests: vec![("select $1::decimal+2 as col", Some(vec![Some("nan")]))],
+            requests: vec![("select $1::decimal+2 as col", vec![Some("nan")])],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[["NaN"]],"col_names":["col"]}]}"#,
         },
         // Null string value parameters
         TestCaseParams {
-            requests: vec![("select $1+$2::int as col", Some(vec![Some("1"), None]))],
+            requests: vec![("select $1+$2::int as col", vec![Some("1"), None])],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[null]],"col_names":["col"]}]}"#,
         },
         // Empty query
         TestCaseParams {
-            requests: vec![("", None)],
+            requests: vec![("", vec![])],
             status: StatusCode::OK,
             body: r#"{"results":[]}"#,
         },
         TestCaseParams {
-            requests: vec![("", Some(vec![]))],
+            requests: vec![("", vec![])],
             status: StatusCode::OK,
             body: r#"{"results":[]}"#,
         },
         // Empty query w/ param
         TestCaseParams {
-            requests: vec![("", Some(vec![Some("1")]))],
+            requests: vec![("", vec![Some("1")])],
             status: StatusCode::OK,
             body: r#"{"results":[{"error":"cannot provide parameters to an empty query"}]}"#,
         },
         TestCaseParams {
-            requests: vec![("select 1 as col", None), ("", Some(vec![None]))],
+            requests: vec![("select 1 as col", vec![]), ("", vec![None])],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"error":"cannot provide parameters to an empty query"}]}"#,
         },
         // Multiple statements
         TestCaseParams {
             requests: vec![
-                ("select 1 as col", None),
-                ("select 1; select 2;", Some(vec![None])),
+                ("select 1 as col", vec![]),
+                ("select 1; select 2;", vec![None]),
             ],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"error":"each query can contain at most 1 statement"}]}"#,
@@ -456,39 +456,42 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         // - Rolledback
         TestCaseParams {
             requests: vec![
-                ("begin;", None),
-                ("insert into t values (1);", None),
-                ("rollback", None),
+                ("begin;", vec![]),
+                ("insert into t values (1);", vec![]),
+                ("rollback", vec![]),
             ],
             status: StatusCode::OK,
             body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"ROLLBACK"}]}"#,
         },
         // - Implicit txn
         TestCaseParams {
-            requests: vec![("insert into t values (1);", None), ("select 1/0;", None)],
+            requests: vec![
+                ("insert into t values (1);", vec![]),
+                ("select 1/0;", vec![]),
+            ],
             status: StatusCode::OK,
             body: r#"{"results":[{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
         },
         // - Errors prevent commit + further execution
         TestCaseParams {
             requests: vec![
-                ("begin;", None),
-                ("insert into t values (1);", None),
-                ("select 1/0;", None),
-                ("select * from t", None),
-                ("commit", None),
+                ("begin;", vec![]),
+                ("insert into t values (1);", vec![]),
+                ("select 1/0;", vec![]),
+                ("select * from t", vec![]),
+                ("commit", vec![]),
             ],
             status: StatusCode::OK,
             body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"error":"division by zero"}]}"#,
         },
         // - Requires explicit commit in explicit txn
         TestCaseParams {
-            requests: vec![("begin;", None), ("insert into t values (1);", None)],
+            requests: vec![("begin;", vec![]), ("insert into t values (1);", vec![])],
             status: StatusCode::OK,
             body: r#"{"results":[{"ok":"BEGIN"},{"ok":"INSERT 0 1"}]}"#,
         },
         TestCaseParams {
-            requests: vec![("select * from t", None)],
+            requests: vec![("select * from t", vec![])],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
         },
@@ -496,18 +499,18 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         // TODO: add this to pg test
         TestCaseParams {
             requests: vec![
-                ("insert into t values ($1);", Some(vec![Some("1")])),
-                ("begin;", None),
-                ("insert into t values ($1);", Some(vec![Some("2")])),
-                ("insert into t values ($1);", Some(vec![Some("3")])),
-                ("commit;", None),
-                ("select 1/0", None),
+                ("insert into t values ($1);", vec![Some("1")]),
+                ("begin;", vec![]),
+                ("insert into t values ($1);", vec![Some("2")]),
+                ("insert into t values ($1);", vec![Some("3")]),
+                ("commit;", vec![]),
+                ("select 1/0", vec![]),
             ],
             status: StatusCode::OK,
             body: r#"{"results":[{"ok":"INSERT 0 1"},{"ok":"BEGIN"},{"ok":"INSERT 0 1"},{"ok":"INSERT 0 1"},{"ok":"COMMIT"},{"error":"division by zero"}]}"#,
         },
         TestCaseParams {
-            requests: vec![("select * from t", None)],
+            requests: vec![("select * from t", vec![])],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"]}]}"#,
         },
@@ -518,11 +521,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         for (query, params) in tc.requests.into_iter() {
             queries.push(mz_adapter::client::ExtendedRequest {
                 query: query.to_string(),
-                params: params.map(|p| {
-                    p.into_iter()
-                        .map(|p| p.map(str::to_string))
-                        .collect::<Vec<_>>()
-                }),
+                params: p.iter().map(|p| p.map(str::to_string)).collect::<Vec<_>>(),
             });
         }
         let req = mz_adapter::client::HttpSqlRequest::Extended { queries };
