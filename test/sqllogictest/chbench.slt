@@ -627,6 +627,7 @@ ORDER BY su_nationkey, cust_nation, l_year
 ----
 %0 = Let l0 =
 | Get materialize.public.nation (u22)
+| Filter ((#1 = "GERMANY") OR (#1 = "CAMBODIA"))
 | Project (#0, #1)
 | ArrangeBy (#0)
 
@@ -1410,9 +1411,9 @@ WHERE (
 )
 ----
 Source materialize.public.item (u17):
-| Map dummy, dummy
-| Filter (#3 <= 400000), (#3 >= 1)
-| Project (#0, #5, #6, #3, #4)
+| Map padchar(#4), dummy, dummy
+| Filter (#3 <= 400000), (#3 >= 1), ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5))
+| Project (#0, #6, #7, #3, #4)
 
 Query:
 %0 =
@@ -1421,7 +1422,8 @@ Query:
 
 %1 =
 | Get materialize.public.item (u17)
-| Filter (#3 <= 400000), (#3 >= 1)
+| Map padchar(#4)
+| Filter (#3 <= 400000), (#3 >= 1), ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5))
 | Project (#0, #4)
 | ArrangeBy (#0)
 
@@ -1430,8 +1432,8 @@ Query:
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#4)
-| Map padchar(#11), (#2 = 1), (#2 = 2), (#2 = 3)
-| Filter (#7 <= 10), (#7 >= 1), (("%a" ~~(#12) AND (#13 OR #14 OR #15)) OR ("%b" ~~(#12) AND (#13 OR #14 OR (#2 = 4))) OR ("%c" ~~(#12) AND (#13 OR #15 OR (#2 = 5))))
+| Map (#2 = 1), (#2 = 2), (#2 = 3), (#2 = 4), (#2 = 5), padchar(#11)
+| Filter (#7 <= 10), (#7 >= 1), (#12 OR #13 OR #14 OR #15 OR #16), (("%a" ~~(#17) AND (#12 OR #13 OR #14)) OR ("%b" ~~(#17) AND (#12 OR #13 OR #15)) OR ("%c" ~~(#17) AND (#12 OR #14 OR #16)))
 | Project (#8)
 | Reduce group=()
 | | agg sum(#0)
