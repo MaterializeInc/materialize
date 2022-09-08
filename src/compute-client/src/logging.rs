@@ -640,7 +640,7 @@ impl LogVariant {
                 .with_key(vec![0, 1]),
 
             LogVariant::Compute(ComputeLog::DataflowDependency) => RelationDesc::empty()
-                .with_column("dataflow", ScalarType::String.nullable(false))
+                .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::Int64.nullable(false)),
 
