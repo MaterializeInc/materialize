@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# With storaged down, the upper of t1 will not advance. However, the global timestamp will advance.
+# In strict serializable mode we may select a timestamp that is ahead of on of the table's upper and hang forever.
 > SET transaction_isolation = serializable
 
 > SELECT COUNT(*) FROM t1;
