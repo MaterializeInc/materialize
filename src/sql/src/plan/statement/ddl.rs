@@ -2170,15 +2170,18 @@ fn kafka_sink_builder(
     };
 
     let consistency_config = KafkaConsistencyConfig::Progress {
-        topic: connection
-            .progress_topic
-            .clone()
-            .unwrap_or_else(|| format!("_materialize-progress-{connection_id}")),
+        topic: match &connection.progress_topic {
+            Some(topic) => topic.clone(),
+            None => {
+                warn!("PROGRESS TOPIC option was missing at plan time, but should be filled in if missing during purification");
+                bail_unsupported!("PROGRESS TOPIC must be specified")
+            }
+        },
     };
 
     if partition_count == 0 || partition_count < -1 {
         sql_bail!(
-            "PARTION COUNT for sink topics must be a positive integer or -1 for broker default"
+            "PARTITION COUNT for sink topics must be a positive integer or -1 for broker default"
         );
     }
 
