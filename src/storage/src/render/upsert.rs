@@ -10,7 +10,6 @@
 use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
-use std::convert::Infallible;
 use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
@@ -297,8 +296,11 @@ where
     );
     let result_stream = stream.binary_frontier(
         &previous_ok.inner,
-        Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
-        Exchange::new(|((key, _v), _t, _r)| Ok::<_, Infallible>(key).hashed()),
+        Exchange::new(move |DecodeResult { key, .. }| match key {
+            None => 0,
+            Some(key) => key.hashed(),
+        }),
+        Exchange::new(|((key, _v), _t, _r)| Hashable::hashed(key)),
         "Upsert",
         move |_cap, _info| {
             // This is a map of (time) -> (capability, ((key) -> (value with max offset)))
