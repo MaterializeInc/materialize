@@ -213,13 +213,13 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::StartTransaction(plan) => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
-                let session = session.start_transaction(
+                let (session, result) = session.start_transaction(
                     self.now_datetime(),
                     plan.access,
                     plan.isolation_level,
                 );
                 tx.send(
-                    Ok(ExecuteResponse::StartedTransaction { duplicated }),
+                    result.map(|_| ExecuteResponse::StartedTransaction { duplicated }),
                     session,
                 )
             }
