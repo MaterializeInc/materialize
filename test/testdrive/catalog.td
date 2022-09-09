@@ -30,7 +30,7 @@ Indexes:
 
 # What schemas do we have by default?
 > SHOW SCHEMAS FROM materialize
-public  user
+public  system
 > SHOW SCHEMAS
 name                type
 --------------------------

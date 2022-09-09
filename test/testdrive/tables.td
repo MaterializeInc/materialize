@@ -46,13 +46,13 @@ contains:column "a" specified more than once
 > SELECT * FROM t;
 
 > SHOW TABLES;
-name
-----
-t
+name    type
+------------
+t       user
 
 > SHOW SOURCES;
-name
-----
+name    type    type
+--------------------
 
 > SHOW INDEXES FROM t;
 
