@@ -1,10 +1,5 @@
 # Bounded Input Reliance
 
-**Note**: This design document relies on changes in [this pr], which is expected
-to merge soon.
-
-[this pr]: https://github.com/MaterializeInc/materialize/pull/14355
-
 ## Summary
 
 The [source ingestion pipeline design doc] describes that Materialize must
@@ -151,6 +146,15 @@ we may need some kind of coordination introduced so we can both send and receive
 
 [tokio `watch`]: https://docs.rs/tokio/latest/tokio/sync/watch/index.html
 [`Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
+
+#### Total-ordered time requirement
+
+Inverting a frontier to frontier mapping (in this case, from the _time resumption frontier_ to
+the _offset resumption frontier_) is non-trivial, if the frontier's time domain is not totally ordered.
+The current reclocking API manages totally-ordered times, and this implementation will rely on that fact.
+
+In the future, it may be possible to support non-totally ordered time, depending on the exact semantics of
+inversion we require.
 
 ## Implementation of Additional Goals
 
