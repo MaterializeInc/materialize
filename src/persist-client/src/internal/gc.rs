@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
@@ -126,6 +127,11 @@ where
 
                 let merged_requests = gc_completed_senders.len() - 1;
                 if merged_requests > 0 {
+                    machine
+                        .metrics
+                        .gc
+                        .merged
+                        .inc_by(u64::cast_from(merged_requests));
                     debug!(
                         "Merged {} gc requests together for shard {}",
                         merged_requests, consolidated_req.shard_id
@@ -141,6 +147,7 @@ where
                     .instrument(gc_span)
                     .await;
                 machine.metrics.gc.finished.inc();
+                machine.shard_metrics.gc_finished.inc();
                 machine
                     .metrics
                     .gc
@@ -215,6 +222,7 @@ where
         //
         // Also a fix for #14580.
         if earliest_live_seqno > req.new_seqno_since {
+            machine.metrics.gc.noop.inc();
             return;
         }
 
