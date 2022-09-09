@@ -11,7 +11,7 @@ name = "like_pattern"
 harness = false
 
 [dependencies]
-aho-corasick = "0.7.18"
+aho-corasick = "0.7.19"
 anyhow = "1.0.64"
 bytes = "1.2.1"
 bytesize = "1.1.0"
