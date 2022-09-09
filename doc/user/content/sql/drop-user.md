@@ -15,7 +15,7 @@ menu:
 Field | Use
 ------|-----
 **IF EXISTS** | Do not return an error if the specified role does not exist.
-_role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/sql/system-catalog/#mz_roles).
+_role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ## Details
 
