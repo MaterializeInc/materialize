@@ -103,6 +103,8 @@ pub enum ComputeError {
     InstanceMissing(ComputeInstanceId),
     /// Command referenced an identifier that was not present.
     IdentifierMissing(GlobalId),
+    /// The identified instance exists already.
+    InstanceExists(ComputeInstanceId),
     /// Dataflow was malformed (e.g. missing `as_of`).
     DataflowMalformed,
     /// The dataflow `as_of` was not greater than the `since` of the identifier.
@@ -120,6 +122,7 @@ impl Error for ComputeError {
         match self {
             Self::InstanceMissing(_)
             | Self::IdentifierMissing(_)
+            | Self::InstanceExists(_)
             | Self::DataflowMalformed
             | Self::DataflowSinceViolation(_)
             | Self::PeekSinceViolation(_) => None,
@@ -141,6 +144,7 @@ impl fmt::Display for ComputeError {
                 f,
                 "command referenced an identifier that was not present: {id}"
             ),
+            Self::InstanceExists(id) => write!(f, "an instance with this ID exists already: {id}"),
             Self::DataflowMalformed => write!(f, "dataflow was malformed"),
             Self::DataflowSinceViolation(id) => write!(
                 f,
@@ -326,18 +330,24 @@ where
         instance: ComputeInstanceId,
         logging: Option<LoggingConfig>,
         max_result_size: u32,
-    ) {
-        // Insert a new compute instance controller.
+    ) -> Result<(), ComputeError> {
+        if self.instances.contains_key(&instance) {
+            return Err(ComputeError::InstanceExists(instance));
+        }
+
         self.instances.insert(
             instance,
             Instance::new(instance, self.build_info, &logging, max_result_size),
         );
+
         if self.initialized {
             self.instances
                 .get_mut(&instance)
                 .expect("instance just added")
                 .initialization_complete();
         }
+
+        Ok(())
     }
 
     /// Remove a compute instance.

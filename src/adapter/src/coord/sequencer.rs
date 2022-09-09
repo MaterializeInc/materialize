@@ -759,7 +759,7 @@ impl<S: Append + 'static> Coordinator<S> {
             instance.id,
             instance.logging.clone(),
             self.catalog.system_config().max_result_size(),
-        );
+        )?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
                 .active_compute()

@@ -370,13 +370,11 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<(), AdapterError> {
         let mut persisted_source_ids = vec![];
         for instance in self.catalog.compute_instances() {
-            self.controller
-                .compute
-                .create_instance(
-                    instance.id,
-                    instance.logging.clone(),
-                    self.catalog.system_config().max_result_size(),
-                );
+            self.controller.compute.create_instance(
+                instance.id,
+                instance.logging.clone(),
+                self.catalog.system_config().max_result_size(),
+            )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config
