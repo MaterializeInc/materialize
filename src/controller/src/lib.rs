@@ -287,11 +287,12 @@ where
         &mut self,
         instance: ComputeInstanceId,
         logging: Option<LoggingConfig>,
+        max_result_size: u32,
     ) {
         // Insert a new compute instance controller.
         self.compute.insert(
             instance,
-            ComputeController::new(instance, self.build_info, &logging),
+            ComputeController::new(instance, self.build_info, &logging, max_result_size),
         );
         if self.initialized {
             self.compute_mut(instance)

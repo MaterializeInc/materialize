@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.64"
 axum = "0.5.15"
+bytesize = "1.1.0"
 clap = { version = "3.2.17", features = ["derive", "env"] }
 crossbeam-channel = "0.5.6"
 dec = { version = "0.4.8", features = ["serde"] }

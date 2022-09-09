@@ -895,6 +895,13 @@ impl Row {
         row.packer().extend(slice.iter());
         row
     }
+
+    /// Returns the total amount of bytes used by this row.
+    pub fn byte_len(&self) -> usize {
+        let heap_size = self.data.len().saturating_sub(self.data.inline_size());
+        let inline_size = std::mem::size_of::<Self>();
+        inline_size.saturating_add(heap_size)
+    }
 }
 
 impl RowPacker<'_> {
@@ -1221,10 +1228,6 @@ impl RowRef {
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data
-    }
-
-    pub fn byte_len(&self) -> usize {
-        self.data.len()
     }
 
     /// True iff there is no data in this Row
