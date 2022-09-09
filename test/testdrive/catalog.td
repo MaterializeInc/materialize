@@ -29,9 +29,9 @@ Indexes:
 > DROP TABLE tbl CASCADE
 
 # What schemas do we have by default?
-> SHOW SCHEMAS
+> SHOW SCHEMAS FROM materialize
 public  user
-> SELECT name, 'system' FROM mz_catalog.mz_schemas WHERE database_id IS NULL
+> SHOW SCHEMAS
 name                type
 --------------------------
 information_schema  system

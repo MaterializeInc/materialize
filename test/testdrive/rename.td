@@ -156,9 +156,9 @@ materialize.public.renamed_sink
 
 # Source was successfully renamed
 > SHOW SOURCES;
-name            type
---------------------
-renamed_mz_data user
+name            type    type
+-----------------------------
+renamed_mz_data user    kafka
 
 # Sink was successfully renamed
 > SHOW SINKS

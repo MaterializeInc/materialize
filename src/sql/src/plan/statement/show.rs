@@ -267,22 +267,13 @@ pub fn show_schemas<'a>(
     scx: &'a StatementContext<'a>,
     ShowSchemasStatement { from, filter }: ShowSchemasStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let database_id = match from {
-        Some(ResolvedDatabaseName::Database { id, .. }) => id.0,
-        None => match scx.active_database() {
-            Some(id) => id.0,
-            None => sql_bail!("no database specified and no active database"),
-        },
-        Some(ResolvedDatabaseName::Error) => {
-            unreachable!("should have been handled in name resolution")
-        }
-    };
-    let query = format!(
+    let mut query = format!(
         "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
-            FROM mz_catalog.mz_schemas
-            WHERE database_id = {}",
-        &database_id,
+            FROM mz_catalog.mz_schemas",
     );
+    if let Some(ResolvedDatabaseName::Database { id, .. }) = from {
+        query = format!("{query} WHERE database_id = {}", id.0);
+    }
     ShowSelect::new(scx, query, filter, None, None)
 }
 
