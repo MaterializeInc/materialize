@@ -74,8 +74,7 @@ consistent with the real time ordering of the transactions, in other words trans
 if SQL-transaction T1 happens before SQL-transaction T2 in real time, then the result may be equivalent to a serial
 order where T2 was executed first.
 
-In practice non-linearizable orderings are unlikely to happen, but still possible, when querying directly from tables
-and sources. Non-linearizable orderings are likely to surface when querying from indexes and materialized views with
+Non-linearizable orderings are more likely to surface when querying from indexes and materialized views with
 large propagation delays. For example, if SQL-transaction T1 happens before SQL-transaction T2 in real time, T1 queries
 table t, and T2 queries materialized view mv where mv is an expensive materialized view including t, then T2 may not see
 all the rows that were seen by T1 if they are executed close enough together in real time.
