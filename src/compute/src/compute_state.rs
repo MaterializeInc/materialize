@@ -836,7 +836,7 @@ impl PendingPeek {
                         if total_size > max_result_size {
                             return Err(format!(
                                 "result exceeds max size of {}",
-                                ByteSize::b(u64::cast_from(max_result_size)).to_string()
+                                ByteSize::b(u64::cast_from(max_result_size))
                             ));
                         }
                         results.push((result, copies));
