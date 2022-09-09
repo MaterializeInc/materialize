@@ -565,7 +565,7 @@ CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 
 # PG permits starting a read only txn with writes blended into its ops;
-# evidence of this behavior by an errored txn does not commit write
+# evidence of this behavior by an errored txn does not commit write.
 send
 Parse {"query": "INSERT INTO t VALUES (2)"}
 Bind
@@ -613,6 +613,8 @@ CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 
 # PG permits commits writes that are part of read-only txns
+# n.b. this is possible only because we support selecting constants
+# in write-only txns
 send
 Parse {"query": "INSERT INTO t VALUES (2)"}
 Bind
