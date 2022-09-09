@@ -34,6 +34,7 @@ steps:
 #          - { value: feature-benchmark-cluster }
           - { value: zippy-kafka-sources }
           - { value: zippy-user-tables }
+          - { value: zippy-debezium-postgres }
           - { value: secrets }
           - { value: checks-oneatatime-drop-create-default-replica }
           - { value: checks-oneatatime-restart-computed }
@@ -259,6 +260,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=UserTables, --actions=1000]
+
+  - id: zippy-debezium-postgres
+    label: "Zippy Debezium Postgres"
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=DebeziumPostgres, --actions=1000]
+
 
   - id: secrets
     label: "Secrets"

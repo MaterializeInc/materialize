@@ -78,6 +78,9 @@ class Action:
 
 
 class Scenario:
+    def bootstrap(self) -> List[Type[Action]]:
+        return []
+
     def config(self) -> Dict[Type[Action], float]:
         assert False
 
@@ -95,6 +98,12 @@ class Test:
         self._scenario = scenario
         self._actions: List[Action] = []
         self._capabilities = Capabilities()
+
+        for action_class in self._scenario.bootstrap():
+            action = action_class(capabilities=self._capabilities)
+            self._actions.append(action)
+            self._capabilities._extend(action.provides())
+            self._capabilities._remove(action.removes())
 
         for i in range(0, actions):
             action_class = self._pick_action_class()
