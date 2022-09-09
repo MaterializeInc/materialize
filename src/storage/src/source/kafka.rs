@@ -28,6 +28,7 @@ use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
+use crate::source::commit::LogCommitter;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -79,6 +80,7 @@ impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Diff = ();
+    type OffsetCommitter = LogCommitter;
     type Connection = KafkaSourceConnection;
 
     /// Create a new instance of a Kafka reader.
@@ -93,7 +95,7 @@ impl SourceReader for KafkaSourceReader {
         _: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let KafkaSourceConnection {
             connection,
             options,
@@ -179,22 +181,34 @@ impl SourceReader for KafkaSourceReader {
                 .unpark_on_drop()
         };
         let partition_ids = start_offsets.keys().copied().collect();
-        Ok(KafkaSourceReader {
-            topic_name: topic.clone(),
-            source_name,
-            id: source_id,
-            partition_consumers: VecDeque::new(),
-            consumer,
-            worker_id,
-            worker_count,
-            last_offsets: HashMap::new(),
-            start_offsets,
-            stats_rx,
-            partition_info,
-            include_headers: kc.include_headers.is_some(),
-            _metadata_thread_handle: metadata_thread_handle,
-            partition_metrics: KafkaPartitionMetrics::new(metrics, partition_ids, topic, source_id),
-        })
+        Ok((
+            KafkaSourceReader {
+                topic_name: topic.clone(),
+                source_name,
+                id: source_id,
+                partition_consumers: VecDeque::new(),
+                consumer,
+                worker_id,
+                worker_count,
+                last_offsets: HashMap::new(),
+                start_offsets,
+                stats_rx,
+                partition_info,
+                include_headers: kc.include_headers.is_some(),
+                _metadata_thread_handle: metadata_thread_handle,
+                partition_metrics: KafkaPartitionMetrics::new(
+                    metrics,
+                    partition_ids,
+                    topic,
+                    source_id,
+                ),
+            },
+            LogCommitter {
+                source_id,
+                worker_id,
+                worker_count,
+            },
+        ))
     }
 
     /// This function polls from the next consumer for which a message is available. This function

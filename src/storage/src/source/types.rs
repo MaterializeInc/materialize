@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
+use std::marker::{Send, Sync};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -71,6 +72,8 @@ pub trait SourceReader {
     type Diff: timely::Data;
     type Connection: SourceConnection;
 
+    type OffsetCommitter: OffsetCommitter + Send + Sync + 'static;
+
     /// Create a new source reader.
     ///
     /// This function returns the source reader and optionally, any "partition" it's
@@ -87,7 +90,7 @@ pub trait SourceReader {
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error>
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error>
     where
         Self: Sized;
 
@@ -156,6 +159,21 @@ pub trait SourceReader {
 
 pub trait SourceConnection: Clone {
     fn name(&self) -> &'static str;
+}
+
+/// A sibling trait to `SourceReader` that represents a source's
+/// ability to _commit offsets_ that have been guaranteed
+/// to be written into persist
+#[async_trait]
+pub trait OffsetCommitter {
+    /// Commit the given partition-offset pairs upstream.
+    /// A specific `SourceReader`-`OffsetCommiter` pair
+    /// is guaranteed to only receive offsets for partitions
+    /// they are owners for.
+    async fn commit_offsets(
+        &self,
+        offsets: HashMap<PartitionId, MzOffset>,
+    ) -> Result<(), anyhow::Error>;
 }
 
 /// A `SourceToken` manages interest in a source.

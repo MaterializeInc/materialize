@@ -165,12 +165,19 @@ where
     let (resume_stream, source_reader_feedback_handle) =
         super::resumption::resumption_operator(scope, config.clone(), calc);
 
+    let reclock_follower = {
+        let upper_ts = config.resume_upper.as_option().copied().unwrap();
+        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+        ReclockFollower::new(as_of)
+    };
+
     let ((batches, source_upper_summaries, resumption_feedback_stream), source_reader_token) =
         source_reader_operator::<G, S>(
             scope,
             config.clone(),
             source_connection,
             connection_context,
+            reclock_follower.share(),
             resume_stream,
         );
     resumption_feedback_stream.connect_loop(source_reader_feedback_handle);
@@ -179,7 +186,7 @@ where
         remap_operator::<G, S>(scope, config.clone(), source_upper_summaries);
 
     let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
-        reclock_operator::<G, S>(scope, config, batches, remap_stream);
+        reclock_operator::<G, S>(scope, config, reclock_follower, batches, remap_stream);
 
     let token = Rc::new((source_reader_token, remap_token));
 
@@ -187,10 +194,11 @@ where
 }
 
 fn build_source_reader_stream<G, S>(
+    source_reader: S,
     config: RawSourceCreationConfig,
     source_connection: S::Connection,
-    connection_context: ConnectionContext,
-    sync_activator: timely::scheduling::activate::SyncActivator,
+    initial_source_upper: HashMap<PartitionId, MzOffset>,
+    mut source_upper: HashMap<PartitionId, MzOffset>,
 ) -> Pin<
     // TODO(guswynn): determine if this boxing is necessary
     Box<
@@ -216,7 +224,7 @@ fn build_source_reader_stream<G, S>(
 >
 where
     G: Scope<Timestamp = Timestamp>,
-    S: SourceReader,
+    S: SourceReader + 'static,
 {
     let RawSourceCreationConfig {
         name,
@@ -225,42 +233,14 @@ where
         worker_id,
         worker_count,
         timestamp_interval,
-        encoding,
+        encoding: _,
         storage_metadata,
-        resume_upper,
-        base_metrics,
+        resume_upper: _,
+        base_metrics: _,
         now,
         persist_clients,
     } = config;
     Box::pin(async_stream::stream!({
-        let mut source_upper = {
-            let upper_ts = resume_upper.as_option().copied().unwrap();
-            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-            // This is a TEMPORARY instance of a `ReclockOperator` used to calculate
-            // a OFFSET `source_upper` for the SourceReader. It cannot be
-            // shared with the `remap_operator` because its initialization
-            // is async, which is not acceptable within dataflow creation.
-            // It cannot be a `ReclockFollower`, which is empty on
-            // initialization.
-            let timestamper = match ReclockOperator::new(
-                Arc::clone(&persist_clients),
-                storage_metadata.clone(),
-                now.clone(),
-                timestamp_interval.clone(),
-                as_of,
-            )
-            .await
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    panic!("Failed to create source {} timestamper: {:#}", name, e);
-                }
-            };
-            timestamper
-                .source_upper_at_frontier(resume_upper.borrow())
-                .expect("source_upper_at_frontier to be used correctly")
-        };
-
         let mut healthchecker = if storage_metadata.status_shard.is_some() {
             match Healthchecker::new(
                 name.clone(),
@@ -292,36 +272,9 @@ where
         // about the current frontier. Otherwise, if there are no new
         // messages after a restart, the reclock operator would be stuck and
         // not advance its downstream frontier.
-        yield Some((HashMap::new(), Vec::new(), Vec::new(), source_upper.clone()));
+        yield Some((HashMap::new(), Vec::new(), Vec::new(), initial_source_upper));
 
-        trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
-        source_upper.retain(|pid, _offset| {
-            crate::source::responsible_for(&id, worker_id, worker_count, &pid)
-        });
-        trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
-
-        let mut start_offsets = Vec::with_capacity(source_upper.len());
-        for (pid, offset) in source_upper.iter() {
-            start_offsets.push((pid.clone(), Some(offset.clone())));
-        }
-
-        let source_reader = S::new(
-            name.clone(),
-            id,
-            worker_id,
-            worker_count,
-            sync_activator,
-            source_connection.clone(),
-            start_offsets,
-            encoding,
-            base_metrics,
-            connection_context.clone(),
-        );
-
-        let source_stream = source_reader
-            .expect("Failed to create source")
-            .into_stream(timestamp_interval)
-            .fuse();
+        let source_stream = source_reader.into_stream(timestamp_interval).fuse();
 
         tokio::pin!(source_stream);
 
@@ -437,6 +390,7 @@ fn source_reader_operator<G, S: 'static>(
     config: RawSourceCreationConfig,
     source_connection: S::Connection,
     connection_context: ConnectionContext,
+    reclock_follower: ReclockFollower,
     resume_stream: timely::dataflow::Stream<G, ()>,
 ) -> (
     (
@@ -460,18 +414,19 @@ where
         id,
         worker_id,
         worker_count,
-        timestamp_interval: _,
-        encoding: _,
-        storage_metadata: _,
+        timestamp_interval,
+        encoding,
+        storage_metadata,
         resume_upper: initial_resume_upper,
-        base_metrics: _,
-        now: _,
-        persist_clients: _,
+        base_metrics,
+        now,
+        persist_clients,
     } = config;
 
+    let resume_upper = initial_resume_upper.clone();
     let (stream, capability) = async_source(
         scope,
-        name,
+        name.clone(),
         &resume_stream,
         move |info: OperatorInfo, mut cap_set, mut resume_input, mut output| {
             // TODO(guswynn): should sources still be able to self-activate?
@@ -479,11 +434,76 @@ where
             let sync_activator = scope.sync_activator_for(&info.address[..]);
 
             async move {
+                // Setup time!
+                let mut source_upper = {
+                    let upper_ts = resume_upper.as_option().copied().unwrap();
+                    let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+                    // This is a TEMPORARY instance of a `ReclockOperator` used to calculate
+                    // a OFFSET `source_upper` for the SourceReader. It cannot be
+                    // shared with the `remap_operator` because its initialization
+                    // is async, which is not acceptable within dataflow creation.
+                    // It cannot be a `ReclockFollower`, which is empty on
+                    // initialization.
+                    let timestamper = match ReclockOperator::new(
+                        Arc::clone(&persist_clients),
+                        storage_metadata.clone(),
+                        now.clone(),
+                        timestamp_interval.clone(),
+                        as_of,
+                    )
+                    .await
+                    {
+                        Ok(t) => t,
+                        Err(e) => {
+                            panic!("Failed to create source {} timestamper: {:#}", name, e);
+                        }
+                    };
+                    timestamper
+                        .source_upper_at_frontier(resume_upper.borrow())
+                        .expect("source_upper_at_frontier to be used correctly")
+                };
+
+                // Save this to pass into the stream creation
+                let initial_source_upper = source_upper.clone();
+
+                trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
+                source_upper.retain(|pid, _offset| {
+                    crate::source::responsible_for(&id, worker_id, worker_count, &pid)
+                });
+                trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
+
+                let mut start_offsets = Vec::with_capacity(source_upper.len());
+                for (pid, offset) in source_upper.iter() {
+                    start_offsets.push((pid.clone(), Some(offset.clone())));
+                }
+
+                let (source_reader, offset_committer) = S::new(
+                    name.clone(),
+                    id,
+                    worker_id,
+                    worker_count,
+                    sync_activator,
+                    source_connection.clone(),
+                    start_offsets,
+                    encoding,
+                    base_metrics,
+                    connection_context.clone(),
+                )
+                .expect("Failed to create source");
+
+                let offset_commit_handle = crate::source::commit::drive_offset_committer(
+                    offset_committer,
+                    id,
+                    worker_id,
+                    worker_count,
+                );
+
                 let mut source_reader = build_source_reader_stream::<G, S>(
+                    source_reader,
                     sub_config,
                     source_connection,
-                    connection_context,
-                    sync_activator,
+                    initial_source_upper,
+                    source_upper,
                 );
 
                 // WIP: Should we have these metrics for all three involved
@@ -522,6 +542,13 @@ where
                                 resumption_frontier = ?resume_frontier_update,
                                 "received new resumption frontier"
                             );
+                            let mut offset_upper = reclock_follower
+                                .source_upper_at_frontier(resume_frontier_update.borrow())
+                                .unwrap();
+                            offset_upper.retain(|pid, _offset| {
+                                crate::source::responsible_for(&id, worker_id, worker_count, &pid)
+                            });
+                            offset_commit_handle.commit_offsets(offset_upper);
                             continue;
                         }
                         _ => {
@@ -844,6 +871,7 @@ where
 fn reclock_operator<G, S: 'static>(
     scope: &G,
     config: RawSourceCreationConfig,
+    timestamper: ReclockFollower,
     batches: timely::dataflow::Stream<
         G,
         Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
@@ -872,7 +900,7 @@ where
         timestamp_interval: _,
         encoding: _,
         storage_metadata: _,
-        resume_upper,
+        resume_upper: _,
         base_metrics,
         now: _,
         persist_clients: _,
@@ -912,10 +940,6 @@ where
         // summaries from the raw reader operators.
         let mut global_source_upper = HashMap::new();
         let mut untimestamped_batches = VecDeque::new();
-
-        let upper_ts = resume_upper.as_option().copied().unwrap();
-        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-        let timestamper = ReclockFollower::new(as_of);
 
         move |frontiers| {
             batch_input.for_each(|_cap, data| {
