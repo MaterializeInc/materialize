@@ -421,7 +421,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     policy_changes.push((*id, read_needs.policy()));
                 }
             }
-            if let Some(mut instance) = compute.instance(*compute_instance) {
+            if let Ok(mut instance) = compute.instance(*compute_instance) {
                 instance.set_read_policy(policy_changes).await.unwrap();
             }
         }

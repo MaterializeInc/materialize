@@ -293,9 +293,11 @@ impl<T> ComputeController<T> {
         }
     }
 
-    /// Return a handle to the indicated compute instance, if it exists.
-    pub fn instance(&self, id: ComputeInstanceId) -> Option<&Instance<T>> {
-        self.instances.get(&id)
+    /// Return a handle to the indicated compute instance.
+    pub fn instance(&self, id: ComputeInstanceId) -> Result<&Instance<T>, ComputeError> {
+        self.instances
+            .get(&id)
+            .ok_or(ComputeError::InstanceMissing(id))
     }
 
     /// Acquire an [`ActiveComputeController`] by supplying a storage connection.
@@ -403,11 +405,12 @@ pub struct ActiveComputeController<'a, T> {
 }
 
 impl<T> ActiveComputeController<'_, T> {
-    /// Return a handle to the indicated compute instance, if it exists.
-    pub fn instance(&mut self, id: ComputeInstanceId) -> Option<ActiveInstance<T>> {
+    /// Return a handle to the indicated compute instance.
+    pub fn instance(&mut self, id: ComputeInstanceId) -> Result<ActiveInstance<T>, ComputeError> {
         self.compute
             .instances
             .get_mut(&id)
+            .ok_or(ComputeError::InstanceMissing(id))
             .map(|c| c.activate(self.storage))
     }
 }
@@ -434,9 +437,11 @@ where
         // Add replicas backing that instance.
         match config.location {
             ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
-                self.instance(instance_id)
-                    .ok_or(ComputeError::InstanceMissing(instance_id))?
-                    .add_replica(replica_id, addrs.into_iter().collect(), persisted_logs);
+                self.instance(instance_id)?.add_replica(
+                    replica_id,
+                    addrs.into_iter().collect(),
+                    persisted_logs,
+                );
             }
             ConcreteComputeInstanceReplicaLocation::Managed {
                 allocation,
@@ -449,8 +454,7 @@ where
                     .ensure_replica(instance_id, replica_id, allocation, availability_zone)
                     .await?;
 
-                self.instance(instance_id)
-                    .ok_or(ComputeError::InstanceMissing(instance_id))?
+                self.instance(instance_id)?
                     .add_replica(replica_id, replica_addrs, persisted_logs);
             }
         }
@@ -489,10 +493,7 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
     ) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
-        self.instance(instance_id)
-            .ok_or(ComputeError::InstanceMissing(instance_id))?
-            .process()
-            .await
+        self.instance(instance_id)?.process().await
     }
 }
 
