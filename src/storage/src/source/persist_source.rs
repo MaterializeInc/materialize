@@ -166,9 +166,14 @@ where
             .expect("could not open persist shard");
 
         let mut subscription = read
-            .subscribe(as_of_stream)
+            .subscribe(as_of_stream.clone())
             .await
-            .expect("cannot serve requested as_of");
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{source_id}: cannot serve requested as_of {:?}: {:?}",
+                    as_of_stream, e
+                )
+            });
 
         let mut done = false;
         while !done {
