@@ -10,9 +10,11 @@
 //! CLI introspection tools for persist
 
 use crate::internal::state::ProtoStateRollup;
-use crate::{Metrics, ShardId};
+use crate::{Metrics, PersistConfig, ShardId};
 use anyhow::anyhow;
+use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::ConsensusConfig;
 use mz_persist::location::SeqNo;
 use prost::Message;
@@ -22,7 +24,8 @@ pub async fn fetch_current_state(
     shard_id: ShardId,
     consensus_uri: &str,
 ) -> Result<impl serde::Serialize, anyhow::Error> {
-    let metrics = Metrics::new(&MetricsRegistry::new());
+    let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics = Metrics::new(&cfg, &MetricsRegistry::new());
     let consensus =
         ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus).await?;
     let consensus = consensus.clone().open().await?;
@@ -40,7 +43,8 @@ pub async fn fetch_state_diffs(
     shard_id: ShardId,
     consensus_uri: &str,
 ) -> Result<Vec<impl serde::Serialize>, anyhow::Error> {
-    let metrics = Metrics::new(&MetricsRegistry::new());
+    let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics = Metrics::new(&cfg, &MetricsRegistry::new());
     let consensus =
         ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus).await?;
     let consensus = consensus.clone().open().await?;
