@@ -18,8 +18,8 @@ use bytes::Bytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt,
-    IntCounter, MetricsRegistry,
+    ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
+    DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry,
 };
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
@@ -31,7 +31,7 @@ use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{CounterVec, IntCounterVec};
 use timely::progress::Antichain;
 
-use crate::ShardId;
+use crate::{PersistConfig, ShardId};
 
 /// Prometheus monitoring metrics.
 ///
@@ -40,6 +40,7 @@ use crate::ShardId;
 #[derive(Debug)]
 pub struct Metrics {
     _vecs: MetricsVecs,
+    _uptime: ComputedGauge,
 
     /// Metrics for [Blob] usage.
     pub blob: BlobMetrics,
@@ -71,8 +72,20 @@ pub struct Metrics {
 
 impl Metrics {
     /// Returns a new [Metrics] instance connected to the given registry.
-    pub fn new(registry: &MetricsRegistry) -> Self {
+    pub fn new(cfg: &PersistConfig, registry: &MetricsRegistry) -> Self {
         let vecs = MetricsVecs::new(registry);
+        let start = Instant::now();
+        let uptime = registry.register_computed_gauge(
+            metric!(
+                name: "mz_persist_metadata_seconds",
+                help: "server uptime, labels are build metadata",
+                const_labels: {
+                    "version" => cfg.build_version,
+                    "build_type" => if cfg!(release) { "release" } else { "debug" }
+                },
+            ),
+            move || start.elapsed().as_secs_f64(),
+        );
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -87,6 +100,7 @@ impl Metrics {
             shards: ShardsMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
             _vecs: vecs,
+            _uptime: uptime,
         }
     }
 

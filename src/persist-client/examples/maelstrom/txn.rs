@@ -506,7 +506,7 @@ impl Service for TransactorService {
 
         // Construct requested Consensus.
         let config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
-        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+        let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
                 ConsensusConfig::try_from(
