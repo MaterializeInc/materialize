@@ -435,10 +435,20 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(&mut session, stmt, &params).await {
-                Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
-                Err(e) => tx.send(Err(e), session),
-            },
+            mut stmt => {
+                // If we can purify the statement synchronously, do that here.
+                match &mut stmt {
+                    Statement::CreateConnection(stmt) => {
+                        mz_sql::pure::purify_create_connection(stmt)
+                    }
+                    _ => {}
+                }
+
+                match self.plan_statement(&mut session, stmt, &params).await {
+                    Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
+                    Err(e) => tx.send(Err(e), session),
+                }
+            }
         }
     }
 

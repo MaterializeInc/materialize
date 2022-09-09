@@ -20,8 +20,10 @@ use anyhow::{anyhow, bail, Context};
 use aws_arn::ResourceName as AmazonResourceName;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{
-    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, KafkaConfigOption,
-    KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, ReaderSchemaSelectionStrategy,
+    CreateConnection, CreateConnectionStatement, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
+    CsrSeedProtobufSchema, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection,
+    KafkaConnectionOption, KafkaConnectionOptionName, KafkaSourceConnection,
+    ReaderSchemaSelectionStrategy,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -612,4 +614,27 @@ async fn validate_aws_credentials(
         .await
         .context("Unable to validate AWS credentials")?;
     Ok(())
+}
+
+pub fn purify_create_connection(stmt: &mut CreateConnectionStatement<Aug>) {
+    // If no topic was specified by the user, we autogenerate one here.
+    if let CreateConnectionStatement {
+        connection: CreateConnection::Kafka { with_options },
+        ..
+    } = stmt
+    {
+        let has_progress_topic = with_options
+            .iter()
+            .any(|option| option.name == KafkaConnectionOptionName::ProgressTopic);
+        if !has_progress_topic {
+            // NB: ideally we'd generate this deterministically, using the environment id
+            // and the connection id.
+            let nonce = Uuid::new_v4().to_string().replace('-', "");
+            let topic_name = format!("_materialize-progress-{}", &nonce[..16]);
+            with_options.push(KafkaConnectionOption {
+                name: KafkaConnectionOptionName::ProgressTopic,
+                value: Some(WithOptionValue::Value(Value::String(topic_name))),
+            })
+        }
+    }
 }
