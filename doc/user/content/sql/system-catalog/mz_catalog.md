@@ -4,7 +4,6 @@ description: "mz_catalog is a system catalog that exposes metadata in Materializ
 menu:
   main:
     parent: 'system-catalog'
-    name: mz_catalog
     weight: 1
 ---
 

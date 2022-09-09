@@ -4,7 +4,6 @@ description: "pg_catalog is a system catalog that presents metadata in the forma
 menu:
   main:
     parent: 'system-catalog'
-    name: pg_catalog
     weight: 2
 ---
 

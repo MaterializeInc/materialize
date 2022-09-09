@@ -4,7 +4,6 @@ description: "information_schema is a system catalog that presents metadata in t
 menu:
   main:
     parent: 'system-catalog'
-    name: information_schema
     weight: 3
 ---
 
