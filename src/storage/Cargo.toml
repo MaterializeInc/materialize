@@ -37,7 +37,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-kinesis-util = { path = "../kinesis-util" }
-mz-ore = { path = "../ore", features = ["task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["ssh", "task", "tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
