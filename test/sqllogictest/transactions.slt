@@ -451,6 +451,67 @@ INSERT INTO t (a) VALUES (1)
 statement ok
 ROLLBACK
 
+## BEGIN does not lose READ ONLY bit
+
+statement ok
+BEGIN READ ONLY
+
+statement ok
+BEGIN
+
+statement error transaction in read-only mode
+INSERT INTO t (a) VALUES (1)
+
+statement ok
+ROLLBACK
+
+## READ ONLY -> READ WRITE valid only if no queries issued yet
+
+statement ok
+BEGIN READ ONLY
+
+statement ok
+BEGIN READ WRITE
+
+statement ok
+INSERT INTO t (a) VALUES (1)
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN READ ONLY
+
+query I
+SELECT 1
+----
+1
+
+statement error transaction read-write mode must be set before any query
+BEGIN READ WRITE
+
+statement ok
+COMMIT
+
+## READ WRITE -> READ ONLY valid, but cannot switch back if any queries issued
+
+statement ok
+BEGIN READ WRITE
+
+query I
+SELECT 1
+----
+1
+
+statement ok
+BEGIN READ ONLY
+
+statement error transaction read-write mode must be set before any query
+BEGIN READ WRITE
+
+statement ok
+COMMIT
+
 # Test that multi-table write transactions aren't supported
 
 statement ok

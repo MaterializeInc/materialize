@@ -102,7 +102,16 @@ impl<T: CoordTimestamp> Session<T> {
         wall_time: DateTime<Utc>,
         access: Option<TransactionAccessMode>,
         isolation_level: Option<TransactionIsolationLevel>,
-    ) -> Self {
+    ) -> (Self, Result<(), AdapterError>) {
+        if let Some(txn) = self.transaction.inner() {
+            if matches!(txn.ops, TransactionOps::Peeks(_))
+                && access == Some(TransactionAccessMode::ReadWrite)
+                && txn.access == Some(TransactionAccessMode::ReadOnly)
+            {
+                return (self, Err(AdapterError::ReadWriteUnavailable));
+            }
+        }
+
         match self.transaction {
             TransactionStatus::Default => {
                 self.transaction = TransactionStatus::InTransaction(Transaction {
@@ -112,18 +121,24 @@ impl<T: CoordTimestamp> Session<T> {
                     access,
                 });
             }
-            TransactionStatus::Started(txn) | TransactionStatus::InTransactionImplicit(txn) => {
+            TransactionStatus::Started(mut txn)
+            | TransactionStatus::InTransactionImplicit(mut txn)
+            | TransactionStatus::InTransaction(mut txn) => {
+                if access.is_some() {
+                    txn.access = access;
+                }
                 self.transaction = TransactionStatus::InTransaction(txn);
             }
-            TransactionStatus::InTransaction(_) => {}
             TransactionStatus::Failed(_) => unreachable!(),
         };
+
         if let Some(isolation_level) = isolation_level {
             self.vars
                 .set("transaction_isolation", IsolationLevel::from(isolation_level).as_str(), true)
                 .expect("transaction_isolation should be a valid var and isolation level is a valid value");
         }
-        self
+
+        (self, Ok(()))
     }
 
     /// Starts either a single statement or implicit transaction based on the
