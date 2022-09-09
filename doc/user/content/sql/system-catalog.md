@@ -12,14 +12,8 @@ menu:
 Materialize exposes a system catalog that contains metadata about the running
 Materialize instance.
 
-{{< warning >}}
-The system tables are not part of Materialize's stable interface.
-Backwards-incompatible changes to these tables may be made at any time.
-{{< /warning >}}
-
-## Details
-
-The system catalog consists of two schemas that are implicitly available in
+## Overview
+The system catalog consists of three schemas that are implicitly available in
 all databases:
 
   * [`mz_catalog`](#mz_catalog), which exposes metadata in Materialize's
@@ -28,25 +22,31 @@ all databases:
   * [`pg_catalog`](#pg_catalog), which presents the data in `mz_catalog` in
     the format used by PostgreSQL.
 
-These schemas contain sources, tables, and views that expose metadata like:
+  * [`information_schema`](#information_schema), which presents the data in
+    `mz_catalog` in the format used by the SQL standard's information_schema.
 
-  * Descriptions of each database, schema, source, table, view, sink, and
-    index in the system.
-
-  * Descriptions of all running dataflows.
-
-  * Metrics about dataflow execution.
+These schemas contain sources, tables, and views that expose different
+types of metadata.
 
 Whenever possible, applications should prefer to query `mz_catalog` over
-`pg_catalog`. The mapping between Materialize concepts and PostgreSQL concepts
-is not one-to-one, and so the data in `pg_catalog` cannot accurately represent
-the particulars of Materialize.
+`pg_catalog` or `information_schema`. The mapping between Materialize concepts
+and PostgreSQL concepts is not one-to-one, and so the data in `pg_catalog`
+and `information_schema` cannot accurately represent the particulars of Materialize.
 
 ## `mz_catalog`
+The following sections describe the available relations in the `mz_catalog` schema.
+The `mz_catalog` schemas can be classified into two categories:
 
-The following sections describe the available objects in the `mz_catalog`
-schema.
+  * [Object properties](#object-properties), which contain metadata about objects
+    within the Materialize instance. This incudes descriptions of each database,
+    schema, source, table, view, sink, and index in the system.
 
+  * [Dataflow properties](#dataflow-properties), which contains metadata about the
+    Materialize instance's dataflows. This includes both descriptions and metrics.
+    These relations can be useful for understanding and debugging Materialize’s
+    performance.
+
+### Object Properties
 ### `mz_array_types`
 
 The `mz_array_types` table contains a row for each array type in the system.
@@ -55,29 +55,6 @@ Field          | Type       | Meaning
 ---------------|------------|--------
 `type_id`      | [`text`]   | The ID of the array type.
 `element_id`   | [`text`]   | The ID of the array's element type.
-
-### `mz_arrangement_sharing`
-
-The `mz_arrangement_sharing` source describes how many times each [arrangement]
-in the system is used.
-
-Field      | Type       | Meaning
------------|------------|--------
-`operator` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`worker`   | [`bigint`] | The ID of the worker thread hosting the arrangement.
-`count`    | [`bigint`] | The number of operators that share the arrangement.
-
-### `mz_arrangement_sizes`
-
-The `mz_arrangement_sizes` source describes the size of each [arrangement] in
-the system.
-
-Field      | Type       | Meaning
------------|------------|--------
-`operator` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`worker`   | [`bigint`] | The worker hosting the arrangement.
-`records`  | [`bigint`] | The number of records in the arrangement.
-`batches`  | [`bigint`] | The number of batches in the arrangement.
 
 ### `mz_audit_events`
 
@@ -100,6 +77,28 @@ The `mz_base_types` table contains a row for each base type in the system.
 Field          | Type       | Meaning
 ---------------|------------|----------
 `type_id`      | [`text`]   | The ID of the type.
+
+### `mz_clusters`
+
+The `mz_clusters` view contains a row for each cluster in the system.
+
+Field       | Type       | Meaning
+------------|------------|--------
+`id`        | [`bigint`] | The ID of the cluster.
+`name`      | [`text`]   | The name of the cluster.
+
+### `mz_cluster_replicas`
+
+The `mz_cluster_replicas` view contains a row for each cluster replica in the system.
+
+Field               | Type       | Meaning
+--------------------|------------|--------
+`cluster_id`        | [`bigint`] | The ID of the cluster that the replica belongs to. Corresponds to [`mz_clusters.id`](#mz_clusters).
+`id`                | [`bigint`] | The ID of the cluster replica.
+`name`              | [`text`]   | The name of the cluster replica.
+`size`              | [`text`]   | The size of the cluster replica.
+`availability_zone` | [`text`]   | The availability zone to which the cluster replica belongs. May be `NULL`.
+`status`            | [`text`]   | The status of the cluster replica. Either `unhealthy` or `healthy`.
 
 ### `mz_columns`
 
@@ -125,67 +124,6 @@ Field  | Type       | Meaning
 `id`   | [`bigint`] | Materialize's unique ID for the database.
 `oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the database.
 `name` | [`text`]   | The name of the database.
-
-### `mz_dataflow_channels`
-
-The `mz_dataflow_channels` source describes the communication channels between
-[dataflow] operators. A communication channel connects one of the outputs of a
-source operator to one of the inputs of a target operator.
-
-Field         | Type       | Meaning
---------------|------------|--------
-`id`          | [`bigint`] | The ID of the channel.
-`worker`      | [`bigint`] | The ID of the worker thread hosting the channel.
-`source_node` | [`bigint`] | The ID of the source operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`source_port` | [`bigint`] | The source operator's output port.
-`target_node` | [`bigint`] | The ID of the target operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`target_port` | [`bigint`] | The target operator's input port.
-
-### `mz_dataflows`
-
-The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
-
-Field      | Type       | Meaning
------------|------------|--------
-`id`       | [`bigint`] | The ID of the dataflow.
-`worker`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
-`local_id` | [`bigint`] | The scope-local index of the dataflow.
-`name`     | [`text`]   | The internal name of the dataflow.
-
-### `mz_dataflow_addresses`
-
-The `mz_dataflow_addresses` source describes how the dataflow channels
-and operators in the system are nested into scopes.
-
-Field     | Type            | Meaning
-----------|-----------------|--------
-`id`      | [`bigint`]      | The ID of the channel or operator. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels) or [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`worker`  | [`bigint`]      | The ID of the worker thread hosting the channel or operator.
-`address` | [`bigint list`] | A list of scope-local indexes indicating the path from the root to this channel or operator.
-
-### `mz_dataflow_operator_dataflows`
-
-The `mz_dataflow_operator_dataflows` view describes the [dataflow] to which each
-dataflow operator belongs.
-
-Field           | Type       | Meaning
-----------------|------------|--------
-`id`            | [`bigint`] | The ID of the operator.
-`name`          | [`text`]   | The internal name of the operator.
-`worker`        | [`bigint`] | The ID of the worker thread hosting the operator.
-`dataflow_id`   | [`bigint`] | The ID of the dataflow hosting the operator.
-`dataflow_name` | [`text`]   | The name of the dataflow hosting the operator.
-
-### `mz_dataflow_operators`
-
-The `mz_dataflow_operators` source describes the dataflow operators in the
-system.
-
-Field    | Type       | Meaning
----------|------------|--------
-`id`     | [`bigint`] | The ID of the operator.
-`worker` | [`bigint`] | The ID of the worker thread hosting the operator.
-`name`   | [`text`]   | The name of the operator.
 
 ### `mz_functions`
 
@@ -248,6 +186,238 @@ Field        | Type     | Meaning
 -------------|----------|--------
 `type_id`    | [`text`] | The ID of the list type.
 `element_id` | [`text`] | The IID of the list's element type.
+
+#### `mz_map_types`
+
+The `mz_map_types` table contains a row for each map type in the system.
+
+Field          | Type       | Meaning
+---------------|------------|----------
+`type_id`      | [`text`]   | The ID of the map type.
+`key_id `      | [`text`]   | The ID of the map's key type.
+`value_id`     | [`text`]   | The ID of the map's value type.
+
+### `mz_objects`
+
+The `mz_objects` view contains a row for each table, source, view, materialized view, sink,
+index, connection, secret, type, and function in the system.
+
+Field       | Type       | Meaning
+------------|------------|--------
+`id`        | [`text`]   | Materialize's unique ID for the object.
+`oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the object.
+`schema_id` | [`bigint`] | The ID of the schema to which the object belongs.
+`name`      | [`text`]   | The name of the object.
+`type`      | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+
+### `mz_pseudo_types`
+
+The `mz_pseudo_types` table contains a row for each pseudo type in the system.
+
+Field          | Type       | Meaning
+---------------|------------|----------
+`type_id`      | [`text`]   | The ID of the type.
+
+### `mz_relations`
+
+The `mz_relations` view contains a row for each table, source, view, and
+materialized view in the system.
+
+Field       | Type       | Meaning
+------------|------------|--------
+`id`        | [`text`]   | Materialize's unique ID for the relation.
+`oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the relation.
+`schema_id` | [`bigint`] | The ID of the schema to which the relation belongs.
+`name`      | [`text`]   | The name of the relation.
+`type`      | [`text`]   | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
+
+### `mz_roles`
+
+The `mz_roles` table contains a row for each role in the system.
+
+Field  | Type       | Meaning
+-------|------------|--------
+`id`   | [`bigint`] | Materialize's unique ID for the role.
+`oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the role.
+`name` | [`text`]   | The name of the role.
+
+### `mz_schemas`
+
+The `mz_schemas` table contains a row for each schema in the system.
+
+Field         | Type       | Meaning
+--------------|------------|--------
+`id`          | [`bigint`] | Materialize's unique ID for the schema.
+`oid`         | [`oid`]    | A [PostgreSQL-compatible oid][oid] for the schema.
+`database_id` | [`bigint`] | The ID of the database containing the schema.
+`name`        | [`text`]   | The name of the schema.
+
+### `mz_sinks`
+
+The `mz_sinks` table contains a row for each sink in the system.
+
+Field            | Type        | Meaning
+-----------------|-------------|--------
+`id`             | [`text`]    | Materialize's unique ID for the sink.
+`oid`            | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the sink.
+`schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
+`name`           | [`text`]    | The name of the sink.
+`type`           | [`text`]    | The type of the sink: `kafka`.
+
+### `mz_sources`
+
+The `mz_sources` table contains a row for each source in the system.
+
+Field            | Type       | Meaning
+-----------------|------------|----------
+`id`             | [`text`]   | Materialize's unique ID for the source.
+`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
+`schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
+`name`           | [`text`]   | The name of the source.
+`type`           | [`text`]   | The type of the source: `kafka` or `postgres`.
+
+### `mz_storage_usage`
+
+The `mz_storage_usage` table contains a row for each storage utilization snapshot taken within the retention period (60 days as of July 2022)
+
+Field                  | Type                         | Meaning                                               
+---------------------- | ---------------------------- | --------
+`object_id`            | [`text`]                     | Materialize's unique ID for the storage object.       
+`size_bytes`           | [`bigint`]                   | The size in bytes of the storage object.              
+`collection_timestamp` | [`timestamp with time zone`] | The time at which the storage snapshot was collected.
+
+### `mz_tables`
+
+The `mz_tables` table contains a row for each table in the system.
+
+Field            | Type       | Meaning
+-----------------|------------|----------
+`id`             | [`text`]   | Materialize's unique ID for the table.
+`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the table.
+`schema_id`      | [`bigint`] | The ID of the schema to which the table belongs.
+`name`           | [`text`]   | The name of the table.
+`persisted_name` | [`text`]   | The name of the table's persisted materialization, or `NULL` if the table is not being persisted.
+
+### `mz_types`
+
+The `mz_types` table contains a row for each type in the system.
+
+Field          | Type       | Meaning
+---------------|------------|----------
+`id`           | [`text`]   | Materialize's unique ID for the type.
+`oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the type.
+`schema_id`    | [`bigint`] | The ID of the schema to which the type belongs.
+`name`         | [`text`]   | The name of the type.
+
+### `mz_views`
+
+The `mz_views` table contains a row for each view in the system.
+
+Field          | Type        | Meaning
+---------------|-------------|----------
+`id`           | [`text`]    | Materialize's unique ID for the view.
+`oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the view.
+`schema_id`    | [`bigint`]  | The ID of the schema to which the view belongs.
+`name`         | [`text`]    | The name of the view.
+`definition`   | [`text`]    | The view definition (a `SELECT` query).
+
+
+### Dataflow Properties
+{{< warning >}}
+The dataflow system catalog is not part of Materialize's stable interface.
+Backwards-incompatible changes to these tables may be made at any time.
+{{< /warning >}}
+
+Each dataflow property table or view is unique to each [cluster replica](#mz_cluster_replicas).
+See the [Cluster Replica](/overview/key-concepts/#cluster-replicas)
+conceptual overview for more conext.
+These table and view are suffixed by the cluster replica ID, e.g.`mz_dataflows_1`.
+Querying the base table (e.g. `mz_dataflows`) will return data for
+current cluster replica.
+
+### `mz_arrangement_sizes`
+
+The `mz_arrangement_sizes` source describes the size of each [arrangement] in
+the system.
+
+Field      | Type       | Meaning
+-----------|------------|--------
+`operator` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker`   | [`bigint`] | The worker hosting the arrangement.
+`records`  | [`bigint`] | The number of records in the arrangement.
+`batches`  | [`bigint`] | The number of batches in the arrangement.
+
+### `mz_arrangement_sharing`
+
+The `mz_arrangement_sharing` source describes how many times each [arrangement]
+in the system is used.
+
+Field      | Type       | Meaning
+-----------|------------|--------
+`operator` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker`   | [`bigint`] | The ID of the worker thread hosting the arrangement.
+`count`    | [`bigint`] | The number of operators that share the arrangement.
+
+### `mz_dataflow_channels`
+
+The `mz_dataflow_channels` source describes the communication channels between
+[dataflow] operators. A communication channel connects one of the outputs of a
+source operator to one of the inputs of a target operator.
+
+Field         | Type       | Meaning
+--------------|------------|--------
+`id`          | [`bigint`] | The ID of the channel.
+`worker`      | [`bigint`] | The ID of the worker thread hosting the channel.
+`source_node` | [`bigint`] | The ID of the source operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`source_port` | [`bigint`] | The source operator's output port.
+`target_node` | [`bigint`] | The ID of the target operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`target_port` | [`bigint`] | The target operator's input port.
+
+### `mz_dataflows`
+
+The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
+
+Field      | Type       | Meaning
+-----------|------------|--------
+`id`       | [`bigint`] | The ID of the dataflow.
+`worker`   | [`bigint`] | The ID of the worker thread hosting the dataflow.
+`local_id` | [`bigint`] | The scope-local index of the dataflow.
+`name`     | [`text`]   | The internal name of the dataflow.
+
+### `mz_dataflow_addresses`
+
+The `mz_dataflow_addresses` source describes how the dataflow channels
+and operators in the system are nested into scopes.
+
+Field     | Type            | Meaning
+----------|-----------------|--------
+`id`      | [`bigint`]      | The ID of the channel or operator. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels) or [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker`  | [`bigint`]      | The ID of the worker thread hosting the channel or operator.
+`address` | [`bigint list`] | A list of scope-local indexes indicating the path from the root to this channel or operator.
+
+### `mz_dataflow_operator_dataflows`
+
+The `mz_dataflow_operator_dataflows` view describes the [dataflow] to which each
+dataflow operator belongs.
+
+Field           | Type       | Meaning
+----------------|------------|--------
+`id`            | [`bigint`] | The ID of the operator.
+`name`          | [`text`]   | The internal name of the operator.
+`worker`        | [`bigint`] | The ID of the worker thread hosting the operator.
+`dataflow_id`   | [`bigint`] | The ID of the dataflow hosting the operator.
+`dataflow_name` | [`text`]   | The name of the dataflow hosting the operator.
+
+### `mz_dataflow_operators`
+
+The `mz_dataflow_operators` source describes the dataflow operators in the
+system.
+
+Field    | Type       | Meaning
+---------|------------|--------
+`id`     | [`bigint`] | The ID of the operator.
+`worker` | [`bigint`] | The ID of the worker thread hosting the operator.
+`name`   | [`text`]   | The name of the operator.
 
 ### `mz_message_counts`
 
@@ -327,29 +497,6 @@ Field          | Type        | Meaning
 `cluster_id`   | [`bigint`]  | The ID of the cluster maintaining the materialized view.
 `definition`   | [`text`]    | The materialized view definition (a `SELECT` query).
 
-### `mz_map_types`
-
-The `mz_map_types` table contains a row for each map type in the system.
-
-Field          | Type       | Meaning
----------------|------------|----------
-`type_id`      | [`text`]   | The ID of the map type.
-`key_id `      | [`text`]   | The ID of the map's key type.
-`value_id`     | [`text`]   | The ID of the map's value type.
-
-### `mz_objects`
-
-The `mz_objects` view contains a row for each table, source, view, materialized view, sink,
-index, connection, secret, type, and function in the system.
-
-Field       | Type       | Meaning
-------------|------------|--------
-`id`        | [`text`]   | Materialize's unique ID for the object.
-`oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the object.
-`schema_id` | [`bigint`] | The ID of the schema to which the object belongs.
-`name`      | [`text`]   | The name of the object.
-`type`      | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
-
 ### `mz_peek_active`
 
 The `mz_peek_active` source describes all read queries ("peeks") that are
@@ -372,14 +519,6 @@ Field         | Type       | Meaning
 `worker`      | [`bigint`] | The ID of the worker thread servicing the peek.
 `duration_ns` | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`       | [`bigint`] | The (noncumulative) count of peeks in this bucket.
-
-### `mz_pseudo_types`
-
-The `mz_pseudo_types` table contains a row for each pseudo type in the system.
-
-Field          | Type       | Meaning
----------------|------------|----------
-`type_id`      | [`text`]   | The ID of the type.
 
 ### `mz_records_per_dataflow`
 
@@ -423,29 +562,6 @@ Field         | Type        | Meaning
 `dataflow_id` | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
 `records`     | [`numeric`] | The number of records in the dataflow.
 
-### `mz_relations`
-
-The `mz_relations` view contains a row for each table, source, view, and
-materialized view in the system.
-
-Field       | Type       | Meaning
-------------|------------|--------
-`id`        | [`text`]   | Materialize's unique ID for the relation.
-`oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the relation.
-`schema_id` | [`bigint`] | The ID of the schema to which the relation belongs.
-`name`      | [`text`]   | The name of the relation.
-`type`      | [`text`]   | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
-
-### `mz_roles`
-
-The `mz_roles` table contains a row for each role in the system.
-
-Field  | Type       | Meaning
--------|------------|--------
-`id`   | [`bigint`] | Materialize's unique ID for the role.
-`oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the role.
-`name` | [`text`]   | The name of the role.
-
 ### `mz_scheduling_elapsed`
 
 The `mz_scheduling_elapsed` source describes the total amount of time spent in
@@ -480,86 +596,6 @@ Field       | Type       | Meaning
 `slept_for` | [`bigint`] | The actual length of the park event.
 `requested` | [`bigint`] | The requested length of the park event.
 `count`     | [`bigint`] | The number of park events in this bucket.
-
-### `mz_schemas`
-
-The `mz_schemas` table contains a row for each schema in the system.
-
-Field         | Type       | Meaning
---------------|------------|--------
-`id`          | [`bigint`] | Materialize's unique ID for the schema.
-`oid`         | [`oid`]    | A [PostgreSQL-compatible oid][oid] for the schema.
-`database_id` | [`bigint`] | The ID of the database containing the schema.
-`name`        | [`text`]   | The name of the schema.
-
-### `mz_sinks`
-
-The `mz_sinks` table contains a row for each sink in the system.
-
-Field            | Type        | Meaning
------------------|-------------|--------
-`id`             | [`text`]    | Materialize's unique ID for the sink.
-`oid`            | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the sink.
-`schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
-`name`           | [`text`]    | The name of the sink.
-`type`           | [`text`]    | The type of the sink: `kafka`.
-
-### `mz_sources`
-
-The `mz_sources` table contains a row for each source in the system.
-
-Field            | Type       | Meaning
------------------|------------|----------
-`id`             | [`text`]   | Materialize's unique ID for the source.
-`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
-`schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
-`name`           | [`text`]   | The name of the source.
-`type`           | [`text`]   | The type of the source: `kafka` or `postgres`.
-
-### `mz_storage_usage`
-
-The `mz_storage_usage` table contains a row for each storage utilization snapshot taken within the retention period (60 days as of July 2022)
-
-| Field                  | Type                         | Meaning                                               |
-| ---------------------- | ---------------------------- | ----------------------------------------------------- |
-| `object_id`            | [`text`]                     | Materialize's unique ID for the storage object.       |
-| `size_bytes`           | [`bigint`]                   | The size in bytes of the storage object.              |
-| `collection_timestamp` | [`timestamp with time zone`] | The time at which the storage snapshot was collected. |
-
-### `mz_tables`
-
-The `mz_tables` table contains a row for each table in the system.
-
-Field            | Type       | Meaning
------------------|------------|----------
-`id`             | [`text`]   | Materialize's unique ID for the table.
-`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the table.
-`schema_id`      | [`bigint`] | The ID of the schema to which the table belongs.
-`name`           | [`text`]   | The name of the table.
-`persisted_name` | [`text`]   | The name of the table's persisted materialization, or `NULL` if the table is not being persisted.
-
-### `mz_types`
-
-The `mz_types` table contains a row for each type in the system.
-
-Field          | Type       | Meaning
----------------|------------|----------
-`id`           | [`text`]   | Materialize's unique ID for the type.
-`oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the type.
-`schema_id`    | [`bigint`] | The ID of the schema to which the type belongs.
-`name`         | [`text`]   | The name of the type.
-
-### `mz_views`
-
-The `mz_views` table contains a row for each view in the system.
-
-Field          | Type        | Meaning
----------------|-------------|----------
-`id`           | [`text`]    | Materialize's unique ID for the view.
-`oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the view.
-`schema_id`    | [`bigint`]  | The ID of the schema to which the view belongs.
-`name`         | [`text`]    | The name of the view.
-`definition`   | [`text`]    | The view definition (a `SELECT` query).
 
 ### `mz_worker_materialization_frontiers`
 
@@ -680,3 +716,4 @@ Materialize should use the documented [`mz_catalog`](#mz_catalog) API instead.
 [dataflow]: /overview/arrangements/#dataflows
 [librdkafka]: https://github.com/edenhill/librdkafka/tree/v{{< librdkafka-version >}}
 [`STATISTICS.md`]: https://github.com/edenhill/librdkafka/tree/v{{< librdkafka-version >}}/STATISTICS.md
+
