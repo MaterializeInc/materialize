@@ -27,7 +27,6 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
-use mz_sql_parser::ast::KafkaConnectionOptionName;
 
 use crate::types::connections::aws::AwsExternalIdPrefix;
 
@@ -207,29 +206,6 @@ impl From<SaslConfig> for KafkaSecurity {
     }
 }
 
-/// Meant to create an equivalence function between enum-named options and
-/// their free-form `String` counterparts.
-pub trait ConfigKey {
-    fn config_key(&self) -> String;
-}
-
-impl ConfigKey for KafkaConnectionOptionName {
-    fn config_key(&self) -> String {
-        use KafkaConnectionOptionName::*;
-        match self {
-            Broker | Brokers => "bootstrap.servers",
-            ProgressTopic => unimplemented!("not a kafka config"),
-            SslKey => "ssl.key.pem",
-            SslCertificate => "ssl.certificate.pem",
-            SslCertificateAuthority => "ssl.ca.pem",
-            SaslMechanisms => "sasl.mechanisms",
-            SaslUsername => "sasl.username",
-            SaslPassword => "sasl.password",
-        }
-        .to_string()
-    }
-}
-
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection {
     pub brokers: Vec<String>,
@@ -237,10 +213,19 @@ pub struct KafkaConnection {
     pub security: Option<KafkaSecurity>,
 }
 
+mod kafka_config_keys {
+    pub const SASL_MECHANISMS: &str = "sasl.mechanisms";
+    pub const SASL_PASSWORD: &str = "sasl.password";
+    pub const SASL_USERNAME: &str = "sasl.username";
+    pub const SSL_CERTIFICATE: &str = "ssl.certificate.pem";
+    pub const SSL_CERTIFICATE_AUTHORITY: &str = "ssl.ca.pem";
+    pub const SSL_KEY: &str = "ssl.key.pem";
+}
+
 impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
     fn from(v: KafkaConnection) -> Self {
-        use KafkaConnectionOptionName::*;
-        let mut r = BTreeMap::new();
+        use kafka_config_keys::*;
+        let mut r: BTreeMap<String, StringOrSecret> = BTreeMap::new();
         r.insert("bootstrap.servers".into(), v.brokers.join(",").into());
         match v.security {
             Some(KafkaSecurity::Tls(KafkaTlsConfig {
@@ -249,11 +234,11 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
             })) => {
                 r.insert("security.protocol".into(), "SSL".into());
                 if let Some(root_cert) = root_cert {
-                    r.insert(SslCertificateAuthority.config_key(), root_cert);
+                    r.insert(SSL_CERTIFICATE_AUTHORITY.to_owned(), root_cert);
                 }
                 if let Some(identity) = identity {
-                    r.insert(SslKey.config_key(), StringOrSecret::Secret(identity.key));
-                    r.insert(SslCertificate.config_key(), identity.cert);
+                    r.insert(SSL_KEY.to_owned(), StringOrSecret::Secret(identity.key));
+                    r.insert(SSL_CERTIFICATE.to_owned(), identity.cert);
                 }
             }
             Some(KafkaSecurity::Sasl(SaslConfig {
@@ -264,13 +249,13 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
             })) => {
                 r.insert("security.protocol".into(), "SASL_SSL".into());
                 r.insert(
-                    SaslMechanisms.config_key(),
+                    SASL_MECHANISMS.to_owned(),
                     StringOrSecret::String(mechanisms),
                 );
-                r.insert(SaslUsername.config_key(), username);
-                r.insert(SaslPassword.config_key(), StringOrSecret::Secret(password));
+                r.insert(SASL_USERNAME.to_owned(), username);
+                r.insert(SASL_PASSWORD.to_owned(), StringOrSecret::Secret(password));
                 if let Some(certificate_authority) = certificate_authority {
-                    r.insert(SslCertificateAuthority.config_key(), certificate_authority);
+                    r.insert(SSL_CERTIFICATE_AUTHORITY.to_owned(), certificate_authority);
                 }
             }
             None => {}
