@@ -214,9 +214,11 @@ pub struct KafkaConnection {
 }
 
 mod kafka_config_keys {
+    pub const BOOTSTRAP_SERVERS: &str = "bootstrap.servers";
     pub const SASL_MECHANISMS: &str = "sasl.mechanisms";
     pub const SASL_PASSWORD: &str = "sasl.password";
     pub const SASL_USERNAME: &str = "sasl.username";
+    pub const SECURITY_PROTOCOL: &str = "security.protocol";
     pub const SSL_CERTIFICATE: &str = "ssl.certificate.pem";
     pub const SSL_CERTIFICATE_AUTHORITY: &str = "ssl.ca.pem";
     pub const SSL_KEY: &str = "ssl.key.pem";
@@ -226,13 +228,13 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
     fn from(v: KafkaConnection) -> Self {
         use kafka_config_keys::*;
         let mut r: BTreeMap<String, StringOrSecret> = BTreeMap::new();
-        r.insert("bootstrap.servers".into(), v.brokers.join(",").into());
+        r.insert(BOOTSTRAP_SERVERS.to_owned(), v.brokers.join(",").into());
         match v.security {
             Some(KafkaSecurity::Tls(KafkaTlsConfig {
                 root_cert,
                 identity,
             })) => {
-                r.insert("security.protocol".into(), "SSL".into());
+                r.insert(SECURITY_PROTOCOL.to_owned(), "SSL".into());
                 if let Some(root_cert) = root_cert {
                     r.insert(SSL_CERTIFICATE_AUTHORITY.to_owned(), root_cert);
                 }
@@ -247,7 +249,7 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
                 password,
                 tls_root_cert: certificate_authority,
             })) => {
-                r.insert("security.protocol".into(), "SASL_SSL".into());
+                r.insert(SECURITY_PROTOCOL.to_owned(), "SASL_SSL".into());
                 r.insert(
                     SASL_MECHANISMS.to_owned(),
                     StringOrSecret::String(mechanisms),
