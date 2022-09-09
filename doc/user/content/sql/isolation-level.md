@@ -20,8 +20,29 @@ In Materialize, you can request any of these isolation
 levels, but they all behave the same as the Serializable isolation level. In addition to the four levels defined in the
 SQL Standard, Materialize also defines a [Strict Serializable](#strict-serializable) isolation level.
 
-Isolation level is a per session configurable variable. To set the current session’s isolation level you can
-execute `SET TRANSACTION_ISOLATION TO '<isolation-level>';`. The default isolation level is Strict Serializable.
+Isolation level is a per session configurable variable that can be set by the user. The default isolation level is
+[Strict Serializable](#strict-serializable).
+
+## Syntax
+
+{{< diagram "set-transaction-isolation.svg" >}}
+
+| Valid Isolation Levels                      |
+|---------------------------------------------|
+| [Read Uncommitted](#serializable)           |
+| [Read Committed](#serializable)             |
+| [Repeatable Read](#serializable)            |
+| [Serializable](#serializable)               |
+| [Strict Serializable](#strict-serializable) |
+
+## Examples
+
+```sql
+SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+```
+```sql
+SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
+```
 
 ## Serializable
 
@@ -48,9 +69,10 @@ The SQL standard defines the Serializable isolation level as preventing the foll
 Furthermore, Serializable also guarantees that the result of executing a group of concurrent SQL-transactions produces
 the same effect as some serial execution of those same transactions. A serial execution is one where each
 SQL-transaction executes to completion before the next one begins. There is no guarantee that this serial ordering is
-consistent with the real time ordering of the transactions, in other words transactions are not linearizable under the
-Serializable isolation level. For example if SQL-transaction T1 happens before SQL-transaction T2 in real time, then the
-result may be equivalent to a serial order where T2 was executed first.
+consistent with the real time ordering of the transactions, in other words transactions are not
+[linearizable](https://jepsen.io/consistency/models/linearizable) under the Serializable isolation level. For example
+if SQL-transaction T1 happens before SQL-transaction T2 in real time, then the result may be equivalent to a serial
+order where T2 was executed first.
 
 In practice non-linearizable orderings are unlikely to happen, but still possible, when querying directly from tables
 and sources. Non-linearizable orderings are likely to surface when querying from indexes and materialized views with
