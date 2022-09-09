@@ -49,22 +49,25 @@ SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
 The SQL standard defines the Serializable isolation level as preventing the following three phenomenons:
 
 - **P1 (”Dirty Read”):**
-  > SQL-transaction T1 modifies a row. SQL-transaction T2 then reads that row before T1 performs a
+  > "SQL-transaction T1 modifies a row. SQL-transaction T2 then reads that row before T1 performs a
   COMMIT. If T1 then performs a ROLLBACK, T2 will have read a row that was never committed and that may thus be
-  considered to have never existed.
+  considered to have never existed."
+  (ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions)
 
 - **P2 (”Non-repeatable read”):**
 
-  > SQL-transaction T1 reads a row. SQL-transaction T2 then modifies or deletes that row and performs
+  > "SQL-transaction T1 reads a row. SQL-transaction T2 then modifies or deletes that row and performs
   a COMMIT. If T1 then attempts to reread the row, it may receive the modified value or discover that the row has been
-  deleted.
+  deleted."
+  (ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions)
 
 - **P3 (”Phantom”):**
 
-  > SQL-transaction T1 reads the set of rows N that satisfy some <search condition>. SQL-transaction
+  > "SQL-transaction T1 reads the set of rows N that satisfy some <search condition>. SQL-transaction
   T2 then executes SQL-statements that generate one or more rows that satisfy the <search condition> used by
   SQL-transaction T1. If SQL-transaction T1 then repeats the initial read with the same <search condition>, it obtains a
-  different collection of rows.
+  different collection of rows."
+  (ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions)
 
 Furthermore, Serializable also guarantees that the result of executing a group of concurrent SQL-transactions produces
 the same effect as some serial execution of those same transactions. A serial execution is one where each
