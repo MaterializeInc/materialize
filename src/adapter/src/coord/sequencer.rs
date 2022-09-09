@@ -2060,15 +2060,24 @@ impl<S: Append + 'static> Coordinator<S> {
             thinning.len(),
         )?;
 
-        // We only track the peeks in the session if the query doesn't use AS OF, it's a
-        // non-constant or timestamp dependent query.
-        if when == QueryWhen::Immediately
-            && (!matches!(
+        // We only track the peeks in the session if the query doesn't use AS
+        // OF or we're inside an explicit transaction. The latter case is
+        // necessary to support PG's `BEGIN` semantics, whose behavior can
+        // depend on whether or not reads have occurred in the txn.
+        if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
+            || when == QueryWhen::Immediately
+        {
+            let peek_ts = if matches!(
                 peek_plan,
                 peek::PeekPlan::FastPath(peek::FastPathPlan::Constant(_, _))
-            ) || !timestamp_independent)
-        {
-            session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
+            ) && timestamp_independent
+            {
+                None
+            } else {
+                Some(timestamp)
+            };
+
+            session.add_transaction_ops(TransactionOps::Peeks(peek_ts))?;
         }
 
         // Implement the peek, and capture the response.

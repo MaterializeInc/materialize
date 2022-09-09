@@ -197,8 +197,9 @@ impl<T: CoordTimestamp> Session<T> {
         &self.transaction
     }
 
-    /// Adds operations to the current transaction. An error is produced if they
-    /// cannot be merged (i.e., a read cannot be merged to an insert).
+    /// Adds operations to the current transaction. An error is produced if
+    /// they cannot be merged (i.e., a timestamp-dependent read cannot be
+    /// merged to an insert).
     pub fn add_transaction_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
         match &mut self.transaction {
             TransactionStatus::Started(Transaction { ops, access, .. })
@@ -215,7 +216,17 @@ impl<T: CoordTimestamp> Session<T> {
                     }
                     TransactionOps::Peeks(txn_ts) => match add_ops {
                         TransactionOps::Peeks(add_ts) => {
-                            assert_eq!(*txn_ts, add_ts);
+                            match (&txn_ts, add_ts) {
+                                (Some(txn_ts), Some(add_ts)) => assert_eq!(*txn_ts, add_ts),
+                                (None, Some(add_ts)) => *txn_ts = Some(add_ts),
+                                _ => {}
+                            };
+                        }
+                        // Iff peeks thus far do not have a timestamp (i.e.
+                        // they are constant), we can switch to a write
+                        // transaction.
+                        writes @ TransactionOps::Writes(..) if txn_ts.is_none() => {
+                            *ops = writes;
                         }
                         _ => return Err(AdapterError::ReadOnlyTransaction),
                     },
@@ -237,6 +248,9 @@ impl<T: CoordTimestamp> Session<T> {
                                 return Err(AdapterError::MultiTableWriteTransaction);
                             }
                         }
+                        // Iff peeks do not have a timestamp (i.e. they are
+                        // constant), we can permit them.
+                        TransactionOps::Peeks(None) => {}
                         _ => {
                             return Err(AdapterError::WriteOnlyTransaction);
                         }
@@ -279,7 +293,7 @@ impl<T: CoordTimestamp> Session<T> {
                 ops: TransactionOps::Peeks(ts),
                 write_lock_guard: _,
                 access: _,
-            }) => Some(ts.clone()),
+            }) => ts.clone(),
             _ => None,
         }
     }
@@ -671,12 +685,15 @@ pub enum TransactionOps<T> {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
     None,
-    /// This transaction has had a peek (`SELECT`, `TAIL`) and must only do other peeks.
-    Peeks(T),
+    /// This transaction has had a peek (`SELECT`, `TAIL`). If the inner value
+    /// is Some, it must only do other peeks. However, if the value is None
+    /// (i.e. the values are constants), the transaction can still perform
+    /// writes.
+    Peeks(Option<T>),
     /// This transaction has done a TAIL and must do nothing else.
     Tail,
-    /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must only do
-    /// other writes.
+    /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
+    /// only do other writes, or reads whose timestamp is None (i.e. constants).
     Writes(Vec<WriteOp>),
 }
 
