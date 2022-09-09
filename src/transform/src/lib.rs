@@ -342,6 +342,7 @@ impl Optimizer {
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
+            Box::new(crate::inline_let::InlineLet::new(true)),
         ];
         Self {
             name: "mir_logical_optimizer",
