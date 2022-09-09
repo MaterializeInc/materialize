@@ -33,7 +33,6 @@ use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
@@ -418,29 +417,22 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Adds replicas of an instance.
-    ///
-    /// # Panics
-    /// - If the identified `instance` has not yet been created via
-    ///   [`ComputeController::create_instance`].
     pub async fn add_replica_to_instance(
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
-    ) -> Result<(), anyhow::Error> {
-        assert!(
-            self.compute.instances.contains_key(&instance_id),
-            "call create_instance before calling add_replica_to_instance",
-        );
-
+    ) -> Result<(), ComputeError> {
         // Add replicas backing that instance.
         match config.location {
             ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
-                self.instance(instance_id).unwrap().add_replica(
-                    replica_id,
-                    addrs.into_iter().collect(),
-                    config.persisted_logs.get_sources().into_iter().collect(),
-                );
+                self.instance(instance_id)
+                    .ok_or(ComputeError::InstanceMissing(instance_id))?
+                    .add_replica(
+                        replica_id,
+                        addrs.into_iter().collect(),
+                        config.persisted_logs.get_sources().into_iter().collect(),
+                    );
             }
             ConcreteComputeInstanceReplicaLocation::Managed {
                 allocation,
@@ -453,11 +445,13 @@ where
                     .ensure_replica(instance_id, replica_id, allocation, availability_zone)
                     .await?;
 
-                self.instance(instance_id).unwrap().add_replica(
-                    replica_id,
-                    replica_addrs,
-                    config.persisted_logs.get_sources().into_iter().collect(),
-                );
+                self.instance(instance_id)
+                    .ok_or(ComputeError::InstanceMissing(instance_id))?
+                    .add_replica(
+                        replica_id,
+                        replica_addrs,
+                        config.persisted_logs.get_sources().into_iter().collect(),
+                    );
             }
         }
 
@@ -470,7 +464,7 @@ where
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), ComputeError> {
         if let ConcreteComputeInstanceReplicaLocation::Managed { .. } = config.location {
             self.compute
                 .orchestrator
@@ -494,9 +488,9 @@ where
     pub async fn process(
         &mut self,
         instance_id: ComputeInstanceId,
-    ) -> Result<Option<ComputeControllerResponse<T>>, anyhow::Error> {
+    ) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
         self.instance(instance_id)
-            .ok_or_else(|| anyhow!("absent compute instance"))?
+            .ok_or(ComputeError::InstanceMissing(instance_id))?
             .process()
             .await
     }
@@ -963,7 +957,7 @@ where
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, anyhow::Error> {
+    pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
         match self.compute.stashed_response.take() {
             None => Ok(None),
             Some(ActiveReplicationResponse::ComputeResponse(response)) => match response {

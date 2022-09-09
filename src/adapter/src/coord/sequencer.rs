@@ -1621,7 +1621,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.controller
             .active_compute()
             .drop_replica(instance_id, replica_id, replica_config)
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn sequence_drop_items(
