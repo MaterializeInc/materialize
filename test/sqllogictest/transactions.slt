@@ -157,10 +157,10 @@ BEGIN
 ----
 COMPLETE 0
 
-query T rowsort
+query TT rowsort
 SHOW TABLES
 ----
-t
+t   user
 
 simple
 COMMIT

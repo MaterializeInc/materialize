@@ -156,24 +156,24 @@ materialize.public.renamed_sink
 
 # Source was successfully renamed
 > SHOW SOURCES;
-name
-----
-renamed_mz_data
+name            type    type
+-----------------------------
+renamed_mz_data user    kafka
 
 # Sink was successfully renamed
 > SHOW SINKS
-name
-----
-renamed_sink
+name            type
+--------------------
+renamed_sink    user
 
 # View was successfully renamed
 > SHOW VIEWS
-name
-----
-byzantine_view
-dependent_view
-oppositional_view
-renamed_mz_view
+name                type
+------------------------
+byzantine_view      user
+dependent_view      user
+oppositional_view   user
+renamed_mz_view     user
 
 # Item's own `CREATE VIEW` statement updated
 > SHOW CREATE VIEW renamed_mz_view
@@ -773,16 +773,16 @@ materialize.public.count "CREATE VIEW \"materialize\".\"public\".\"count\" AS SE
 > CREATE TABLE j (b int)
 
 > SHOW TABLES
-name
-----
-j
+name    type
+------------
+j       user
 
 > ALTER TABLE j RENAME TO renamed_j
 
 > SHOW TABLES
-name
-----
-renamed_j
+name        type
+----------------
+renamed_j   user
 
 > SELECT name FROM mz_tables WHERE id like 'u%';
 name

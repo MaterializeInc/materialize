@@ -46,13 +46,13 @@ contains:column "a" specified more than once
 > SELECT * FROM t;
 
 > SHOW TABLES;
-name
-----
-t
+name    type
+------------
+t       user
 
 > SHOW SOURCES;
-name
-----
+name    type    type
+--------------------
 
 > SHOW INDEXES FROM t;
 
@@ -213,19 +213,19 @@ contains:unknown catalog item 't'
 contains:unknown catalog item 't'
 
 > SHOW TABLES;
-name
-----
-v
+name    type
+------------
+v       user
 
 > SHOW TABLES LIKE 'foo'
 > SHOW TABLES LIKE 'v%'
-v
+v   user
 > SHOW TABLES WHERE name = 'v'
-v
+v   user
 
 > SHOW SOURCES;
-name
-----
+name    type    type
+--------------------
 
 > CREATE TABLE t (a int, b text NOT NULL)
 
