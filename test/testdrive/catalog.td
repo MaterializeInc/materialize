@@ -30,12 +30,16 @@ Indexes:
 
 # What schemas do we have by default?
 > SHOW SCHEMAS FROM materialize
-public  system
+public              user
+information_schema  system
+mz_catalog          system
+mz_internal         system
+pg_catalog          system
 > SHOW SCHEMAS
 name                type
 --------------------------
 information_schema  system
-public              system
+public              user
 mz_catalog          system
 mz_internal         system
 pg_catalog          system
@@ -71,8 +75,13 @@ name   type
 > SHOW SCHEMAS
 name    type
 ------------
-public  user
-s       user
+public              user
+s                   user
+information_schema  system
+mz_catalog          system
+mz_internal         system
+pg_catalog          system
+
 
 # Creating a schema with a name that already exists should fail.
 ! CREATE SCHEMA s
@@ -92,9 +101,9 @@ contains:schema 'materialize.s' cannot be dropped without CASCADE while it conta
 
 # What databases do we have by default?
 > SHOW DATABASES
-name        type
-----------------
-materialize user
+name
+------------
+materialize
 
 > SELECT name FROM mz_databases
 name
@@ -104,10 +113,10 @@ materialize
 # Creating a database should be reflected in the output of SHOW DATABASES.
 > CREATE DATABASE d
 > SHOW DATABASES
-name        type
-----------------
-d           user
-materialize user
+name
+-----------
+d
+materialize
 
 # ...and also in `\l`
 $ psql-execute command="\l"
@@ -135,14 +144,14 @@ d
 # WHERE clause.
 > SHOW DATABASES LIKE 'foo'
 > SHOW DATABASES LIKE 'd'
-d   user
+d
 > SHOW DATABASES LIKE 'mat%'
-materialize user
+materialize
 > SHOW DATABASES WHERE (SELECT name = name)
 materialize
-d   user
+d
 > SHOW DATABASES WHERE (name = (SELECT min(name) FROM mz_databases))
-d   user
+d
 ! SHOW DATABASES WHERE 7
 contains:WHERE clause must have type boolean, not type integer
 
@@ -154,15 +163,23 @@ contains:database 'd' already exists
 > SHOW SCHEMAS FROM d
 name    type
 ------------
-public  user
+public              user
+information_schema  system
+mz_catalog          system
+mz_internal         system
+pg_catalog          system
 
 # New schemas in the database should appear in the output of SHOW SCHEMAS FROM.
 > CREATE SCHEMA d.s
 > SHOW SCHEMAS FROM d
 name    type
 ------------
-public  user
-s       user
+public              user
+s                   user
+information_schema  system
+mz_catalog          system
+mz_internal         system
+pg_catalog          system
 
 # SHOW SCHEMAS should filter its output based on the provided LIKE or WHERE
 # clause.
@@ -182,10 +199,14 @@ v1      user
 # Setting the session database should update name resolution appropriately.
 > SET DATABASE = d
 > SHOW DATABASE
-d user
+d
 > SHOW SCHEMAS
-public
-s user
+public              user
+s                   user
+information_schema  system
+mz_catalog          system
+mz_internal         system
+pg_catalog          system
 > CREATE VIEW v2 AS SELECT 2
 > SHOW VIEWS
 v1 user
@@ -330,20 +351,20 @@ contains:database 'd' cannot be dropped with RESTRICT while it contains schemas
 > DROP DATABASE d
 # SHOW DATABASES should work, even if the current database has been dropped.
 > SHOW DATABASES
-name        type
-----------------
-materialize user
+name
+-----------
+materialize
 
 > SELECT name FROM mz_databases
-name        type
-----------------
-materialize user
+name
+-----------
+materialize
 
 # The session database should remain set to the dropped database, but future
 # queries that depend on the session database should fail with sensible error
 # messages.
 > SHOW DATABASE
-d   user
+d
 ! SELECT * FROM v
 contains:unknown catalog item 'v'
 
@@ -401,17 +422,17 @@ contains:unknown database 'noexist_db'
 > CREATE VIEW d2.public.t AS SELECT * FROM d1.public.t;
 > DROP DATABASE d1;
 > SHOW DATABASES
-name        type
-----------------
-d           user
-d2          user
-materialize user
+name
+-----------
+d
+d2
+materialize
 > SELECT name FROM mz_databases
-name        type
-----------------
-materialize user
-d           user
-d2          user
+name
+-----------
+materialize
+d
+d2
 
 > SHOW VIEWS FROM d2.public;
  name   type
@@ -502,7 +523,7 @@ mz_views                      system
 > CREATE TABLE tester.test_table (a int)
 
 > SHOW TABLES FROM tester
-test_table
+test_table  user
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
@@ -548,10 +569,10 @@ mz_scheduling_parks                  system
 mz_scheduling_parks_1                system
 
 > SHOW SOURCES FROM mz_catalog LIKE '%peek%';
-mz_peek_active      system
-mz_peek_active_1    system
-mz_peek_durations   system
-mz_peek_durations_1 system
+mz_peek_active      system  log
+mz_peek_active_1    system  log
+mz_peek_durations   system  log
+mz_peek_durations_1 system  log
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
