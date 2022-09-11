@@ -12,12 +12,12 @@ materialize
 "some database"
 
 > SHOW SCHEMAS FROM "some database";
-public              user
-"some schema"       user
-information_schema  system
-mz_catalog          system
-mz_internal         system
-pg_catalog          system
+public
+"some schema"
+information_schema
+mz_catalog
+mz_internal
+pg_catalog
 
 > SELECT * FROM "some database"."some schema".t1;
 

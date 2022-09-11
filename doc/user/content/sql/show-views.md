@@ -23,27 +23,24 @@ _schema&lowbar;name_ | The schema to show views from. Defaults to `public` in th
 `SHOW VIEWS`'s output is a table, with this structure:
 
 ```nofmt
- name  | type
--------+------
- ...   | ...
+ name
+-------
+ ...
 ```
 
 Field | Meaning
 ------|--------
 **name** | The name of the view.
-**type** | Whether the view was created by the `user` or the `system`.
 
 ## Examples
-
-### Default behavior
 
 ```sql
 SHOW VIEWS;
 ```
 ```nofmt
-  name   | type
----------+------
- my_view | user
+  name
+---------
+ my_view
 ```
 
 ## Related pages

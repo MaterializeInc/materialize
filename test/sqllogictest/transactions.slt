@@ -160,7 +160,7 @@ COMPLETE 0
 query TT rowsort
 SHOW TABLES
 ----
-t   user
+t
 
 simple
 COMMIT

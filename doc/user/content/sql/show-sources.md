@@ -24,15 +24,14 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 `SHOW SOURCES`'s output is a table, with this structure:
 
 ```nofmt
- name  | type | type
--------+------+------
- ...   | ...  | ...
+ name  | type
+-------+------
+ ...   | ...
 ```
 
 Field | Meaning
 ------|--------
 **name** | The name of the source
-**type** | Whether the source was created by the `user` or the `system`.
 **type** | The type of the source:  `kafka` or `postgres`
 
 ### Internal statistic sources
@@ -58,27 +57,27 @@ source in the `mz_catalog` schema.
 SHOW SCHEMAS;
 ```
 ```nofmt
-  name  | type
---------+------
- public | user
+  name
+--------
+ public
 ```
 ```sql
 SHOW SOURCES FROM public;
 ```
 ```nofmt
-            name           | type | type
----------------------------+------+---------
- my_kafka_source           | user | kafka
- my_postgres_source        | user | postgres
+            name    | type
+--------------------+---------
+ my_kafka_source    | kafka
+ my_postgres_source | postgres
 ```
 ```sql
 SHOW SOURCES;
 ```
 ```nofmt
-            name           | type | type
----------------------------+------+---------
- my_kafka_source           | user | kafka
- my_postgres_source        | user | postgres
+            name    | type
+--------------------+---------
+ my_kafka_source    | kafka
+ my_postgres_source | postgres
 ```
 
 ## Related pages

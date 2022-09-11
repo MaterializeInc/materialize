@@ -45,10 +45,10 @@ Field | Meaning
 SHOW VIEWS;
 ```
 ```nofmt
-          name           | type
--------------------------+------
- my_nonmaterialized_view | user
- my_materialized_view    | user
+          name
+-------------------------
+ my_nonmaterialized_view
+ my_materialized_view
 ```
 
 ```sql

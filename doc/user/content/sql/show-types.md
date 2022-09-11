@@ -25,9 +25,9 @@ _schema&lowbar;name_ | The schema to show types from. Defaults to `public` in th
 SHOW TYPES;
 ```
 ```
-     name       |  type
-----------------+--------
- int4_list      | user
+   name
+-----------
+ int4_list
 ```
 
 ## Related pages
