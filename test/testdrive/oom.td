@@ -14,7 +14,8 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_result_size = 128
 
-# Each int4 row takes 32 bytes of memory
+# Each inline row takes 32 bytes of memory. 24 bytes for the inline array and 8 bytes
+# for the capacity.
 
 > SELECT 1::int4 FROM generate_series(1, 4);
 1
@@ -69,6 +70,25 @@ contains:result exceeds max size of 320.0 KB
 
 ! INSERT INTO t2 SELECT * FROM t2;
 contains:result exceeds max size of 320.0 KB
+
+# Rows keep 24 bytes inline, after that the row is spilled to the heap. int4 takes 5 bytes,
+# 4 for the int and 1 for the tag. A row of 5 int4's will spill to the heap, but any less will
+# be kept inline. A row of 5 int4's should then take 25 + 32 = 57 bytes
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_result_size = 57
+
+> SELECT 1::int4, 2::int4, 3::int4, 4::int4;
+1 2 3 4
+
+> SELECT 1::int4, 2::int4, 3::int4, 4::int4, 5::int4;
+1 2 3 4 5
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_result_size = 56
+
+! SELECT 1::int4, 2::int4, 3::int4, 4::int4, 5::int4;
+contains:result exceeds max size of 56 B
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET max_result_size
