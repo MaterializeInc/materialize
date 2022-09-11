@@ -81,7 +81,7 @@ message ProtoUnmaterializableFunc {
         google.protobuf.Empty current_schemas_without_system = 3;
         google.protobuf.Empty current_timestamp = 4;
         google.protobuf.Empty current_user = 5;
-        google.protobuf.Empty mz_cluster_id = 6;
+        google.protobuf.Empty mz_environment_id = 6;
         google.protobuf.Empty mz_logical_timestamp = 7;
         google.protobuf.Empty mz_session_id = 8;
         google.protobuf.Empty mz_uptime = 9;

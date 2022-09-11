@@ -27,6 +27,7 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 use tracing::error;
+use uuid::Uuid;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
@@ -91,6 +92,8 @@ pub struct Config {
     pub adapter_stash_url: String,
 
     // === Cloud options. ===
+    /// The cloud ID of this environment.
+    pub environment_id: Uuid,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     pub availability_zones: Vec<String>,
@@ -257,6 +260,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage: adapter_storage,
         unsafe_mode: config.unsafe_mode,
         build_info: &BUILD_INFO,
+        environment_id: config.environment_id,
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller: config.secrets_controller,

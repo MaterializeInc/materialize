@@ -23,6 +23,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tower_http::cors::AllowOrigin;
+use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
 use mz_environmentd::TlsMode;
@@ -192,6 +193,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         unsafe_mode: config.unsafe_mode,
         metrics_registry: metrics_registry.clone(),
         now: config.now,
+        environment_id: Uuid::from_u128(0),
         cors_allowed_origin: AllowOrigin::list([]),
         cluster_replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: "1".into(),

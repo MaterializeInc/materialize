@@ -224,6 +224,7 @@ pub struct Config<S> {
     pub storage: storage::Connection<S>,
     pub unsafe_mode: bool,
     pub build_info: &'static BuildInfo,
+    pub environment_id: Uuid,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Arc<dyn SecretsController>,
@@ -812,6 +813,7 @@ pub async fn serve<S: Append + 'static>(
         storage,
         unsafe_mode,
         build_info,
+        environment_id,
         metrics_registry,
         now,
         secrets_controller,
@@ -847,6 +849,7 @@ pub async fn serve<S: Append + 'static>(
             storage,
             unsafe_mode,
             build_info,
+            environment_id,
             now: now.clone(),
             skip_migrations: false,
             metrics_registry: &metrics_registry,
@@ -857,7 +860,6 @@ pub async fn serve<S: Append + 'static>(
             secrets_reader: secrets_controller.reader(),
         })
         .await?;
-    let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
 
@@ -943,7 +945,6 @@ pub async fn serve<S: Append + 'static>(
     match bootstrap_rx.await.unwrap() {
         Ok(()) => {
             let handle = Handle {
-                cluster_id,
                 session_id,
                 start_instant,
                 _thread: thread.join_on_drop(),

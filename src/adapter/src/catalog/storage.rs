@@ -16,7 +16,6 @@ use std::time::Duration;
 use itertools::{max, Itertools};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use uuid::Uuid;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
@@ -297,7 +296,6 @@ pub struct BootstrapArgs {
 #[derive(Debug)]
 pub struct Connection<S> {
     stash: S,
-    cluster_id: Uuid,
 }
 
 impl<S: Append> Connection<S> {
@@ -323,10 +321,7 @@ impl<S: Append> Connection<S> {
         initialize_stash(&mut stash).await?;
         migrate(&mut stash, skip, bootstrap_args).await?;
 
-        let conn = Connection {
-            cluster_id: Self::set_or_get_cluster_id(&mut stash).await?,
-            stash,
-        };
+        let conn = Connection { stash };
 
         Ok(conn)
     }
@@ -369,22 +364,6 @@ impl<S: Append> Connection<S> {
             .upsert(stash, once((key, value)))
             .await
             .map_err(|e| e.into())
-    }
-
-    /// Sets catalog's `cluster_id` setting on initialization or gets that value.
-    async fn set_or_get_cluster_id(stash: &mut impl Append) -> Result<Uuid, Error> {
-        let current_setting = Self::get_setting_stash(stash, "cluster_id").await?;
-        match current_setting {
-            // Server init
-            None => {
-                // Generate a new version 4 UUID. These are generated from random input.
-                let cluster_id = Uuid::new_v4();
-                Self::set_setting_stash(stash, "cluster_id", cluster_id.to_string()).await?;
-                Ok(cluster_id)
-            }
-            // Server reboot
-            Some(cs) => Ok(Uuid::parse_str(&cs)?),
-        }
     }
 
     pub async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
@@ -727,10 +706,6 @@ impl<S: Append> Connection<S> {
 
     pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), Error> {
         Ok(self.stash.consolidate_batch(&collections).await?)
-    }
-
-    pub fn cluster_id(&self) -> Uuid {
-        self.cluster_id
     }
 }
 

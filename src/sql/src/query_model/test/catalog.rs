@@ -43,7 +43,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     start_time: DateTime::<Utc>::MIN_UTC,
     start_instant: Instant::now(),
     nonce: 0,
-    cluster_id: Uuid::from_u128(0),
+    environment_id: Uuid::from_u128(0),
     session_id: Uuid::from_u128(0),
     unsafe_mode: false,
     build_info: &DUMMY_BUILD_INFO,

@@ -66,7 +66,7 @@ pub enum UnmaterializableFunc {
     CurrentSchemasWithoutSystem,
     CurrentTimestamp,
     CurrentUser,
-    MzClusterId,
+    MzEnvironmentId,
     MzLogicalTimestamp,
     MzSessionId,
     MzUptime,
@@ -90,7 +90,7 @@ impl UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
             UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
-            UnmaterializableFunc::MzClusterId => ScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzEnvironmentId => ScalarType::Uuid.nullable(false),
             UnmaterializableFunc::MzLogicalTimestamp => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             }
@@ -116,7 +116,7 @@ impl fmt::Display for UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => f.write_str("current_timestamp"),
             UnmaterializableFunc::CurrentUser => f.write_str("current_user"),
-            UnmaterializableFunc::MzClusterId => f.write_str("mz_cluster_id"),
+            UnmaterializableFunc::MzEnvironmentId => f.write_str("mz_environment_id"),
             UnmaterializableFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
             UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
             UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
@@ -138,7 +138,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
             UnmaterializableFunc::CurrentTimestamp => CurrentTimestamp(()),
             UnmaterializableFunc::CurrentUser => CurrentUser(()),
-            UnmaterializableFunc::MzClusterId => MzClusterId(()),
+            UnmaterializableFunc::MzEnvironmentId => MzEnvironmentId(()),
             UnmaterializableFunc::MzLogicalTimestamp => MzLogicalTimestamp(()),
             UnmaterializableFunc::MzSessionId => MzSessionId(()),
             UnmaterializableFunc::MzUptime => MzUptime(()),
@@ -162,7 +162,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                 }
                 CurrentTimestamp(()) => Ok(UnmaterializableFunc::CurrentTimestamp),
                 CurrentUser(()) => Ok(UnmaterializableFunc::CurrentUser),
-                MzClusterId(()) => Ok(UnmaterializableFunc::MzClusterId),
+                MzEnvironmentId(()) => Ok(UnmaterializableFunc::MzEnvironmentId),
                 MzLogicalTimestamp(()) => Ok(UnmaterializableFunc::MzLogicalTimestamp),
                 MzSessionId(()) => Ok(UnmaterializableFunc::MzSessionId),
                 MzUptime(()) => Ok(UnmaterializableFunc::MzUptime),

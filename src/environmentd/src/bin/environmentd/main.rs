@@ -323,6 +323,13 @@ pub struct Args {
     adapter_stash_url: String,
 
     // === Cloud options. ===
+    #[clap(
+        long,
+        env = "ENVIRONMENT_ID",
+        value_name = "UUID",
+        default_value = "00000000-0000-0000-0000-000000000000"
+    )]
+    environment_id: Uuid,
     /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
@@ -674,6 +681,7 @@ max log level: {max_log_level}",
         unsafe_mode: args.unsafe_mode,
         metrics_registry,
         now,
+        environment_id: args.environment_id,
         cluster_replica_sizes,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         storage_host_sizes,
