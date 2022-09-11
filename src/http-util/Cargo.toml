@@ -13,7 +13,7 @@ headers = "0.3.7"
 serde = "1.0.144"
 include_dir = "0.7.2"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing_"] }
-prometheus = { version = "0.13.1", default-features = false, features = ["process"] }
+prometheus = { version = "0.13.2", default-features = false, features = ["process"] }
 
 [package.metadata.cargo-udeps.ignore]
 # Only used in macro generated code
