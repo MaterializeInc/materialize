@@ -28,7 +28,7 @@ fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.24"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
-http-serde = "1.1.0"
+http-serde = "1.1.2"
 itertools = { version = "0.10.3" }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }
