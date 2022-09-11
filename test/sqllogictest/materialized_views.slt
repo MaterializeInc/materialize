@@ -75,7 +75,7 @@ CREATE MATERIALIZED VIEW error (name, age) AS SELECT 'jon'
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query TTT colnames,rowsort
+query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
 cluster name
@@ -262,14 +262,14 @@ materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query TTT colnames,rowsort
+query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
 cluster name
 default mv
 other   other_mv
 
-query TTT colnames,rowsort
+query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS IN CLUSTER other
 ----
 cluster name
@@ -318,7 +318,7 @@ SELECT count(*) FROM mz_materialized_views
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT 1
 
-query TT colnames,rowsort
+query T colnames,rowsort
 SHOW OBJECTS
 ----
 name

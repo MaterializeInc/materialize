@@ -157,7 +157,7 @@ BEGIN
 ----
 COMPLETE 0
 
-query TT rowsort
+query T rowsort
 SHOW TABLES
 ----
 t
