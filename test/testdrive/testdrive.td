@@ -179,7 +179,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 > CREATE MATERIALIZED VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
 
 > CREATE SINK kafka_verify_regexp_sink FROM kafka_verify_regexp
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-verify-regexp-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-verify-regexp-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort-messages=true

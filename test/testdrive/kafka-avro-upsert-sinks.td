@@ -50,7 +50,7 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
   ENVELOPE UPSERT
 
 > CREATE SINK upsert_input_sink FROM upsert_input
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'upsert-input-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink-${testdrive.seed}')
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 

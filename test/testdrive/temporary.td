@@ -209,7 +209,7 @@ contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE
 
 ##### Temporary sinks.
 ! CREATE TEMPORARY SINK data_sink FROM data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE, found SINK
 

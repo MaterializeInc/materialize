@@ -232,7 +232,7 @@ $ kafka-create-topic topic=static-csv-pkne-sink
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SINK static_csv_pkne_sink FROM static_csv_pkne
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'static-csv-pkne-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-static-csv-pkne-sink-${testdrive.seed}')
   KEY (zip)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
