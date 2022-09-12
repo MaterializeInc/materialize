@@ -11,7 +11,8 @@
 
 use std::cell::RefCell;
 use std::future::Future;
-use std::mem::transmute;
+use std::mem::ManuallyDrop;
+use std::mem::{transmute, transmute_copy};
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -85,8 +86,13 @@ impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> AsyncInputHandle<T, 
 
     fn next_sync<'handle>(
         &'handle mut self,
-    ) -> Option<(CapabilityRef<'handle, T>, RefOrMut<'handle, D>)> {
-        self.sync_handle.next()
+    ) -> Option<(
+        ManuallyDrop<CapabilityRef<'handle, T>>,
+        RefOrMut<'handle, D>,
+    )> {
+        self.sync_handle
+            .next()
+            .map(|(cap, data)| (ManuallyDrop::new(cap), data))
     }
 }
 
@@ -130,9 +136,31 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
                 // None branch is replaced by a panic!(). Therefore each individual path is safe on
                 // its own and in the full version we only ever call one of them, therefore the
                 // composition is also safe.
-                let cap =
-                    unsafe { transmute::<CapabilityRef<'_, T>, CapabilityRef<'handle, T>>(cap) };
+                //
+                // ## Safety of ManuallyDrop
+                // `next_sync` wraps the returned `CapabilityRef` into a `ManuallyDrop` in order to
+                // not interfere with the borrow checker that will otherwise infer that `cap` may
+                // live until the end of this function and doesn't compile even when transmuting.
+                //
+                // ## Safety of transmute_copy
+                //
+                // We are forced to use `transmute_copy` and not a simple transmute because the
+                // compiler cannot understand that the two types have the same size, even though
+                // they clearly do, since they only differ in their lifetime. `transmute_copy` will
+                // create a bit copy of the capability and at the same time remove the wrapping
+                // `ManuallyDrop`. This is safe because `ManuallyDrop` is marked as
+                // `#[repr(transparent)]`, therefore it has the same layout as the T it wraps.
+                // Finally we don't need to care about running mem::forget() on the original cap
+                // that we created a copy out because it is wrapped in `ManuallyDrop` so no
+                // destructor will run.
+                //
+                let cap = unsafe {
+                    transmute_copy::<ManuallyDrop<CapabilityRef<'_, T>>, CapabilityRef<'handle, T>>(
+                        &cap,
+                    )
+                };
                 let data = unsafe { transmute::<RefOrMut<'_, D>, RefOrMut<'handle, D>>(data) };
+
                 Poll::Ready(Some(Event::Data(cap, data)))
             }
             None => {
