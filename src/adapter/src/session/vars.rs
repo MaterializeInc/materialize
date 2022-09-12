@@ -244,7 +244,7 @@ const MAX_ROLES: ServerVar<u32> = ServerVar {
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
 // query.
 // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
-const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
+pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_result_size"),
     // 1 GiB
     value: &1_073_741_824,
@@ -1013,7 +1013,7 @@ pub trait Var: fmt::Debug {
 
 /// A `ServerVar` is the default value for a configuration parameter.
 #[derive(Debug)]
-struct ServerVar<V>
+pub struct ServerVar<V>
 where
     V: fmt::Debug + ?Sized + 'static,
 {

@@ -119,7 +119,6 @@ Except
 Execute
 Exists
 Explain
-Extended
 Extract
 Factor
 False

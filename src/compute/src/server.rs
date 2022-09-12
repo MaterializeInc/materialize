@@ -439,6 +439,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     compute_logger: None,
                     persist_clients: Arc::clone(&self.persist_clients),
                     command_history: ComputeCommandHistory::default(),
+                    max_result_size: config.max_result_size,
                 });
             }
             ComputeCommand::DropInstance => {

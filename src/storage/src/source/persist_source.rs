@@ -166,9 +166,14 @@ where
             .expect("could not open persist shard");
 
         let mut subscription = read
-            .subscribe(as_of_stream)
+            .subscribe(as_of_stream.clone())
             .await
-            .expect("cannot serve requested as_of");
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{source_id}: cannot serve requested as_of {:?}: {:?}",
+                    as_of_stream, e
+                )
+            });
 
         let mut done = false;
         while !done {
@@ -200,13 +205,14 @@ where
     let (inner, token) = crate::source::util::source(
         scope,
         format!("persist_source {}: part distribution", source_id),
+        None,
         move |info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures::task::waker(waker_activator);
 
             let mut current_ts = timely::progress::Timestamp::minimum();
 
-            move |cap_set, output| {
+            move |cap_set, output, _optional_input| {
                 let mut context = Context::from_waker(&waker);
 
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {

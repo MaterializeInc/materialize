@@ -1154,6 +1154,14 @@ where
                         .map(|init| init.to_running(Rc::clone(&shared_gate_ts)));
 
                     if let Some(gate) = latest_ts {
+                        assert!(
+                            as_of.frontier.iter().all(|ts| *ts <= gate),
+                            "some element of the Sink as_of frontier is too \
+                                far advanced for our output-gating timestamp: \
+                                as_of {:?}, gate_ts: {:?}",
+                            as_of.frontier,
+                            gate
+                        );
                         s.maybe_update_progress(&gate);
                     }
 

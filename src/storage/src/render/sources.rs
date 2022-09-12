@@ -25,7 +25,7 @@ use tokio::runtime::Handle as TokioHandle;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
-use crate::controller::CollectionMetadata;
+use crate::controller::{CollectionMetadata, SourceResumptionFrontierCalculator};
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::types::DecodeResult;
 use crate::source::{
@@ -123,47 +123,57 @@ where
         persist_clients: Arc::clone(&storage_state.persist_clients),
     };
 
+    let resumption_calculator = SourceResumptionFrontierCalculator::new(
+        description.storage_metadata.clone(),
+        envelope.clone(),
+    );
+
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let ((ok_source, err_source), capability) = match connection {
         SourceConnection::Kafka(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader>(
+            let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
                 base_source_config,
                 &connection,
                 storage_state.connection_context.clone(),
+                resumption_calculator,
             );
             ((SourceType::Delimited(ok), err), cap)
         }
         SourceConnection::Kinesis(_) => {
             let ((ok, err), cap) =
-                source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>>(
+                source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
                     base_source_config,
                     &connection,
                     storage_state.connection_context.clone(),
+                    resumption_calculator,
                 );
             ((SourceType::Delimited(ok), err), cap)
         }
         SourceConnection::S3(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader>(
+            let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
                 base_source_config,
                 &connection,
                 storage_state.connection_context.clone(),
+                resumption_calculator,
             );
             ((SourceType::ByteStream(ok), err), cap)
         }
         SourceConnection::Postgres(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader>(
+            let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
                 base_source_config,
                 &connection,
                 storage_state.connection_context.clone(),
+                resumption_calculator,
             );
             ((SourceType::Row(ok), err), cap)
         }
         SourceConnection::LoadGenerator(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader>(
+            let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
                 base_source_config,
                 &connection,
                 storage_state.connection_context.clone(),
+                resumption_calculator,
             );
             ((SourceType::Row(ok), err), cap)
         }

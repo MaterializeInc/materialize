@@ -37,7 +37,6 @@ use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
-use mz_storage::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
 use crate::command::{
     ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId, SourceInstanceDesc,
@@ -46,6 +45,7 @@ use crate::controller::replicated::{ActiveReplication, ActiveReplicationResponse
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
+use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
 mod replicated;
 
@@ -199,6 +199,7 @@ where
         instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         logging: &Option<LoggingConfig>,
+        max_result_size: u32,
     ) -> Self {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
@@ -217,6 +218,7 @@ where
         replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
             logging: logging.clone(),
+            max_result_size,
         }));
 
         Self {
@@ -584,6 +586,13 @@ where
                 .await?;
         }
         Ok(())
+    }
+
+    /// Update the max size in bytes of any result.
+    pub async fn update_max_result_size(&mut self, max_result_size: u32) {
+        self.compute
+            .replicas
+            .send(ComputeCommand::UpdateMaxResultSize(max_result_size))
     }
 
     /// Processes the work queued by [`ComputeController::ready`].

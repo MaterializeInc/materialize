@@ -37,7 +37,7 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > CREATE DEFAULT INDEX ON mz_data
 
 > CREATE SINK sink1 FROM mz_data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE VIEW mz_view AS
@@ -156,20 +156,20 @@ materialize.public.renamed_sink
 
 # Source was successfully renamed
 > SHOW SOURCES;
-name
-----
-renamed_mz_data
+name               type
+------------------------
+renamed_mz_data    kafka
 
 # Sink was successfully renamed
 > SHOW SINKS
 name
-----
+------------
 renamed_sink
 
 # View was successfully renamed
 > SHOW VIEWS
 name
-----
+-----------------
 byzantine_view
 dependent_view
 oppositional_view
@@ -202,7 +202,7 @@ materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"de
 > SHOW CREATE SINK renamed_sink
 Sink                            "Create Sink"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'snk1') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\""
+materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\""
 
 # Simple dependencies with both fully qualified and unqualified item references are renamed
 > SHOW CREATE VIEW byzantine_view
@@ -781,7 +781,7 @@ j
 
 > SHOW TABLES
 name
-----
+---------
 renamed_j
 
 > SELECT name FROM mz_tables WHERE id like 'u%';

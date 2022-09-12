@@ -26,6 +26,9 @@ use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
+use mz_compute_client::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, TailSinkConnection,
+};
 use mz_controller::{ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
@@ -39,7 +42,6 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Ti
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
-
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
@@ -53,14 +55,9 @@ use mz_sql::plan::{
     OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
     RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
 };
-
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
-
-use mz_storage::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, StorageSinkConnectionBuilder,
-    TailSinkConnection,
-};
+use mz_storage::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage::types::sources::IngestionDescription;
 
 use crate::catalog::{
@@ -78,11 +75,12 @@ use crate::error::AdapterError;
 use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
 use crate::session::vars::IsolationLevel;
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
+    WriteOp,
 };
 use crate::tail::PendingTail;
 use crate::util::{send_immediate_rows, ClientTransmitter};
-use crate::{guard_write_critical_section, sink_connection, PeekResponseUnary};
+use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -756,7 +754,11 @@ impl<S: Append + 'static> Coordinator<S> {
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
         self.controller
-            .create_instance(instance.id, instance.logging.clone())
+            .create_instance(
+                instance.id,
+                instance.logging.clone(),
+                self.catalog.system_config().max_result_size(),
+            )
             .await;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
@@ -3251,6 +3253,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
+        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = match value {
             SetVariableValue::Literal(Value::String(value)) => {
                 catalog::Op::UpdateSystemConfiguration { name, value }
@@ -3267,6 +3270,9 @@ impl<S: Append + 'static> Coordinator<S> {
         };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        if update_max_result_size {
+            self.update_max_result_size().await;
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3276,9 +3282,13 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
+        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        if update_max_result_size {
+            self.update_max_result_size().await;
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3291,6 +3301,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        self.update_max_result_size().await;
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3301,6 +3312,15 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(AdapterError::Unauthorized(format!(
                 "only user '{SYSTEM_USER}' is allowed to execute 'ALTER SYSTEM ...'"
             )))
+        }
+    }
+
+    async fn update_max_result_size(&mut self) {
+        for compute_instance in self.catalog.compute_instances() {
+            let mut compute = self.controller.active_compute(compute_instance.id).unwrap();
+            compute
+                .update_max_result_size(self.catalog.system_config().max_result_size())
+                .await;
         }
     }
 

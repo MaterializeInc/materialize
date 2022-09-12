@@ -41,18 +41,15 @@ $ kafka-create-topic topic=data
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b
 
-> SHOW FULL VIEWS
-name        type
-----------------
-data_view   user
+> SHOW VIEWS
+name
+---------
+data_view
 
 > SHOW MATERIALIZED VIEWS
-test1
-
-> SHOW FULL MATERIALIZED VIEWS
-cluster   name     type
------------------------
-default   test1    user
+cluster   name
+---------------
+default   test1
 
 > SELECT * FROM test1
 b  sum
@@ -336,16 +333,10 @@ a  b
 1  2
 
 > SHOW SOURCES
-name
---------
-data
-mat_data
-
-> SHOW FULL SOURCES
-name     type type
--------------------
-data     user kafka
-mat_data user kafka
+name     type
+--------------
+data     kafka
+mat_data kafka
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

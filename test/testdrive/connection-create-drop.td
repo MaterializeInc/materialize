@@ -26,10 +26,7 @@ name       type
 testconn   kafka
 
 > SHOW CONNECTIONS
-testconn
-
-> SHOW FULL CONNECTIONS
-testconn user
+testconn    kafka
 
 > SHOW CREATE CONNECTION testconn
 Connection   "Create Connection"
