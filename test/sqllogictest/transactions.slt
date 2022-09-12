@@ -512,6 +512,23 @@ BEGIN READ WRITE
 statement ok
 COMMIT
 
+# Test read-only -> read-write with tail
+statement ok
+BEGIN READ ONLY
+
+simple
+DECLARE c CURSOR FOR TAIL t;
+FETCH 0 c;
+----
+COMPLETE 0
+COMPLETE 0
+
+statement error transaction read-write mode must be set before any query
+BEGIN READ WRITE
+
+statement ok
+COMMIT
+
 # Test that multi-table write transactions aren't supported
 
 statement ok

@@ -103,11 +103,19 @@ impl<T: CoordTimestamp> Session<T> {
         access: Option<TransactionAccessMode>,
         isolation_level: Option<TransactionIsolationLevel>,
     ) -> (Self, Result<(), AdapterError>) {
+        // Check that current transaction state is compatible with new `access`
         if let Some(txn) = self.transaction.inner() {
-            if matches!(txn.ops, TransactionOps::Peeks(_))
-                && access == Some(TransactionAccessMode::ReadWrite)
-                && txn.access == Some(TransactionAccessMode::ReadOnly)
-            {
+            // `READ WRITE` prohibited if:
+            // - Currently in `READ ONLY`
+            // - Already performed a query
+            let read_write_prohibited = match txn.ops {
+                TransactionOps::Peeks(_) | TransactionOps::Tail => {
+                    txn.access == Some(TransactionAccessMode::ReadOnly)
+                }
+                TransactionOps::None | TransactionOps::Writes(_) => false,
+            };
+
+            if read_write_prohibited && access == Some(TransactionAccessMode::ReadWrite) {
                 return (self, Err(AdapterError::ReadWriteUnavailable));
             }
         }
