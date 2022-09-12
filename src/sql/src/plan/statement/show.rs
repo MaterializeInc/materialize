@@ -479,13 +479,16 @@ pub fn show_indexes<'a>(
 
     let query = format!(
         "SELECT
+            idxs.name AS name,
+            objs.name AS on,
             clusters.name AS cluster,
-            objs.name AS on_name,
-            idxs.name AS key_name,
-            idx_cols.index_position AS seq_in_index,
-            obj_cols.name AS column_name,
-            idx_cols.on_expression AS expression,
-            idx_cols.nullable AS nullable
+            ARRAY_AGG(
+                CASE
+                    WHEN idx_cols.on_expression IS NULL THEN obj_cols.name
+                    ELSE idx_cols.on_expression
+                END
+                ORDER BY idx_cols.index_position ASC
+            ) AS key
         FROM
             mz_catalog.mz_indexes AS idxs
             JOIN mz_catalog.mz_index_columns AS idx_cols ON idxs.id = idx_cols.index_id
@@ -494,7 +497,8 @@ pub fn show_indexes<'a>(
             LEFT JOIN mz_catalog.mz_columns AS obj_cols
                 ON idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         WHERE
-            {}",
+            {}
+        GROUP BY idxs.name, objs.name, clusters.name",
         itertools::join(query_filter.iter(), " AND ")
     );
 

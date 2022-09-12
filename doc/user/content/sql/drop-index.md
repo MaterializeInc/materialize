@@ -67,11 +67,11 @@ SHOW VIEWS;
 SHOW INDEXES FROM q01;
 ```
 ```nofmt
-+------------------------+--------------------------------+-----
-| View                   | Key_name                       | ...
-|------------------------+--------------------------------+----
-| materialize.public.q01 | materialize.public.q01_geo_idx | ...
-+------------------------+--------------------------------+-----
++--------------------------------+------------------------+-----
+| name                           | on                     | ...
+|--------------------------------+------------------------+----
+| materialize.public.q01_geo_idx | materialize.public.q01 | ...
++--------------------------------+------------------------+-----
 ```
 
 You can use the unqualified index name (`q01_geo_idx`) rather the fully qualified name (`materialize.public.q01_geo_idx`).

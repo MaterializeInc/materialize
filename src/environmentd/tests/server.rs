@@ -81,19 +81,9 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     );
     assert_eq!(
         client
-            .query("SHOW INDEXES FROM mat", &[])?
-            .into_iter()
-            .map(|row| (
-                row.get("Column_name"),
-                row.get::<_, UInt8>("Seq_in_index").0
-            ))
-            .collect::<Vec<(String, u64)>>(),
-        &[
-            ("a".into(), 1),
-            ("a_data".into(), 2),
-            ("c".into(), 3),
-            ("c_data".into(), 4),
-        ],
+            .query_one("SHOW INDEXES FROM mat", &[])?
+            .get::<_, Vec<String>>("key"),
+        &["a", "a_data", "c", "c_data"],
     );
     assert_eq!(
         client

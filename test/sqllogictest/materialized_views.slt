@@ -331,11 +331,11 @@ t
 statement ok
 CREATE DEFAULT INDEX ON mv
 
-query TTTITTT colnames
+query TTTT colnames
 SHOW INDEXES ON mv
 ----
-cluster on_name key_name       seq_in_index column_name expression nullable
-default mv      mv_primary_idx 1            ?column?    NULL       false
+name            on  cluster key
+mv_primary_idx  mv  default {?column?}
 
 
 # Test: Creating materialized views that depend on log sources is forbidden.

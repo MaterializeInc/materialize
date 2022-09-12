@@ -24,20 +24,17 @@ _cluster&lowbar;name_ | The cluster to show indexes from. If omitted, indexes fr
 `SHOW INDEX`'s output is a table with the following structure:
 
 ```nofmt
-cluster | on_name | key_name | seq_in_index | column_name | expression | nullable | enabled
---------+---------+----------+--------------+-------------+------------+----------+--------
- ...    | ...     | ...      | ...          | ...         | ...        | ...      | ...
+name | on  | cluster | key
+-----+-----+---------+----
+ ... | ... | ...     | ...
 ```
 
 Field | Meaning
 ------|--------
+**name** | The name of the index.
+**on** | The name of the table, source, or view the index belongs to.
 **cluster** | The name of the [cluster](/overview/key-concepts/#clusters) containing the index.
-**on_name** | The name of the table, source, or view the index belongs to.
-**key_name** | The name of the index.
-**seq_in_index** | The column's position in the index.
-**column_name** | The indexed column.
-**expression** | An expression used to generate the column in the index.
-**null** | Is the column nullable?
+**key** | A text array describing the expressions in the index key.
 
 ## Examples
 
@@ -55,9 +52,9 @@ SHOW VIEWS;
 SHOW INDEXES FROM my_materialized_view;
 ```
 ```nofmt
- on_name | key_name | seq_in_index | column_name | expression | nullable | enabled
----------+----------+--------------+-------------+------------+----------+--------
- ...     | ...      | ...          | ...         | ...        | ...      | ...
+ name | on  | cluster | key
+------+-----+---------+----
+ ...  | ... | ...     | ...
 ```
 
 ## Related pages

@@ -144,14 +144,14 @@ contains:catalog item 'materialize.public.i1' is an index and so cannot be depen
 > CREATE INDEX i2 ON v2a(x*2);
 
 > SHOW INDEXES FROM v2a;
-cluster        on_name   key_name         seq_in_index column_name expression  nullable
+name    on  cluster         key
 ---------------------------------------------------------------------------------------
-<CLUSTER_NAME> v2a       i2               1            <null>      "x * 2"     false
+i2      v2a <CLUSTER_NAME>  {"x * 2"}
 
 > SHOW INDEXES FROM v2;
-cluster        on_name  key_name        seq_in_index column_name expression nullable
+name    on  cluster         key
 ------------------------------------------------------------------------------------
-<CLUSTER_NAME> v2       i1              1            x           <null>     false
+i1      v2  <CLUSTER_NAME>  {x}
 
 # Test that dependent indexes do not prevent view deletion when restrict is specified
 # but do not cause deletion of dependent views
@@ -161,9 +161,9 @@ cluster        on_name  key_name        seq_in_index column_name expression null
 contains:unknown catalog item 'v2a'
 
 > SHOW INDEXES FROM v2;
-cluster on_name  key_name        seq_in_index   column_name expression nullable
+name    on  cluster         key
 -----------------------------------------------------------------------------------
-<CLUSTER_NAME> v2       i1              1              x           <null>     false
+i1      v2  <CLUSTER_NAME>  {x}
 
 ! DROP INDEX i2;
 contains:unknown catalog item 'i2'
@@ -175,16 +175,16 @@ contains:unknown catalog item 'i2'
 > CREATE INDEX i3 ON v4a(y);
 
 > SHOW INDEXES FROM v4a;
-cluster on_name  key_name         seq_in_index   column_name expression nullable
+name    on  cluster         key
 ------------------------------------------------------------------------------------
-<CLUSTER_NAME> v4a      i3               1              y           <null>     false
+i3      v4a <CLUSTER_NAME>  {y}
 
 > CREATE INDEX i4 ON v4(x);
 
 > SHOW INDEXES FROM v4;
-cluster on_name  key_name        seq_in_index  column_name expression nullable
+name    on  cluster         key
 ----------------------------------------------------------------------------------
-<CLUSTER_NAME> v4       i4              1             x           <null>     false
+i4      v4  <CLUSTER_NAME>  {x}
 
 # Test cascade deletes associated indexes as well
 > DROP VIEW v4a CASCADE;
@@ -196,32 +196,25 @@ contains:unknown catalog item 'v4a'
 contains:unknown catalog item 'i3'
 
 > SHOW INDEXES FROM v4;
-cluster on_name  key_name        seq_in_index  column_name expression nullable
+name    on  cluster         key
 ----------------------------------------------------------------------------------
-<CLUSTER_NAME> v4       i4              1             x           <null>     false
+i4      v4  <CLUSTER_NAME>  {x}
 
 > CREATE VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
 
 > CREATE INDEX i5 ON v5(substr);
 
 > SHOW INDEXES FROM v5;
-cluster on_name   key_name        seq_in_index  column_name expression nullable
+name    on  cluster         key
 ----------------------------------------------------------------------------------
-<CLUSTER_NAME> v5        i5              1             substr      <null>     true
+i5      v5  <CLUSTER_NAME>  {substr}
 
 > CREATE VIEW multicol AS SELECT 'a' AS a, 'b' AS b, 'c' AS c, 'd' AS d
 > CREATE INDEX i6 ON multicol (2, a, 4)
 > SHOW INDEXES FROM multicol
-cluster on_name   key_name  seq_in_index column_name  expression   nullable
+name    on          cluster         key
 -------------------------------------------------------------------------------
-<CLUSTER_NAME> multicol  i6        1            b            <null>       false
-<CLUSTER_NAME> multicol  i6        2            a            <null>       false
-<CLUSTER_NAME> multicol  i6        3            d            <null>       false
-
-> SHOW INDEXES FROM multicol WHERE column_name = 'a'
-cluster on_name   key_name  seq_in_index column_name  expression   nullable
--------------------------------------------------------------------------------
-<CLUSTER_NAME> multicol  i6        2            a            <null>       false
+i6      multicol    <CLUSTER_NAME>  {b, a, d}
 
 # Test cascade deletes all indexes associated with cascaded views
 > DROP VIEW v4 CASCADE;
@@ -254,9 +247,9 @@ contains:unknown catalog item 'i4'
 > CREATE INDEX j1 on s3(ascii(y))
 
 > SHOW INDEXES FROM s3;
-cluster on_name  key_name        seq_in_index  column_name expression             nullable
+name    on  cluster         key
 ----------------------------------------------------------------------------------------------
-<CLUSTER_NAME> s3       j1              1             <null>      "pg_catalog.ascii(y)"  false
+j1      s3  <CLUSTER_NAME>  {"pg_catalog.ascii(y)"}
 
 > DROP SOURCE s3;
 
@@ -279,14 +272,14 @@ contains:unknown catalog item 'j1'
 > CREATE INDEX j3 on w(z);
 
 > SHOW INDEXES FROM s4;
-cluster on_name  key_name        seq_in_index   column_name expression  nullable
+name    on  cluster         key
 ------------------------------------------------------------------------------------
-<CLUSTER_NAME> s4       j2              1               <null>      "x + 2"    false
+j2      s4  <CLUSTER_NAME>  {"x + 2"}
 
 > SHOW INDEXES FROM w;
-cluster on_name  key_name   seq_in_index  column_name expression nullable
+name    on          cluster         key
 -----------------------------------------------------------------------------
-<CLUSTER_NAME> w        j3         1             z           <null>     false
+j3      w           <CLUSTER_NAME>  {z}
 
 > DROP SOURCE s4 CASCADE;
 

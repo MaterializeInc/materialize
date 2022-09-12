@@ -52,8 +52,8 @@ class RenameIndex(Check):
             dedent(
                 """
                 > SHOW INDEXES FROM rename_index_table;
-                default rename_index_table rename_index_index2 1 f2 <null> true
-                default rename_index_table rename_index_index3 1 f2 <null> true
+                rename_index_index2 rename_index_table default {f2}
+                rename_index_index3 rename_index_table default {f2}
 
                 > SELECT * FROM rename_index_view1;
                 1
