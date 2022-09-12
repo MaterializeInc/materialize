@@ -384,7 +384,7 @@ fn show_materialized_views<'a>(
     }
 
     let query = format!(
-        "SELECT clusters.name AS cluster, mviews.name
+        "SELECT mviews.name, clusters.name AS cluster
          FROM mz_materialized_views AS mviews
          JOIN mz_clusters AS clusters
             ON clusters.id = mviews.cluster_id

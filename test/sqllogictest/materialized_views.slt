@@ -78,9 +78,9 @@ CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-cluster name
-default mv
-other   other_mv
+name      cluster
+mv        default
+other_mv  other
 
 statement ok
 DROP MATERIALIZED VIEW other_mv
@@ -265,15 +265,15 @@ CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-cluster name
-default mv
-other   other_mv
+name      cluster
+mv        default
+other_mv  other
 
 query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS IN CLUSTER other
 ----
-cluster name
-other   other_mv
+name      cluster
+other_mv  other
 
 statement ok
 DROP MATERIALIZED VIEW other_mv
