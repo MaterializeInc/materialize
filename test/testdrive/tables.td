@@ -51,8 +51,8 @@ name
 t
 
 > SHOW SOURCES;
-name
-----
+name    type
+------------
 
 > SHOW INDEXES FROM t;
 
@@ -224,8 +224,8 @@ v
 v
 
 > SHOW SOURCES;
-name
-----
+name    type
+------------
 
 > CREATE TABLE t (a int, b text NOT NULL)
 

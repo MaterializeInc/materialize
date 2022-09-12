@@ -14,6 +14,10 @@ materialize
 > SHOW SCHEMAS FROM "some database";
 public
 "some schema"
+information_schema
+mz_catalog
+mz_internal
+pg_catalog
 
 > SELECT * FROM "some database"."some schema".t1;
 

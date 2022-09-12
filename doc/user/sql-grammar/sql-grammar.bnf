@@ -286,7 +286,7 @@ select_stmt ::=
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)
 show_connections ::=
-  'SHOW' 'FULL'? 'CONNECTIONS'
+  'SHOW' 'CONNECTIONS'
   ('FROM' schema_name)?
   ('LIKE' 'pattern' | 'WHERE' expr)?
 show_create_connection ::=
@@ -305,29 +305,29 @@ show_create_view ::=
   'SHOW' 'CREATE' 'VIEW' view_name
 show_databases ::=
     'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)?
-show_index ::=
-    'SHOW' 'EXTENDED'? ('INDEX' | 'INDEXES' | 'KEYS')
-    (('FROM' | 'IN') on_name)?
+show_indexes ::=
+    'SHOW' 'INDEXES'
+    (('FROM' | 'ON') on_name)?
     ('IN' 'CLUSTER' cluster_name)?
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=
-    'SHOW' 'FULL'? 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
+    'SHOW' 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_secrets ::=
     'SHOW' 'SECRETS' ('FROM' schema_name)? ('LIKE' 'pattern' | 'WHERE' expr)?
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
-   'SHOW' 'FULL'? 'SINKS' ('FROM' schema_name)?
+   'SHOW' 'SINKS' ('FROM' schema_name)?
 show_sources ::=
-  'SHOW' 'FULL'? 'SOURCES' ('FROM' schema_name)?
+  'SHOW' 'SOURCES' ('FROM' schema_name)?
 show_tables ::=
-  'SHOW' 'EXTENDED'? 'FULL'? 'TABLES' ('FROM' schema_name)?
+  'SHOW' 'TABLES' ('FROM' schema_name)?
 show_types ::=
-  'SHOW' 'EXTENDED'? 'FULL'?
+  'SHOW' 'TYPES' ('FROM' schema_name)?
 show_views ::=
-  'SHOW' 'FULL'? 'VIEWS' ('FROM' schema_name)?
+  'SHOW' 'VIEWS' ('FROM' schema_name)?
 show_objects ::=
-  'SHOW' 'EXTENDED'? 'FULL'?  'OBJECTS' ('FROM' schema_name)?
+  'SHOW' 'OBJECTS' ('FROM' schema_name)?
 string_agg ::=
   'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 table_ref ::=

@@ -1523,20 +1523,12 @@ impl_display_t!(ShowDatabasesStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowSchemasStatement<T: AstInfo> {
     pub from: Option<T::DatabaseName>,
-    pub extended: bool,
-    pub full: bool,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for ShowSchemasStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW");
-        if self.extended {
-            f.write_str(" EXTENDED");
-        }
-        if self.full {
-            f.write_str(" FULL");
-        }
         f.write_str(" SCHEMAS");
         if let Some(from) = &self.from {
             f.write_str(" FROM ");
@@ -1563,20 +1555,12 @@ pub struct ShowObjectsStatement<T: AstInfo> {
     pub object_type: ObjectType,
     pub from: Option<T::SchemaName>,
     pub in_cluster: Option<T::ClusterName>,
-    pub extended: bool,
-    pub full: bool,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW");
-        if self.extended {
-            f.write_str(" EXTENDED");
-        }
-        if self.full {
-            f.write_str(" FULL");
-        }
         f.write_str(" ");
         f.write_str(match &self.object_type {
             ObjectType::Table => "TABLES",
@@ -1614,16 +1598,12 @@ impl_display_t!(ShowObjectsStatement);
 pub struct ShowIndexesStatement<T: AstInfo> {
     pub table_name: Option<T::ObjectName>,
     pub in_cluster: Option<T::ClusterName>,
-    pub extended: bool,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for ShowIndexesStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW ");
-        if self.extended {
-            f.write_str("EXTENDED ");
-        }
         f.write_str("INDEXES");
         if let Some(table_name) = &self.table_name {
             f.write_str(" FROM ");
@@ -1646,8 +1626,6 @@ impl_display_t!(ShowIndexesStatement);
 /// Note: this is a MySQL-specific statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowColumnsStatement<T: AstInfo> {
-    pub extended: bool,
-    pub full: bool,
     pub table_name: T::ObjectName,
     pub filter: Option<ShowStatementFilter<T>>,
 }
@@ -1655,12 +1633,6 @@ pub struct ShowColumnsStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ShowColumnsStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW ");
-        if self.extended {
-            f.write_str("EXTENDED ");
-        }
-        if self.full {
-            f.write_str("FULL ");
-        }
         f.write_str("COLUMNS FROM ");
         f.write_node(&self.table_name);
         if let Some(filter) = &self.filter {

@@ -116,8 +116,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 contains:unexpected parameters for CREATE SOURCE: badoption
 
 > SHOW SOURCES
-name
-----
+name    type
+------------
 
 
 # Create a source using an inline schema.

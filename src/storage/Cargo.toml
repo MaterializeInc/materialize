@@ -19,7 +19,7 @@ aws-smithy-http = "0.48.0"
 aws-types = { version = "0.48.0", features = ["hardcoded-credentials"] }
 bytes = "1.2.1"
 bytesize = "1.1.0"
-chrono = { version = "0.4.21", default-features = false, features = ["std"] }
+chrono = { version = "0.4.22", default-features = false, features = ["std"] }
 crossbeam-channel = { version = "0.5.6" }
 csv-core = { version = "0.1.10" }
 derivative = "2.2.0"
@@ -28,7 +28,7 @@ fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.24"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
-http-serde = "1.1.0"
+http-serde = "1.1.2"
 itertools = { version = "0.10.3" }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }
@@ -52,9 +52,9 @@ mz-stash = { path = "../stash" }
 # TODO(benesch): this crate should not depend on the SQL parser.
 mz-sql-parser = { path = "../sql-parser" }
 mz-timely-util = { path = "../timely-util" }
-once_cell = { version = "1.13.1" }
+once_cell = { version = "1.14.0" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-prometheus = { version = "0.13.1", default-features = false }
+prometheus = { version = "0.13.2", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
 prost = { version = "0.11.0", features = ["no-recursion-limit"] }
@@ -68,11 +68,11 @@ tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.9"
 tokio-util = { version = "0.7.3", features = ["io"] }
-tonic = "0.8.0"
+tonic = "0.8.1"
 tracing = "0.1.36"
 tracing-subscriber = "0.3.15"
-thiserror = { version = "1.0.32" }
-url = { version = "2.2.2", features = ["serde"] }
+thiserror = { version = "1.0.34" }
+url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
 [build-dependencies]

@@ -164,20 +164,20 @@ renamed_sink
 
 # Source was successfully renamed
 > SHOW SOURCES;
-name
-----
-renamed_mz_data
+name               type
+------------------------
+renamed_mz_data    kafka
 
 # Sink was successfully renamed
 > SHOW SINKS
 name
-----
+------------
 renamed_sink
 
 # View was successfully renamed
 > SHOW VIEWS
 name
-----
+-----------------
 byzantine_view
 dependent_view
 oppositional_view
@@ -789,7 +789,7 @@ j
 
 > SHOW TABLES
 name
-----
+---------
 renamed_j
 
 > SELECT name FROM mz_tables WHERE id like 'u%';

@@ -110,13 +110,6 @@ snk1
 snk2
 snk3
 
-> SHOW FULL SINKS
-name   type
------------
-snk1   user
-snk2   user
-snk3   user
-
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
 {"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
@@ -189,17 +182,17 @@ $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
 {"before": null, "after": {"row":{"column1": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
 
-> SHOW FULL SINKS
-name        type
-----------------
-snk1        user
-snk2        user
-snk3        user
-snk4        user
-snk5        user
-snk6        user
-snk7        user
-snk8        user
+> SHOW SINKS
+name
+----
+snk1
+snk2
+snk3
+snk4
+snk5
+snk6
+snk7
+snk8
 
 # test explicit partition count
 > CREATE SINK snk9 FROM foo

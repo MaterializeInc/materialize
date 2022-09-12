@@ -164,5 +164,5 @@ Take into account that aggregations like `count()` cannot be used as expressions
 
 ## Related pages
 
--   [`SHOW INDEX`](../show-index)
+-   [`SHOW INDEXES`](../show-indexes)
 -   [`DROP INDEX`](../drop-index)
