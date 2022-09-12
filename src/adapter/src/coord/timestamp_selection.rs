@@ -129,7 +129,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         .filter_map(|id| {
                             let since = self
                                 .controller
-                                .compute(compute_instance)
+                                .compute
+                                .instance(compute_instance)
                                 .unwrap()
                                 .collection(*id)
                                 .unwrap()
@@ -148,7 +149,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
                 let since = self
                     .controller
-                    .storage()
+                    .storage
                     .collection(*id)
                     .unwrap()
                     .read_capabilities
@@ -179,14 +180,14 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::from_elem(Timestamp::minimum());
         {
-            let storage = self.controller.storage();
+            let storage = &self.controller.storage;
             for id in id_bundle.storage_ids.iter() {
                 since.join_assign(&storage.collection(*id).unwrap().implied_capability)
             }
         }
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
-                let compute = self.controller.compute(*instance).unwrap();
+                let compute = self.controller.compute.instance(*instance).unwrap();
                 for id in compute_ids.iter() {
                     since.join_assign(&compute.collection(*id).unwrap().read_capability())
                 }
@@ -205,10 +206,10 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::new();
         {
-            let storage = self.controller.storage();
             for id in id_bundle.storage_ids.iter() {
                 since.extend(
-                    storage
+                    self.controller
+                        .storage
                         .collection(*id)
                         .unwrap()
                         .write_frontier
@@ -219,7 +220,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
-                let compute = self.controller.compute(*instance).unwrap();
+                let compute = self.controller.compute.instance(*instance).unwrap();
                 for id in compute_ids.iter() {
                     since.extend(
                         compute
