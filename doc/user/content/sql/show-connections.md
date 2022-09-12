@@ -25,8 +25,8 @@ SHOW CONNECTIONS;
 ```
 
 ```nofmt
-       name
----------------------
+       name          | type
+---------------------+------
  kafka_connection
  postgres_connection
 ```
@@ -36,8 +36,8 @@ SHOW CONNECTIONS LIKE 'kafka%';
 ```
 
 ```nofmt
-       name
------------------
+       name      | type
+-----------------+------
  kafka_connection
 ```
 
