@@ -13,4 +13,4 @@ proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-fea
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
 
 [dev-dependencies]
-tokio = { version = "1.19.2", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.21.0", features = ["macros", "rt-multi-thread", "time"] }
