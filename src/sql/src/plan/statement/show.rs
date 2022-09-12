@@ -318,7 +318,7 @@ fn show_connections<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT t.name
+        "SELECT t.name, t.type
         FROM mz_catalog.mz_connections t
         JOIN mz_catalog.mz_schemas s on t.schema_id = s.id
         WHERE schema_id = {schema_spec}",
