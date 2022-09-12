@@ -29,10 +29,10 @@ _schema&lowbar;name_ | The schema to show tables from. Defaults to `public` in t
 SHOW TABLES;
 ```
 ```nofmt
- name           | type
-----------------+-----
- my_table       | user
- my_other_table | user
+ name
+----------------
+ my_table
+ my_other_table
 ```
 
 ### Show tables from specified schema
@@ -40,18 +40,18 @@ SHOW TABLES;
 SHOW SCHEMAS;
 ```
 ```nofmt
-  name  | type
---------+------
- public | user
+  name
+--------
+ public
 ```
 ```sql
 SHOW TABLES FROM public;
 ```
 ```nofmt
- name           | type
-----------------+-----
- my_table       | user
- my_other_table | user
+ name
+----------------
+ my_table
+ my_other_table
 ```
 
 ## Related pages
