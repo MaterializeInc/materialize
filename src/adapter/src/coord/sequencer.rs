@@ -22,52 +22,49 @@ use tracing::{event, warn, Level};
 use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
-use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
+use mz_compute_client::controller::{
+    ComputeInstanceId, ComputeSinkId, ConcreteComputeInstanceReplicaConfig,
+    ConcreteComputeInstanceReplicaLogging,
+};
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
-use mz_controller::{ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging};
+use mz_compute_client::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, TailSinkConnection,
+};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
-use mz_ore::collections::CollectionExt;
+use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::explain_new::{Explain, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
-use mz_sql::plan;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, ComputeInstanceReplicaConfig, CreateComputeInstancePlan,
-    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
+    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
+    RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
 };
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{CreateSourceOption, CreateSourceOptionName, Statement, WithOptionValue};
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
-use mz_storage::types::hosts::StorageHostConfig;
-use mz_storage::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, StorageSinkConnectionBuilder,
-    TailSinkConnection,
-};
+use mz_storage::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage::types::sources::IngestionDescription;
 
 use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection,
-    SerializedComputeInstanceReplicaLocation, Source, StorageSinkConnectionState, SYSTEM_USER,
+    SerializedComputeInstanceReplicaLocation, StorageSinkConnectionState, SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -80,11 +77,12 @@ use crate::error::AdapterError;
 use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
 use crate::session::vars::IsolationLevel;
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
+    WriteOp,
 };
 use crate::tail::PendingTail;
-use crate::util::{duration_to_timestamp_millis, send_immediate_rows, ClientTransmitter};
-use crate::{guard_write_critical_section, sink_connection, PeekResponseUnary};
+use crate::util::{send_immediate_rows, ClientTransmitter};
+use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -406,6 +404,9 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::Raise(RaisePlan { severity }) => {
                 tx.send(Ok(ExecuteResponse::Raise { severity }), session);
             }
+            Plan::RotateKeys(RotateKeysPlan { id }) => {
+                tx.send(self.sequence_rotate_keys(&session, id).await, session);
+            }
         }
     }
 
@@ -467,7 +468,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
 
                 self.controller
-                    .storage_mut()
+                    .storage
                     .create_collections(vec![(
                         source_id,
                         CollectionDescription {
@@ -504,22 +505,58 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog.allocate_oid().await?;
         let connection_gid = self.catalog.allocate_user_id().await?;
+        let mut connection = plan.connection.connection.clone();
+
+        if let mz_storage::types::connections::Connection::Ssh(ref mut ssh) = connection {
+            let keyset = SshKeyset::new()?;
+            self.secrets_controller
+                .ensure(connection_gid, &keyset.to_bytes())
+                .await?;
+
+            ssh.public_keys = Some(keyset.public_keys());
+        }
+
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
             oid: connection_oid,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                connection: plan.connection.connection,
+                connection,
                 depends_on,
             }),
         }];
+
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection { existed: false }),
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_rotate_keys(
+        &mut self,
+        session: &Session,
+        id: GlobalId,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let secret = self.secrets_controller.reader().read(id).await?;
+        let previous_keyset = SshKeyset::from_bytes(&secret)?;
+        let new_keyset = previous_keyset.rotate()?;
+        self.secrets_controller
+            .ensure(id, &new_keyset.to_bytes())
+            .await?;
+
+        let ops = vec![catalog::Op::UpdateRotatedKeys {
+            id,
+            previous_public_keypair: previous_keyset.public_keys(),
+            new_public_keypair: new_keyset.public_keys(),
+        }];
+
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
             Err(err) => Err(err),
         }
     }
@@ -709,7 +746,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect();
 
         self.controller
-            .storage_mut()
+            .storage
             .create_collections(persisted_introspection_sources)
             .await
             .unwrap();
@@ -718,11 +755,14 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
-        self.controller
-            .create_instance(instance.id, instance.logging.clone())
-            .await;
+        self.controller.compute.create_instance(
+            instance.id,
+            instance.logging.clone(),
+            self.catalog.system_config().max_result_size(),
+        )?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
+                .active_compute()
                 .add_replica_to_instance(instance.id, replica_id, replica.config)
                 .await
                 .unwrap();
@@ -839,7 +879,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let replica_concrete_config = instance.replicas_by_id[&replica_id].config.clone();
 
         self.controller
-            .storage_mut()
+            .storage
             .create_collections(persisted_sources)
             .await
             .unwrap();
@@ -857,6 +897,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         self.controller
+            .active_compute()
             .add_replica_to_instance(instance_id, replica_id, replica_concrete_config)
             .await
             .unwrap();
@@ -904,14 +945,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 let collection_desc = table.desc.clone().into();
                 self.controller
-                    .storage_mut()
+                    .storage
                     .create_collections(vec![(table_id, collection_desc)])
                     .await
                     .unwrap();
 
                 let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
                 self.controller
-                    .storage_mut()
+                    .storage
                     .set_read_policy(vec![(table_id, policy)])
                     .await
                     .unwrap();
@@ -1056,7 +1097,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(Some(&session), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
                 txn.dataflow_client
-                    .storage()
+                    .storage
                     .collection(sink.from)
                     .map_err(|e| match e {
                         StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
@@ -1149,8 +1190,8 @@ impl<S: Append + 'static> Coordinator<S> {
             ops.append(&mut view_ops);
         }
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
-            Ok(()) => Ok(ExecuteResponse::CreatedView { existed: false }),
-            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            Ok(()) => Ok(ExecuteResponse::CreatedViews { existed: false }),
+            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedViews { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1281,7 +1322,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok(df) => {
                 // Announce the creation of the materialized view source.
                 self.controller
-                    .storage_mut()
+                    .storage
                     .create_collections(vec![(
                         id,
                         CollectionDescription {
@@ -1489,7 +1530,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
             }
-            self.controller.drop_instance(instance_id).await.unwrap();
+            self.controller.compute.drop_instance(instance_id);
         }
 
         Ok(ExecuteResponse::DroppedComputeInstance)
@@ -1578,8 +1619,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
         }
         self.controller
+            .active_compute()
             .drop_replica(instance_id, replica_id, replica_config)
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn sequence_drop_items(
@@ -1615,7 +1658,7 @@ impl<S: Append + 'static> Coordinator<S> {
             session
                 .vars()
                 .iter()
-                .chain(self.catalog.state().system_config().iter())
+                .chain(self.catalog.system_config().iter())
                 .filter(|v| !v.experimental())
                 .map(|v| {
                     Row::pack_slice(&[
@@ -1636,7 +1679,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let variable = session
             .vars()
             .get(&plan.name)
-            .or_else(|_| self.catalog.state().system_config().get(&plan.name))?;
+            .or_else(|_| self.catalog.system_config().get(&plan.name))?;
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
@@ -1988,7 +2031,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.catalog.state(),
                 plan,
                 ExprPrepStyle::OneShot {
-                    logical_time: Some(timestamp),
+                    logical_time: Some(timestamp.into()),
                     session,
                 },
             )?;
@@ -2503,9 +2546,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
                 let mut sources = Vec::new();
                 {
-                    let storage = self.controller.storage();
                     for id in id_bundle.storage_ids.iter() {
-                        let state = storage.collection(*id).unwrap();
+                        let state = self.controller.storage.collection(*id).unwrap();
                         let name = self
                             .catalog
                             .try_get_entry(id)
@@ -2519,18 +2561,13 @@ impl<S: Append + 'static> Coordinator<S> {
                         sources.push(TimestampSource {
                             name: format!("{name} ({id}, storage)"),
                             read_frontier: state.implied_capability.elements().to_vec(),
-                            write_frontier: state
-                                .write_frontier
-                                .frontier()
-                                .to_owned()
-                                .elements()
-                                .to_vec(),
+                            write_frontier: state.write_frontier.elements().to_vec(),
                         });
                     }
                 }
                 {
                     if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-                        let compute = self.controller.compute(compute_instance).unwrap();
+                        let compute = self.controller.compute.instance(compute_instance).unwrap();
                         for id in compute_ids {
                             let state = compute.collection(*id).unwrap();
                             let name = self
@@ -2545,13 +2582,8 @@ impl<S: Append + 'static> Coordinator<S> {
                                 .unwrap_or_else(|| id.to_string());
                             sources.push(TimestampSource {
                                 name: format!("{name} ({id}, compute)"),
-                                read_frontier: state.implied_capability.elements().to_vec(),
-                                write_frontier: state
-                                    .write_frontier
-                                    .frontier()
-                                    .to_owned()
-                                    .elements()
-                                    .to_vec(),
+                                read_frontier: state.read_capability().elements().to_vec(),
+                                write_frontier: state.write_frontier().to_vec(),
                             });
                         }
                     }
@@ -2658,7 +2690,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 offset: 0,
                 project: (0..plan.returning[0].0.iter().count()).collect(),
             };
-            return Ok(send_immediate_rows(finishing.finish(plan.returning)));
+            return match finishing.finish(
+                plan.returning,
+                self.catalog.system_config().max_result_size(),
+            ) {
+                Ok(rows) => Ok(send_immediate_rows(rows)),
+                Err(e) => Err(AdapterError::ResultSize(e)),
+            };
         }
         Ok(match plan.kind {
             MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
@@ -2891,12 +2929,8 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let ts = self.get_local_read_ts();
-        let ts = MirScalarExpr::literal_ok(
-            Datum::from(Numeric::from(ts)),
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            },
-        );
+        // TODO: Convert to MzTimestamp.
+        let ts = MirScalarExpr::literal_ok(Datum::from(u64::from(ts)), ScalarType::UInt64);
         let peek_response = match self
             .sequence_peek(
                 &mut session,
@@ -3091,7 +3125,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for o in plan.options {
             options.push(match o {
                 IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.map(Duration::from_millis),
+                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.map(|ts| Duration::from_millis(ts.into())),
                 ),
             });
         }
@@ -3116,9 +3150,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         .index()
                         .expect("setting options on index")
                         .compute_instance;
-                    let window = window.map(duration_to_timestamp_millis);
                     let policy = match window {
-                        Some(time) => ReadPolicy::lag_writes_by(time),
+                        Some(time) => ReadPolicy::lag_writes_by(time.try_into()?),
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
                     self.update_compute_base_read_policy(compute_instance, id, policy)
@@ -3148,78 +3181,20 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         AlterSourcePlan { id, size, remote }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_sql::ast::Value;
-        use AlterSourceItem::*;
-        use CreateSourceOptionName::*;
+        let op = catalog::Op::AlterSource { id, size, remote };
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
 
+        // Re-fetch the updated item from the catalog
         let entry = self.catalog.get_entry(&id);
-        let old_source = match entry.item() {
-            CatalogItem::Source(source) => source.clone(),
-            other => coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ()),
-        };
+        let updated_source = entry.source().ok_or_else(|| {
+            CatalogError::UnexpectedType(entry.name().to_string(), CatalogItemType::Source)
+        })?;
 
-        // Since the catalog serializes the items using only their creation statement
-        // and context, we need to parse and rewrite the with options in that statement.
-        // (And then make any other changes to the source definition to match.)
-        let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
-            .unwrap()
-            .into_element();
-
-        let create_stmt = match &mut stmt {
-            Statement::CreateSource(s) => s,
-            _ => coord_bail!("source {id} was not created with a CREATE SOURCE statement"),
-        };
-
-        let new_config = match (&old_source.host_config, size, remote) {
-            (_, Set(_), Set(_)) => coord_bail!("Can't set both SIZE and REMOTE on source"),
-            (_, Set(size), _) => Some(plan::StorageHostConfig::Managed { size }),
-            (_, _, Set(addr)) => Some(plan::StorageHostConfig::Remote { addr }),
-            (StorageHostConfig::Remote { .. }, _, Reset)
-            | (StorageHostConfig::Managed { .. }, Reset, _) => {
-                Some(plan::StorageHostConfig::Undefined)
-            }
-            (_, _, _) => None,
-        };
-
-        if let Some(config) = new_config {
-            create_stmt
-                .with_options
-                .retain(|x| ![Size, Remote].contains(&x.name));
-
-            let new_host_option = match &config {
-                plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
-                plan::StorageHostConfig::Remote { addr } => Some((Remote, addr.clone())),
-                plan::StorageHostConfig::Undefined => None,
-            };
-
-            if let Some((name, value)) = new_host_option {
-                create_stmt.with_options.push(CreateSourceOption {
-                    name,
-                    value: Some(WithOptionValue::Value(Value::String(value))),
-                });
-            }
-
-            let host_config = self.catalog.resolve_storage_host_config(config)?;
-            let create_sql = stmt.to_ast_string_stable();
-            let source = Source {
-                create_sql,
-                host_config: host_config.clone(),
-                ..old_source
-            };
-
-            let op = catalog::Op::UpdateItem {
-                id,
-                name: entry.name().clone(),
-                to_item: CatalogItem::Source(source.clone()),
-            };
-            self.catalog_transact(Some(session), vec![op], |_| Ok(()))
-                .await?;
-
-            self.controller
-                .storage_mut()
-                .alter_collections(vec![(id, host_config)])
-                .await?;
-        };
+        self.controller
+            .storage
+            .alter_collections(vec![(id, updated_source.host_config.clone())])
+            .await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
     }
@@ -3281,6 +3256,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
+        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = match value {
             SetVariableValue::Literal(Value::String(value)) => {
                 catalog::Op::UpdateSystemConfiguration { name, value }
@@ -3297,6 +3273,9 @@ impl<S: Append + 'static> Coordinator<S> {
         };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        if update_max_result_size {
+            self.update_max_result_size().await;
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3306,9 +3285,13 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
+        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        if update_max_result_size {
+            self.update_max_result_size().await;
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3321,6 +3304,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        self.update_max_result_size().await;
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3331,6 +3315,16 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(AdapterError::Unauthorized(format!(
                 "only user '{SYSTEM_USER}' is allowed to execute 'ALTER SYSTEM ...'"
             )))
+        }
+    }
+
+    async fn update_max_result_size(&mut self) {
+        let mut compute = self.controller.active_compute();
+        for compute_instance in self.catalog.compute_instances() {
+            let mut instance = compute.instance(compute_instance.id).unwrap();
+            instance
+                .update_max_result_size(self.catalog.system_config().max_result_size())
+                .await;
         }
     }
 

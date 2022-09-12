@@ -1121,7 +1121,8 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("public_key", ScalarType::String.nullable(false)),
+        .with_column("public_key_1", ScalarType::String.nullable(false))
+        .with_column("public_key_2", ScalarType::String.nullable(false)),
 });
 pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sources",
@@ -1346,31 +1347,10 @@ UNION ALL
     SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret' FROM mz_catalog.mz_secrets",
 };
 
-// For historical reasons, this view does not properly escape identifiers. For
-// example, a table named 'cAp.S' in the default database and schema will be
-// rendered as `materialize.public.cAp.S`. This is *not* a valid SQL identifier,
-// as it has an extra dot, and the capitals will be folded to lowercase. This
-// view is thus only fit for use in debugging queries where the names are for
-// human consumption. Applications should instead pull the names of individual
-// components out of mz_objects, mz_schemas, and mz_databases to avoid these
-// escaping issues.
-//
-// TODO(benesch): deprecate this view.
-pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
-    name: "mz_catalog_names",
+pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
+    name: "mz_dataflows",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_catalog_names AS SELECT
-    o.id AS global_id,
-    coalesce(d.name || '.', '') || s.name || '.' || o.name AS name
-FROM mz_catalog.mz_objects o
-JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
-LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
-};
-
-pub const MZ_DATAFLOW_NAMES: BuiltinView = BuiltinView {
-    name: "mz_dataflow_names",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_dataflow_names AS SELECT
+    sql: "CREATE VIEW mz_catalog.mz_dataflows AS SELECT
     mz_dataflow_addresses.id,
     mz_dataflow_addresses.worker,
     mz_dataflow_addresses.address[1] AS local_id,
@@ -1391,17 +1371,17 @@ pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
     mz_dataflow_operators.id,
     mz_dataflow_operators.name,
     mz_dataflow_operators.worker,
-    mz_dataflow_names.id as dataflow_id,
-    mz_dataflow_names.name as dataflow_name
+    mz_dataflows.id as dataflow_id,
+    mz_dataflows.name as dataflow_name
 FROM
     mz_catalog.mz_dataflow_operators,
     mz_catalog.mz_dataflow_addresses,
-    mz_catalog.mz_dataflow_names
+    mz_catalog.mz_dataflows
 WHERE
     mz_dataflow_operators.id = mz_dataflow_addresses.id AND
     mz_dataflow_operators.worker = mz_dataflow_addresses.worker AND
-    mz_dataflow_names.local_id = mz_dataflow_addresses.address[1] AND
-    mz_dataflow_names.worker = mz_dataflow_addresses.worker",
+    mz_dataflows.local_id = mz_dataflow_addresses.address[1] AND
+    mz_dataflows.worker = mz_dataflow_addresses.worker",
 };
 
 pub const MZ_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
@@ -1482,18 +1462,18 @@ pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_records_per_dataflow AS SELECT
     mz_records_per_dataflow_operator.dataflow_id as id,
-    mz_dataflow_names.name,
+    mz_dataflows.name,
     mz_records_per_dataflow_operator.worker,
     pg_catalog.SUM(mz_records_per_dataflow_operator.records) as records
 FROM
     mz_catalog.mz_records_per_dataflow_operator,
-    mz_catalog.mz_dataflow_names
+    mz_catalog.mz_dataflows
 WHERE
-    mz_records_per_dataflow_operator.dataflow_id = mz_dataflow_names.id AND
-    mz_records_per_dataflow_operator.worker = mz_dataflow_names.worker
+    mz_records_per_dataflow_operator.dataflow_id = mz_dataflows.id AND
+    mz_records_per_dataflow_operator.worker = mz_dataflows.worker
 GROUP BY
     mz_records_per_dataflow_operator.dataflow_id,
-    mz_dataflow_names.name,
+    mz_dataflows.name,
     mz_records_per_dataflow_operator.worker",
 };
 
@@ -2296,10 +2276,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_STORAGE_USAGE),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
-        Builtin::View(&MZ_CATALOG_NAMES),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES),
-        Builtin::View(&MZ_DATAFLOW_NAMES),
+        Builtin::View(&MZ_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICAS),

@@ -30,7 +30,7 @@ $ set schema={
 
 $ kafka-create-topic topic=data
 
-$ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1}}}
 
 ! CREATE CONNECTION kafka_sasl
@@ -50,7 +50,7 @@ contains:invalid CONNECTION: under-specified security configuration
 #       sasl_password_env = 'SASL_PASSWORD',
 #       ssl_ca_location = '/share/secrets/ca.crt'
 #   )
-#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   WITH (
 #       ssl_ca_location = '/share/secrets/ca.crt'
 #   )

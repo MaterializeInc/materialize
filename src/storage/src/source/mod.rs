@@ -46,6 +46,7 @@ pub mod metrics;
 pub mod persist_source;
 mod postgres;
 mod reclock;
+mod resumption;
 mod s3;
 mod source_reader_pipeline;
 pub mod types;

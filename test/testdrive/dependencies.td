@@ -24,17 +24,21 @@ $ set schema={
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE s
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 ! CREATE SOURCE s
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-blah-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 contains:catalog item 's' already exists
 
 > CREATE SOURCE IF NOT EXISTS s
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-blah-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE VIEW test1 AS SELECT 1;
@@ -102,25 +106,25 @@ contains:unknown catalog item 'test2'
 contains:unknown catalog item 'test4'
 
 > CREATE SOURCE s
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE SINK s1 FROM s
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'v'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'v')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 ! CREATE SINK s1 FROM s
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'v'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'v')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:catalog item 's1' already exists
 
 > CREATE SINK IF NOT EXISTS s1 FROM s
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'v2'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'v2')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK s2 FROM s
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'v3'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'v3')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # Test that sinks cannot be depended upon.
 ! CREATE VIEW v2 AS SELECT * FROM s1;
@@ -243,7 +247,7 @@ contains:unknown catalog item 'i4'
 # Materialized source tests
 
 > CREATE SOURCE s3
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 # Test that dependent indexes do not prevent source deletion when restrict is specified
@@ -265,7 +269,7 @@ contains:unknown catalog item 'j1'
 # Test cascade deletes all indexes associated with cascaded sources and views
 
 > CREATE SOURCE s4
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE INDEX j2 on s4(x+2);
@@ -301,7 +305,7 @@ contains:unknown catalog item 'j2'
 # Test that dropping indexes even with cascade does not cause the underlying source to be dropped
 
 > CREATE SOURCE s5
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE DEFAULT INDEX ON s5;

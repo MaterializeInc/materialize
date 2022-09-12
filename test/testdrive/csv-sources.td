@@ -155,7 +155,7 @@ $ kafka-create-topic topic=dynamic
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE SOURCE dynamic_csv (city, state, zip)
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-dynamic-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dynamic-${testdrive.seed}')
   FORMAT CSV WITH 3 COLUMNS
 
 > SELECT * FROM dynamic_csv
@@ -227,10 +227,14 @@ $ kafka-create-topic topic=static-csv-pkne-sink
   )
   FORMAT CSV WITH HEADER (city, state, zip)
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SINK static_csv_pkne_sink FROM static_csv_pkne
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'static-csv-pkne-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'static-csv-pkne-sink')
   KEY (zip)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 $ kafka-verify format=avro sink=materialize.public.static_csv_pkne_sink sort-messages=true
 {"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004", "transaction": {"id": "<>"}}

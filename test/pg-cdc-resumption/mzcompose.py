@@ -25,6 +25,7 @@ def workflow_default(c: Composition) -> None:
 
     initialize(c)
 
+    # TODO: most of these should likely be converted to cluster tests
     for scenario in [
         disconnect_pg_during_snapshot,
         disconnect_pg_during_replication,

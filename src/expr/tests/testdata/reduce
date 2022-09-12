@@ -281,7 +281,7 @@ reduce
 ----
 ((#0) IS NULL OR ((#1) IS NULL AND (#2) IS NULL))
 
-# flatten_and_or + undistribute_and_or
+# flatten_associative + undistribute_and_or
 # ((#0 OR #1) OR (#2 > 2)) AND (#0 OR ((#2 < 3) OR #1))
 reduce
 (call_variadic and [
@@ -291,6 +291,36 @@ reduce
 [bool bool int32]
 ----
 (#0 OR #1 OR ((#2 < 3) AND (#2 > 2)))
+
+# Test that flatten_associative works on
+# functions other than `and` and `or`.
+reduce
+(call_variadic greatest [
+    (call_variadic greatest [#0 #1 #2])
+    (call_variadic least [#3 #4 #5])
+    (call_variadic greatest [#6 #7 #8])
+])
+[int32 int32 int32 int32 int32 int32 int32 int32 int32]
+----
+greatest(#0, #1, #2, least(#3, #4, #5), #6, #7, #8)
+
+# Right-deep tree
+reduce
+(call_variadic coalesce [
+    #0 (call_variadic coalesce [#1 (call_variadic coalesce [#2 (call_variadic coalesce [#3 #4])])])
+])
+[int32 int32 int32 int32 int32]
+----
+coalesce(#0, #1, #2, #3, #4)
+
+# Left-deep tree
+reduce
+(call_variadic coalesce [
+    (call_variadic coalesce [(call_variadic coalesce [(call_variadic coalesce [#0 #1]) #2]) #3]) #4
+])
+[int32 int32 int32 int32 int32]
+----
+coalesce(#0, #1, #2, #3, #4)
 
 # undistribute_and_or -- more than 2 args at the top level.
 # (#0 OR #1 OR (#2 > 2)) AND (#0 OR (#2 < 3) OR #1) AND (#1 OR (#5 < 7) OR #0)

@@ -14,10 +14,13 @@ mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-storage = { path = "../storage" }
+num-traits = "0.2"
+num-derive = "0.3"
 tracing = "0.1.36"
+typemap_rev = "0.1.5"
 
 [dev-dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }

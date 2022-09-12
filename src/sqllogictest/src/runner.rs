@@ -71,7 +71,7 @@ use mz_pgrepr::{oid, Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
-use mz_sql::ast::{Expr, Raw, Statement};
+use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
 use mz_sql_parser::{
     ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
     parser,
@@ -879,7 +879,7 @@ impl Runner {
         match statement {
             Statement::CreateView { .. }
             | Statement::Select { .. }
-            | Statement::ShowIndexes { .. } => (),
+            | Statement::Show(ShowStatement::ShowIndexes { .. }) => (),
             _ => {
                 if output.is_err() {
                     // We're not interested in testing our hacky handling of INSERT etc

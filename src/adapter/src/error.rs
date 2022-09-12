@@ -117,9 +117,11 @@ pub enum AdapterError {
     /// A query tried to create more resources than is allowed in the system configuration.
     ResourceExhaustion {
         resource_type: String,
-        limit: i32,
-        current_amount: i32,
+        limit: u32,
+        current_amount: usize,
     },
+    /// Result size of a query is too large.
+    ResultSize(String),
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
     /// Waiting on a query timed out.
@@ -375,6 +377,7 @@ impl fmt::Display for AdapterError {
                     Current amount is {current_amount}."
                 )
             }
+            AdapterError::ResultSize(e) => write!(f, "{e}"),
             AdapterError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
             }

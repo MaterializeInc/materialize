@@ -14,7 +14,7 @@ const hpccWasm = window['@hpcc-js/wasm'];
 async function query(sql) {
   const response = await fetch('/api/sql', {
     method: 'POST',
-    body: JSON.stringify({sql: sql}),
+    body: JSON.stringify({ sql: sql }),
     headers: { 'Content-Type': 'application/json' },
   });
   if (!response.ok) {
@@ -28,27 +28,27 @@ async function query(sql) {
 const { useState, useEffect } = React;
 
 function Dataflows() {
-    const [stats, setStats] = useState(null);
-    const [addrs, setAddrs] = useState(null);
-    const [records, setRecords] = useState(null);
-    const [opers, setOpers] = useState(null);
-    const [chans, setChans] = useState(null);
-    const [view, setView] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(false);
-    const [page, setPage] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [addrs, setAddrs] = useState(null);
+  const [records, setRecords] = useState(null);
+  const [opers, setOpers] = useState(null);
+  const [chans, setChans] = useState(null);
+  const [view, setView] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [page, setPage] = useState(null);
 
-    useEffect(() => {
+  useEffect(() => {
 
-        if (!loading) {
-            return;
-        }
+    if (!loading) {
+      return;
+    }
 
-        const load = async () => {
+    const load = async () => {
 
-            const {
-                results: [addr_table, oper_table, chan_table, records_table],
-            } = await query(`
+      const {
+        results: [addr_table, oper_table, chan_table, records_table],
+      } = await query(`
                 SELECT DISTINCT
                     id, address
                 FROM
@@ -75,183 +75,183 @@ function Dataflows() {
                     id;
             `);
 
-            // Map from id to address (array). {320: [11], 321: [11, 1]}.
-            const addrs = {};
-            addr_table.rows.forEach(([id, address]) => {
-                if (!addrs[id]) {
-                    addrs[id] = address;
-                }
-            });
-            setAddrs(addrs);
-
-            // Map from id to operator name. {320: 'name'}.
-            const opers = Object.fromEntries(oper_table.rows);
-            setOpers(opers);
-
-            // {id: [source, target]}.
-            const chans = Object.fromEntries(
-                chan_table.rows.map(([id, source, target, source_port, target_port, sent]) => [id, [source, target, source_port, target_port, sent]])
-            );
-            setChans(chans);
-
-            setRecords(Object.fromEntries(records_table.rows));
-
-            try {
-                const view = await getCreateView(stats.name);
-                setView(view);
-            } catch (error) {
-                console.debug('could not get create view:', error);
-                setView(null);
-            }
-
-            console.log("Loaded");
-            setLoading(false);
-        };
-
-        load().catch((error) => {
-            console.log("ERROR", error);
-            setError(error);
-            setLoading(false);
-        });
-    });
-
-    useEffect(() => {
-
-        if (loading || error || (page != null)) {
-            return;
+      // Map from id to address (array). {320: [11], 321: [11, 1]}.
+      const addrs = {};
+      addr_table.rows.forEach(([id, address]) => {
+        if (!addrs[id]) {
+          addrs[id] = address;
         }
+      });
+      setAddrs(addrs);
 
-        const render = async() => {
+      // Map from id to operator name. {320: 'name'}.
+      const opers = Object.fromEntries(oper_table.rows);
+      setOpers(opers);
 
-            console.log("Starting out");
+      // {id: [source, target]}.
+      const chans = Object.fromEntries(
+        chan_table.rows.map(([id, source, target, source_port, target_port, sent]) => [id, [source, target, source_port, target_port, sent]])
+      );
+      setChans(chans);
 
-            // Establish maps to and from ids, addresses, and names.
-            const id_to_addr = Object.fromEntries(Object.entries(addrs).map(([id, addr]) => [id, addr]));
-            const id_to_name = Object.fromEntries(Object.entries(opers).map(([id, name]) => [id, name]));
-            const addr_to_id = Object.fromEntries(Object.entries(opers).map(([id, name]) => [addrStr(id_to_addr[id]), id]));
-            const max_record_count = Math.max.apply(Math, Object.values(records));
+      setRecords(Object.fromEntries(records_table.rows));
 
-            // Map scopes to children.
-            const scope_children = new Map();
-            const scope_channels = new Map();
+      try {
+        const view = await getCreateView(stats.name);
+        setView(view);
+      } catch (error) {
+        console.debug('could not get create view:', error);
+        setView(null);
+      }
 
-            Object.entries(opers).forEach(([id, name]) => {
-                let addr = id_to_addr[id];
-                if (addr != null) {
-                    // remove the last item (will re-insert later).
-                    let last = addr.splice(addr.length-1, 1)[0];
-                    let prefix_addr = addrStr(addr);
-                    if (!scope_children.has(prefix_addr)) { scope_children.set(prefix_addr, []); }
-                    if (!scope_channels.has(prefix_addr)) { scope_channels.set(prefix_addr, []); }
-                    scope_children.get(prefix_addr).push(last);
-                    addr.push(last);
+      console.log("Loaded");
+      setLoading(false);
+    };
+
+    load().catch((error) => {
+      console.log("ERROR", error);
+      setError(error);
+      setLoading(false);
+    });
+  }, []);
+
+  useEffect(() => {
+
+    if (loading || error || (page != null)) {
+      return;
+    }
+
+    const render = async () => {
+
+      console.log("Starting out");
+
+      // Establish maps to and from ids, addresses, and names.
+      const id_to_addr = Object.fromEntries(Object.entries(addrs).map(([id, addr]) => [id, addr]));
+      const id_to_name = Object.fromEntries(Object.entries(opers).map(([id, name]) => [id, name]));
+      const addr_to_id = Object.fromEntries(Object.entries(opers).map(([id, name]) => [addrStr(id_to_addr[id]), id]));
+      const max_record_count = Math.max.apply(Math, Object.values(records));
+
+      // Map scopes to children.
+      const scope_children = new Map();
+      const scope_channels = new Map();
+
+      Object.entries(opers).forEach(([id, name]) => {
+        let addr = id_to_addr[id];
+        if (addr != null) {
+          // remove the last item (will re-insert later).
+          let last = addr.splice(addr.length - 1, 1)[0];
+          let prefix_addr = addrStr(addr);
+          if (!scope_children.has(prefix_addr)) { scope_children.set(prefix_addr, []); }
+          if (!scope_channels.has(prefix_addr)) { scope_channels.set(prefix_addr, []); }
+          scope_children.get(prefix_addr).push(last);
+          addr.push(last);
+        }
+      });
+
+      // Map scopes to edges.
+      let channels = [...new Set(Object.entries(chans))];
+      channels.forEach(([id, st]) => {
+        if (id_to_addr[id] != null) {
+          let addr = addrStr(id_to_addr[id]);
+          if (!scope_children.has(addr)) { scope_channels.set(addr, []); }
+          if (!scope_channels.has(addr)) { scope_channels.set(addr, []); }
+          scope_channels.get(addr).push([st[0], st[1], st[2], st[3], st[4]]);
+        }
+      });
+
+      // Meant to render the scope identifier by addr, and its children recursively.
+      async function render_scope(addr) {
+
+        if (scope_channels.get(addr) != null) {
+
+          let ids_seen = [];
+          const edges = scope_channels.get(addr).map(([source, target, source_port, target_port, sent]) => {
+            // if either `source` or `target` are zero, they signify a scope input or output, respectively.
+            let source1 = source != 0 ? addr_to_id[addr.concat(", ").concat(source)] : `input_${source_port}`;
+            let target1 = target != 0 ? addr_to_id[addr.concat(", ").concat(target)] : `output_${target_port}`;
+            ids_seen.push(source1);
+            ids_seen.push(target1);
+            return sent == null ? `${source1} -> ${target1} [style="dashed"]` :
+              `${source1} -> ${target1} [label="sent ${sent}"]`;
+          })
+
+          const children = [];
+          for (const id of scope_children.get(addr)) {
+            let name = (addr == "") ? "".concat(id) : addr.concat(", ".concat(id));
+            if (scope_channels.get(name) != null) {
+              let id = addr_to_id[name];
+              let text_name = id_to_name[id];
+              children.push([id.concat(" : ").concat(text_name), await render_scope(name)]);
+            }
+          };
+
+          edges.unshift('');
+
+          const labels = ids_seen.map((id) => {
+            let name = id_to_name[id];
+            if (name != null) {
+              if (scope_children.has(addrStr(id_to_addr[id]))) {
+                // indicate subgraphs
+                return `${id} [label="${id} : ${name}",shape=house,style=filled,color=green,fillcolor="#bbffbb"]`;
+              } else {
+                let my_records = records["".concat(id)];
+                if (my_records != null) {
+                  return `${id} [label= "${id} : ${name} \n\t records : ${my_records}",style=filled,color=red,fillcolor="#ffbbbb"]`;
+                } else {
+                  return `${id} [label="${id} : ${name}"]`;
                 }
-            });
+              }
+            } else {
+              return `${id} [label="${id}",shape=box,style=filled,color=blue,fillcolor="#bbbbff"]`;
+            }
+          });
+          labels.unshift('');
 
-            // Map scopes to edges.
-            let channels = [...new Set(Object.entries(chans))];
-            channels.forEach(([id, st]) => {
-                if (id_to_addr[id] != null) {
-                    let addr = addrStr(id_to_addr[id]);
-                    if (!scope_children.has(addr)) { scope_channels.set(addr, []); }
-                    if (!scope_channels.has(addr)) { scope_channels.set(addr, []); }
-                    scope_channels.get(addr).push([st[0], st[1], st[2], st[3], st[4]]);
-                }
-            });
-
-            // Meant to render the scope identifier by addr, and its children recursively.
-            async function render_scope(addr) {
-
-                if (scope_channels.get(addr) != null) {
-
-                    let ids_seen = [];
-                    const edges = scope_channels.get(addr).map(([source, target, source_port, target_port, sent]) => {
-                        // if either `source` or `target` are zero, they signify a scope input or output, respectively.
-                        let source1 = source != 0 ? addr_to_id[addr.concat(", ").concat(source)] : `input_${source_port}`;
-                        let target1 = target != 0 ? addr_to_id[addr.concat(", ").concat(target)] : `output_${target_port}`;
-                        ids_seen.push(source1);
-                        ids_seen.push(target1);
-                        return sent == null ? `${source1} -> ${target1} [style="dashed"]` :
-                            `${source1} -> ${target1} [label="sent ${sent}"]`;
-                    })
-
-                    const children = [];
-                    for (const id of scope_children.get(addr)) {
-                        let name = (addr == "") ? "".concat(id) : addr.concat(", ".concat(id));
-                        if (scope_channels.get(name) != null) {
-                            let id = addr_to_id[name];
-                            let text_name = id_to_name[id];
-                            children.push([id.concat(" : ").concat(text_name), await render_scope(name)]);
-                        }
-                    };
-
-                    edges.unshift('');
-
-                    const labels = ids_seen.map((id) => {
-                        let name = id_to_name[id];
-                        if (name != null) {
-                            if (scope_children.has(addrStr(id_to_addr[id]))) {
-                                // indicate subgraphs
-                                return `${id} [label="${id} : ${name}",shape=house,style=filled,color=green,fillcolor="#bbffbb"]`;
-                            } else {
-                                let my_records = records["".concat(id)];
-                                if (my_records != null) {
-                                    return `${id} [label= "${id} : ${name} \n\t records : ${my_records}",style=filled,color=red,fillcolor="#ffbbbb"]`;
-                                } else {
-                                    return `${id} [label="${id} : ${name}"]`;
-                                }
-                            }
-                        } else {
-                            return `${id} [label="${id}",shape=box,style=filled,color=blue,fillcolor="#bbbbff"]`;
-                        }
-                    });
-                    labels.unshift('');
-
-                    const dot = `digraph {
+          const dot = `digraph {
                         ${edges.join('\n')}
                         ${labels.join('\n')}
                     }`;
-                    let graph = await hpccWasm.graphviz.layout(dot, 'svg', 'dot');
-                    return (
-                        <div>
-                          { scope_channels.get(addr).length > 0 ? <div dangerouslySetInnerHTML={{ __html: graph } }></div> : <div></div> }
-                          { children.map(([name, div]) => (
-                            <div>
-                              <button class="collapsible" onClick={toggle_active}>{name}</button>
-                              <div class="content">
-                                {div}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                    );
-                } else {
-                    return (<div> </div> )
-                }
-            }
+          let graph = await hpccWasm.graphviz.layout(dot, 'svg', 'dot');
+          return (
+            <div>
+              {scope_channels.get(addr).length > 0 ? <div dangerouslySetInnerHTML={{ __html: graph }}></div> : <div></div>}
+              {children.map(([name, div]) => (
+                <div>
+                  <button class="collapsible" onClick={toggle_active}>{name}</button>
+                  <div class="content">
+                    {div}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        } else {
+          return (<div> </div>)
+        }
+      }
 
-            setPage(await render_scope(""));
-        };
+      setPage(await render_scope(""));
+    };
 
-        render().catch((error) => {
-            console.log("ERROR", error);
-            setError(error);
-        });
+    render().catch((error) => {
+      console.log("ERROR", error);
+      setError(error);
     });
+  });
 
-    return (
-      <div style={{ marginTop: '2em' }}>
-        {loading ? (
-          <div>Loading...</div>
-        ) : error ? (
-          <div>error: {error}</div>
-        ) : (
-          <div>
-              {page}
-          </div>
-        )}
-      </div>
-    );
+  return (
+    <div style={{ marginTop: '2em' }}>
+      {loading ? (
+        <div>Loading...</div>
+      ) : error ? (
+        <div>error: {error}</div>
+      ) : (
+        <div>
+          {page}
+        </div>
+      )}
+    </div>
+  );
 }
 
 
@@ -350,15 +350,15 @@ function dispNs(ns) {
 }
 
 function toggle_active(e) {
-    console.log("toggling: ", e.target);
-    e.target.classList.toggle("active");
-    var content = e.target.nextElementSibling;
-    // a null maxHeight collapses the item.
-    if (content.style.maxHeight){
-        content.style.maxHeight = null;
-    } else {
-        content.style.maxHeight = "none";
-    }
+  console.log("toggling: ", e.target);
+  e.target.classList.toggle("active");
+  var content = e.target.nextElementSibling;
+  // a null maxHeight collapses the item.
+  if (content.style.maxHeight) {
+    content.style.maxHeight = null;
+  } else {
+    content.style.maxHeight = "none";
+  }
 }
 
 const content = document.getElementById('content2');

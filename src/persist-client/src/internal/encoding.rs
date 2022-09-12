@@ -21,19 +21,19 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::CodecMismatch;
-use crate::fetch::{LeasedBatch, LeasedBatchMetadata};
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
-use crate::internal::state::proto_leased_batch_metadata;
 use crate::internal::state::{
-    HollowBatch, ProtoHollowBatch, ProtoLeasedBatch, ProtoLeasedBatchMetadata, ProtoReaderState,
-    ProtoStateDiff, ProtoStateFieldDiff, ProtoStateFieldDiffType, ProtoStateRollup, ProtoTrace,
-    ProtoU64Antichain, ProtoU64Description, ProtoWriterState, ReaderState, State, StateCollections,
-    WriterState,
+    HollowBatch, HollowBatchPart, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReaderState,
+    ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
+    ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState,
+    ReaderState, State, StateCollections, WriterState,
 };
-use crate::internal::state_diff::{StateDiff, StateFieldDiff, StateFieldValDiff};
+use crate::internal::state_diff::{
+    ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
+};
 use crate::internal::trace::Trace;
 use crate::read::ReaderId;
-use crate::{ShardId, WriterId};
+use crate::{PersistConfig, ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
     let uuid_encoded = match encoded.strip_prefix(id_prefix) {
@@ -178,54 +178,56 @@ where
 
 impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
     fn into_proto(&self) -> ProtoStateDiff {
+        let mut field_diffs = ProtoStateFieldDiffs::default();
+        field_diffs_into_proto(
+            ProtoStateField::LastGcReq,
+            &self.last_gc_req,
+            &mut field_diffs,
+            |()| Vec::new(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+        field_diffs_into_proto(
+            ProtoStateField::Rollups,
+            &self.rollups,
+            &mut field_diffs,
+            |k| k.into_proto().encode_to_vec(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+        field_diffs_into_proto(
+            ProtoStateField::Readers,
+            &self.readers,
+            &mut field_diffs,
+            |k| k.into_proto().encode_to_vec(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+        field_diffs_into_proto(
+            ProtoStateField::Writers,
+            &self.writers,
+            &mut field_diffs,
+            |k| k.into_proto().encode_to_vec(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+        field_diffs_into_proto(
+            ProtoStateField::Since,
+            &self.since,
+            &mut field_diffs,
+            |()| Vec::new(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+        field_diffs_into_proto(
+            ProtoStateField::Spine,
+            &self.spine,
+            &mut field_diffs,
+            |k| k.into_proto().encode_to_vec(),
+            |()| Vec::new(),
+        );
+        debug_assert_eq!(field_diffs.validate(), Ok(()));
         ProtoStateDiff {
             applier_version: self.applier_version.to_string(),
             seqno_from: self.seqno_from.into_proto(),
             seqno_to: self.seqno_to.into_proto(),
             latest_rollup_key: self.latest_rollup_key.into_proto(),
-            rollups: field_diffs_into_proto(
-                &self.rollups,
-                |k| k.into_proto().encode_to_vec(),
-                |v| v.into_proto().encode_to_vec(),
-            ),
-            last_gc_req: field_diffs_into_proto(
-                &self.last_gc_req,
-                |()| Vec::new(),
-                |v| v.into_proto().encode_to_vec(),
-            ),
-            readers: field_diffs_into_proto(
-                &self.readers,
-                |k| k.into_proto().encode_to_vec(),
-                |v| {
-                    ProtoReaderState {
-                        since: Some(v.since.into_proto()),
-                        seqno: v.seqno.into_proto(),
-                        last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                    }
-                    .encode_to_vec()
-                },
-            ),
-            writers: field_diffs_into_proto(
-                &self.writers,
-                |k| k.into_proto().encode_to_vec(),
-                |v| {
-                    ProtoWriterState {
-                        last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                        lease_duration_ms: v.lease_duration_ms,
-                    }
-                    .encode_to_vec()
-                },
-            ),
-            since: field_diffs_into_proto(
-                &self.since,
-                |()| Vec::new(),
-                |v| v.into_proto().encode_to_vec(),
-            ),
-            spine: field_diffs_into_proto(
-                &self.spine,
-                |k| k.into_proto().encode_to_vec(),
-                |()| Vec::new(),
-            ),
+            field_diffs: Some(field_diffs),
         }
     }
 
@@ -243,142 +245,157 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                 ))
             })?
         };
-        Ok(StateDiff {
+        let mut state_diff = StateDiff::new(
             applier_version,
-            seqno_from: proto.seqno_from.into_rust()?,
-            seqno_to: proto.seqno_to.into_rust()?,
-            latest_rollup_key: proto.latest_rollup_key.into_rust()?,
-            rollups: field_diffs_into_rust::<u64, String, _, _, _, _>(
-                proto.rollups,
-                |k| k.into_rust(),
-                |v| v.into_rust(),
-            )?
-            .into_iter()
-            .collect(),
-            last_gc_req: field_diffs_into_rust::<(), u64, _, _, _, _>(
-                proto.last_gc_req,
-                |()| Ok(()),
-                |v| v.into_rust(),
-            )?,
-            readers: field_diffs_into_rust::<String, ProtoReaderState, _, _, _, _>(
-                proto.readers,
-                |k| k.into_rust(),
-                |v| {
-                    Ok(ReaderState {
-                        since: v.since.into_rust_if_some("since")?,
-                        seqno: v.seqno.into_rust()?,
-                        last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                    })
-                },
-            )?
-            .into_iter()
-            .collect(),
-            writers: field_diffs_into_rust::<String, ProtoWriterState, _, _, _, _>(
-                proto.writers,
-                |k| k.into_rust(),
-                |v| {
-                    Ok(WriterState {
-                        last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                        lease_duration_ms: v.lease_duration_ms,
-                    })
-                },
-            )?
-            .into_iter()
-            .collect(),
-            since: field_diffs_into_rust::<(), ProtoU64Antichain, _, _, _, _>(
-                proto.since,
-                |()| Ok(()),
-                |v| v.into_rust(),
-            )?,
-            spine: field_diffs_into_rust::<ProtoHollowBatch, (), _, _, _, _>(
-                proto.spine,
-                |k| k.into_rust(),
-                |()| Ok(()),
-            )?,
-        })
+            proto.seqno_from.into_rust()?,
+            proto.seqno_to.into_rust()?,
+            proto.latest_rollup_key.into_rust()?,
+        );
+        if let Some(field_diffs) = proto.field_diffs {
+            debug_assert_eq!(field_diffs.validate(), Ok(()));
+            for field_diff in field_diffs.iter() {
+                let (field, diff) = field_diff?;
+                match field {
+                    ProtoStateField::LastGcReq => field_diff_into_rust::<(), u64, _, _, _, _>(
+                        diff,
+                        &mut state_diff.last_gc_req,
+                        |()| Ok(()),
+                        |v| v.into_rust(),
+                    )?,
+                    ProtoStateField::Rollups => field_diff_into_rust::<u64, String, _, _, _, _>(
+                        diff,
+                        &mut state_diff.rollups,
+                        |k| k.into_rust(),
+                        |v| v.into_rust(),
+                    )?,
+                    ProtoStateField::Readers => {
+                        field_diff_into_rust::<String, ProtoReaderState, _, _, _, _>(
+                            diff,
+                            &mut state_diff.readers,
+                            |k| k.into_rust(),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    ProtoStateField::Writers => {
+                        field_diff_into_rust::<String, ProtoWriterState, _, _, _, _>(
+                            diff,
+                            &mut state_diff.writers,
+                            |k| k.into_rust(),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    ProtoStateField::Since => {
+                        field_diff_into_rust::<(), ProtoU64Antichain, _, _, _, _>(
+                            diff,
+                            &mut state_diff.since,
+                            |()| Ok(()),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    ProtoStateField::Spine => {
+                        field_diff_into_rust::<ProtoHollowBatch, (), _, _, _, _>(
+                            diff,
+                            &mut state_diff.spine,
+                            |k| k.into_rust(),
+                            |()| Ok(()),
+                        )?
+                    }
+                }
+            }
+        }
+        Ok(state_diff)
     }
 }
 
 fn field_diffs_into_proto<K, V, KFn, VFn>(
+    field: ProtoStateField,
     diffs: &[StateFieldDiff<K, V>],
+    proto: &mut ProtoStateFieldDiffs,
     k_fn: KFn,
     v_fn: VFn,
-) -> Vec<ProtoStateFieldDiff>
-where
+) where
     KFn: Fn(&K) -> Vec<u8>,
     VFn: Fn(&V) -> Vec<u8>,
 {
-    diffs
-        .iter()
-        .map(|diff| {
-            let (diff_type, from, to) = match &diff.val {
-                StateFieldValDiff::Insert(to) => {
-                    (ProtoStateFieldDiffType::Insert, Vec::new(), v_fn(to))
-                }
-                StateFieldValDiff::Update(from, to) => {
-                    (ProtoStateFieldDiffType::Update, v_fn(from), v_fn(to))
-                }
-                StateFieldValDiff::Delete(from) => {
-                    (ProtoStateFieldDiffType::Delete, v_fn(from), Vec::new())
-                }
-            };
-            ProtoStateFieldDiff {
-                key: k_fn(&diff.key),
-                diff_type: i32::from(diff_type),
-                from,
-                to,
-            }
-        })
-        .collect()
+    for diff in diffs.iter() {
+        field_diff_into_proto(field, diff, proto, &k_fn, &v_fn);
+    }
 }
 
-fn field_diffs_into_rust<KP, VP, K, V, KFn, VFn>(
-    protos: Vec<ProtoStateFieldDiff>,
+fn field_diff_into_proto<K, V, KFn, VFn>(
+    field: ProtoStateField,
+    diff: &StateFieldDiff<K, V>,
+    proto: &mut ProtoStateFieldDiffs,
     k_fn: KFn,
     v_fn: VFn,
-) -> Result<Vec<StateFieldDiff<K, V>>, TryFromProtoError>
+) where
+    KFn: Fn(&K) -> Vec<u8>,
+    VFn: Fn(&V) -> Vec<u8>,
+{
+    proto.fields.push(i32::from(field));
+    proto.push_data(k_fn(&diff.key));
+    match &diff.val {
+        StateFieldValDiff::Insert(to) => {
+            proto
+                .diff_types
+                .push(i32::from(ProtoStateFieldDiffType::Insert));
+            proto.push_data(v_fn(to));
+        }
+        StateFieldValDiff::Update(from, to) => {
+            proto
+                .diff_types
+                .push(i32::from(ProtoStateFieldDiffType::Update));
+            proto.push_data(v_fn(from));
+            proto.push_data(v_fn(to));
+        }
+        StateFieldValDiff::Delete(from) => {
+            proto
+                .diff_types
+                .push(i32::from(ProtoStateFieldDiffType::Delete));
+            proto.push_data(v_fn(from));
+        }
+    };
+}
+
+fn field_diff_into_rust<KP, VP, K, V, KFn, VFn>(
+    proto: ProtoStateFieldDiff<'_>,
+    diffs: &mut Vec<StateFieldDiff<K, V>>,
+    k_fn: KFn,
+    v_fn: VFn,
+) -> Result<(), TryFromProtoError>
 where
     KP: prost::Message + Default,
     VP: prost::Message + Default,
     KFn: Fn(KP) -> Result<K, TryFromProtoError>,
     VFn: Fn(VP) -> Result<V, TryFromProtoError>,
 {
-    let mut diffs = Vec::new();
-    for proto in protos {
-        let val = match ProtoStateFieldDiffType::from_i32(proto.diff_type) {
-            Some(ProtoStateFieldDiffType::Insert) => {
-                let to = VP::decode(proto.to.as_slice())
-                    .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
-                StateFieldValDiff::Insert(v_fn(to)?)
-            }
-            Some(ProtoStateFieldDiffType::Update) => {
-                let from = VP::decode(proto.from.as_slice())
-                    .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
-                let to = VP::decode(proto.to.as_slice())
-                    .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+    let val = match proto.diff_type {
+        ProtoStateFieldDiffType::Insert => {
+            let to = VP::decode(proto.to)
+                .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+            StateFieldValDiff::Insert(v_fn(to)?)
+        }
+        ProtoStateFieldDiffType::Update => {
+            let from = VP::decode(proto.from)
+                .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+            let to = VP::decode(proto.to)
+                .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
 
-                StateFieldValDiff::Update(v_fn(from)?, v_fn(to)?)
-            }
-            Some(ProtoStateFieldDiffType::Delete) => {
-                let from = VP::decode(proto.from.as_slice())
-                    .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
-                StateFieldValDiff::Delete(v_fn(from)?)
-            }
-            None => {
-                return Err(TryFromProtoError::unknown_enum_variant(format!(
-                    "ProtoStateFieldDiffType {}",
-                    proto.diff_type,
-                )))
-            }
-        };
-        let key = KP::decode(proto.key.as_slice())
-            .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
-        diffs.push(StateFieldDiff {
-            key: k_fn(key)?,
-            val,
-        });
-    }
-    Ok(diffs)
+            StateFieldValDiff::Update(v_fn(from)?, v_fn(to)?)
+        }
+        ProtoStateFieldDiffType::Delete => {
+            let from = VP::decode(proto.from)
+                .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+            StateFieldValDiff::Delete(v_fn(from)?)
+        }
+    };
+    let key = KP::decode(proto.key)
+        .map_err(|err| TryFromProtoError::InvalidPersistState(err.to_string()))?;
+    diffs.push(StateFieldDiff {
+        key: k_fn(key)?,
+        val,
+    });
+    Ok(())
 }
 
 impl<K, V, T, D> State<K, V, T, D>
@@ -570,14 +587,26 @@ impl<T: Timestamp + Codec64> RustType<ProtoReaderState> for ReaderState<T> {
             seqno: self.seqno.into_proto(),
             since: Some(self.since.into_proto()),
             last_heartbeat_timestamp_ms: self.last_heartbeat_timestamp_ms.into_proto(),
+            lease_duration_ms: self.lease_duration_ms.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoReaderState) -> Result<Self, TryFromProtoError> {
+        let mut lease_duration_ms = proto.lease_duration_ms.into_rust()?;
+        // MIGRATION: If the lease_duration_ms is empty, then the proto field
+        // was missing and we need to fill in a default. This would ideally be
+        // based on the actual value in PersistConfig, but it's only here for a
+        // short time and this is way easier.
+        if lease_duration_ms == 0 {
+            lease_duration_ms =
+                u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis())
+                    .expect("lease duration as millis should fit within u64");
+        }
         Ok(ReaderState {
             seqno: proto.seqno.into_rust()?,
             since: proto.since.into_rust_if_some("ProtoReaderState::since")?,
             last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms.into_rust()?,
+            lease_duration_ms,
         })
     }
 }
@@ -602,16 +631,45 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     fn into_proto(&self) -> ProtoHollowBatch {
         ProtoHollowBatch {
             desc: Some(self.desc.into_proto()),
-            keys: self.keys.into_proto(),
+            parts: self.parts.into_proto(),
             len: self.len.into_proto(),
+            deprecated_keys: vec![],
         }
     }
 
     fn from_proto(proto: ProtoHollowBatch) -> Result<Self, TryFromProtoError> {
+        let mut parts: Vec<HollowBatchPart> = proto.parts.into_rust()?;
+        // MIGRATION: We used to just have the keys instead of a more structured
+        // part.
+        parts.extend(
+            proto
+                .deprecated_keys
+                .into_iter()
+                .map(|key| HollowBatchPart {
+                    key: PartialBatchKey(key),
+                    encoded_size_bytes: 0,
+                }),
+        );
         Ok(HollowBatch {
             desc: proto.desc.into_rust_if_some("desc")?,
-            keys: proto.keys.into_rust()?,
+            parts,
             len: proto.len.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        ProtoHollowBatchPart {
+            key: self.key.into_proto(),
+            encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        Ok(HollowBatchPart {
+            key: proto.key.into_rust()?,
+            encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
         })
     }
 }
@@ -655,77 +713,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatchMetadata> for LeasedBatchMetadata<T> {
-    fn into_proto(&self) -> ProtoLeasedBatchMetadata {
-        use proto_leased_batch_metadata::*;
-        ProtoLeasedBatchMetadata {
-            kind: Some(match self {
-                LeasedBatchMetadata::Snapshot { as_of } => {
-                    Kind::Snapshot(ProtoLeasedBatchMetadataSnapshot {
-                        as_of: Some(as_of.into_proto()),
-                    })
-                }
-                LeasedBatchMetadata::Listen { as_of, until } => {
-                    Kind::Listen(ProtoLeasedBatchMetadataListen {
-                        as_of: Some(as_of.into_proto()),
-                        until: Some(until.into_proto()),
-                    })
-                }
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoLeasedBatchMetadata) -> Result<Self, TryFromProtoError> {
-        use proto_leased_batch_metadata::Kind::*;
-        Ok(match proto.kind {
-            Some(Snapshot(snapshot)) => LeasedBatchMetadata::Snapshot {
-                as_of: snapshot
-                    .as_of
-                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Snapshot::as_of")?,
-            },
-            Some(Listen(listen)) => LeasedBatchMetadata::Listen {
-                as_of: listen
-                    .as_of
-                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Listen::as_of")?,
-                until: listen
-                    .until
-                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Listen::until")?,
-            },
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "ProtoLeasedBatchMetadata::Kind",
-                ))
-            }
-        })
-    }
-}
-
-impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatch> for LeasedBatch<T> {
-    /// n.b. this is used with [`crate::fetch::SerdeLeasedBatch`].
-    fn into_proto(&self) -> ProtoLeasedBatch {
-        ProtoLeasedBatch {
-            shard_id: self.shard_id.into_proto(),
-            reader_id: self.reader_id.into_proto(),
-            reader_metadata: Some(self.metadata.into_proto()),
-            batch: Some(self.batch.into_proto()),
-            leased_seqno: self.leased_seqno.into_proto(),
-        }
-    }
-
-    /// n.b. this is used with [`crate::fetch::SerdeLeasedBatch`].
-    fn from_proto(proto: ProtoLeasedBatch) -> Result<Self, TryFromProtoError> {
-        Ok(LeasedBatch {
-            shard_id: proto.shard_id.into_rust()?,
-            reader_id: proto.reader_id.into_rust()?,
-            metadata: proto
-                .reader_metadata
-                .into_rust_if_some("ProtoLeasedBatch::reader_metadata")?,
-            batch: proto.batch.into_rust_if_some("ProtoLeasedBatch::batch")?,
-            leased_seqno: proto.leased_seqno.into_rust()?,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use mz_persist::location::SeqNo;
@@ -735,6 +722,8 @@ mod tests {
     use crate::internal::state::State;
     use crate::internal::state_diff::StateDiff;
     use crate::ShardId;
+
+    use super::*;
 
     #[test]
     fn applier_version_state() {
@@ -783,5 +772,55 @@ mod tests {
         // of code.
         let v1_res = std::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, &buf));
         assert!(v1_res.is_err());
+    }
+
+    #[test]
+    fn hollow_batch_migration_keys() {
+        let x = HollowBatch {
+            desc: Description::new(
+                Antichain::from_elem(1u64),
+                Antichain::from_elem(2u64),
+                Antichain::from_elem(3u64),
+            ),
+            len: 4,
+            parts: vec![HollowBatchPart {
+                key: PartialBatchKey("a".into()),
+                encoded_size_bytes: 5,
+            }],
+        };
+        let mut old = x.into_proto();
+        // Old ProtoHollowBatch had keys instead of parts.
+        old.deprecated_keys = vec!["b".into()];
+        // We don't expect to see a ProtoHollowBatch with keys _and_ parts, only
+        // one or the other, but we have a defined output, so may as well test
+        // it.
+        let mut expected = x;
+        // We fill in 0 for encoded_size_bytes when we migrate from keys. This
+        // will violate bounded memory usage compaction during the transition
+        // (short-term issue), but that's better than creating unnecessary runs
+        // (longer-term issue).
+        expected.parts.push(HollowBatchPart {
+            key: PartialBatchKey("b".into()),
+            encoded_size_bytes: 0,
+        });
+        assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
+    }
+
+    #[test]
+    fn reader_state_migration_lease_duration() {
+        let x = ReaderState {
+            seqno: SeqNo(1),
+            since: Antichain::from_elem(2u64),
+            last_heartbeat_timestamp_ms: 3,
+            // Old ProtoReaderState had no lease_duration_ms field
+            lease_duration_ms: 0,
+        };
+        let old = x.into_proto();
+        let mut expected = x;
+        // We fill in DEFAULT_READ_LEASE_DURATION for lease_duration_ms when we
+        // migrate from unset.
+        expected.lease_duration_ms =
+            u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis()).unwrap();
+        assert_eq!(<ReaderState<u64>>::from_proto(old).unwrap(), expected);
     }
 }

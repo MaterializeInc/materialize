@@ -9,14 +9,18 @@
 
 //! PostgreSQL utility library.
 
+use std::time::Duration;
+
 use anyhow::{anyhow, bail};
+use async_ssh2_lite::{AsyncChannel, AsyncSession, SessionConfiguration};
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use std::time::Duration;
+use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{ReplicationMode, SslMode};
-use tokio_postgres::{Client, Config};
+use tokio_postgres::tls::MakeTlsConnect;
+use tokio_postgres::{Client, Config as PostgresConfig};
 
 use mz_ore::task;
 
@@ -25,7 +29,7 @@ use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
 pub mod desc;
 
 /// Creates a TLS connector for the given [`Config`].
-pub fn make_tls(config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
+pub fn make_tls(config: &PostgresConfig) -> Result<MakeTlsConnector, anyhow::Error> {
     let mut builder = SslConnector::builder(SslMethod::tls_client())?;
     // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is
     // pretty relaxed and recommends SslMode::VerifyCa or SslMode::VerifyFull for security.
@@ -92,9 +96,7 @@ pub async fn publication_info(
     config: &Config,
     publication: &str,
 ) -> Result<Vec<PostgresTableDesc>, anyhow::Error> {
-    let tls = make_tls(&config)?;
-    let (client, connection) = config.connect(tls).await?;
-    task::spawn(|| "postgres_publication_info", connection);
+    let client = config.connect("postgres_publication_info").await?;
 
     client
         .query(
@@ -173,11 +175,8 @@ pub async fn publication_info(
 }
 
 pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<(), anyhow::Error> {
-    let tls = make_tls(&config)?;
-    let (client, connection) = config.connect(tls).await?;
-    task::spawn(|| "postgres_drop_replication_slots", connection);
-
-    let replication_client = connect_replication(config).await?;
+    let client = config.connect("postgres_drop_replication_slots").await?;
+    let replication_client = config.connect_replication().await?;
     for slot in slots {
         let rows = client
             .query(
@@ -207,15 +206,155 @@ pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<()
     Ok(())
 }
 
-/// Starts a replication connection to the upstream database
-pub async fn connect_replication(mut config: Config) -> Result<Client, anyhow::Error> {
-    let tls = make_tls(&config)?;
-    let (client, connection) = config
-        .replication_mode(ReplicationMode::Logical)
-        .connect_timeout(Duration::from_secs(30))
-        .keepalives_idle(Duration::from_secs(10 * 60))
-        .connect(tls)
-        .await?;
-    task::spawn(|| "postgres_connect_replication", connection);
-    Ok(client)
+/// Configuration on how to connect a given Postgres database.
+#[derive(PartialEq, Clone)]
+pub enum SshTunnelConfig {
+    /// Establish a direct TCP connection to the database host.
+    Direct,
+    /// Establish a TCP connection to the database via an SSH tunnel.
+    /// This means first establishing an SSH connection to a bastion host,
+    /// and then opening a separate connection from that host to the database.
+    /// This is commonly referred by vendors as a "direct SSH tunnel", in
+    /// opposition to "reverse SSH tunnel", which is currently unsupported.
+    Tunnel {
+        /// Hostname of the SSH bastion host
+        host: String,
+        /// Port where `sshd` is running in the bastion host
+        port: u16,
+        /// Username to be used in the SSH connection
+        user: String,
+        /// Public SSH key used for authentication, in OpenSSH format.
+        /// Stored as a string (instead of `Vec<u8>`) because that is how
+        /// the SSH library expects it.
+        public_key: String,
+        /// Private SSH key used for authentication, in OpenSSH format.
+        /// Stored as a string (instead of `Vec<u8>`) because that is how
+        /// the SSH library expects it.
+        private_key: String,
+    },
+}
+
+// Omit keys from debug output
+impl std::fmt::Debug for SshTunnelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Direct => write!(f, "Direct"),
+            Self::Tunnel {
+                host, port, user, ..
+            } => f
+                .debug_struct("Tunnel")
+                .field("host", host)
+                .field("port", port)
+                .field("user", user)
+                .finish(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Config {
+    postgres_config: PostgresConfig,
+    host: String,
+    port: u16,
+    ssh_tunnel: SshTunnelConfig,
+}
+
+impl Config {
+    pub fn new(
+        postgres_config: PostgresConfig,
+        host: &str,
+        port: u16,
+        ssh_tunnel: SshTunnelConfig,
+    ) -> Self {
+        Self {
+            postgres_config,
+            host: host.to_string(),
+            port,
+            ssh_tunnel,
+        }
+    }
+
+    /// Connect to a Postgres database, automatically managing SSL and SSH details as needed.
+    pub async fn connect(&self, connection_task_name: &str) -> Result<Client, anyhow::Error> {
+        let mut tls = make_tls(&self.postgres_config)?;
+        match self.ssh_tunnel {
+            SshTunnelConfig::Direct => {
+                let (client, connection) = self.postgres_config.connect(tls).await?;
+                task::spawn(|| connection_task_name, connection);
+                Ok(client)
+            }
+            SshTunnelConfig::Tunnel { .. } => {
+                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, &self.host)?;
+                let channel = self.establish_ssh_connection().await?;
+                let (client, connection) = self.postgres_config.connect_raw(channel, tls).await?;
+                task::spawn(|| connection_task_name, connection);
+                Ok(client)
+            }
+        }
+    }
+
+    /// Starts a replication connection to the upstream database
+    pub async fn connect_replication(mut self) -> Result<Client, anyhow::Error> {
+        let mut tls = make_tls(&self.postgres_config)?;
+        match self.ssh_tunnel {
+            SshTunnelConfig::Direct => {
+                let (client, connection) = self
+                    .postgres_config
+                    .replication_mode(ReplicationMode::Logical)
+                    .connect_timeout(Duration::from_secs(30))
+                    .keepalives_idle(Duration::from_secs(10 * 60))
+                    .connect(tls)
+                    .await?;
+                task::spawn(|| "postgres_connect_replication", connection);
+                Ok(client)
+            }
+            SshTunnelConfig::Tunnel { .. } => {
+                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, &self.host)?;
+                let channel = self.establish_ssh_connection().await?;
+                let (client, connection) = self
+                    .postgres_config
+                    .replication_mode(ReplicationMode::Logical)
+                    .connect_timeout(Duration::from_secs(30))
+                    .keepalives_idle(Duration::from_secs(10 * 60))
+                    .connect_raw(channel, tls)
+                    .await?;
+                task::spawn(|| "postgres_connect_replication", connection);
+                Ok(client)
+            }
+        }
+    }
+
+    async fn establish_ssh_connection(
+        &self,
+    ) -> Result<AsyncChannel<TokioTcpStream>, anyhow::Error> {
+        match &self.ssh_tunnel {
+            SshTunnelConfig::Tunnel {
+                host,
+                port,
+                user,
+                public_key,
+                private_key,
+            } => {
+                let tcp_stream = TokioTcpStream::connect((host.as_str(), *port)).await?;
+                let mut session = AsyncSession::new(tcp_stream, Some(SessionConfiguration::new()))?;
+                session.handshake().await?;
+
+                session
+                    .userauth_pubkey_memory(user, Some(public_key), private_key, None)
+                    .await?;
+
+                if !session.authenticated() {
+                    bail!("failed SSH authentication")
+                };
+
+                // Advertise the source connection to Postgres as coming from the bastion host
+                let src = Some((host.as_str(), *port));
+
+                Ok(session
+                    .channel_direct_tcpip(&self.host, self.port, src)
+                    .await?)
+            }
+            SshTunnelConfig::Direct => bail!("connection not setup to use SSH"),
+        }
+    }
 }

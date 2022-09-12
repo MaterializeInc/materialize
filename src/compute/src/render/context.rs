@@ -97,7 +97,7 @@ where
         let as_of_frontier = dataflow
             .as_of
             .clone()
-            .unwrap_or_else(|| Antichain::from_elem(0));
+            .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum()));
 
         Self {
             debug_name: dataflow.debug_name.clone(),

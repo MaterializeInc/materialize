@@ -11,6 +11,8 @@
 # Ingest some more data and read it back
 #
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": "string" } ] }
 
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=21
@@ -37,15 +39,15 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=2
 04-03
 
 $ kafka-verify format=avro sink=materialize.public.multi_broker_sink sort-messages=true
-{"before": null, "after": {"row": {"f1": "01-01" }}}
-{"before": null, "after": {"row": {"f1": "01-02" }}}
-{"before": null, "after": {"row": {"f1": "01-03" }}}
-{"before": null, "after": {"row": {"f1": "02-01" }}}
-{"before": null, "after": {"row": {"f1": "02-02" }}}
-{"before": null, "after": {"row": {"f1": "02-03" }}}
-{"before": null, "after": {"row": {"f1": "03-01" }}}
-{"before": null, "after": {"row": {"f1": "03-02" }}}
-{"before": null, "after": {"row": {"f1": "03-03" }}}
-{"before": null, "after": {"row": {"f1": "04-01" }}}
-{"before": null, "after": {"row": {"f1": "04-02" }}}
-{"before": null, "after": {"row": {"f1": "04-03" }}}
+{"before": null, "after": {"row": {"f1": "01-01" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "01-02" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "01-03" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "02-01" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "02-02" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "02-03" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "03-01" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "03-02" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "03-03" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "04-01" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "04-02" }}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"f1": "04-03" }}, "transaction": {"id": "<TIMESTAMP>"}}

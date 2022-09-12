@@ -352,37 +352,61 @@ where
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
 
-    let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
-        &updates,
-        trace,
-        |time| time.step_back(),
-        comparison,
-        // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
-        // in that we seem to yield too much and do too little work when we do.
-        |_timer, count| count > 1_000_000,
-        // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-        move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
-            let temp_storage = RowArena::new();
-            let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
-            let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
-            let diff = diff1.clone() * diff2.clone();
-            let dout = (row, time.clone());
-            Some((dout, initial.clone(), diff))
-        },
-    )
-    .inner
-    .ok_err(|(data_time, init_time, diff)| {
-        // TODO(mcsherry): consider `ok_err()` for `Collection`.
-        match data_time {
-            (Ok(data), time) => Ok((data.map(|data| (data, time)), init_time, diff)),
-            (Err(err), _time) => Err((DataflowError::from(err), init_time, diff)),
-        }
-    });
+    if closure.could_error() {
+        let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
+            &updates,
+            trace,
+            |time| time.step_back(),
+            comparison,
+            // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
+            // in that we seem to yield too much and do too little work when we do.
+            |_timer, count| count > 1_000_000,
+            // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
+            move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+                let temp_storage = RowArena::new();
+                let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
+                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
+                let diff = diff1.clone() * diff2.clone();
+                let dout = (row, time.clone());
+                Some((dout, initial.clone(), diff))
+            },
+        )
+        .inner
+        .ok_err(|(data_time, init_time, diff)| {
+            // TODO(mcsherry): consider `ok_err()` for `Collection`.
+            match data_time {
+                (Ok(data), time) => Ok((data.map(|data| (data, time)), init_time, diff)),
+                (Err(err), _time) => Err((DataflowError::from(err), init_time, diff)),
+            }
+        });
 
-    (
-        oks.as_collection().flat_map(|x| x),
-        errs.concat(&errs2.as_collection()),
-    )
+        (
+            oks.as_collection().flat_map(|x| x),
+            errs.concat(&errs2.as_collection()),
+        )
+    } else {
+        let oks = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
+            &updates,
+            trace,
+            |time| time.step_back(),
+            comparison,
+            // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
+            // in that we seem to yield too much and do too little work when we do.
+            |_timer, count| count > 1_000_000,
+            // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
+            move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+                let temp_storage = RowArena::new();
+                let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
+                let row = closure
+                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                    .expect("Closure claimed to never errer");
+                let diff = diff1.clone() * diff2.clone();
+                row.map(|r| ((r, time.clone()), initial.clone(), diff))
+            },
+        );
+
+        (oks, errs)
+    }
 }
 
 /// Builds the beginning of the update stream of a delta path.

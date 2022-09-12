@@ -9,8 +9,8 @@
 
 syntax = "proto3";
 
-import "persist/src/persist.proto";
 import "proto/src/proto.proto";
+import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
 import "storage/src/protocol/client.proto";
@@ -58,7 +58,7 @@ message ProtoPeekResponse {
 message ProtoTailResponse {
     oneof kind {
         ProtoTailBatch batch = 1;
-        mz_persist.gen.persist.ProtoU64Antichain dropped_at = 2;
+        mz_repr.antichain.ProtoU64Antichain dropped_at = 2;
     }
 }
 
@@ -69,7 +69,7 @@ message ProtoTailBatch {
         int64 diff = 3;
     }
 
-    mz_persist.gen.persist.ProtoU64Antichain lower = 1;
-    mz_persist.gen.persist.ProtoU64Antichain upper = 2;
+    mz_repr.antichain.ProtoU64Antichain lower = 1;
+    mz_repr.antichain.ProtoU64Antichain upper = 2;
     repeated ProtoUpdate updates = 3;
 }

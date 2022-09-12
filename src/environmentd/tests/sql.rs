@@ -116,11 +116,20 @@ fn test_no_block() -> Result<(), anyhow::Error> {
             let slow_task = task::spawn(|| "slow_client", async move {
                 info!("test_no_block: in thread; executing create source");
                 let result = client
-                    .batch_execute(&format!(
-                        "CREATE SOURCE foo \
+                .batch_execute(&format!(
+                    "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://{}';",
+                    schema_registry_server.addr,
+                ))
+                .await;
+                info!("test_no_block: in thread; create CSR conn done");
+                let _ = result?;
+
+                let result = client
+                    .batch_execute(&format!("
+                        CREATE SOURCE foo \
                         FROM KAFKA BROKER '{}' TOPIC 'foo' \
-                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://{}'",
-                        &*KAFKA_ADDRS, schema_registry_server.addr,
+                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                        &*KAFKA_ADDRS,
                     ))
                     .await;
                 info!("test_no_block: in thread; create source done");
@@ -925,34 +934,43 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     client_interactive.execute("COMMIT", &[])?;
     let _ = client_interactive.query("SELECT * FROM T1", &[])?;
 
-    let rows = client_tail.query("FETCH ALL c1", &[])?;
-    client_tail.batch_execute("COMMIT;")?;
     let mut first_write_ts = None;
     let mut second_write_ts = None;
     let mut seen_first = false;
     let mut seen_second = false;
-    for row in rows.iter() {
-        let mz_timestamp = row.get::<_, MzTimestamp>("mz_timestamp");
-        let mz_progressed = row.get::<_, Option<bool>>("mz_progressed").unwrap();
-        let mz_diff = row.get::<_, Option<i64>>("mz_diff");
-        let data = row.get::<_, Option<String>>("data");
 
-        if !mz_progressed {
-            // Actual data
-            let mz_diff = mz_diff.unwrap();
-            let data = data.unwrap();
-            if !seen_first {
-                assert_eq!(data, "first");
-                seen_first = true;
-                first_write_ts = Some(mz_timestamp);
-            } else {
-                assert_eq!(data, "second");
-                seen_second = true;
-                second_write_ts = Some(mz_timestamp);
+    // TODO(aljoscha): We can wrap this with timeout logic, if we want/need to?
+    // We need to do multiple FETCH ALL calls. ALL only guarantees that all
+    // available rows will be returned, but it's up to the system to decide what
+    // is available. This means that we could still get only one row per
+    // request, and we won't know how many rows will come back otherwise.
+    while !seen_second {
+        let rows = client_tail.query("FETCH ALL c1", &[])?;
+        for row in rows.iter() {
+            let mz_timestamp = row.get::<_, MzTimestamp>("mz_timestamp");
+            let mz_progressed = row.get::<_, Option<bool>>("mz_progressed").unwrap();
+            let mz_diff = row.get::<_, Option<i64>>("mz_diff");
+            let data = row.get::<_, Option<String>>("data");
+
+            if !mz_progressed {
+                // Actual data
+                let mz_diff = mz_diff.unwrap();
+                let data = data.unwrap();
+                if !seen_first {
+                    assert_eq!(data, "first");
+                    seen_first = true;
+                    first_write_ts = Some(mz_timestamp);
+                } else {
+                    assert_eq!(data, "second");
+                    seen_second = true;
+                    second_write_ts = Some(mz_timestamp);
+                }
+                assert_eq!(mz_diff, 2);
             }
-            assert_eq!(mz_diff, 2);
         }
     }
+
+    client_tail.batch_execute("COMMIT;")?;
 
     assert!(seen_first);
     assert!(seen_second);

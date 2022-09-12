@@ -345,6 +345,41 @@ pub enum Plan<T = mz_repr::Timestamp> {
     },
 }
 
+impl<T> Plan<T> {
+    /// Iterates through mutable references to child expressions.
+    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Self> {
+        let mut first = None;
+        let mut second = None;
+        let mut rest = None;
+
+        use Plan::*;
+        match self {
+            Constant { .. } | Get { .. } => (),
+            Let { value, body, .. } => {
+                first = Some(&mut **value);
+                second = Some(&mut **body);
+            }
+            Mfp { input, .. }
+            | FlatMap { input, .. }
+            | Reduce { input, .. }
+            | TopK { input, .. }
+            | Negate { input }
+            | Threshold { input, .. }
+            | ArrangeBy { input, .. } => {
+                first = Some(&mut **input);
+            }
+            Join { inputs, .. } | Union { inputs } => {
+                rest = Some(inputs);
+            }
+        }
+
+        first
+            .into_iter()
+            .chain(second)
+            .chain(rest.into_iter().flatten())
+    }
+}
+
 impl Arbitrary for Plan {
     type Strategy = BoxedStrategy<Plan>;
     type Parameters = ();
@@ -714,11 +749,11 @@ impl RustType<ProtoPlan> for Plan {
     }
 }
 
-impl RustType<proto_plan::ProtoRowDiff> for (Row, u64, i64) {
+impl RustType<proto_plan::ProtoRowDiff> for (Row, mz_repr::Timestamp, i64) {
     fn into_proto(&self) -> proto_plan::ProtoRowDiff {
         proto_plan::ProtoRowDiff {
             row: Some(self.0.into_proto()),
-            timestamp: self.1.clone(),
+            timestamp: self.1.into(),
             diff: self.2.clone(),
         }
     }
@@ -726,13 +761,13 @@ impl RustType<proto_plan::ProtoRowDiff> for (Row, u64, i64) {
     fn from_proto(proto: proto_plan::ProtoRowDiff) -> Result<Self, TryFromProtoError> {
         Ok((
             proto.row.into_rust_if_some("ProtoRowDiff::row")?,
-            proto.timestamp,
+            proto.timestamp.into(),
             proto.diff,
         ))
     }
 }
 
-impl RustType<proto_plan::ProtoRowDiffVec> for Vec<(Row, u64, i64)> {
+impl RustType<proto_plan::ProtoRowDiffVec> for Vec<(Row, mz_repr::Timestamp, i64)> {
     fn into_proto(&self) -> proto_plan::ProtoRowDiffVec {
         proto_plan::ProtoRowDiffVec {
             rows: self.into_proto(),
@@ -803,16 +838,11 @@ impl RustType<ProtoGetPlan> for GetPlan {
 pub struct LirDebugInfo<'a> {
     debug_name: &'a str,
     id: GlobalId,
-    dataflow_uuid: uuid::Uuid,
 }
 
 impl<'a> std::fmt::Display for LirDebugInfo<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Debug name: {}; id: {}; dataflow UUID: {}",
-            self.debug_name, self.id, self.dataflow_uuid
-        )
+        write!(f, "Debug name: {}; id: {}", self.debug_name, self.id)
     }
 }
 
@@ -886,7 +916,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         fields(
             dataflow.name = debug_info.debug_name,
             dataflow.id = %debug_info.id,
-            dataflow.uuid = %debug_info.dataflow_uuid
         )
     )]
     pub fn from_mir(
@@ -1491,14 +1520,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 LirDebugInfo {
                     debug_name: &desc.debug_name,
                     id: build.id,
-                    dataflow_uuid: desc.id,
                 },
             )?;
             arrangements.insert(Id::Global(build.id), keys);
             objects_to_build.push(BuildDesc { id: build.id, plan });
         }
 
-        Ok(DataflowDescription {
+        let mut dataflow = DataflowDescription {
             source_imports: desc.source_imports,
             index_imports: desc.index_imports,
             objects_to_build,
@@ -1507,8 +1535,56 @@ This is not expected to cause incorrect results, but could indicate a performanc
             as_of: desc.as_of,
             until: desc.until,
             debug_name: desc.debug_name,
-            id: desc.id,
-        })
+        };
+
+        // Extract MFPs from Get operators for sources, and extract what we can for the source.
+        // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
+        for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
+            let mut identity_present = false;
+            let mut mfps = Vec::new();
+            for build_desc in dataflow.objects_to_build.iter_mut() {
+                let mut todo = vec![&mut build_desc.plan];
+                while let Some(expression) = todo.pop() {
+                    if let Plan::Get { id, plan, .. } = expression {
+                        if *id == mz_expr::Id::Global(*source_id) {
+                            match plan {
+                                GetPlan::Collection(mfp) => mfps.push(mfp),
+                                GetPlan::PassArrangements => {
+                                    identity_present = true;
+                                }
+                                GetPlan::Arrangement(..) => {
+                                    panic!("Surprising `GetPlan` for imported source: {:?}", plan);
+                                }
+                            }
+                        }
+                    } else {
+                        todo.extend(expression.children_mut());
+                    }
+                }
+            }
+
+            // Direct exports of sources are possible, and prevent pushdown.
+            identity_present |= dataflow
+                .index_exports
+                .values()
+                .any(|(x, _)| x.on_id == *source_id);
+            identity_present |= dataflow.sink_exports.values().any(|x| x.from == *source_id);
+
+            if !identity_present && !mfps.is_empty() {
+                // Extract a common prefix `MapFilterProject` from `mfps`.
+                let common = MapFilterProject::extract_common(&mut mfps[..]);
+                // Apply common expressions to the source's `MapFilterProject`.
+                let mut mfp = if let Some(mfp) = source.arguments.operators.take() {
+                    MapFilterProject::compose(mfp, common)
+                } else {
+                    common
+                };
+                mfp.optimize();
+                source.arguments.operators = Some(mfp);
+            }
+        }
+
+        Ok(dataflow)
     }
 
     /// Partitions the plan into `parts` many disjoint pieces.

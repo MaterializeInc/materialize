@@ -7,14 +7,14 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 aws-arn = "0.3.1"
-aws-sdk-sts = { version = "0.17.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-chrono = { version = "0.4.20", default-features = false, features = ["clock", "std"] }
+aws-sdk-sts = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+chrono = { version = "0.4.22", default-features = false, features = ["clock", "std"] }
 globset = "0.4.9"
 hex = "0.4.3"
 itertools = "0.10.3"
-once_cell = "1.13.1"
+once_cell = "1.14.0"
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-compute-client = { path = "../compute-client" }

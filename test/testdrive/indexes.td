@@ -189,10 +189,10 @@ materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\"
 # TODO(justin): not handled in parser yet:
 #   SHOW INDEXES FROM v LIKE '%v'
 
-! SHOW INDEX FROM nonexistent
+! SHOW INDEXES FROM nonexistent
 contains:unknown catalog item 'nonexistent'
 
-! SHOW INDEX FROM foo_primary_idx
+! SHOW INDEXES FROM foo_primary_idx
 contains:cannot show indexes on materialize.public.foo_primary_idx because it is a index
 
 > CREATE CLUSTER clstr REPLICAS (r1 (REMOTE ['localhost:1234']))

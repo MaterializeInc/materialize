@@ -17,9 +17,13 @@ CREATE TABLE alter_extend_primary_key (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1))
 ALTER TABLE alter_extend_primary_key REPLICA IDENTITY FULL;
 INSERT INTO alter_extend_primary_key VALUES (123, 234), (345, 456);
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE alter_extend_primary_key
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_extend_primary_key'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > SELECT * FROM alter_extend_primary_key;

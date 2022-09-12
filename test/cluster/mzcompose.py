@@ -70,7 +70,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
         "test-cluster",
         "test-github-12251",
-        "test-github-13603",
         "test-remote-storaged",
         "test-drop-default-cluster",
         "test-upsert",
@@ -78,6 +77,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Disabled to permit a breaking change.
         # See: https://materializeinc.slack.com/archives/C02FWJ94HME/p1661288774456699?thread_ts=1661288684.301649&cid=C02FWJ94HME
         # "test-builtin-migration",
+        "pg-snapshot-resumption",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -126,29 +126,6 @@ def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> Non
     # Leave only replica 2 up and verify that tests still pass.
     c.sql("DROP CLUSTER REPLICA cluster1.replica1")
     c.run("testdrive", *args.glob)
-
-
-def workflow_test_github_13603(c: Composition) -> None:
-    """Test that multi woker replicas terminate eagerly upon rehydration"""
-    c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.wait_for_materialized()
-
-    c.up("computed_1")
-    c.up("computed_2")
-    c.sql(
-        "CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100', 'computed_2:2100']));"
-    )
-
-    c.kill("materialized")
-    c.up("materialized")
-    c.wait_for_materialized()
-
-    # Ensure the computeds have crashed
-    c1 = c.invoke("logs", "computed_1", capture=True)
-    assert "panicked" in c1.stdout
-    c2 = c.invoke("logs", "computed_2", capture=True)
-    assert "panicked" in c2.stdout
 
 
 def workflow_test_github_12251(c: Composition) -> None:
@@ -341,3 +318,42 @@ def workflow_test_builtin_migration(c: Composition) -> None:
     """
             )
         )
+
+
+def workflow_pg_snapshot_resumption(c: Composition) -> None:
+    """Test creating sources in a remote storaged process."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        # Start postgres for the pg source
+        Postgres(),
+        Testdrive(no_reset=True),
+        Storaged(environment=["FAILPOINTS=pg_snapshot_failure=return"]),
+    ):
+        dependencies = [
+            "materialized",
+            "postgres",
+            "storaged",
+        ]
+        c.start_and_wait_for_tcp(
+            services=dependencies,
+        )
+
+        c.run("testdrive", "pg-snapshot-resumption/01-configure-postgres.td")
+        c.run("testdrive", "pg-snapshot-resumption/02-create-sources.td")
+
+        # storaged should crash
+        c.run("testdrive", "pg-snapshot-resumption/03-while-storaged-down.td")
+
+        print("Sleeping to ensure that storaged crashes")
+        time.sleep(10)
+
+        with c.override(
+            # turn off the failpoint
+            Storaged()
+        ):
+            c.start_and_wait_for_tcp(
+                services=["storaged"],
+            )
+            c.run("testdrive", "pg-snapshot-resumption/04-verify-data.td")

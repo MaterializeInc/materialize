@@ -71,7 +71,7 @@ where
     /// Creates a new batch logger.
     pub fn new(event_pusher: P, interval_ms: u64) -> Self {
         BatchLogger {
-            time_ms: 0,
+            time_ms: Timestamp::minimum(),
             event_pusher,
             _phantom: ::std::marker::PhantomData,
             interval_ms,
@@ -81,8 +81,10 @@ where
 
     /// Publishes a batch of logged events and advances the capability.
     pub fn publish_batch(&mut self, time: &Duration, data: &mut Vec<(Duration, E, T)>) {
-        let new_time_ms =
-            (((time.as_millis() as Timestamp) / self.interval_ms) + 1) * self.interval_ms;
+        let new_time_ms = Timestamp::try_from(
+            (((time.as_millis() as u64) / self.interval_ms) + 1) * self.interval_ms,
+        )
+        .expect("must fit");
         if !data.is_empty() {
             // If we don't need to grow our buffer, move
             if data.len() > self.buffer.capacity() - self.buffer.len() {

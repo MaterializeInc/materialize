@@ -22,9 +22,13 @@ INSERT INTO toasted_full VALUES (NULL), (REPEAT('a', 32 * 1024) || 'b');
 
 $ schema-registry-wait-schema schema=postgres.public.toasted_full-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE toasted_full
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.toasted_full'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > SELECT length(f1) = (32 * 1024) + 1, substr(f1, 1, 2), substr(f1, 32 * 1024, 2) FROM toasted_full;

@@ -133,6 +133,7 @@ pub enum Plan {
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
+    RotateKeys(RotateKeysPlan),
 }
 
 #[derive(Debug)]
@@ -456,7 +457,7 @@ pub struct AlterIndexResetOptionsPlan {
     pub options: HashSet<IndexOptionName>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AlterSourceItem {
     Set(String),
     Reset,
@@ -497,6 +498,11 @@ pub struct AlterSystemResetPlan {
 
 #[derive(Debug)]
 pub struct AlterSystemResetAllPlan {}
+
+#[derive(Debug)]
+pub struct RotateKeysPlan {
+    pub id: GlobalId,
+}
 
 #[derive(Debug)]
 pub struct DeclarePlan {

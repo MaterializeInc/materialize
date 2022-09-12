@@ -25,12 +25,10 @@ use toml_edit::{value, Document};
 
 /// ----------------------------
 ///  Profiles handling
+///  The config path is as follows: ~/.config/mz/profiles.toml
 /// ----------------------------
 
-/**
- * Gets the config path from the $HOME path.
- * It is as follows: ~/.config/mz/profiles.toml
- */
+/// Gets the config path from the $HOME path.
 fn get_config_path() -> PathBuf {
     match home_dir() {
         Some(mut path) => {
@@ -41,9 +39,7 @@ fn get_config_path() -> PathBuf {
     }
 }
 
-/**
- * Authenticates a profile with Frontegg
- */
+/// Authenticates a profile with Frontegg
 pub(crate) async fn authenticate_profile(
     client: &Client,
     profile: &Profile,
@@ -72,16 +68,12 @@ pub(crate) async fn authenticate_profile(
     }
 }
 
-/**
- * Checks if a path does not exists.
- */
+/// Checks if a path does not exists.
 fn path_not_exist(path: &PathBuf) -> bool {
     fs::metadata(path).is_err()
 }
 
-/**
- * Creates the config dir if not exists.
- */
+/// Creates the config dir if not exists.
 fn create_profile_dir_if_not_exists() {
     let config_path = get_config_path();
 
@@ -90,9 +82,7 @@ fn create_profile_dir_if_not_exists() {
     };
 }
 
-/**
- * Write a particular profile into the config file
- */
+/// Write a particular profile into the config file
 fn write_profile(profile: Profile) -> std::io::Result<()> {
     let mut config_path = get_config_path();
     config_path.push(PROFILES_FILE_NAME);
@@ -110,18 +100,14 @@ fn write_profile(profile: Profile) -> std::io::Result<()> {
     fs::write(config_path, profiles_document.to_string())
 }
 
-/**
- * Create the config dir. and save a particular profile into the config file.
- */
+/// Create the config dir. and save a particular profile into the config file.
 pub(crate) fn save_profile(profile: Profile) -> std::io::Result<()> {
     create_profile_dir_if_not_exists();
 
     write_profile(profile)
 }
 
-/**
- * Get all the profiles from the config file.
- */
+/// Get all the profiles from the config file.
 pub(crate) fn get_profiles() -> Option<Document> {
     let mut profiles_path = get_config_path();
     profiles_path.push(PROFILES_FILE_NAME);
@@ -147,9 +133,7 @@ pub(crate) fn get_profiles() -> Option<Document> {
     }
 }
 
-/**
- * Get a particular profile from the config file
- */
+/// Get a particular profile from the config file
 pub(crate) fn get_profile(profile_name: String) -> Option<Profile> {
     if let Some(profiles) = get_profiles() {
         let profile_name_key = format!("{:}.{:}", PROFILES_PREFIX, profile_name);
@@ -176,21 +160,12 @@ pub(crate) fn get_profile(profile_name: String) -> Option<Profile> {
     }
 }
 
-/**
- * Returns a default profile if there is one.
- */
-fn get_default_profile() -> Option<Profile> {
-    get_profile(DEFAULT_PROFILE_NAME.to_string())
-}
-
-/**
- * Validate that a profile credentials USER_ID and SECRET are valid.
- */
+/// Validate that a profile credentials USER_ID and SECRET are valid.
 pub(crate) async fn validate_profile(
-    profile_arg: Option<String>,
+    profile_name: String,
     client: &Client,
 ) -> Option<FronteggAuthMachine> {
-    match get_profile_using_args(profile_arg) {
+    match get_profile(profile_name) {
         Some(profile) => match authenticate_profile(client, &profile).await {
             Ok(frontegg_auth_machine) => {
                 return Some(frontegg_auth_machine);
@@ -204,15 +179,4 @@ pub(crate) async fn validate_profile(
     }
 
     None
-}
-
-/**
- * Get a particular profile from config by using the user's profile argument
- */
-pub(crate) fn get_profile_using_args(profile_arg: Option<String>) -> Option<Profile> {
-    if let Some(profile_name) = profile_arg {
-        get_profile(profile_name)
-    } else {
-        get_default_profile()
-    }
 }

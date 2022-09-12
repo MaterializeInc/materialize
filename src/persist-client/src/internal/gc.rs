@@ -203,25 +203,36 @@ where
             states.len()
         );
 
+        // Fast-path: Someone already GC'd past `req.new_seqno_since`, don't
+        // bother running any of the below logic.
+        //
+        // Also a fix for #14580.
+        if states
+            .peek_seqno()
+            .map_or(true, |x| x > req.new_seqno_since)
+        {
+            return;
+        }
+
         let mut deleteable_batch_blobs = HashSet::new();
         let mut deleteable_rollup_blobs = Vec::new();
         while let Some(state) = states.next() {
             if state.seqno < req.new_seqno_since {
                 state.collections.trace.map_batches(|b| {
-                    for key in b.keys.iter() {
+                    for part in b.parts.iter() {
                         // It's okay (expected) if the key already exists in
                         // deleteable_batch_blobs, it may have been present in
                         // previous versions of state.
-                        deleteable_batch_blobs.insert(key.to_owned());
+                        deleteable_batch_blobs.insert(part.key.to_owned());
                     }
                 });
             } else if state.seqno == req.new_seqno_since {
                 state.collections.trace.map_batches(|b| {
-                    for key in b.keys.iter() {
+                    for part in b.parts.iter() {
                         // It's okay (expected) if the key doesn't exist in
                         // deleteable_batch_blobs, it may have been added in
                         // this version of state.
-                        let _ = deleteable_batch_blobs.remove(key);
+                        let _ = deleteable_batch_blobs.remove(&part.key);
                     }
                 });
                 // We only need to detect deletable rollups in the last iter

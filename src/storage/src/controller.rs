@@ -33,6 +33,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::StreamExt;
 use itertools::Itertools;
+use mz_persist_client::PersistClient;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -42,12 +43,13 @@ use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
-use tracing::info;
+use tracing::debug;
 
 use mz_build_info::BuildInfo;
+use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistLocation, ShardId};
+use mz_persist_client::{write::WriteHandle, PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -61,7 +63,7 @@ use crate::protocol::client::{
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use crate::types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
-use crate::types::sources::IngestionDescription;
+use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
 
 mod hosts;
 mod rehydration;
@@ -256,7 +258,7 @@ pub trait StorageController: Debug + Send {
     /// Accept write frontier updates from the compute layer.
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, ChangeBatch<Self::Timestamp>)],
+        updates: &[(GlobalId, Antichain<Self::Timestamp>)],
     ) -> Result<(), StorageError>;
 
     /// Applies `updates` and sends any appropriate compaction command.
@@ -321,7 +323,7 @@ impl ReadPolicy<mz_repr::Timestamp> {
             } else {
                 // Subtract the lag from the time, and then round down to a multiple thereof to cut chatter.
                 let mut time = upper[0];
-                if lag != 0 {
+                if lag != mz_repr::Timestamp::default() {
                     time = time.saturating_sub(lag);
                     time = time.saturating_sub(time % lag);
                 }
@@ -409,6 +411,159 @@ impl Codec for CollectionMetadata {
     fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoCollectionMetadata::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
+    }
+}
+
+/// A trait that is used to calculate safe _resumption frontiers_ for a source.
+///
+/// Use [`ResumptionFrontierCalculator::initialize_state`] for creating an
+/// opaque state that you should keep around. Then repeatedly call
+/// [`ResumptionFrontierCalculator::calculate_resumption_frontier`] with the
+/// state to efficiently calculate an up-to-date frontier.
+#[async_trait]
+pub trait ResumptionFrontierCalculator<T> {
+    /// Opaque state that a `ResumptionFrontierCalculator` needs to repeatedly
+    /// (and efficiently) calculate a _resumption frontier_.
+    type State;
+
+    /// Creates an opaque state type that can be used to efficiently calculate a
+    /// new _resumption frontier_ when needed.
+    // TODO: This could also take an Arc<Mutex<PersistClientsCache>>. We know
+    // the persist location internally, most likely.
+    async fn initialize_state(&self, persist_clients: &PersistClient) -> Self::State;
+
+    /// Calculates a new, safe _resumption frontier_.
+    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T>;
+}
+
+/// A [`ResumptionFrontierCalculator`] that can calculate the resumption
+/// frontier for a source.
+pub struct SourceResumptionFrontierCalculator {
+    collection_metadata: CollectionMetadata,
+    source_envelope: SourceEnvelope,
+}
+
+impl SourceResumptionFrontierCalculator {
+    pub fn new(collection_metadata: CollectionMetadata, source_envelope: SourceEnvelope) -> Self {
+        Self {
+            collection_metadata,
+            source_envelope,
+        }
+    }
+}
+
+#[async_trait]
+impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
+    for SourceResumptionFrontierCalculator
+{
+    // A `WriteHandle` each for the data shard and remap shard. Once we have
+    // source envelopes that keep additional shards we have to specialize this
+    // some more.
+    type State = (
+        WriteHandle<(), PartitionId, T, MzOffset>,
+        WriteHandle<SourceData, (), T, Diff>,
+    );
+
+    async fn initialize_state(&self, persist_client: &PersistClient) -> Self::State {
+        self.collection_metadata
+            .get_write_handles(persist_client)
+            .await
+    }
+
+    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T> {
+        let (remap_write, data_write) = state;
+
+        // Update to latest upper.
+        remap_write.fetch_recent_upper().await;
+        data_write.fetch_recent_upper().await;
+
+        self.collection_metadata
+            .get_resume_upper_from_handles(remap_write, data_write, &self.source_envelope)
+            .await
+    }
+}
+
+impl CollectionMetadata {
+    /// Calculate the point at which we can resume ingestion computing the greatest
+    /// antichain that is less or equal to all state and output shard uppers,
+    /// using pre-existing `WriteHandle`s
+    pub async fn get_resume_upper_from_handles<T>(
+        &self,
+        remap_write: &mut WriteHandle<(), PartitionId, T, MzOffset>,
+        data_write: &mut WriteHandle<SourceData, (), T, Diff>,
+        source_envelope: &SourceEnvelope,
+    ) -> Antichain<T>
+    where
+        T: timely::progress::Timestamp + Lattice + Codec64,
+    {
+        // Calculate the point at which we can resume ingestion computing the greatest
+        // antichain that is less or equal to all state and output shard uppers.
+        let mut resume_upper: Antichain<T> = Antichain::new();
+        for t in remap_write.upper().elements() {
+            resume_upper.insert(t.clone());
+        }
+        for t in data_write.upper().elements() {
+            resume_upper.insert(t.clone());
+        }
+
+        // Check if this ingestion is using any operators that are stateful AND are not
+        // storing their state in persist shards. This whole section should be eventually
+        // removed as we make each operator durably record its state in persist shards.
+        let resume_upper = match source_envelope {
+            // We can only resume with the None envelope, which is stateless,
+            // or with the [Debezium] Upsert envelope, which is easy
+            //   (re-ingest the last emitted state)
+            SourceEnvelope::None(_) => resume_upper,
+            SourceEnvelope::Upsert(_) => resume_upper,
+            // Otherwise re-ingest everything
+            _ => Antichain::from_elem(T::minimum()),
+        };
+
+        resume_upper
+    }
+
+    /// Returns the `WriteHandle` for the remap shard and the data shard
+    pub async fn get_write_handles<T>(
+        &self,
+        persist: &PersistClient,
+    ) -> (
+        WriteHandle<(), PartitionId, T, MzOffset>,
+        WriteHandle<SourceData, (), T, Diff>,
+    )
+    where
+        T: timely::progress::Timestamp + Lattice + Codec64,
+    {
+        // Calculate the point at which we can resume ingestion computing the greatest
+        // antichain that is less or equal to all state and output shard uppers.
+        let remap_write = persist
+            .open_writer::<(), PartitionId, T, MzOffset>(self.remap_shard)
+            .await
+            .unwrap();
+        let data_write = persist
+            .open_writer::<SourceData, (), T, Diff>(self.data_shard)
+            .await
+            .unwrap();
+
+        (remap_write, data_write)
+    }
+
+    /// Calculate the point at which we can resume ingestion computing the greatest
+    /// antichain that is less or equal to all state and output shard uppers.
+    ///
+    /// This is a convenience method that combines
+    /// [`CollectionMetadata::get_write_handles`] and
+    /// [`CollectionMetadata::get_resume_upper_from_handles`].
+    pub async fn get_resume_upper<T>(
+        &self,
+        persist: &PersistClient,
+        source_envelope: &SourceEnvelope,
+    ) -> Antichain<T>
+    where
+        T: timely::progress::Timestamp + Lattice + Codec64,
+    {
+        let (mut remap_write, mut data_write) = self.get_write_handles(persist).await;
+        self.get_resume_upper_from_handles(&mut remap_write, &mut data_write, source_envelope)
+            .await
     }
 }
 
@@ -768,18 +923,20 @@ where
 
             // should be replaced with real introspection (https://github.com/MaterializeInc/materialize/issues/14266)
             // but for now, it's helpful to have this mapping written down somewhere
-            info!(
+            debug!(
                 "mapping GlobalId={} to remap shard ({}), data shard ({}), status shard ({:?})",
                 id, metadata.remap_shard, metadata.data_shard, status_shard
             );
 
-            let (write, mut read) = self
+            let persist_client = self
                 .persist
                 .lock()
                 .await
                 .open(self.persist_location.clone())
                 .await
-                .unwrap()
+                .unwrap();
+
+            let (write, mut read) = persist_client
                 .open(metadata.data_shard)
                 .await
                 .expect("invalid persist usage");
@@ -812,7 +969,10 @@ where
                     desc: ingestion.desc,
                     typ: description.desc.typ().clone(),
                 };
-                let resume_upper = desc.get_resume_upper(Arc::clone(&self.persist)).await;
+                let resume_upper = desc
+                    .storage_metadata
+                    .get_resume_upper(&persist_client, &desc.desc.envelope)
+                    .await;
                 let augmented_ingestion = IngestSourceCommand {
                     id,
                     description: desc,
@@ -985,7 +1145,6 @@ where
                 Err(_) => continue,
             };
             let from = export.from();
-            let old_frontier = export.write_frontier.frontier().to_owned();
 
             self.state
                 .exported_collections
@@ -995,9 +1154,8 @@ where
                 .retain(|from_export_id| *from_export_id != id);
 
             // Remove sink by removing its write frontier and then deprovisioning.
-            let mut update = ChangeBatch::new();
-            update.extend(old_frontier.iter().map(|time| (time.clone(), -1)));
-            self.update_write_frontiers(&[(id, update)]).await?;
+            self.update_write_frontiers(&[(id, Antichain::new())])
+                .await?;
             self.hosts.deprovision(id).await?;
         }
         Ok(())
@@ -1062,36 +1220,36 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, ChangeBatch<Self::Timestamp>)],
+        updates: &[(GlobalId, Antichain<Self::Timestamp>)],
     ) -> Result<(), StorageError> {
         let mut read_capability_changes = BTreeMap::default();
         let mut collections = BTreeMap::new();
         let mut exports = vec![];
 
-        for (id, changes) in updates.iter() {
+        for (id, new_upper) in updates.iter() {
             if let Ok(_) = self.collection(*id) {
-                collections.insert(*id, Some(changes));
+                collections.insert(*id, Some(new_upper));
             } else if let Ok(_) = self.export(*id) {
-                exports.push((id, changes));
+                exports.push((id, new_upper));
             } else {
                 panic!("Reference to absent collection");
             }
         }
 
         // Exports come first so we can update the collections below based on any new export write frontiers
-        for (id, changes) in exports {
+        for (id, new_upper) in exports {
             let export = self
                 .export_mut(*id)
                 .expect("Export previously validated to exist");
-            export.write_frontier.update_iter(changes.clone().drain());
+            export.write_frontier.join_assign(new_upper);
             collections.entry(export.from()).or_insert(None);
         }
 
-        for (id, changes) in collections {
+        for (id, new_upper) in collections {
             let mut update = self
                 .generate_new_capability_for_collection(id, |c| {
-                    if let Some(changes) = changes {
-                        c.write_frontier.update_iter(changes.clone().drain());
+                    if let Some(new_upper) = new_upper {
+                        c.write_frontier.join_assign(new_upper);
                     }
                 })
                 .expect("Collection previously validated to exist");
@@ -1279,7 +1437,7 @@ where
         // Get read policy sent from the coordinator
         let mut new_read_capability = collection
             .read_policy
-            .frontier(collection.write_frontier.frontier());
+            .frontier(collection.write_frontier.borrow());
 
         // Also consider the write frontier of any exports.  It's worth adding a quick note on write frontiers here.
         //
@@ -1303,9 +1461,7 @@ where
                     .exports
                     .get(&export_id)
                     .expect("Dangling export reference")
-                    .write_frontier
-                    .frontier()
-                    .to_owned(),
+                    .write_frontier,
             );
         }
 
@@ -1336,12 +1492,8 @@ pub struct CollectionState<T> {
     /// The policy to use to downgrade `self.implied_capability`.
     pub read_policy: ReadPolicy<T>,
 
-    /// Reported progress in the write capabilities.
-    ///
-    /// Importantly, this is not a write capability, but what we have heard about the
-    /// write capabilities of others. All future writes will have times greater than or
-    /// equal to `write_frontier.frontier()`.
-    pub write_frontier: MutableAntichain<T>,
+    /// Reported write frontier.
+    pub write_frontier: Antichain<T>,
 
     pub collection_metadata: CollectionMetadata,
 }
@@ -1360,7 +1512,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
-            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
+            write_frontier: Antichain::from_elem(Timestamp::minimum()),
             collection_metadata: metadata,
         }
     }
@@ -1372,18 +1524,14 @@ pub struct ExportState<T> {
     /// Description with which the export was created
     pub description: ExportDescription<T>,
 
-    /// Reported progress in the write capabilities.
-    ///
-    /// Importantly, this is not a write capability, but what we have heard about the
-    /// write capabilities of others. All future writes will have times greater than or
-    /// equal to `write_frontier.frontier()`.
-    pub write_frontier: MutableAntichain<T>,
+    /// Reported write frontier.
+    pub write_frontier: Antichain<T>,
 }
 impl<T: Timestamp> ExportState<T> {
     fn new(description: ExportDescription<T>) -> Self {
         Self {
             description,
-            write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
+            write_frontier: Antichain::from_elem(Timestamp::minimum()),
         }
     }
     fn from(&self) -> GlobalId {
@@ -1703,8 +1851,7 @@ mod persist_write_handles {
                     for (span, command) in commands {
                         match command {
                             PersistWorkerCmd::Register(id, write_handle) => {
-                                let previous = write_handles
-                                    .insert(id, (write_handle, Antichain::from_elem(T::minimum())));
+                                let previous = write_handles.insert(id, write_handle);
                                 if previous.is_some() {
                                     panic!(
                                         "already registered a ReadHandle for collection {:?}",
@@ -1750,7 +1897,7 @@ mod persist_write_handles {
                         >,
                         write_handles: &mut BTreeMap<
                             GlobalId,
-                            (WriteHandle<SourceData, (), T2, Diff>, Antichain<T2>),
+                            WriteHandle<SourceData, (), T2, Diff>,
                         >,
                         mut commands: BTreeMap<
                             GlobalId,
@@ -1766,7 +1913,7 @@ mod persist_write_handles {
                         // Instead, we first group the update by ID above and then iterate
                         // through all available write handles and see if there are any updates
                         // for it. If yes, we send them all in one go.
-                        for (id, (write, old_upper)) in write_handles.iter_mut() {
+                        for (id, write) in write_handles.iter_mut() {
                             if let Some((span, updates, new_upper)) = commands.remove(id) {
                                 let persist_upper = write.upper().clone();
                                 let updates = updates
@@ -1828,27 +1975,22 @@ mod persist_write_handles {
                                         .expect("cannot append updates")
                                         .or(Err(*id))?;
 
-                                    let mut change_batch = timely::progress::ChangeBatch::new();
-                                    change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
-                                    change_batch.extend(old_upper.iter().cloned().map(|t| (t, -1)));
-                                    old_upper.clone_from(&new_upper);
-
-                                    Ok::<_, GlobalId>((*id, change_batch))
+                                    Ok::<_, GlobalId>((*id, new_upper))
                                 })
                             }
                         }
 
                         use futures::StreamExt;
                         // Ensure all futures run to completion, and track status of each of them individually
-                        let (change_batches, failed_appends): (Vec<_>, Vec<_>) = futs
+                        let (new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
                             .collect::<Vec<_>>()
                             .await
                             .into_iter()
                             .partition_result();
 
                         // It is not strictly an error for the controller to hang up.
-                        let _ = frontier_responses
-                            .send(StorageResponse::FrontierUppers(change_batches));
+                        let _ =
+                            frontier_responses.send(StorageResponse::FrontierUppers(new_uppers));
 
                         if failed_appends.is_empty() {
                             Ok(())
@@ -1915,8 +2057,8 @@ mod tests {
 
     #[test]
     fn lag_writes_by_zero() {
-        let policy = ReadPolicy::lag_writes_by(0);
-        let write_frontier = Antichain::from_elem(5);
+        let policy = ReadPolicy::lag_writes_by(mz_repr::Timestamp::default());
+        let write_frontier = Antichain::from_elem(mz_repr::Timestamp::from(5));
         assert_eq!(policy.frontier(write_frontier.borrow()), write_frontier);
     }
 }

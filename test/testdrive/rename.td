@@ -26,15 +26,19 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE mz_data
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
 > CREATE DEFAULT INDEX ON mz_data
 
 > CREATE SINK sink1 FROM mz_data
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'snk1'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE VIEW mz_view AS
     SELECT * FROM mz_data
@@ -59,11 +63,16 @@ cluster on_name  key_name             seq_in_index  column_name  expression  nul
     "materialize"."public"."mz_data"
     ';
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_data%';
+> CREATE VIEW public_objects AS
+    SELECT mz_objects.* FROM mz_objects
+    JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
+    WHERE mz_schemas.name = 'public';
+
+> SELECT name FROM public_objects WHERE name LIKE 'mz_data%';
 name
 -----
-materialize.public.mz_data
-materialize.public.mz_data_primary_idx
+mz_data
+mz_data_primary_idx
 
 # Test that data can be selected from the source before renaming.
 > SELECT * FROM mz_data
@@ -73,15 +82,15 @@ a  b
 
 > ALTER SOURCE mz_data RENAME TO renamed_mz_data;
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_data%';
+> SELECT name FROM public_objects WHERE name LIKE 'mz_data%';
 name
 -----
-materialize.public.mz_data_primary_idx
+mz_data_primary_idx
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_mz_data%';
+> SELECT name FROM public_objects WHERE name LIKE 'renamed_mz_data%';
 name
 -----
-materialize.public.renamed_mz_data
+renamed_mz_data
 
 # Test that data can be selected from the source after renaming.
 > SELECT * FROM renamed_mz_data
@@ -100,72 +109,75 @@ a  b
 ------
 1  dog
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view%';
+> SELECT name FROM public_objects WHERE name LIKE 'mz_view%';
 name
 -----
-materialize.public.mz_view
-materialize.public.mz_view_primary_idx
+mz_view
+mz_view_primary_idx
 
 > ALTER VIEW mz_view RENAME TO renamed_mz_view;
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view%';
+> SELECT name FROM public_objects WHERE name LIKE 'mz_view%';
 name
 -----
-materialize.public.mz_view_primary_idx
+mz_view_primary_idx
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_mz_view%';
+> SELECT name FROM public_objects WHERE name LIKE 'renamed_mz_view%';
 name
 -----
-materialize.public.renamed_mz_view
+renamed_mz_view
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view_primary_idx%';
+> SELECT name FROM public_objects WHERE name LIKE 'mz_view_primary_idx%';
 name
 -----
-materialize.public.mz_view_primary_idx
+mz_view_primary_idx
 
 > ALTER INDEX mz_view_primary_idx RENAME TO renamed_index;
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view_primary_idx%';
+> SELECT name FROM public_objects WHERE name LIKE 'mz_view_primary_idx%';
 name
 -----
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_index%';
+> SELECT name FROM public_objects WHERE name LIKE 'renamed_index%';
 name
 -----
-materialize.public.renamed_index
+renamed_index
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.sink1%';
+> SELECT name FROM public_objects WHERE name LIKE 'sink1%';
 name
 -----
-materialize.public.sink1
+sink1
 
 > ALTER SINK sink1 RENAME TO renamed_sink
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.sink1%';
+> SELECT name FROM public_objects WHERE name LIKE 'sink1%';
 name
 -----
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_sink%';
+> SELECT name FROM public_objects WHERE name LIKE 'renamed_sink%';
 name
 -----
-materialize.public.renamed_sink
+renamed_sink
+
+# Clean up temp view
+> DROP VIEW public_objects;
 
 # Source was successfully renamed
 > SHOW SOURCES;
-name
-----
-renamed_mz_data
+name               type
+------------------------
+renamed_mz_data    kafka
 
 # Sink was successfully renamed
 > SHOW SINKS
 name
-----
+------------
 renamed_sink
 
 # View was successfully renamed
 > SHOW VIEWS
 name
-----
+-----------------
 byzantine_view
 dependent_view
 oppositional_view
@@ -198,7 +210,7 @@ materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"de
 > SHOW CREATE SINK renamed_sink
 Sink                            "Create Sink"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" TOPIC 'snk1' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' WITH SNAPSHOT"
+materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\""
 
 # Simple dependencies with both fully qualified and unqualified item references are renamed
 > SHOW CREATE VIEW byzantine_view
@@ -777,7 +789,7 @@ j
 
 > SHOW TABLES
 name
-----
+---------
 renamed_j
 
 > SELECT name FROM mz_tables WHERE id like 'u%';

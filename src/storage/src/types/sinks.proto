@@ -11,20 +11,13 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "persist/src/persist.proto";
+import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage/src/controller.proto";
 import "storage/src/types/connections.proto";
 
 package mz_storage.types.sinks;
-
-message ProtoComputeSinkDesc {
-    mz_repr.global_id.ProtoGlobalId from = 1;
-    mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
-    ProtoComputeSinkConnection connection = 3;
-    ProtoSinkAsOf as_of = 4;
-}
 
 message ProtoStorageSinkDesc {
     mz_repr.global_id.ProtoGlobalId from = 1;
@@ -42,13 +35,6 @@ message ProtoSinkEnvelope {
     }
 }
 
-message ProtoComputeSinkConnection {
-    oneof kind {
-        google.protobuf.Empty tail = 1;
-        ProtoPersistSinkConnection persist = 2;
-    }
-}
-
 message ProtoStorageSinkConnection {
     oneof kind {
         ProtoKafkaSinkConnection kafka = 1;
@@ -57,11 +43,12 @@ message ProtoStorageSinkConnection {
 
 message ProtoKafkaSinkConsistencyConnection {
     string topic = 1;
-    int32 schema_id = 2;
+    // int32 schema_id = 2;
+    reserved 2;
 }
 
 message ProtoSinkAsOf {
-    mz_persist.gen.persist.ProtoU64Antichain frontier = 1;
+    mz_repr.antichain.ProtoU64Antichain frontier = 1;
     bool strict = 2;
 }
 

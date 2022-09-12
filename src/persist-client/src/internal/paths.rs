@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mz_persist::location::SeqNo;
+use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::str::FromStr;
 use uuid::Uuid;
@@ -53,7 +54,7 @@ impl PartId {
 /// Used to reduce the bytes needed to refer to a blob key in memory and in
 /// persistent state, all access to blobs are always within the context of an
 /// individual shard.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PartialBatchKey(pub(crate) String);
 
 impl PartialBatchKey {

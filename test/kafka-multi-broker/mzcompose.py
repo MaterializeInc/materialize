@@ -28,13 +28,10 @@ SERVICES = [
     ),
     Materialized(),
     Testdrive(
-        entrypoint=[
-            "testdrive",
-            "--schema-registry-url=http://schema-registry:8081",
-            "--materialize-url=postgres://materialize@materialized:6875",
+        entrypoint_extra=[
             "--kafka-option=acks=all",
-            "--seed=1",
-        ]
+        ],
+        seed=1,
     ),
 ]
 

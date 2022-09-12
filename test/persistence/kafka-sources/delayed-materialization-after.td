@@ -30,7 +30,7 @@ $ set schema={
         ]
     }
 
-$ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-schema=${keyschema} schema=${schema} repeat=${count}
 {"f1": "a${kafka-ingest.iteration}"} {"f2": "a${kafka-ingest.iteration}"}
 
 > CREATE DEFAULT INDEX ON materialized_via_create_index_after_restart;

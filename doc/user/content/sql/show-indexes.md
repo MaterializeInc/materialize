@@ -1,26 +1,21 @@
 ---
-title: "SHOW INDEX"
-description: "SHOW INDEX provides details about indexes built on a source, view, or materialized view"
+title: "SHOW INDEXES"
+description: "SHOW INDEXES provides details about indexes built on a source, view, or materialized view"
 menu:
   main:
     parent: commands
-aliases:
-    - /sql/show-indexes
-    - /sql/show-keys
 ---
 
-`SHOW INDEX` provides details about indexes built on a source, view, or materialized view.
+`SHOW INDEXES` provides details about indexes built on a source, view, or materialized view.
 
 ## Syntax
 
-{{< diagram "show-index.svg" >}}
+{{< diagram "show-indexes.svg" >}}
 
 Field | Use
 ------|-----
 _on&lowbar;name_ | The name of the object whose indexes you want to show. If omitted, all indexes in the cluster are shown.
 _cluster&lowbar;name_ | The cluster to show indexes from. If omitted, indexes from all clusters are shown.
-**EXTENDED** | Returns system indexes as well as user-created indexes. By default, only user-created indexes are returned.
-**FULL** | Returns all materialized views, including their associated cluster and type.
 
 ## Details
 
@@ -47,13 +42,13 @@ Field | Meaning
 ## Examples
 
 ```sql
-SHOW FULL VIEWS;
+SHOW VIEWS;
 ```
 ```nofmt
-          name           | type | materialized
--------------------------+------+ -------------
- my_nonmaterialized_view | user | f
- my_materialized_view    | user | t
+          name
+-------------------------
+ my_nonmaterialized_view
+ my_materialized_view
 ```
 
 ```sql

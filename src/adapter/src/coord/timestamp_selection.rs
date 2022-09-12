@@ -20,7 +20,7 @@ use mz_stash::Append;
 
 use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::{CoordTimestamp, Coordinator};
+use crate::coord::Coordinator;
 use crate::session::{vars, Session};
 use crate::AdapterError;
 
@@ -65,17 +65,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 coord_bail!("can't use {} as a timestamp for AS OF", evaled);
             }
             let ty = timestamp.typ(&[]);
-            let ts = match ty.scalar_type {
+            let ts: mz_repr::Timestamp = match ty.scalar_type {
                 ScalarType::Numeric { .. } => {
                     let n = evaled.unwrap_numeric().0;
-                    u64::try_from(n)?
+                    u64::try_from(n)?.into()
                 }
-                ScalarType::Int16 => evaled.unwrap_int16().try_into()?,
-                ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
-                ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
-                ScalarType::UInt16 => evaled.unwrap_uint16().into(),
-                ScalarType::UInt32 => evaled.unwrap_uint32().into(),
-                ScalarType::UInt64 => evaled.unwrap_uint64(),
+                ScalarType::Int16 => u64::try_from(evaled.unwrap_int16())?.into(),
+                ScalarType::Int32 => u64::try_from(evaled.unwrap_int32())?.into(),
+                ScalarType::Int64 => u64::try_from(evaled.unwrap_int64())?.into(),
+                ScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
+                ScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
+                ScalarType::UInt64 => evaled.unwrap_uint64().into(),
                 ScalarType::TimestampTz => {
                     evaled.unwrap_timestamptz().timestamp_millis().try_into()?
                 }
@@ -129,12 +129,12 @@ impl<S: Append + 'static> Coordinator<S> {
                         .filter_map(|id| {
                             let since = self
                                 .controller
-                                .compute(compute_instance)
+                                .compute
+                                .instance(compute_instance)
                                 .unwrap()
                                 .collection(*id)
                                 .unwrap()
-                                .read_capabilities
-                                .frontier()
+                                .read_frontier()
                                 .to_owned();
                             if since.less_equal(&candidate) {
                                 None
@@ -149,7 +149,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
                 let since = self
                     .controller
-                    .storage()
+                    .storage
                     .collection(*id)
                     .unwrap()
                     .read_capabilities
@@ -180,16 +180,16 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::from_elem(Timestamp::minimum());
         {
-            let storage = self.controller.storage();
+            let storage = &self.controller.storage;
             for id in id_bundle.storage_ids.iter() {
                 since.join_assign(&storage.collection(*id).unwrap().implied_capability)
             }
         }
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
-                let compute = self.controller.compute(*instance).unwrap();
+                let compute = self.controller.compute.instance(*instance).unwrap();
                 for id in compute_ids.iter() {
-                    since.join_assign(&compute.collection(*id).unwrap().implied_capability)
+                    since.join_assign(&compute.collection(*id).unwrap().read_capability())
                 }
             }
         }
@@ -206,14 +206,13 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Antichain<mz_repr::Timestamp> {
         let mut since = Antichain::new();
         {
-            let storage = self.controller.storage();
             for id in id_bundle.storage_ids.iter() {
                 since.extend(
-                    storage
+                    self.controller
+                        .storage
                         .collection(*id)
                         .unwrap()
                         .write_frontier
-                        .frontier()
                         .iter()
                         .cloned(),
                 );
@@ -221,14 +220,13 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
-                let compute = self.controller.compute(*instance).unwrap();
+                let compute = self.controller.compute.instance(*instance).unwrap();
                 for id in compute_ids.iter() {
                     since.extend(
                         compute
                             .collection(*id)
                             .unwrap()
-                            .write_frontier
-                            .frontier()
+                            .write_frontier()
                             .iter()
                             .cloned(),
                     );

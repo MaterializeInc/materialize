@@ -42,6 +42,9 @@ pub struct ReaderState<T> {
     pub since: Antichain<T>,
     /// UNIX_EPOCH timestamp (in millis) of this reader's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
+    /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
+    /// after which this reader may be expired
+    pub lease_duration_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,6 +56,15 @@ pub struct WriterState {
     pub lease_duration_ms: u64,
 }
 
+/// A subset of a [HollowBatch] corresponding 1:1 to a blob.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HollowBatchPart {
+    /// Pointer usable to retrieve the updates.
+    pub key: PartialBatchKey,
+    /// The encoded size of this part.
+    pub encoded_size_bytes: usize,
+}
+
 /// A [Batch] but with the updates themselves stored externally.
 ///
 /// [Batch]: differential_dataflow::trace::BatchReader
@@ -61,7 +73,7 @@ pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
     /// Pointers usable to retrieve the updates.
-    pub keys: Vec<PartialBatchKey>,
+    pub parts: Vec<HollowBatchPart>,
     /// The number of updates in the batch.
     pub len: usize,
 }
@@ -78,26 +90,26 @@ impl<T: Ord> Ord for HollowBatch<T> {
         // are added.
         let HollowBatch {
             desc: self_desc,
-            keys: self_keys,
+            parts: self_parts,
             len: self_len,
         } = self;
         let HollowBatch {
             desc: other_desc,
-            keys: other_keys,
+            parts: other_parts,
             len: other_len,
         } = other;
         (
             self_desc.lower().elements(),
             self_desc.upper().elements(),
             self_desc.since().elements(),
-            self_keys,
+            self_parts,
             self_len,
         )
             .cmp(&(
                 other_desc.lower().elements(),
                 other_desc.upper().elements(),
                 other_desc.since().elements(),
-                other_keys,
+                other_parts,
                 other_len,
             ))
     }
@@ -157,6 +169,7 @@ where
         &mut self,
         reader_id: &ReaderId,
         seqno: SeqNo,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, (Upper<T>, ReaderState<T>)> {
         // TODO: Handle if the reader or writer already exist (probably with a
@@ -165,6 +178,8 @@ where
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+            lease_duration_ms: u64::try_from(lease_duration.as_millis())
+                .expect("lease duration as millis should fit within u64"),
         };
         self.readers.insert(reader_id.clone(), read_cap.clone());
         Continue((Upper(self.trace.upper().clone()), read_cap))
@@ -189,6 +204,7 @@ where
         &mut self,
         new_reader_id: &ReaderId,
         seqno: SeqNo,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, ReaderState<T>> {
         // TODO: Handle if the reader already exists (probably with a retry).
@@ -196,6 +212,8 @@ where
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+            lease_duration_ms: u64::try_from(lease_duration.as_millis())
+                .expect("lease duration as millis should fit within u64"),
         };
         self.readers.insert(new_reader_id.clone(), read_cap.clone());
         Continue(read_cap)
@@ -220,11 +238,11 @@ where
 
         // If the time interval is empty, the list of updates must also be
         // empty.
-        if batch.desc.upper() == batch.desc.lower() && !batch.keys.is_empty() {
+        if batch.desc.upper() == batch.desc.lower() && !batch.parts.is_empty() {
             return Break(Err(InvalidUsage::InvalidEmptyTimeInterval {
                 lower: batch.desc.lower().clone(),
                 upper: batch.desc.upper().clone(),
-                keys: batch.keys.to_vec(),
+                keys: batch.parts.iter().map(|x| x.key.clone()).collect(),
             }));
         }
 
@@ -457,6 +475,10 @@ where
         self.collections.trace.num_updates()
     }
 
+    pub fn encoded_batch_size(&self) -> usize {
+        self.collections.trace.encoded_batch_size()
+    }
+
     pub fn latest_rollup(&self) -> (&SeqNo, &PartialRollupKey) {
         // We maintain the invariant that every version of state has at least
         // one rollup.
@@ -616,18 +638,11 @@ where
         &self,
         now_ms: EpochMillis,
     ) -> (Vec<ReaderId>, Vec<WriterId>) {
-        // TODO: Give lots of extra leeway in this temporary hack version of
-        // automatic expiry.
-        let read_lease_duration = PersistConfig::FAKE_READ_LEASE_DURATION * 15;
-
         let mut readers = Vec::new();
         for (reader, state) in self.collections.readers.iter() {
-            // TODO: We likely want to store the lease duration in state, so the
-            // answer to which readers are considered expired doesn't depend on
-            // the version of the code running.
             let time_since_last_heartbeat_ms =
                 now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
-            if Duration::from_millis(time_since_last_heartbeat_ms) > read_lease_duration {
+            if time_since_last_heartbeat_ms > state.lease_duration_ms {
                 readers.push(reader.clone());
             }
         }
@@ -687,9 +702,12 @@ mod tests {
                 Antichain::from_elem(upper),
                 Antichain::from_elem(T::minimum()),
             ),
-            keys: keys
+            parts: keys
                 .iter()
-                .map(|x| PartialBatchKey((*x).to_owned()))
+                .map(|x| HollowBatchPart {
+                    key: PartialBatchKey((*x).to_owned()),
+                    encoded_size_bytes: 0,
+                })
                 .collect(),
             len,
         }
@@ -702,7 +720,9 @@ mod tests {
         let reader = ReaderId::new();
         let seqno = SeqNo::minimum();
         let now = SYSTEM_TIME.clone();
-        let _ = state.collections.register_reader(&reader, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader, seqno, Duration::from_secs(10), now());
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
@@ -746,7 +766,9 @@ mod tests {
 
         // Create a second reader.
         let reader2 = ReaderId::new();
-        let _ = state.collections.register_reader(&reader2, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader2, seqno, Duration::from_secs(10), now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
@@ -779,7 +801,9 @@ mod tests {
 
         // Create a third reader.
         let reader3 = ReaderId::new();
-        let _ = state.collections.register_reader(&reader3, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader3, seqno, Duration::from_secs(10), now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
@@ -913,9 +937,12 @@ mod tests {
 
         let reader = ReaderId::new();
         // Advance the since to 2.
-        let _ = state
-            .collections
-            .register_reader(&reader, SeqNo::minimum(), now());
+        let _ = state.collections.register_reader(
+            &reader,
+            SeqNo::minimum(),
+            Duration::from_secs(10),
+            now(),
+        );
         assert_eq!(
             state.collections.downgrade_since(
                 &reader,

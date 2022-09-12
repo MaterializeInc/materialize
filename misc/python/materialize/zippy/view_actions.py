@@ -11,13 +11,14 @@ import random
 from typing import List, Set, Type, Union
 
 from materialize.mzcompose import Composition
+from materialize.zippy.debezium_capabilities import DebeziumSourceExists
 from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.table_capabilities import TableExists
 from materialize.zippy.view_capabilities import ViewExists
 
-WatermarkedObjects = List[Union[TableExists, SourceExists]]
+WatermarkedObjects = List[Union[TableExists, SourceExists, DebeziumSourceExists]]
 
 
 class CreateView(Action):
@@ -25,7 +26,11 @@ class CreateView(Action):
 
     @classmethod
     def requires(self) -> List[Set[Type[Capability]]]:
-        return [{MzIsRunning, SourceExists}, {MzIsRunning, TableExists}]
+        return [
+            {MzIsRunning, SourceExists},
+            {MzIsRunning, TableExists},
+            {MzIsRunning, DebeziumSourceExists},
+        ]
 
     def __init__(self, capabilities: Capabilities) -> None:
         view_name = "view" + str(random.randint(1, 10))
@@ -40,8 +45,11 @@ class CreateView(Action):
             self.new_view = True
             sources: WatermarkedObjects = capabilities.get(SourceExists)
             tables: WatermarkedObjects = capabilities.get(TableExists)
+            debezium_sources: WatermarkedObjects = capabilities.get(
+                DebeziumSourceExists
+            )
 
-            potential_froms = sources + tables
+            potential_froms = sources + tables + debezium_sources
             this_view.froms = random.sample(
                 potential_froms, min(len(potential_froms), random.randint(1, 5))
             )

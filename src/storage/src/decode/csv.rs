@@ -11,7 +11,6 @@ use mz_repr::{Datum, Row};
 
 use crate::types::errors::DecodeErrorKind;
 use crate::types::sources::encoding::CsvEncoding;
-use crate::types::transforms::LinearOperator;
 
 #[derive(Debug)]
 pub struct CsvDecoderState {
@@ -23,7 +22,6 @@ pub struct CsvDecoderState {
     ends: Vec<usize>,
     ends_cursor: usize,
     csv_reader: csv_core::Reader,
-    demanded: Vec<bool>,
     row_buf: Row,
     events_error: usize,
     events_success: usize,
@@ -34,19 +32,9 @@ impl CsvDecoderState {
         self.events_error + self.events_success
     }
 
-    pub fn new(format: CsvEncoding, operators: &mut Option<LinearOperator>) -> Self {
+    pub fn new(format: CsvEncoding) -> Self {
         let CsvEncoding { columns, delimiter } = format;
         let n_cols = columns.arity();
-
-        let operators = operators.take();
-        let demanded = (0..n_cols)
-            .map(move |c| {
-                operators
-                    .as_ref()
-                    .map(|o| o.projection.contains(&c))
-                    .unwrap_or(true)
-            })
-            .collect::<Vec<_>>();
 
         let header_names = columns.into_header_names();
         Self {
@@ -58,7 +46,6 @@ impl CsvDecoderState {
             ends: vec![0],
             ends_cursor: 1,
             csv_reader: csv_core::ReaderBuilder::new().delimiter(delimiter).build(),
-            demanded,
             row_buf: Row::default(),
             events_error: 0,
             events_success: 0,
@@ -113,13 +100,7 @@ impl CsvDecoderState {
                                     self.events_success += 1;
                                     let mut row_packer = self.row_buf.packer();
                                     row_packer.extend((0..self.n_cols).map(|i| {
-                                        Datum::String(
-                                            if self.next_row_is_header || self.demanded[i] {
-                                                &output[self.ends[i]..self.ends[i + 1]]
-                                            } else {
-                                                ""
-                                            },
-                                        )
+                                        Datum::String(&output[self.ends[i]..self.ends[i + 1]])
                                     }));
                                     self.output_cursor = 0;
                                     self.ends_cursor = 1;

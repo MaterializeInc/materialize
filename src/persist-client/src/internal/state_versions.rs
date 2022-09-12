@@ -146,11 +146,27 @@ impl StateVersions {
                 // We lost a CaS race and someone else initialized the shard,
                 // use the value included in the CaS expectation error.
 
-                // Clean up the rollup blob that we were trying to reference.
-                let (_, rollup_key) = initial_state.latest_rollup();
-                self.delete_rollup(&shard_id, rollup_key).await;
+                let state = self.fetch_current_state(&shard_id, live_diffs).await;
 
-                return self.fetch_current_state(&shard_id, live_diffs).await;
+                // Clean up the rollup blob that we were trying to reference.
+                //
+                // SUBTLE: If we got an Indeterminate error in the CaS above,
+                // but it actually went through, then we'll "contend" with
+                // ourselves and get an expectation mismatch. Use the actual
+                // fetched state to determine if our rollup actually made it in
+                // and decide whether to delete based on that.
+                let (_, rollup_key) = initial_state.latest_rollup();
+                let should_delete_rollup = match state.as_ref() {
+                    Ok(state) => !state.collections.rollups.values().any(|x| x == rollup_key),
+                    // If the codecs don't match, then we definitely didn't
+                    // write the state.
+                    Err(CodecMismatch { .. }) => true,
+                };
+                if should_delete_rollup {
+                    self.delete_rollup(&shard_id, rollup_key).await;
+                }
+
+                return state;
             }
         }
     }
@@ -218,6 +234,7 @@ impl StateVersions {
                 shard_metrics.set_upper(&new_state.upper());
                 shard_metrics.set_batch_count(new_state.batch_count());
                 shard_metrics.set_update_count(new_state.num_updates());
+                shard_metrics.set_encoded_batch_size(new_state.encoded_batch_size());
                 shard_metrics.set_seqnos_held(new_state.seqnos_held());
                 shard_metrics.inc_encoded_diff_size(payload_len);
                 Ok(Ok(()))
@@ -559,6 +576,11 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> StateVersionsIter<K, V, T, D> {
 
     pub fn len(&self) -> usize {
         self.diffs.len()
+    }
+
+    /// Returns the SeqNo of the next state returned by `next`.
+    pub fn peek_seqno(&self) -> Option<SeqNo> {
+        self.diffs.last().map(|x| x.seqno)
     }
 
     pub fn next(&mut self) -> Option<&State<K, V, T, D>> {

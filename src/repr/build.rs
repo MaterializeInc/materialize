@@ -15,6 +15,7 @@ fn main() {
     prost_build::Config::new()
         .compile_protos(
             &[
+                "repr/src/antichain.proto",
                 "repr/src/chrono.proto",
                 "repr/src/global_id.proto",
                 "repr/src/row.proto",

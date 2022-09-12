@@ -12,7 +12,7 @@ use std::error::Error;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
-use futures::{pin_mut, FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt};
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
@@ -44,6 +44,9 @@ mod metrics;
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
 static PG_EPOCH: Lazy<SystemTime> = Lazy::new(|| UNIX_EPOCH + Duration::from_secs(946_684_800));
+
+/// How often a status update message should be sent to the server
+static FEEDBACK_INTERVAL: Duration = Duration::from_secs(30);
 
 trait ErrorExt {
     fn is_recoverable(&self) -> bool;
@@ -151,7 +154,7 @@ pub struct PostgresSourceReader {
 /// An internal struct held by the spawned tokio task
 struct PostgresTaskInfo {
     source_id: GlobalId,
-    connection_config: tokio_postgres::Config,
+    connection_config: mz_postgres_util::Config,
     publication: String,
     slot: String,
     /// Our cursor into the WAL
@@ -493,20 +496,19 @@ impl PostgresTaskInfo {
     /// After the initial snapshot has been produced it returns the name of the created slot and
     /// the LSN at which we should start the replication stream at.
     async fn produce_snapshot(&mut self) -> Result<(), ReplicationError> {
-        let client = try_recoverable!(
-            mz_postgres_util::connect_replication(self.connection_config.clone()).await
+        // Get all the relevant tables for this publication
+        let publication_tables = try_recoverable!(
+            mz_postgres_util::publication_info(&self.connection_config, &self.publication).await
         );
 
-        // We're initialising this source so any previously existing slot must be removed and
+        let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
+
+        // We're initializing this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
         let _ = client
             .simple_query(&format!("DROP_REPLICATION_SLOT {:?}", &self.slot))
             .await;
 
-        // Get all the relevant tables for this publication
-        let publication_tables = try_recoverable!(
-            mz_postgres_util::publication_info(&self.connection_config, &self.publication).await
-        );
         // Validate publication tables against the state snapshot
         try_fatal!(self.validate_tables(publication_tables));
 
@@ -555,7 +557,7 @@ impl PostgresTaskInfo {
                 )
                 .await?;
 
-            pin_mut!(reader);
+            tokio::pin!(reader);
             let mut mz_row = Row::default();
             // TODO: once tokio-stream is released with https://github.com/tokio-rs/tokio/pull/4502
             //    we can convert this into a single `timeout(...)` call on the reader CopyOutStream
@@ -581,6 +583,13 @@ impl PostgresTaskInfo {
                 }));
 
                 self.row_sender.insert(mz_row.clone(), self.lsn).await;
+                // Failure scenario after we have produced at least one row, but before a
+                // successful `COMMIT`
+                fail::fail_point!("pg_snapshot_failure", |_| {
+                    Err(ReplicationError::Recoverable(anyhow::anyhow!(
+                        "recoverable errors should crash the process"
+                    )))
+                });
             }
 
             self.metrics.tables.inc();
@@ -588,8 +597,8 @@ impl PostgresTaskInfo {
         self.metrics.lsn.set(self.lsn.into());
         client.simple_query("COMMIT;").await?;
 
-        // close the current `row_sender` context after we are sure we are not erroring out.
-        // Otherwise, `revert_snapshot` will close it
+        // close the current `row_sender` context after we are sure we have not errored
+        // out (in the commit).
         self.row_sender.close_lsn(self.lsn).await;
         Ok(())
     }
@@ -631,9 +640,7 @@ impl PostgresTaskInfo {
     async fn produce_replication(&mut self) -> Result<(), ReplicationError> {
         use ReplicationError::*;
 
-        let client = try_recoverable!(
-            mz_postgres_util::connect_replication(self.connection_config.clone()).await
-        );
+        let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
 
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
@@ -644,223 +651,209 @@ impl PostgresTaskInfo {
         );
         let copy_stream = try_recoverable!(client.copy_both_simple(&query).await);
 
-        let stream = LogicalReplicationStream::new(copy_stream);
+        let stream = LogicalReplicationStream::new(copy_stream).take_until(self.sender.closed());
         tokio::pin!(stream);
 
-        let mut last_keepalive = Instant::now();
+        let mut last_feedback = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
-        let closer = self.sender.clone();
 
-        loop {
-            // This select is safe because `Sender::closed` is cancel-safe
-            // and when `closed` finishes, dropping the `try_next` future is fine,
-            // as we are shutting down and don't have any control over whether we
-            // would have seen the next item or not. Additionally, `try_next`
-            // just holds a reference to the stream, so it is cancel-safe.
+        while let Some(item) = stream.next().await {
+            let item = item?;
+            use ReplicationMessage::*;
+
+            // The upstream will periodically request status updates by setting the keepalive's
+            // reply field to 1. However, we cannot rely on these messages arriving on time. For
+            // example, when the upstream is sending a big transaction its keepalive messages are
+            // queued and can be delayed arbitrarily. Therefore, we also make sure to send a
+            // proactive status update every 30 seconds.
             //
-            // TODO(guswynn): avoid this select! complexity by just moving to `SourceReader::next`
-            tokio::select! {
-                biased;
-                _ = closer.closed() => {
-                    return Ok(())
-                },
-                item = stream.try_next() => {
-                    if let Some(item) = item? {
-                        use ReplicationMessage::*;
-                        // The upstream will periodically request keepalive responses by setting the reply field
-                        // to 1. However, we cannot rely on these messages arriving on time. For example, when
-                        // the upstream is sending a big transaction its keepalive messages are queued and can
-                        // be delayed arbitrarily.  Therefore, we also make sure to send a proactive keepalive
-                        // every 30 seconds.
-                        //
-                        // See: https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com
-                        if matches!(item, PrimaryKeepAlive(ref k) if k.reply() == 1)
-                            || last_keepalive.elapsed() > Duration::from_secs(30)
-                        {
-                            let ts: i64 = PG_EPOCH
-                                .elapsed()
-                                .expect("system clock set earlier than year 2000!")
-                                .as_micros()
-                                .try_into()
-                                .expect("software more than 200k years old, consider updating");
+            // See: https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com
+            let mut needs_status_update = last_feedback.elapsed() > FEEDBACK_INTERVAL;
 
-                            try_recoverable!(
-                                stream
-                                    .as_mut()
-                                    .standby_status_update(self.lsn, self.lsn, self.lsn, ts, 0)
-                                    .await
-                            );
-                            last_keepalive = Instant::now();
+            self.metrics.total.inc();
+            use LogicalReplicationMessage::*;
+            match &item {
+                XLogData(xlog_data) => match xlog_data.data() {
+                    Begin(_) => {
+                        if !inserts.is_empty() || !deletes.is_empty() {
+                            return Err(Fatal(anyhow!(
+                                "got BEGIN statement after uncommitted data"
+                            )));
                         }
-                        match item {
-                            XLogData(xlog_data) => {
-                                self.metrics.total.inc();
-                                use LogicalReplicationMessage::*;
+                    }
+                    Insert(insert) if self.source_tables.contains_key(&insert.rel_id()) => {
+                        self.metrics.inserts.inc();
+                        let rel_id = insert.rel_id();
+                        let new_tuple = insert.tuple().tuple_data();
+                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
+                        inserts.push(row);
+                    }
+                    Update(update) if self.source_tables.contains_key(&update.rel_id()) => {
+                        self.metrics.updates.inc();
+                        let rel_id = update.rel_id();
+                        let err = || {
+                            anyhow!(
+                                "Old row missing from replication stream for table with OID = {}.
+                                 Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                                rel_id
+                            )
+                        };
+                        let old_tuple = try_fatal!(update.old_tuple().ok_or_else(err)).tuple_data();
+                        let old_row =
+                            try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
+                        deletes.push(old_row);
 
-                                match xlog_data.data() {
-                                    Begin(_) => {
-                                        if !inserts.is_empty() || !deletes.is_empty() {
-                                            return Err(Fatal(anyhow!(
-                                                "got BEGIN statement after uncommitted data"
-                                            )));
-                                        }
-                                    }
-                                    Insert(insert) => {
-                                        self.metrics.inserts.inc();
-                                        let rel_id = insert.rel_id();
-                                        if !self.source_tables.contains_key(&rel_id) {
-                                            continue;
-                                        }
-                                        let new_tuple = insert.tuple().tuple_data();
-                                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
-                                        inserts.push(row);
-                                    }
-                                    Update(update) => {
-                                        self.metrics.updates.inc();
-                                        let rel_id = update.rel_id();
-                                        if !self.source_tables.contains_key(&rel_id) {
-                                            continue;
-                                        }
-                                        let old_tuple = try_fatal!(update
-                                            .old_tuple()
-                                            .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
-                                                    Did you forget to set REPLICA IDENTITY to FULL for your table?", rel_id)))
-                                        .tuple_data();
-                                        let old_row =
-                                            try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
-                                        deletes.push(old_row);
+                        // If the new tuple contains unchanged toast values, reuse the ones
+                        // from the old tuple
+                        let new_tuple = update
+                            .new_tuple()
+                            .tuple_data()
+                            .iter()
+                            .zip(old_tuple.iter())
+                            .map(|(new, old)| match new {
+                                TupleData::UnchangedToast => old,
+                                _ => new,
+                            });
+                        let new_row =
+                            try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
+                        inserts.push(new_row);
+                    }
+                    Delete(delete) if self.source_tables.contains_key(&delete.rel_id()) => {
+                        self.metrics.deletes.inc();
+                        let rel_id = delete.rel_id();
+                        let err = || {
+                            anyhow!(
+                                "Old row missing from replication stream for table with OID = {}.
+                                 Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                                rel_id
+                            )
+                        };
+                        let old_tuple = try_fatal!(delete.old_tuple().ok_or_else(err)).tuple_data();
+                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
+                        deletes.push(row);
+                    }
+                    Commit(commit) => {
+                        self.metrics.transactions.inc();
+                        self.lsn = commit.end_lsn().into();
 
-                                        // If the new tuple contains unchanged toast values, reuse the ones
-                                        // from the old tuple
-                                        let new_tuple = update
-                                            .new_tuple()
-                                            .tuple_data()
-                                            .iter()
-                                            .zip(old_tuple.iter())
-                                            .map(|(new, old)| match new {
-                                                TupleData::UnchangedToast => old,
-                                                _ => new,
-                                            });
-                                        let new_row =
-                                            try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
-                                        inserts.push(new_row);
-                                    }
-                                    Delete(delete) => {
-                                        self.metrics.deletes.inc();
-                                        let rel_id = delete.rel_id();
-                                        if !self.source_tables.contains_key(&rel_id) {
-                                            continue;
-                                        }
-                                        let old_tuple = try_fatal!(delete
-                                            .old_tuple()
-                                            .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
-                                                    Did you forget to set REPLICA IDENTITY to FULL for your table?", rel_id)))
-                                        .tuple_data();
-                                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
-                                        deletes.push(row);
-                                    }
-                                    Commit(commit) => {
-                                        self.metrics.transactions.inc();
-                                        self.lsn = commit.end_lsn().into();
+                        for row in deletes.drain(..) {
+                            self.row_sender.delete(row, self.lsn).await;
+                        }
+                        for row in inserts.drain(..) {
+                            self.row_sender.insert(row, self.lsn).await;
+                        }
 
-                                        for row in deletes.drain(..) {
-                                            self.row_sender.delete(row, self.lsn).await;
-                                        }
-                                        for row in inserts.drain(..) {
-                                            self.row_sender.insert(row, self.lsn).await;
-                                        }
+                        self.row_sender.close_lsn(self.lsn).await;
+                        self.metrics.lsn.set(self.lsn.into());
+                    }
+                    Relation(relation) => {
+                        let rel_id = relation.rel_id();
+                        if let Some(source_table) = self.source_tables.get(&rel_id) {
+                            // Start with the cheapest check first, this will catch the majority of alters
+                            if source_table.columns.len() != relation.columns().len() {
+                                error!(
+                                    "alter table detected on {} with id {}",
+                                    source_table.name, source_table.oid
+                                );
+                                return Err(Fatal(anyhow!(
+                                    "source table {} with oid {} has been altered",
+                                    source_table.name,
+                                    source_table.oid
+                                )));
+                            }
+                            let same_name = source_table.name == relation.name().unwrap();
+                            let same_namespace =
+                                source_table.namespace == relation.namespace().unwrap();
+                            if !same_name || !same_namespace {
+                                error!(
+                                    "table name changed on {}.{} with id {} to {}.{}",
+                                    source_table.namespace,
+                                    source_table.name,
+                                    source_table.oid,
+                                    relation.namespace().unwrap(),
+                                    relation.name().unwrap()
+                                );
+                                return Err(Fatal(anyhow!(
+                                    "source table {} with oid {} has been altered",
+                                    source_table.name,
+                                    source_table.oid
+                                )));
+                            }
+                            // Relation messages do not include nullability/primary_key data so we
+                            // check the name, type_oid, and type_mod explicitly and error if any
+                            // of them differ
+                            for (src, rel) in source_table.columns.iter().zip(relation.columns()) {
+                                let same_name = src.name == rel.name().unwrap();
+                                let rel_typoid = u32::try_from(rel.type_id()).unwrap();
+                                let same_typoid = src.type_oid == rel_typoid;
+                                let same_typmod = src.type_mod == rel.type_modifier();
 
-                                        self.row_sender.close_lsn(self.lsn).await;
-                                        self.metrics.lsn.set(self.lsn.into());
-                                    }
-                                    Relation(relation) => {
-                                        let rel_id = relation.rel_id();
-                                        match self.source_tables.get(&rel_id) {
-                                            Some(source_table) => {
-                                                // Start with the cheapest check first, this will catch the majority of alters
-                                                if source_table.columns.len() != relation.columns().len() {
-                                                    error!(
-                                                        "alter table detected on {} with id {}",
-                                                        source_table.name, source_table.oid
-                                                    );
-                                                    return Err(Fatal(anyhow!(
-                                                        "source table {} with oid {} has been altered",
-                                                        source_table.name,
-                                                        source_table.oid
-                                                    )));
-                                                }
-                                                if source_table.name.ne(relation.name().unwrap())
-                                                    || source_table.namespace.ne(relation.namespace().unwrap())
-                                                {
-                                                    error!(
-                                                        "table name changed on {}.{} with id {} to {}.{}",
-                                                        source_table.namespace,
-                                                        source_table.name,
-                                                        source_table.oid,
-                                                        relation.namespace().unwrap(),
-                                                        relation.name().unwrap()
-                                                    );
-                                                    return Err(Fatal(anyhow!(
-                                                        "source table {} with oid {} has been altered",
-                                                        source_table.name,
-                                                        source_table.oid
-                                                    )));
-                                                }
-                                                // Relation messages do not include nullability/primary_key data
-                                                // so we check the name, type_oid, and type_mod explicitly and error if any of them differ
-                                                if !source_table.columns.iter().zip(relation.columns()).all(
-                                                    |(src, rel)| {
-                                                        src.name == rel.name().unwrap()
-                                                            && src.type_oid == u32::from_be_bytes(rel.type_id().to_be_bytes())
-                                                            && src.type_mod == rel.type_modifier()
-                                                    },
-                                                ) {
-                                                    error!("alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}", source_table.name, source_table.oid, source_table.columns, relation.columns());
-                                                    return Err(Fatal(anyhow!(
-                                                        "source table {} with oid {} has been altered",
-                                                        source_table.name,
-                                                        source_table.oid
-                                                    )));
-                                                }
-                                            }
-                                            // Ignore messages for tables we do not know about
-                                            None => continue,
-                                        }
-                                    }
-                                    Origin(_) | Type(_) => {
-                                        self.metrics.ignored.inc();
-                                    }
-                                    Truncate(truncate) => {
-                                        let tables = truncate
-                                            .rel_ids()
-                                            .iter()
-                                            // Filter here makes option handling in map "safe"
-                                            .filter_map(|id| self.source_tables.get(&id))
-                                            .map(|table| {
-                                                format!("name: {} id: {}", table.name, table.oid)
-                                            })
-                                            .collect::<Vec<String>>();
-                                        return Err(Fatal(anyhow!(
-                                            "source table(s) {} got truncated",
-                                            tables.join(", ")
-                                        )));
-                                    }
-                                    // The enum is marked as non_exhaustive. Better to be conservative here in
-                                    // case a new message is relevant to the semantics of our source
-                                    _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
+                                if !same_name || !same_typoid || !same_typmod {
+                                    error!(
+                                        "alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}",
+                                        source_table.name,
+                                        source_table.oid,
+                                        source_table.columns,
+                                        relation.columns()
+                                    );
+                                    return Err(Fatal(anyhow!(
+                                        "source table {} with oid {} has been altered",
+                                        source_table.name,
+                                        source_table.oid
+                                    )));
                                 }
                             }
-                            // Handled above
-                            PrimaryKeepAlive(_) => {}
-                            // The enum is marked non_exhaustive, better be conservative
-                            _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
                         }
-                    } else {
-                        return Err(Recoverable(anyhow!("replication stream ended")))
                     }
+                    Insert(_) | Update(_) | Delete(_) | Origin(_) | Type(_) => {
+                        self.metrics.ignored.inc();
+                    }
+                    Truncate(truncate) => {
+                        let tables = truncate
+                            .rel_ids()
+                            .iter()
+                            // Filter here makes option handling in map "safe"
+                            .filter_map(|id| self.source_tables.get(&id))
+                            .map(|table| format!("name: {} id: {}", table.name, table.oid))
+                            .collect::<Vec<String>>();
+                        return Err(Fatal(anyhow!(
+                            "source table(s) {} got truncated",
+                            tables.join(", ")
+                        )));
+                    }
+                    // The enum is marked as non_exhaustive. Better to be conservative here in
+                    // case a new message is relevant to the semantics of our source
+                    _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
+                },
+                PrimaryKeepAlive(keepalive) => {
+                    needs_status_update = needs_status_update || keepalive.reply() == 1;
                 }
+                // The enum is marked non_exhaustive, better be conservative
+                _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
+            }
+
+            if needs_status_update {
+                let ts: i64 = PG_EPOCH
+                    .elapsed()
+                    .expect("system clock set earlier than year 2000!")
+                    .as_micros()
+                    .try_into()
+                    .expect("software more than 200k years old, consider updating");
+
+                try_recoverable!(
+                    stream
+                        .as_mut()
+                        .get_pin_mut()
+                        .standby_status_update(self.lsn, self.lsn, self.lsn, ts, 0)
+                        .await
+                );
+                last_feedback = Instant::now();
             }
         }
+        if !stream.is_stopped() {
+            return Err(Recoverable(anyhow!("replication stream ended")));
+        }
+        Ok(())
     }
 }

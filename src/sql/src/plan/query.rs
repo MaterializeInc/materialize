@@ -59,9 +59,10 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AsOf, Assignment, AstInfo, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
-    Limit, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition,
-    TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement,
-    Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
+    Limit, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatement,
+    SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins,
+    UnresolvedObjectName, UpdateStatement, Value, Values, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
@@ -79,8 +80,10 @@ use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
-use crate::plan::{transform_ast, PlanContext};
+use crate::plan::{transform_ast, PlanContext, SendRowsPlan};
 use crate::plan::{Params, QueryWhen};
+
+use super::statement::show;
 
 #[derive(Debug)]
 pub struct PlannedQuery<E> {
@@ -1264,6 +1267,72 @@ fn plan_set_expr(
         SetExpr::Query(query) => {
             let (expr, scope) = plan_nested_query(qcx, query)?;
             Ok((expr, scope))
+        }
+        SetExpr::Show(stmt) => {
+            // Some SHOW statements are a SELECT query. Others produces Rows
+            // directly. Convert both of these to the needed Hir and Scope.
+
+            fn to_hirscope(
+                plan: SendRowsPlan,
+                desc: StatementDesc,
+            ) -> Result<(HirRelationExpr, Scope), PlanError> {
+                let rows = plan
+                    .rows
+                    .iter()
+                    .map(|row| row.iter().collect::<Vec<_>>())
+                    .collect::<Vec<_>>();
+                let desc = desc.relation_desc.expect("must exist");
+                let expr = HirRelationExpr::constant(rows, desc.typ().clone());
+                let scope = Scope::from_source(None, desc.iter_names());
+                Ok((expr, scope))
+            }
+
+            match stmt.clone() {
+                ShowStatement::ShowColumns(stmt) => {
+                    show::show_columns(&qcx.scx, stmt)?.plan_hir(qcx)
+                }
+                ShowStatement::ShowCreateConnection(stmt) => to_hirscope(
+                    show::plan_show_create_connection(&qcx.scx, stmt.clone())?,
+                    show::describe_show_create_connection(&qcx.scx, stmt)?,
+                ),
+                ShowStatement::ShowCreateIndex(stmt) => to_hirscope(
+                    show::plan_show_create_index(&qcx.scx, stmt.clone())?,
+                    show::describe_show_create_index(&qcx.scx, stmt)?,
+                ),
+                ShowStatement::ShowCreateSink(stmt) => to_hirscope(
+                    show::plan_show_create_sink(&qcx.scx, stmt.clone())?,
+                    show::describe_show_create_sink(&qcx.scx, stmt)?,
+                ),
+                ShowStatement::ShowCreateSource(stmt) => to_hirscope(
+                    show::plan_show_create_source(&qcx.scx, stmt.clone())?,
+                    show::describe_show_create_source(&qcx.scx, stmt)?,
+                ),
+                ShowStatement::ShowCreateTable(stmt) => to_hirscope(
+                    show::plan_show_create_table(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_table(qcx.scx, stmt)?,
+                ),
+                ShowStatement::ShowCreateView(stmt) => to_hirscope(
+                    show::plan_show_create_view(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_view(qcx.scx, stmt)?,
+                ),
+                ShowStatement::ShowCreateMaterializedView(stmt) => to_hirscope(
+                    show::plan_show_create_materialized_view(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_materialized_view(qcx.scx, stmt)?,
+                ),
+                ShowStatement::ShowDatabases(stmt) => {
+                    show::show_databases(&qcx.scx, stmt)?.plan_hir(qcx)
+                }
+                ShowStatement::ShowIndexes(stmt) => {
+                    show::show_indexes(&qcx.scx, stmt)?.plan_hir(qcx)
+                }
+                ShowStatement::ShowObjects(stmt) => {
+                    show::show_objects(&qcx.scx, stmt)?.plan_hir(qcx)
+                }
+                ShowStatement::ShowSchemas(stmt) => {
+                    show::show_schemas(&qcx.scx, stmt)?.plan_hir(qcx)
+                }
+                ShowStatement::ShowVariable(_) => sql_bail!("unsupported SHOW statement"),
+            }
         }
     }
 }

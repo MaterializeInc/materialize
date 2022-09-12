@@ -2865,6 +2865,19 @@ impl BinaryFunc {
             _ => None,
         }
     }
+
+    /// Returns true if the function could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        match self {
+            BinaryFunc::Eq
+            | BinaryFunc::NotEq
+            | BinaryFunc::Lt
+            | BinaryFunc::Gte
+            | BinaryFunc::Gt
+            | BinaryFunc::Lte => false,
+            _ => true,
+        }
+    }
 }
 
 impl fmt::Display for BinaryFunc {
@@ -3693,6 +3706,9 @@ derive_unary!(
     BitNotInt16,
     BitNotInt32,
     BitNotInt64,
+    BitNotUint16,
+    BitNotUint32,
+    BitNotUint64,
     NegInt16,
     NegInt32,
     NegInt64,
@@ -3963,6 +3979,14 @@ impl UnaryFunc {
             _ => None,
         }
     }
+
+    /// Returns true if the function could introduce an error on non-error input.
+    pub fn could_error(&self) -> bool {
+        match self {
+            UnaryFunc::IsNull(_) | UnaryFunc::CastVarCharToString(_) | UnaryFunc::Not(_) => false,
+            _ => true,
+        }
+    }
 }
 
 /// An explicit [`Arbitrary`] implementation needed here because of a known
@@ -3985,6 +4009,9 @@ impl Arbitrary for UnaryFunc {
             BitNotInt16::arbitrary().prop_map_into(),
             BitNotInt32::arbitrary().prop_map_into(),
             BitNotInt64::arbitrary().prop_map_into(),
+            BitNotUint16::arbitrary().prop_map_into(),
+            BitNotUint32::arbitrary().prop_map_into(),
+            BitNotUint64::arbitrary().prop_map_into(),
             NegInt16::arbitrary().prop_map_into(),
             NegInt32::arbitrary().prop_map_into(),
             NegInt64::arbitrary().prop_map_into(),
@@ -4295,6 +4322,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::BitNotInt16(_) => BitNotInt16(()),
             UnaryFunc::BitNotInt32(_) => BitNotInt32(()),
             UnaryFunc::BitNotInt64(_) => BitNotInt64(()),
+            UnaryFunc::BitNotUint16(_) => BitNotUint16(()),
+            UnaryFunc::BitNotUint32(_) => BitNotUint32(()),
+            UnaryFunc::BitNotUint64(_) => BitNotUint64(()),
             UnaryFunc::NegInt16(_) => NegInt16(()),
             UnaryFunc::NegInt32(_) => NegInt32(()),
             UnaryFunc::NegInt64(_) => NegInt64(()),
@@ -4602,6 +4632,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 BitNotInt16(()) => Ok(impls::BitNotInt16.into()),
                 BitNotInt32(()) => Ok(impls::BitNotInt32.into()),
                 BitNotInt64(()) => Ok(impls::BitNotInt64.into()),
+                BitNotUint16(()) => Ok(impls::BitNotUint16.into()),
+                BitNotUint32(()) => Ok(impls::BitNotUint32.into()),
+                BitNotUint64(()) => Ok(impls::BitNotUint64.into()),
                 NegInt16(()) => Ok(impls::NegInt16.into()),
                 NegInt32(()) => Ok(impls::NegInt32.into()),
                 NegInt64(()) => Ok(impls::NegInt64.into()),
@@ -6232,6 +6265,38 @@ impl VariadicFunc {
         }
     }
 
+    pub fn is_associative(&self) -> bool {
+        match self {
+            VariadicFunc::Coalesce
+            | VariadicFunc::Greatest
+            | VariadicFunc::Least
+            | VariadicFunc::Concat
+            | VariadicFunc::And
+            | VariadicFunc::Or => true,
+
+            VariadicFunc::MakeTimestamp
+            | VariadicFunc::PadLeading
+            | VariadicFunc::Substr
+            | VariadicFunc::Replace
+            | VariadicFunc::JsonbBuildArray
+            | VariadicFunc::JsonbBuildObject
+            | VariadicFunc::ArrayCreate { elem_type: _ }
+            | VariadicFunc::ArrayToString { elem_type: _ }
+            | VariadicFunc::ArrayIndex { offset: _ }
+            | VariadicFunc::ListCreate { elem_type: _ }
+            | VariadicFunc::RecordCreate { field_names: _ }
+            | VariadicFunc::ListIndex
+            | VariadicFunc::ListSliceLinear
+            | VariadicFunc::SplitPart
+            | VariadicFunc::RegexpMatch
+            | VariadicFunc::HmacString
+            | VariadicFunc::HmacBytes
+            | VariadicFunc::ErrorIfNull
+            | VariadicFunc::DateBinTimestamp
+            | VariadicFunc::DateBinTimestampTz => false,
+        }
+    }
+
     pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
         use VariadicFunc::*;
         let in_nullable = input_types.iter().any(|t| t.nullable);
@@ -6365,6 +6430,15 @@ impl VariadicFunc {
             VariadicFunc::And => MirScalarExpr::literal_false(),
             VariadicFunc::Or => MirScalarExpr::literal_true(),
             _ => unreachable!(),
+        }
+    }
+
+    /// Returns true if the function could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        match self {
+            VariadicFunc::And | VariadicFunc::Or => false,
+            // All other cases are unknown
+            _ => true,
         }
     }
 }
@@ -6594,7 +6668,6 @@ mod test {
         let mut rti = mz_lowertest::ReflectedTypeInfo::default();
         UnaryFunc::add_to_reflected_type_info(&mut rti);
         for (variant, (_, f_types)) in rti.enum_dict["UnaryFunc"].iter() {
-            println!("f_types {:?}", f_types);
             if f_types.is_empty() {
                 let unary_unit_variant: UnaryFunc =
                     serde_json::from_str(&format!("\"{}\"", variant)).unwrap();

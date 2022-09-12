@@ -28,14 +28,14 @@ pub enum SinkFormat {
     Json { key: bool },
 }
 
-pub enum SinkConsistencyFormat {
-    Debezium,
+pub enum Topic {
+    FromSink(String),
+    Named(String),
 }
 
 pub struct VerifyAction {
-    sink: String,
+    source: Topic,
     format: SinkFormat,
-    consistency: Option<SinkConsistencyFormat>,
     sort_messages: bool,
     expected_messages: Vec<String>,
     partial_search: Option<usize>,
@@ -51,11 +51,12 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Err
         },
         f => bail!("unknown format: {}", f),
     };
-    let sink = cmd.args.string("sink")?;
-    let consistency = match cmd.args.opt_string("consistency").as_deref() {
-        Some("debezium") => Some(SinkConsistencyFormat::Debezium),
-        Some(s) => bail!("unknown sink consistency format {}", s),
-        None => None,
+
+    let source = match (cmd.args.opt_string("sink"), cmd.args.opt_string("topic")) {
+        (Some(sink), None) => Topic::FromSink(sink),
+        (None, Some(topic)) => Topic::Named(topic),
+        (Some(_), Some(_)) => bail!("Can't provide both `source` and `topic` to kafka-verify"),
+        (None, None) => bail!("kafka-verify expects either `source` or `topic`"),
     };
 
     let sort_messages = cmd.args.opt_bool("sort-messages")?.unwrap_or(false);
@@ -69,9 +70,8 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Err
     let debug_print_only = cmd.args.opt_bool("debug-print-only")?.unwrap_or(false);
     cmd.args.done()?;
     Ok(VerifyAction {
-        sink,
+        source,
         format,
-        consistency,
         sort_messages,
         expected_messages,
         partial_search,
@@ -109,10 +109,23 @@ async fn get_topic(
     topic_field: &str,
     state: &mut State,
 ) -> Result<String, anyhow::Error> {
-    let query = format!("SELECT {} FROM mz_catalog_names JOIN mz_kafka_sinks ON global_id = sink_id WHERE name = $1", topic_field);
+    let query = format!(
+        "SELECT {} FROM mz_sinks JOIN mz_kafka_sinks \
+        ON mz_sinks.id = mz_kafka_sinks.sink_id \
+        JOIN mz_schemas s ON s.id = mz_sinks.schema_id \
+        LEFT JOIN mz_databases d ON d.id = s.database_id \
+        WHERE d.name = $1 \
+        AND s.name = $2 \
+        AND mz_sinks.name = $3",
+        topic_field
+    );
+    let sink_fields: Vec<&str> = sink.split('.').collect();
     let result = state
         .pgclient
-        .query_one(query.as_str(), &[&sink])
+        .query_one(
+            query.as_str(),
+            &[&sink_fields[0], &sink_fields[1], &sink_fields[2]],
+        )
         .await
         .context("retrieving topic name")?
         .get(topic_field);
@@ -126,11 +139,9 @@ impl Action for VerifyAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let topic: String = match self.consistency {
-            None => get_topic(&self.sink, "topic", state).await?,
-            Some(SinkConsistencyFormat::Debezium) => {
-                get_topic(&self.sink, "consistency_topic", state).await?
-            }
+        let topic: String = match &self.source {
+            Topic::FromSink(sink) => get_topic(&sink, "topic", state).await?,
+            Topic::Named(name) => name.clone(),
         };
 
         println!("Verifying results in Kafka topic {}", topic);
@@ -249,7 +260,7 @@ impl Action for VerifyAction {
                     self.partial_search.is_some(),
                 )?
             }
-            SinkFormat::Json { key } => {
+            SinkFormat::Json { key: has_key } => {
                 assert!(
                     self.partial_search.is_none(),
                     "partial search not yet implemented for json formatted sinks"
@@ -261,10 +272,14 @@ impl Action for VerifyAction {
                 let mut actual_messages = vec![];
                 for (key, value) in actual_bytes {
                     let key_datum = match key {
-                        None => None,
                         Some(bytes) => {
-                            Some(serde_json::from_slice(&bytes).context("decoding json")?)
+                            if *has_key {
+                                Some(serde_json::from_slice(&bytes).context("decoding json")?)
+                            } else {
+                                None
+                            }
                         }
+                        None => None,
                     };
                     let value_datum = match value {
                         None => None,
@@ -281,7 +296,7 @@ impl Action for VerifyAction {
                 }
 
                 json::validate_sink(
-                    *key,
+                    *has_key,
                     &self.expected_messages,
                     &actual_messages,
                     &state.regex,

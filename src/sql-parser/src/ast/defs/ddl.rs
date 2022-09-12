@@ -25,7 +25,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOption, WithOptionValue};
+use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -149,10 +149,57 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CsrConnection<T: AstInfo> {
-    Inline { url: String },
-    Reference { connection: T::ObjectName },
+pub enum CsrConfigOptionName {
+    AvroKeyFullname,
+    AvroValueFullname,
 }
+
+impl AstDisplay for CsrConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CsrConfigOptionName::AvroKeyFullname => "AVRO KEY FULLNAME",
+            CsrConfigOptionName::AvroValueFullname => "AVRO VALUE FULLNAME",
+        })
+    }
+}
+impl_display!(CsrConfigOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `{FROM|INTO} CONNECTION ...` statement.
+pub struct CsrConfigOption<T: AstInfo> {
+    pub name: CsrConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CsrConfigOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(CsrConfigOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrConnection<T: AstInfo> {
+    pub connection: T::ObjectName,
+    pub options: Vec<CsrConfigOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CsrConnection<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CONNECTION ");
+        f.write_node(&self.connection);
+        if !self.options.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(CsrConnection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ReaderSchemaSelectionStrategy {
@@ -173,31 +220,15 @@ pub struct CsrConnectionAvro<T: AstInfo> {
     pub key_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub value_strategy: Option<ReaderSchemaSelectionStrategy>,
     pub seed: Option<CsrSeedAvro>,
-    pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
-        match &self.connection {
-            CsrConnection::Inline { url: uri, .. } => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(uri));
-                f.write_str("'");
-            }
-            CsrConnection::Reference { connection, .. } => {
-                f.write_str("CONNECTION ");
-                f.write_node(connection);
-            }
-        }
+        f.write_node(&self.connection);
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
-        }
-        if !&self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
         }
     }
 }
@@ -207,33 +238,16 @@ impl_display_t!(CsrConnectionAvro);
 pub struct CsrConnectionProtobuf<T: AstInfo> {
     pub connection: CsrConnection<T>,
     pub seed: Option<CsrSeedProtobuf>,
-    pub with_options: Vec<WithOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CsrConnectionProtobuf<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
-        match &self.connection {
-            CsrConnection::Inline { url: uri, .. } => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(uri));
-                f.write_str("'");
-            }
-            CsrConnection::Reference { connection, .. } => {
-                f.write_str("CONNECTION ");
-                f.write_node(connection);
-            }
-        }
+        f.write_node(&self.connection);
 
         if let Some(seed) = &self.seed {
             f.write_str(" ");
             f.write_node(seed);
-        }
-
-        if !&self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
         }
     }
 }
@@ -554,6 +568,7 @@ impl_display_t!(DbzTxMetadataOption);
 pub enum KafkaConnectionOptionName {
     Broker,
     Brokers,
+    ProgressTopic,
     SslKey,
     SslCertificate,
     SslCertificateAuthority,
@@ -567,6 +582,7 @@ impl AstDisplay for KafkaConnectionOptionName {
         f.write_str(match self {
             KafkaConnectionOptionName::Broker => "BROKER",
             KafkaConnectionOptionName::Brokers => "BROKERS",
+            KafkaConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
             KafkaConnectionOptionName::SslKey => "SSL KEY",
             KafkaConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
             KafkaConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
@@ -817,10 +833,15 @@ pub enum KafkaConfigOptionName {
     GroupIdPrefix,
     IsolationLevel,
     StatisticsIntervalMs,
+    Topic,
     TopicMetadataRefreshIntervalMs,
     TransactionTimeoutMs,
     StartTimestamp,
     StartOffset,
+    PartitionCount,
+    ReplicationFactor,
+    RetentionMs,
+    RetentionBytes,
 }
 
 impl AstDisplay for KafkaConfigOptionName {
@@ -834,12 +855,17 @@ impl AstDisplay for KafkaConfigOptionName {
             KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
             KafkaConfigOptionName::IsolationLevel => "ISOLATION LEVEL",
             KafkaConfigOptionName::StatisticsIntervalMs => "STATISTICS INTERVAL MS",
+            KafkaConfigOptionName::Topic => "TOPIC",
             KafkaConfigOptionName::TopicMetadataRefreshIntervalMs => {
                 "TOPIC METADATA REFRESH INTERVAL MS"
             }
             KafkaConfigOptionName::TransactionTimeoutMs => "TRANSACTION TIMEOUT MS",
-            KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",
             KafkaConfigOptionName::StartOffset => "START OFFSET",
+            KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",
+            KafkaConfigOptionName::PartitionCount => "PARTITION COUNT",
+            KafkaConfigOptionName::ReplicationFactor => "REPLICATION FACTOR",
+            KafkaConfigOptionName::RetentionBytes => "RETENTION BYTES",
+            KafkaConfigOptionName::RetentionMs => "RETENTION MS",
         })
     }
 }
@@ -870,7 +896,7 @@ pub enum KafkaConnection<T: AstInfo> {
     },
     Reference {
         connection: T::ObjectName,
-        with_options: Vec<KafkaConfigOption<T>>,
+        options: Vec<KafkaConfigOption<T>>,
     },
 }
 
@@ -884,13 +910,13 @@ impl<T: AstInfo> AstDisplay for KafkaConnection<T> {
             }
             KafkaConnection::Reference {
                 connection,
-                with_options,
+                options,
             } => {
                 f.write_str("CONNECTION ");
                 f.write_node(connection);
-                if !with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(with_options));
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
                     f.write_str(")");
                 }
             }
@@ -902,7 +928,7 @@ impl_display_t!(KafkaConnection);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaSourceConnection<T: AstInfo> {
     pub connection: KafkaConnection<T>,
-    pub topic: String,
+    pub topic: Option<String>,
     pub key: Option<Vec<Ident>>,
 }
 
@@ -947,9 +973,11 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
             }) => {
                 f.write_str("KAFKA ");
                 f.write_node(connection);
-                f.write_str(" TOPIC '");
-                f.write_node(&display::escape_single_quote_string(topic));
-                f.write_str("'");
+                if let Some(topic) = topic {
+                    f.write_str(" TOPIC '");
+                    f.write_node(&display::escape_single_quote_string(topic));
+                    f.write_str("'");
+                }
                 if let Some(key) = key.as_ref() {
                     f.write_str(" KEY (");
                     f.write_node(&display::comma_separated(&key));
@@ -1062,58 +1090,24 @@ impl_display_t!(LoadGeneratorOption);
 pub enum CreateSinkConnection<T: AstInfo> {
     Kafka {
         connection: KafkaConnection<T>,
-        topic: String,
         key: Option<KafkaSinkKey>,
-        consistency: Option<KafkaConsistency<T>>,
     },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSinkConnection::Kafka {
-                connection,
-                topic,
-                key,
-                consistency,
-            } => {
+            CreateSinkConnection::Kafka { connection, key } => {
                 f.write_str("KAFKA ");
                 f.write_node(connection);
-                f.write_str(" TOPIC '");
-                f.write_node(&display::escape_single_quote_string(topic));
-                f.write_str("'");
                 if let Some(key) = key.as_ref() {
                     f.write_node(key);
-                }
-                if let Some(consistency) = consistency.as_ref() {
-                    f.write_node(consistency);
                 }
             }
         }
     }
 }
 impl_display_t!(CreateSinkConnection);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KafkaConsistency<T: AstInfo> {
-    pub topic: String,
-    pub topic_format: Option<Format<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for KafkaConsistency<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(" CONSISTENCY (TOPIC '");
-        f.write_node(&display::escape_single_quote_string(&self.topic));
-        f.write_str("'");
-
-        if let Some(format) = self.topic_format.as_ref() {
-            f.write_str(" FORMAT ");
-            f.write_node(format);
-        }
-        f.write_str(")");
-    }
-}
-impl_display_t!(KafkaConsistency);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaSinkKey {

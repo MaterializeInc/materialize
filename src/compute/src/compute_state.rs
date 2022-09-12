@@ -14,6 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytesize::ByteSize;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
@@ -22,17 +23,16 @@ use timely::logging::Logger;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::reachability::logging::TrackerEvent;
-use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
 use mz_compute_client::command::{
-    ComputeCommand, DataflowDescription, InstanceConfig, Peek, ReplicaId,
+    ComputeCommand, ComputeCommandHistory, DataflowDescription, InstanceConfig, Peek, ReplicaId,
 };
-use mz_compute_client::controller::replicated::ComputeCommandHistory;
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::response::{ComputeResponse, PeekResponse, TailResponse};
+use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -77,6 +77,8 @@ pub struct ComputeState {
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory,
+    /// Max size in bytes of any result.
+    pub max_result_size: u32,
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
@@ -114,6 +116,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 self.handle_peek(peek)
             }
             CancelPeeks { uuids } => self.handle_cancel_peeks(uuids),
+            UpdateMaxResultSize(max_result_size) => {
+                self.compute_state.max_result_size = max_result_size
+            }
         }
     }
 
@@ -142,14 +147,19 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
             // Initialize frontiers for each object, and optionally log their construction.
             for (object_id, collection_id) in exported_ids {
-                self.compute_state
-                    .reported_frontiers
-                    .insert(object_id, Antichain::from_elem(0));
+                self.compute_state.reported_frontiers.insert(
+                    object_id,
+                    Antichain::from_elem(timely::progress::Timestamp::minimum()),
+                );
 
                 // Log dataflow construction, frontier construction, and any dependencies.
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(object_id, true));
-                    logger.log(ComputeEvent::Frontier(object_id, 0, 1));
+                    logger.log(ComputeEvent::Frontier(
+                        object_id,
+                        timely::progress::Timestamp::minimum(),
+                        1,
+                    ));
                     for import_id in dataflow.depends_on(collection_id) {
                         logger.log(ComputeEvent::DataflowDependency {
                             dataflow: object_id,
@@ -234,7 +244,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             logger.log(ComputeEvent::Peek(peek.as_log_event(), true));
         }
         // Attempt to fulfill the peek.
-        if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
+        if let Some(response) =
+            peek.seek_fulfillment(&mut Antichain::new(), self.compute_state.max_result_size)
+        {
             self.send_peek_response(peek, response);
         } else {
             peek.span = span!(parent: &peek.span, Level::DEBUG, "pending peek");
@@ -266,7 +278,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         use crate::logging::BatchLogger;
         use timely::dataflow::operators::capture::event::link::EventLink;
 
-        let interval = std::cmp::max(1, logging.interval_ns / 1_000_000) as Timestamp;
+        let interval = std::cmp::max(1, logging.interval_ns / 1_000_000)
+            .try_into()
+            .expect("must fit");
 
         // Track time relative to the Unix epoch, rather than when the server
         // started, so that the logging sources can be joined with tables and
@@ -501,10 +515,15 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let index_ids = logging.active_logs.values().copied();
         let sink_ids = logging.sink_logs.values().map(|(id, _)| *id);
         for id in index_ids.chain(sink_ids) {
-            self.compute_state
-                .reported_frontiers
-                .insert(id, Antichain::from_elem(0));
-            logger.log(ComputeEvent::Frontier(id, 0, 1));
+            self.compute_state.reported_frontiers.insert(
+                id,
+                Antichain::from_elem(timely::progress::Timestamp::minimum()),
+            );
+            logger.log(ComputeEvent::Frontier(
+                id,
+                timely::progress::Timestamp::minimum(),
+                1,
+            ));
         }
 
         self.compute_state.compute_logger = Some(logger);
@@ -529,65 +548,43 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
     /// Send progress information to the coordinator.
     pub fn report_compute_frontiers(&mut self) {
-        fn add_progress(
-            id: GlobalId,
-            new_frontier: &Antichain<Timestamp>,
-            prev_frontier: &Antichain<Timestamp>,
-            progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
-        ) {
-            let mut changes = ChangeBatch::new();
-            for time in prev_frontier.elements().iter() {
-                changes.update(time.clone(), -1);
+        let mut new_uppers = Vec::new();
+
+        let mut update_frontier = |id, new_frontier: &Antichain<Timestamp>| {
+            let prev_frontier = self.compute_state.reported_frontiers.get_mut(&id);
+            let prev_frontier = prev_frontier
+                .unwrap_or_else(|| panic!("Frontier update for untracked identifier: {id}"));
+
+            assert!(PartialOrder::less_equal(prev_frontier, new_frontier));
+            if prev_frontier == new_frontier {
+                return; // nothing new to report
             }
-            for time in new_frontier.elements().iter() {
-                changes.update(time.clone(), 1);
+
+            if let Some(logger) = self.compute_state.compute_logger.as_mut() {
+                if let Some(time) = prev_frontier.get(0) {
+                    logger.log(ComputeEvent::Frontier(id, *time, -1));
+                }
+                if let Some(time) = new_frontier.get(0) {
+                    logger.log(ComputeEvent::Frontier(id, *time, 1));
+                }
             }
-            changes.compact();
-            if !changes.is_empty() {
-                progress.push((id, changes));
-            }
-        }
+
+            new_uppers.push((id, new_frontier.clone()));
+            prev_frontier.clone_from(&new_frontier);
+        };
 
         let mut new_frontier = Antichain::new();
-        let mut progress = Vec::new();
         for (id, traces) in self.compute_state.traces.traces.iter_mut() {
-            // Read the upper frontier and compare to what we've reported.
             traces.oks_mut().read_upper(&mut new_frontier);
-            if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&id) {
-                assert!(PartialOrder::less_equal(prev_frontier, &new_frontier));
-                if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                    prev_frontier.clone_from(&new_frontier);
-                }
-            } else {
-                panic!("Frontier update for untracked identifier: {:?}", id);
-            }
+            update_frontier(*id, &new_frontier);
         }
-
         for (id, frontier) in self.compute_state.sink_write_frontiers.iter() {
             new_frontier.clone_from(&frontier.borrow());
-            if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&id) {
-                assert!(PartialOrder::less_equal(prev_frontier, &new_frontier));
-                if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
-                    prev_frontier.clone_from(&new_frontier);
-                }
-            } else {
-                panic!("Frontier update for untracked identifier: {:?}", id);
-            }
+            update_frontier(*id, &new_frontier);
         }
 
-        // Log index and sink frontier changes
-        if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            for (id, changes) in &mut progress {
-                for (time, diff) in changes.iter() {
-                    logger.log(ComputeEvent::Frontier(*id, *time, *diff));
-                }
-            }
-        }
-
-        if !progress.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(progress));
+        if !new_uppers.is_empty() {
+            self.send_compute_response(ComputeResponse::FrontierUppers(new_uppers));
         }
     }
 
@@ -600,7 +597,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             Vec::with_capacity(pending_peeks_len),
         );
         for mut peek in pending_peeks.drain(..) {
-            if let Some(response) = peek.seek_fulfillment(&mut upper) {
+            if let Some(response) =
+                peek.seek_fulfillment(&mut upper, self.compute_state.max_result_size)
+            {
                 let _span = tracing::info_span!(parent: &peek.span,  "process_peek").entered();
                 self.send_peek_response(peek, response);
             } else {
@@ -675,7 +674,11 @@ impl PendingPeek {
     /// then for any time `t` less or equal to `peek.timestamp` it is
     /// not the case that `upper` is less or equal to that timestamp,
     /// and so the result cannot further evolve.
-    fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> Option<PeekResponse> {
+    fn seek_fulfillment(
+        &mut self,
+        upper: &mut Antichain<Timestamp>,
+        max_result_size: u32,
+    ) -> Option<PeekResponse> {
         self.trace_bundle.oks_mut().read_upper(upper);
         if upper.less_equal(&self.peek.timestamp) {
             return None;
@@ -684,7 +687,7 @@ impl PendingPeek {
         if upper.less_equal(&self.peek.timestamp) {
             return None;
         }
-        let response = match self.collect_finished_data() {
+        let response = match self.collect_finished_data(max_result_size) {
             Ok(rows) => PeekResponse::Rows(rows),
             Err(text) => PeekResponse::Error(text),
         };
@@ -692,7 +695,12 @@ impl PendingPeek {
     }
 
     /// Collects data for a known-complete peek.
-    fn collect_finished_data(&mut self) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+    fn collect_finished_data(
+        &mut self,
+        max_result_size: u32,
+    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+        let max_result_size = usize::cast_from(max_result_size);
+        let count_byte_size = std::mem::size_of::<NonZeroUsize>();
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -720,6 +728,7 @@ impl PendingPeek {
         let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
         // Accumulated `Vec<(row, count)>` results that we are likely to return.
         let mut results = Vec::new();
+        let mut total_size: usize = 0;
 
         // When set, a bound on the number of records we need to return.
         // The requirements on the records are driven by the finishing's
@@ -821,6 +830,15 @@ impl PendingPeek {
                     };
                     // if copies > 0 ... otherwise skip
                     if let Some(copies) = NonZeroUsize::new(copies) {
+                        total_size = total_size
+                            .saturating_add(result.byte_len())
+                            .saturating_add(count_byte_size);
+                        if total_size > max_result_size {
+                            return Err(format!(
+                                "result exceeds max size of {}",
+                                ByteSize::b(u64::cast_from(max_result_size))
+                            ));
+                        }
                         results.push((result, copies));
                     }
 
@@ -853,7 +871,14 @@ impl PendingPeek {
                                         || left.0.cmp(&right.0),
                                     )
                                 });
-                                results.truncate(max_results);
+                                let dropped = results.drain(max_results..);
+                                let dropped_size =
+                                    dropped.into_iter().fold(0, |acc: usize, (row, _count)| {
+                                        acc.saturating_add(
+                                            row.byte_len().saturating_add(count_byte_size),
+                                        )
+                                    });
+                                total_size = total_size.saturating_sub(dropped_size);
                             }
                         }
                     }
