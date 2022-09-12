@@ -9,15 +9,25 @@
 
 //! CLI introspection tools for persist
 
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use crate::internal::gc::{GarbageCollector, GcReq};
+use crate::internal::machine::Machine;
 use crate::internal::state::ProtoStateRollup;
+use crate::internal::state_versions::StateVersions;
 use crate::{Metrics, PersistConfig, ShardId};
 use anyhow::anyhow;
-use mz_build_info::DUMMY_BUILD_INFO;
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
+use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist::cfg::ConsensusConfig;
+use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::SeqNo;
+use mz_persist_types::{Codec, Codec64};
 use prost::Message;
+use timely::progress::Timestamp;
 
 /// Fetches the current state of a given shard
 pub async fn fetch_current_state(
@@ -58,4 +68,47 @@ pub async fn fetch_state_diffs(
     }
 
     Ok(states)
+}
+
+/// WIP
+pub async fn run_gc<K, V, T, D>(
+    shard_id: ShardId,
+    consensus_uri: &str,
+    blob_uri: &str,
+    old_seqno_since: SeqNo,
+    new_seqno_since: SeqNo,
+) -> Result<(), anyhow::Error>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+{
+    let build_info = BuildInfo {
+        version: "0.27.0-alpha.20".into(),
+        sha: "".into(),
+        time: "".into(),
+    };
+    let cfg = PersistConfig::new(&build_info, SYSTEM_TIME.clone());
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+    let consensus =
+        ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus.clone()).await?;
+    let consensus = consensus.clone().open().await?;
+    let blob = BlobConfig::try_from(&blob_uri).await?;
+    let blob = blob.clone().open().await?;
+    let state_versions = Arc::new(StateVersions::new(
+        cfg.clone(),
+        consensus,
+        blob,
+        Arc::clone(&metrics),
+    ));
+    let mut machine = Machine::<K, V, T, D>::new(cfg, shard_id, metrics, state_versions).await?;
+
+    let req = GcReq {
+        shard_id,
+        old_seqno_since,
+        new_seqno_since,
+    };
+    GarbageCollector::gc_and_truncate(&mut machine, req).await;
+    Ok(())
 }

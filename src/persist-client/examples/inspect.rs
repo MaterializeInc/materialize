@@ -9,6 +9,7 @@
 
 //! Persist command-line utilities
 
+use mz_persist::location::SeqNo;
 use mz_persist_client::ShardId;
 
 use serde_json::json;
@@ -48,6 +49,9 @@ pub(crate) enum Command {
     ///
     #[clap(verbatim_doc_comment)]
     StateDiff(StateArgs),
+
+    ///
+    Gc(GcArgs),
 }
 
 /// Arguments for viewing the current state of a given shard
@@ -71,6 +75,37 @@ pub struct StateArgs {
     ///
     #[clap(long, verbatim_doc_comment)]
     consensus_uri: String,
+}
+
+#[derive(Debug, Clone, clap::Parser)]
+pub struct GcArgs {
+    /// Shard to view
+    #[clap(long)]
+    shard_id: String,
+
+    /// Consensus to use.
+    ///
+    /// When connecting to a deployed environment's consensus table, the Postgres/CRDB connection
+    /// string must contain the database name and `options=--search_path=consensus`.
+    ///
+    /// When connecting to Cockroach Cloud, use the following format:
+    ///
+    ///   postgresql://<user>:$COCKROACH_PW@<hostname>:<port>/environment_<environment-id>
+    ///     ?sslmode=verify-full
+    ///     &sslrootcert=/path/to/cockroach-cloud/certs/cluster-ca.crt
+    ///     &options=--search_path=consensus
+    ///
+    #[clap(long, verbatim_doc_comment)]
+    consensus_uri: String,
+
+    #[clap(long, verbatim_doc_comment)]
+    blob_uri: String,
+
+    #[clap(long, verbatim_doc_comment)]
+    old_seqno_since: u64,
+
+    #[clap(long, verbatim_doc_comment)]
+    new_seqno_since: u64,
 }
 
 pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
@@ -100,7 +135,35 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
                 );
             }
         }
+        Command::Gc(args) => {
+            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
+            mz_persist_client::inspect::run_gc::<PlaceholderSourceData, (), u64, i64>(
+                shard_id,
+                &args.consensus_uri,
+                &args.blob_uri,
+                SeqNo(args.old_seqno_since),
+                SeqNo(args.new_seqno_since),
+            )
+            .await?;
+        }
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+struct PlaceholderSourceData;
+
+impl mz_persist_types::Codec for PlaceholderSourceData {
+    fn codec_name() -> String {
+        "protobuf[SourceData]".into()
+    }
+
+    fn encode<B: bytes::BufMut>(&self, _buf: &mut B) {
+        unreachable!("should not be used by gc")
+    }
+
+    fn decode(_buf: &[u8]) -> Result<Self, String> {
+        unreachable!("should not be used by gc")
+    }
 }
