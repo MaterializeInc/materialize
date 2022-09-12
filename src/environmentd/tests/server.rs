@@ -310,13 +310,13 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[],"col_names":["a"]}]}"#,
         },
-        // Syntax errors fail the request.
+        // Emtpy query OK.
         TestCase {
             query: "",
             status: StatusCode::OK,
             body: r#"{"results":[]}"#,
         },
-        // Syntax errors fail the request.
+        // Does not support parameters
         TestCase {
             query: "select $1",
             status: StatusCode::OK,
@@ -425,23 +425,18 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCaseParams {
             requests: vec![("", vec![])],
             status: StatusCode::OK,
-            body: r#"{"results":[]}"#,
-        },
-        TestCaseParams {
-            requests: vec![("", vec![])],
-            status: StatusCode::OK,
-            body: r#"{"results":[]}"#,
+            body: r#"{"results":[{"error":"each query must contain exactly 1 statement"}]}"#,
         },
         // Empty query w/ param
         TestCaseParams {
             requests: vec![("", vec![Some("1")])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"error":"cannot provide parameters to an empty query"}]}"#,
+            body: r#"{"results":[{"error":"each query must contain exactly 1 statement"}]}"#,
         },
         TestCaseParams {
             requests: vec![("select 1 as col", vec![]), ("", vec![None])],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"error":"cannot provide parameters to an empty query"}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"error":"each query must contain exactly 1 statement"}]}"#,
         },
         // Multiple statements
         TestCaseParams {
@@ -450,7 +445,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 ("select 1; select 2;", vec![None]),
             ],
             status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"error":"each query can contain at most 1 statement"}]}"#,
+            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"error":"each query must contain exactly 1 statement"}]}"#,
         },
         // Txns
         // - Rolledback
