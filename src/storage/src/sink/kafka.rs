@@ -1220,7 +1220,7 @@ where
 
                     let ts_bytes = ts.to_string().into_bytes();
                     let record = record.headers(OwnedHeaders::new().insert(Header {
-                        key: "mz-timestamp",
+                        key: "materialize-timestamp",
                         value: Some(&ts_bytes),
                     }));
 

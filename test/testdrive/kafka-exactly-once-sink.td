@@ -268,7 +268,7 @@ $ kafka-ingest format=avro topic=progress-test-input schema=${cdcv2-schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":2}]}}
 {"array":[{"data":{"a":2,"b":2},"time":3,"diff":1}]}
 
-$ kafka-verify headers=mz-timestamp format=avro sink=materialize.public.compaction_test_sink sort-messages=true
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.compaction_test_sink sort-messages=true
 1	{"before": null, "after": {"row": {"a": 1, "b": 1}}}
 1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
