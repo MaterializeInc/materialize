@@ -17,7 +17,7 @@ $ set concrete-double={"type": "record", "name": "schema_union", "fields": [ {"n
 
 $ kafka-create-topic topic=resolution-union-concrete
 
-$ kafka-ingest format=avro topic=resolution-union-concrete schema=${union-int} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-union-concrete schema=${union-int} timestamp=1
 {"f1": {"int": 123 } }
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -29,7 +29,7 @@ $ kafka-ingest format=avro topic=resolution-union-concrete schema=${union-int} p
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=resolution-union-concrete schema=${concrete-double} publish=true timestamp=2
+$ kafka-ingest format=avro topic=resolution-union-concrete schema=${concrete-double} timestamp=2
 {"f1": 123.456 }
 
 ! SELECT f1 FROM resolution_union_concrete

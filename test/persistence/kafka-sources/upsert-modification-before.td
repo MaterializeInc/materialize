@@ -29,7 +29,7 @@ $ set schema={
 
 $ kafka-create-topic topic=upsert-modification
 
-$ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": ${kafka-ingest.iteration}} {"f2": "${kafka-ingest.iteration}"}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn

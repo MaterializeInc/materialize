@@ -369,6 +369,187 @@ WHERE (a,b) IN ((1, 4*a), (2, 5*a), (3, a+20))
 1  4  7
 3  23  33
 
+# Regression test for https://github.com/MaterializeInc/materialize/issues/14532
+# Copied from test/sqllogictest/sqlite/test/index/orderby_nosort/100/slt_good_3.test
+
+statement ok
+CREATE TABLE tab0(pk INTEGER PRIMARY KEY, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT)
+
+statement ok
+INSERT INTO tab0 VALUES(0,146,632.63,'shwwd',703,412.47,'xsppr')
+
+statement ok
+INSERT INTO tab0 VALUES(1,81,536.29,'trhdh',49,726.3,'chuxv')
+
+query I rowsort
+SELECT pk FROM tab0 WHERE (((col4 >= 660.98) AND ((col4 IN (724.71,445.29,441.2,606.49) AND ((col0 > 523)) AND (((col3 > 975 OR (col3 IS NULL) AND (col1 > 259.62 OR col0 >= 896 OR col1 <= 947.3 OR col3 IS NULL OR (col3 > 788) AND ((col3 < 264)) AND col0 < 823 AND ((col0 < 164) AND col1 > 95.85) AND (col0 > 534) AND col4 > 922.46 AND col3 >= 528 AND col3 > 762 AND col0 <= 903) AND col3 IS NULL))) OR col1 < 760.15 OR ((((((col0 >= 551)))))) OR col0 IN (425,98,842,550))) OR col0 < 397 AND col4 > 32.43 AND col3 >= 13 OR col3 > 474 OR ((col1 < 746.36)) AND col1 >= 499.2 AND col0 < 362 OR ((col0 <= 979) AND ((col0 IS NULL) AND (col1 > 251.48) AND (col3 > 838 OR col3 > 529 AND col0 IN (627,345,774,557) OR ((col0 <= 992 OR (((col3 BETWEEN 277 AND 34)))) AND (col0 > 561))) AND col1 >= 912.45 OR (col0 < 4 AND (col3 <= 996 AND (col0 <= 364))) OR ((col0 < 979)) OR col1 > 599.0 OR (col4 <= 26.30 AND ((col3 = 547 AND col3 >= 799) OR (col1 BETWEEN 841.6 AND 776.13)) AND col1 > 614.41 OR col4 = 581.12))) AND col0 < 480 OR (col3 = 763 AND (col3 IS NULL)))) ORDER BY 1 DESC
+----
+0
+1
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/14548
+# Also tests the situation when `constraints_to_residual_sets` has multiple elements in the sets.
+
+statement ok
+CREATE INDEX idx_t1_b ON t1(b)
+
+query I
+SELECT a FROM t1
+WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
+----
+1
+2
+3
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_b
+| | Lookup values [("l1"); ("l2"); ("l3"); ("l9")]
+| Filter ((#1 < 3) OR (#1 > 0))
+| Project (#1)
+
+EOF
+
+# More tricky tests for `remove_literal_constraints`
+
+query I
+SELECT a FROM t1
+WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l%' OR a > 5)
+----
+1
+2
+3
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l%' OR a > 5)
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_b
+| | Lookup values [("l1"); ("l2"); ("l3"); ("l9")]
+| Filter ((#1 < 3) OR (#1 < 7) OR (#1 > 0)), ("l%" ~~(#0) OR (#1 > 5))
+| Project (#1)
+
+EOF
+
+query IT
+SELECT * FROM t1
+WHERE ((b = 'l1' AND a = 1) OR (a = 2 AND b = 'l2')) AND (b like 'nonono' OR (b like 'l%' AND a < 10))
+----
+1  l1
+2  l2
+
+query T multiline
+EXPLAIN SELECT * FROM t1
+WHERE ((b = 'l1' AND a = 1) OR (a = 2 AND b = 'l2')) AND (b like 'nonono' OR (b like 'l%' AND a < 10))
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_a_b
+| | Lookup values [(1, "l1"); (2, "l2")]
+| Filter ("nonono" ~~(#1) OR ("l%" ~~(#1) AND (#0 < 10)))
+| Project (#0, #1)
+
+EOF
+
+# Even more tricky test for `remove_literal_constraints`: has multiple fields in the IN list and MFP CSE
+
+query I
+SELECT a FROM t1
+WHERE (a % 3 = 0 OR a % 3 = 1) AND (a,b) IN ((1,'l1'), (2,'l2'), (3,'l3'), (9,'l9'))
+----
+1
+3
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE (a % 3 = 0 OR a % 3 = 1) AND (a,b) IN ((1,'l1'), (2,'l2'), (3,'l3'), (9,'l9'))
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_a_b
+| | Lookup values [(1, "l1"); (2, "l2"); (3, "l3"); (9, "l9")]
+| Map (#0 % 3)
+| Filter ((#4 = 0) OR (#4 = 1))
+| Project (#0)
+
+EOF
+
+# Negative test for `remove_literal_constraints` when `constraints_to_residual_sets` has multiple elements in the sets.
+# There is also an impossible constraint to remove by `remove_impossible_or_args`.
+
+query I
+SELECT a FROM t1
+WHERE (
+    (a = 1 AND b like 'nope') OR
+    (a = 2) OR
+    (a = 1 AND a = 2)
+) AND
+(b like 'l%' OR b like 'aaa')
+----
+2
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE (
+    (a = 1 AND b like 'nope') OR
+    (a = 2)
+) AND
+(b like 'l%' OR b like 'aaa')
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_a
+| | Lookup values [(1); (2)]
+| Filter ("aaa" ~~(#1) OR "l%" ~~(#1)), ((#0 = 2) OR ("nope" ~~(#1) AND (#0 = 1)))
+| Project (#0)
+
+EOF
+
+# Impossible predicates (exercise `remove_impossible_or_args`)
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE a = 3 AND a = 5
+----
+%0 =
+| Constant
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE a IN (1,2) AND a IN (3,4,5)
+----
+%0 =
+| Constant
+
+EOF
+
+# Only some subexpressions of the predicates can be removed due to being impossible
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE (a = 4 AND a = 7) OR (a = 9)
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_a
+| | Lookup value (9)
+| Project (#0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE a IN (1,2) AND a IN (2,3,4)
+----
+%0 =
+| ReadExistingIndex materialize.public.idx_t1_a
+| | Lookup value (2)
+| Project (#0)
+
+EOF
+
 # In the following query, we would be able to detect literal constraints if we called `canonicalize_equivalences`
 
 query T multiline

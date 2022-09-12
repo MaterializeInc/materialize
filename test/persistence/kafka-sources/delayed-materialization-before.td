@@ -32,7 +32,7 @@ $ set schema={
 
 $ kafka-create-topic topic=delayed-materialization
 
-$ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=1
+$ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-schema=${keyschema} schema=${schema} repeat=1
 {"f1": "a${kafka-ingest.iteration}"} {"f2": "a${kafka-ingest.iteration}"}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -59,7 +59,7 @@ $ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-sch
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
-$ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count}
+$ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-schema=${keyschema} schema=${schema} repeat=${count}
 {"f1": "a${kafka-ingest.iteration}"} {"f2": "a${kafka-ingest.iteration}"}
 
 > CREATE DEFAULT INDEX ON materialized_via_create_index_before_restart;

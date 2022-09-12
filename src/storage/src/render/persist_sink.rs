@@ -166,7 +166,7 @@ pub fn render<G>(
                         let new_upper = if i == finalized_batch_count - 1 {
                             input_upper.clone()
                         } else {
-                            Antichain::from_elem(ts + 1)
+                            Antichain::from_elem(ts.step_forward())
                         };
 
                         let mut batch = stashed_batches

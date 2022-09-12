@@ -15,10 +15,10 @@ $ set first-writer-schema={"type": "record", "name": "row", "fields": [{"name": 
 $ set second-writer-schema={"type": "record", "name": "row", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}, {"name": "c", "type": ["null", "long"], "default": null}]}
 $ set reader-schema={"type": "record", "name": "row", "fields": [{"name": "a", "type": "long"}]}
 
-$ kafka-ingest format=avro topic=schema-strategy-test schema=${first-writer-schema} timestamp=1 publish=true
+$ kafka-ingest format=avro topic=schema-strategy-test schema=${first-writer-schema} timestamp=1
 {"a": 0, "b": 1}
 
-$ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-schema} timestamp=1 publish=true
+$ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-schema} timestamp=1
 {"a": 2, "b": 3, "c": {"long": 4}}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn

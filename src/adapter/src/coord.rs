@@ -143,7 +143,8 @@ mod timeline;
 mod timestamp_selection;
 
 /// The default is set to a second to track the default timestamp frequency for sources.
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<u64> = Some(1_000);
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<mz_repr::Timestamp> =
+    Some(Timestamp::new(1_000));
 
 /// The default interval at which to collect storage usage information.
 pub const DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL: Duration = Duration::from_secs(3600);
@@ -371,7 +372,11 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut persisted_source_ids = vec![];
         for instance in self.catalog.compute_instances() {
             self.controller
-                .create_instance(instance.id, instance.logging.clone())
+                .create_instance(
+                    instance.id,
+                    instance.logging.clone(),
+                    self.catalog.system_config().max_result_size(),
+                )
                 .await;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
@@ -406,26 +411,10 @@ impl<S: Append + 'static> Coordinator<S> {
         .await;
 
         // Migrate builtin objects.
-        for (compute_id, index_ids) in builtin_migration_metadata.previous_index_ids {
-            self.controller
-                .compute_mut(compute_id)
-                .unwrap()
-                .drop_indexes_unvalidated(index_ids)
-                .await?;
-        }
-        for (compute_id, recorded_view_ids) in
-            builtin_migration_metadata.previous_materialized_view_ids
-        {
-            self.controller
-                .compute_mut(compute_id)
-                .unwrap()
-                .drop_sinks_unvalidated(recorded_view_ids.clone())
-                .await?;
-            self.controller
-                .storage_mut()
-                .drop_sources_unvalidated(recorded_view_ids)
-                .await?;
-        }
+        self.controller
+            .storage_mut()
+            .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids)
+            .await?;
         self.controller
             .storage_mut()
             .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids)
@@ -536,7 +525,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         let dataflow_plan =
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
                         self.controller
-                            .compute_mut(idx.compute_instance)
+                            .active_compute(idx.compute_instance)
                             .unwrap()
                             .create_dataflows(dataflow_plan)
                             .await
@@ -892,7 +881,7 @@ pub async fn serve<S: Append + 'static>(
                     let now = now.clone();
                     handle.block_on(timeline::DurableTimestampOracle::new(
                         initial_timestamp,
-                        move || (*&(now))(),
+                        move || (*&(now))().into(),
                         *timeline::TIMESTAMP_PERSIST_INTERVAL,
                         |ts| catalog.persist_timestamp(&timeline, ts),
                     ))

@@ -66,6 +66,29 @@ ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
 
+# In implicit transactions, an error with a later ROLLBACK still doesn't execute
+# anything after the error, but also doesn't need to have the next query start
+# with ROLLBACK.
+send
+Query {"query": "SELECT 1; SELECT 1/(SELECT 0); SELECT 2; ROLLBACK; SELECT 3"}
+Query {"query": "SELECT 4"}
+----
+
+until err_field_typs=M
+ReadyForQuery
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+RowDescription {"fields":[{"name":"?column?"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["4"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
 # The entire query is parsed at once, preventing any of it from running if that fails.
 send
 Query {"query": "BEGIN; SELECT 1; COMMIT; SELCT 1/(SELECT 0);"}

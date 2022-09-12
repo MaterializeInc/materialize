@@ -152,6 +152,16 @@ impl<T> Trace<T> {
         self.map_batches(|b| ret += b.len);
         ret
     }
+
+    pub fn encoded_batch_size(&self) -> usize {
+        let mut ret = 0;
+        self.map_batches(|b| {
+            for part in b.parts.iter() {
+                ret += part.encoded_size_bytes;
+            }
+        });
+        ret
+    }
 }
 
 impl<T: Timestamp + Lattice> Trace<T> {
@@ -281,7 +291,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     pub fn empty(lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Self {
         SpineBatch::Merged(HollowBatch {
             desc: Description::new(lower, upper, since),
-            keys: vec![],
+            parts: vec![],
             len: 0,
         })
     }
@@ -1051,6 +1061,7 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
 mod tests {
     use super::*;
     use crate::internal::paths::PartialBatchKey;
+    use crate::internal::state::HollowBatchPart;
 
     #[test]
     fn trace_datadriven() {
@@ -1073,9 +1084,12 @@ mod tests {
                     Antichain::from_elem(since),
                 ),
                 len,
-                keys: keys
+                parts: keys
                     .iter()
-                    .map(|x| PartialBatchKey((*x).to_owned()))
+                    .map(|x| HollowBatchPart {
+                        key: PartialBatchKey((*x).to_owned()),
+                        encoded_size_bytes: 0,
+                    })
                     .collect(),
             }
         }
@@ -1099,14 +1113,15 @@ mod tests {
                         let mut s = String::new();
                         trace.spine.map_batches(|b| {
                             let b = match b {
-                                SpineBatch::Merged(HollowBatch { desc, len, keys }) => format!(
+                                SpineBatch::Merged(HollowBatch { desc, len, parts }) => format!(
                                     "{:?}{:?}{:?} {}{}\n",
                                     desc.lower().elements(),
                                     desc.upper().elements(),
                                     desc.since().elements(),
                                     len,
-                                    keys.iter()
-                                        .map(|x| format!(" {}", x))
+                                    parts
+                                        .iter()
+                                        .map(|x| format!(" {}", x.key))
                                         .collect::<Vec<_>>()
                                         .join(""),
                                 ),
@@ -1119,8 +1134,8 @@ mod tests {
                                     parts.iter().map(|x| x.len).sum::<usize>(),
                                     parts
                                         .iter()
-                                        .flat_map(|x| x.keys.iter())
-                                        .map(|x| format!(" {}", x))
+                                        .flat_map(|x| x.parts.iter())
+                                        .map(|x| format!(" {}", x.key))
                                         .collect::<Vec<_>>()
                                         .join("")
                                 ),
@@ -1153,9 +1168,8 @@ mod tests {
                                 merge_req
                                     .inputs
                                     .iter()
-                                    .flat_map(|x| x.keys.iter())
-                                    .cloned()
-                                    .map(|x| x.0)
+                                    .flat_map(|x| x.parts.iter())
+                                    .map(|x| x.key.0.clone())
                                     .collect::<Vec<_>>()
                                     .join(" ")
                             );

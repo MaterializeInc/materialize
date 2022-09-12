@@ -269,8 +269,8 @@ impl<S: Append + 'static> Coordinator<S> {
             .into_group_map();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
-                compute.drop_sinks(ids).await.unwrap();
+            if let Some(mut compute) = self.controller.active_compute(compute_instance) {
+                compute.drop_collections(ids).await.unwrap();
             }
         }
     }
@@ -300,9 +300,9 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         for (compute_instance, ids) in by_compute_instance {
             self.controller
-                .compute_mut(compute_instance)
+                .active_compute(compute_instance)
                 .unwrap()
-                .drop_indexes(ids)
+                .drop_collections(ids)
                 .await
                 .unwrap();
         }
@@ -327,8 +327,8 @@ impl<S: Append + 'static> Coordinator<S> {
         // TODO(chae): Drop storage sinks when they're moved over
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
-                compute.drop_sinks(ids).await.unwrap();
+            if let Some(mut compute) = self.controller.active_compute(compute_instance) {
+                compute.drop_collections(ids).await.unwrap();
             }
         }
 
@@ -575,7 +575,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::StorageCollection(_) => {}
                     }
                 }
-                Op::DropTimeline(_)
+                Op::AlterSource { .. }
+                | Op::DropTimeline(_)
                 | Op::RenameItem { .. }
                 | Op::UpdateComputeInstanceStatus { .. }
                 | Op::UpdateStorageUsage { .. }
@@ -682,7 +683,7 @@ impl<S: Append + 'static> Coordinator<S> {
     where
         F: Fn(&SystemVars) -> u32,
     {
-        let limit = resource_limit(self.catalog.state().system_config());
+        let limit = resource_limit(self.catalog.system_config());
         let exceeds_limit = match (u32::try_from(current_amount), u32::try_from(new_instances)) {
             // 0 new instances are always ok.
             (_, Ok(new_instances)) if new_instances == 0 => false,

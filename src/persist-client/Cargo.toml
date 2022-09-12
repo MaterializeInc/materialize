@@ -29,12 +29,12 @@ name = "persistcli"
 bench = false
 
 [dependencies]
-anyhow = { version = "1.0.62", features = ["backtrace"] }
+anyhow = { version = "1.0.64", features = ["backtrace"] }
 async-stream = "0.3.3"
 async-trait = "0.1.57"
 bytes = "1.2.1"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.23"
+futures = "0.3.24"
 futures-util = "0.3"
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore" }
@@ -72,5 +72,5 @@ tempfile = "3.2.0"
 
 [build-dependencies]
 prost-build = "0.11.1"
-protobuf-src = "1.0.4"
+protobuf-src = "1.1.0"
 serde = { version = "1.0.144", features = ["derive"] }

@@ -71,11 +71,8 @@ select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_fro
 ----
 2
 
-statement error cannot drop cluster with active indexes.*
-DROP CLUSTER c1;
-
 statement ok
-DROP CLUSTER c1 CASCADE;
+DROP CLUSTER c1;
 
 query T rowsort
 select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
@@ -139,11 +136,8 @@ SELECT * FROM w1;
 query error unknown catalog item 'w11'
 SELECT * FROM w11;
 
-statement error cannot drop cluster with active indexes.*
-DROP CLUSTER c1;
-
 statement ok
-DROP CLUSTER c1 CASCADE;
+DROP CLUSTER c1;
 
 query error unknown catalog item 'v2'
 SELECT * FROM v2;

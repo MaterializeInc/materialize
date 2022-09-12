@@ -254,7 +254,7 @@ $ set schema={
     ]
   }
 $ kafka-create-topic topic=data
-$ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 1}
 
 > CREATE TABLE tbl (a int, b text);
@@ -271,7 +271,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 > CREATE SINK snk FROM source_data
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-catalog-sink-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-catalog-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 
 > SHOW FULL OBJECTS
@@ -302,6 +302,22 @@ connection
 type
 function
 secret
+
+> SELECT * FROM (SHOW FULL OBJECTS) ORDER BY name DESC
+bool user
+csr_conn user
+int_list user
+kafka_conn user
+mv user
+pass_secret user
+snk user
+source_data user
+tbl user
+v1 user
+v2 user
+
+> SELECT "Create Table" FROM (SHOW CREATE TABLE tbl)
+"CREATE TABLE \"d\".\"public\".\"tbl\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\")"
 
 # DROP DATABASE does not support both RESTRICT and CASCADE.
 ! DROP DATABASE d RESTRICT CASCADE

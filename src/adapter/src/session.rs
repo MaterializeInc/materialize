@@ -551,9 +551,7 @@ pub enum TransactionStatus<T> {
     /// Currently in an implicit transaction started from a multi-statement query
     /// with more than 1 statements. Matches `TBLOCK_IMPLICIT_INPROGRESS`.
     InTransactionImplicit(Transaction<T>),
-    /// In a failed transaction that was started explicitly (i.e., previously
-    /// InTransaction). We do not use Failed for implicit transactions because
-    /// those cleanup after themselves. Matches `TBLOCK_ABORT`.
+    /// In a failed transaction. Matches `TBLOCK_ABORT`.
     Failed(Transaction<T>),
 }
 

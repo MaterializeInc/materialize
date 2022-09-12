@@ -232,7 +232,7 @@ CREATE CLUSTER to_drop REPLICAS ()
 statement ok
 CREATE MATERIALIZED VIEW to_drop_mv IN CLUSTER to_drop AS SELECT 1
 
-statement error cannot drop cluster with active indexes, sinks, materialized views, or replicas
+statement error cannot drop cluster with active indexes or materialized views
 DROP CLUSTER to_drop
 
 

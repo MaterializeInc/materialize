@@ -37,7 +37,7 @@ $ kafka-ingest format=avro topic=data schema=${schema}
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE SOURCE data FROM
-  KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > SHOW COLUMNS FROM data
@@ -60,7 +60,7 @@ u      false     uuid
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SINK uuid_sink_${testdrive.seed} FROM data
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'data'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sort-messages=true sink=materialize.public.uuid_sink_${testdrive.seed}

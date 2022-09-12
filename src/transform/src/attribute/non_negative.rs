@@ -13,13 +13,15 @@ use mz_expr::Id;
 use mz_expr::MirRelationExpr;
 
 use super::subtree_size::SubtreeSize;
+use super::DerivedAttributes;
+use super::RequiredAttributes;
 use super::{Attribute, Env};
 
 /// Traverses a [`MirRelationExpr`] tree and figures out whether for subtree
 /// the sum of all diffs up to a specific time for any record can be a
 /// negative value.
 ///
-/// The sresult for each subtree are accumulated in a bottom-up order
+/// The results for each subtree are accumulated in a bottom-up order
 /// in [`NonNegative::results`].
 ///
 /// This method is a conservative approximation and is known to miss not-hard
@@ -40,9 +42,8 @@ pub struct NonNegative {
 
 impl Attribute for NonNegative {
     type Value = bool;
-    type Dependencies = SubtreeSize;
 
-    fn derive(&mut self, expr: &MirRelationExpr, subtree_size: &SubtreeSize) {
+    fn derive(&mut self, expr: &MirRelationExpr, deps: &DerivedAttributes) {
         use MirRelationExpr::*;
         let n = self.results.len();
         match expr {
@@ -90,7 +91,7 @@ impl Attribute for NonNegative {
                 let mut offset = 1;
                 for _ in 0..inputs.len() {
                     result &= &self.results[n - offset];
-                    offset += &subtree_size.results[n - offset];
+                    offset += &deps.get_results::<SubtreeSize>()[n - offset];
                 }
                 self.results.push(result); // can be refined
             }
@@ -113,7 +114,7 @@ impl Attribute for NonNegative {
                 let mut offset = 1;
                 for _ in 0..inputs.len() {
                     result &= &self.results[n - offset];
-                    offset += &subtree_size.results[n - offset];
+                    offset += &deps.get_results::<SubtreeSize>()[n - offset];
                 }
                 result &= &self.results[n - offset]; // include the base result
                 self.results.push(result); // can be refined
@@ -131,5 +132,24 @@ impl Attribute for NonNegative {
 
     fn handle_env_tasks(&mut self) {
         self.env.handle_tasks(&self.results);
+    }
+
+    fn add_dependencies(builder: &mut RequiredAttributes)
+    where
+        Self: Sized,
+    {
+        builder.require::<SubtreeSize>();
+    }
+
+    fn get_results(&self) -> &Vec<Self::Value> {
+        &self.results
+    }
+
+    fn get_results_mut(&mut self) -> &mut Vec<Self::Value> {
+        &mut self.results
+    }
+
+    fn take(self) -> Vec<Self::Value> {
+        self.results
     }
 }

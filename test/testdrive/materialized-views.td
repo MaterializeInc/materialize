@@ -25,7 +25,7 @@ $ set materialized-views={
 
 $ kafka-create-topic topic=materialized-views
 
-$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views} publish=true
+$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "123"}
 
 > CREATE CONNECTION kafka_conn
@@ -40,12 +40,11 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION kafka_conn TOPIC
-  'testdrive-materialized-views-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-materialized-views-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views} publish=true
+$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "234"}
 
 > SELECT COUNT(*) FROM s1;
@@ -53,24 +52,24 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 
 > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(f1::integer) AS c1 FROM s1;
 
-$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views} publish=true
+$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "345"}
 
 > SELECT * FROM v1;
 3
 
 > CREATE SINK sink1 FROM v1
-  INTO KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SOURCE sink1_check
-  FROM KAFKA CONNECTION kafka_conn TOPIC
-  'testdrive-materialized-views-sink-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}'
+  )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views} publish=true
+$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "456"}
 
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
@@ -83,7 +82,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Inject failure in the source
 
-$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views} publish=true
+$ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "ABC"}
 
 ! SELECT * FROM v1;

@@ -246,6 +246,7 @@ impl RecursionGuard {
 #[derive(Clone, Debug)]
 pub struct RecursionLimitError {
     limit: usize,
+    // todo: add backtrace (say, bottom 20 frames) once `std::backtrace` stabilizes in Rust 1.65
 }
 
 impl fmt::Display for RecursionLimitError {

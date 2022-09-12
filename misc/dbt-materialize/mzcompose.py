@@ -39,28 +39,32 @@ class TestCase:
     name: str
     dbt_env: Dict[str, str]
     materialized_options: List[str]
+    profile: str
     materialized_image: Optional[str] = None
 
 
 test_cases = [
     TestCase(
-        name="no-tls",
+        name="no-tls-cloud",
         materialized_options=[],
         dbt_env={},
+        profile="materialize_cloud",
     ),
     TestCase(
-        name="tls",
+        name="tls-binary",
         materialized_options=[
             "--tls-mode=verify-ca",
             "--tls-cert=/secrets/materialized.crt",
             "--tls-key=/secrets/materialized.key",
             "--tls-ca=/secrets/ca.crt",
         ],
+        materialized_image="materialize/materialized:v0.26.4",
         dbt_env={
             "DBT_SSLCERT": "/secrets/postgres.crt",
             "DBT_SSLKEY": "/secrets/postgres.key",
             "DBT_SSLROOTCERT": "/secrets/ca.crt",
         },
+        profile="materialize_binary",
     ),
 ]
 
@@ -92,6 +96,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "dbt-test",
                         "pytest",
                         "dbt-materialize/tests",
+                        "--profile",
+                        test_case.profile,
                         env_extra={
                             "DBT_HOST": "materialized",
                             "KAFKA_ADDR": "redpanda:9092",

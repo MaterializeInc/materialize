@@ -1278,3 +1278,10 @@ SELECT count(DISTINCT *) FROM foo
 error: DISTINCT * not supported as function args
 SELECT count(DISTINCT *) FROM foo
                       ^
+
+parse-statement
+SELECT * FROM (SHOW TABLES)
+----
+SELECT * FROM (SHOW TABLES)
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: None, in_cluster: None, extended: false, full: false, filter: None })), order_by: [], limit: None, offset: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })

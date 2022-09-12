@@ -13,7 +13,7 @@ harness = false
 [dependencies]
 async-trait = "0.1.57"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.23"
+futures = "0.3.24"
 mz-ore = { path = "../ore" }
 mz-persist-types = { path = "../persist-types" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
@@ -27,7 +27,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tracing = "0.1.36"
 
 [dev-dependencies]
-anyhow = "1.0.62"
+anyhow = "1.0.64"
 mz-postgres-util = { path = "../postgres-util" }
 tempfile = "3.2.0"
 tokio = { version = "1.19.2", features = ["macros"] }

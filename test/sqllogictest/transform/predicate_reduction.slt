@@ -122,7 +122,8 @@ query T multiline
 EXPLAIN SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else false end;
 ----
 Source materialize.public.t2 (u2):
-| Filter ((#0 + #1) > 0), if ((#0 + #1) > 0) then {((1 / #0) > 0)} else {false}
+| Map ((#0 + #1) > 0)
+| Filter #2, if #2 then {((1 / #0) > 0)} else {false}
 | Project (#0, #1)
 
 Query:
@@ -138,7 +139,8 @@ query T multiline
 EXPLAIN SELECT * FROM t2 WHERE case when f1 + f2 > 0 then 1/f1 > 0 else false end and f1 + f2 > 0;
 ----
 Source materialize.public.t2 (u2):
-| Filter ((#0 + #1) > 0), if ((#0 + #1) > 0) then {((1 / #0) > 0)} else {false}
+| Map ((#0 + #1) > 0)
+| Filter #2, if #2 then {((1 / #0) > 0)} else {false}
 | Project (#0, #1)
 
 Query:

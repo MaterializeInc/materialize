@@ -9,30 +9,33 @@
 
 #![warn(missing_docs)]
 
-use std::cmp::Ordering;
+use std::cmp::{max, Ordering};
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::num::NonZeroUsize;
 
+use bytesize::ByteSize;
 use itertools::Itertools;
-use mz_ore::str::{separated, Indent};
-use mz_repr::explain_new::DisplayText;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::{separated, Indent};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::explain_new::DisplayText;
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
-use self::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::explain::{Indices, ViewExplanation};
 use crate::visit::{Visit, VisitChildren};
 use crate::{func as scalar_func, EvalError, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc};
+
+use self::func::{AggregateFunc, LagLeadType, TableFunc};
 
 pub mod canonicalize;
 pub mod func;
@@ -747,26 +750,22 @@ impl MirRelationExpr {
                         if let MirRelationExpr::Map { input, .. } = &inputs[0] {
                             if let MirRelationExpr::Union { base, inputs } = &**input {
                                 if inputs.len() == 1 {
-                                    if let MirRelationExpr::Project { input, outputs } = &**base {
-                                        if let MirRelationExpr::Negate { input } = &**input {
-                                            if let MirRelationExpr::Get {
-                                                id: second_id,
-                                                typ: _,
-                                            } = &**input
-                                            {
-                                                if first_id == second_id {
-                                                    result.extend(
-                                                        inputs[0].typ().keys.drain(..).filter(
-                                                            |key| {
-                                                                key.iter().all(|c| {
-                                                                    outputs.get(*c) == Some(c)
-                                                                        && base_projection.get(*c)
-                                                                            == Some(c)
-                                                                })
-                                                            },
-                                                        ),
-                                                    );
-                                                }
+                                    if let Some((input, outputs)) = base.is_negated_project() {
+                                        if let MirRelationExpr::Get {
+                                            id: second_id,
+                                            typ: _,
+                                        } = input
+                                        {
+                                            if first_id == second_id {
+                                                result.extend(
+                                                    inputs[0].typ().keys.drain(..).filter(|key| {
+                                                        key.iter().all(|c| {
+                                                            outputs.get(*c) == Some(c)
+                                                                && base_projection.get(*c)
+                                                                    == Some(c)
+                                                        })
+                                                    }),
+                                                );
                                             }
                                         }
                                     }
@@ -1146,6 +1145,21 @@ impl MirRelationExpr {
         }
     }
 
+    /// If the expression is a negated project, return the input and the projection.
+    pub fn is_negated_project(&self) -> Option<(&MirRelationExpr, &[usize])> {
+        if let MirRelationExpr::Negate { input } = self {
+            if let MirRelationExpr::Project { input, outputs } = &**input {
+                return Some((&**input, outputs));
+            }
+        }
+        if let MirRelationExpr::Project { input, outputs } = self {
+            if let MirRelationExpr::Negate { input } = &**input {
+                return Some((&**input, outputs));
+            }
+        }
+        None
+    }
+
     /// Pretty-print this MirRelationExpr to a string.
     ///
     /// This method allows an additional `ExprHumanizer` which can annotate
@@ -1383,6 +1397,34 @@ impl MirRelationExpr {
             Ok::<_, RecursionLimitError>(())
         })
         .expect("Unexpected error in `visit_scalars_mut` call");
+    }
+
+    /// Clears the contents of `self` even if it's so deep that simply dropping it would cause a
+    /// stack overflow in `drop_in_place`.
+    ///
+    /// Leaves `self` in an unusable state, so this should only be used if `self` is about to be
+    /// dropped or otherwise overwritten.
+    pub fn destroy_carefully(&mut self) {
+        #[allow(deprecated)] // Having `maybe_grow` and no limit is the point here
+        self.visit_mut_post_nolimit(&mut |e| {
+            e.take_dangerous();
+        });
+    }
+
+    /// Computes the size (total number of nodes) and maximum depth of a MirRelationExpr for
+    /// debug printing purposes. Might grow the stack to a size proportional to the maximum depth.
+    pub fn debug_size_and_depth(&self) -> (usize, usize) {
+        let mut size = 0;
+        let mut max_depth = 0;
+        fn dfs(expr: &MirRelationExpr, size: &mut usize, max_depth: &mut usize, cur_depth: usize) {
+            mz_ore::stack::maybe_grow(|| {
+                *size += 1;
+                *max_depth = max(*max_depth, cur_depth);
+                expr.visit_children(|child| dfs(child, size, max_depth, cur_depth + 1));
+            });
+        }
+        dfs(self, &mut size, &mut max_depth, 1);
+        (size, max_depth)
     }
 }
 
@@ -1622,6 +1664,9 @@ impl AggregateExpr {
             AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxUInt16
+            | AggregateFunc::MaxUInt32
+            | AggregateFunc::MaxUInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
             | AggregateFunc::MaxBool
@@ -1632,6 +1677,9 @@ impl AggregateExpr {
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
+            | AggregateFunc::MinUInt16
+            | AggregateFunc::MinUInt32
+            | AggregateFunc::MinUInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
             | AggregateFunc::MinBool
@@ -1676,6 +1724,23 @@ impl AggregateExpr {
             AggregateFunc::SumInt64 => self.expr.clone().call_unary(UnaryFunc::CastInt64ToNumeric(
                 scalar_func::CastInt64ToNumeric(Some(NumericMaxScale::ZERO)),
             )),
+
+            // SumUInt16 takes UInt16s as input, but outputs UInt64s.
+            AggregateFunc::SumUInt16 => self.expr.clone().call_unary(
+                UnaryFunc::CastUint16ToUint64(scalar_func::CastUint16ToUint64),
+            ),
+
+            // SumUInt32 takes UInt32s as input, but outputs UInt64s.
+            AggregateFunc::SumUInt32 => self.expr.clone().call_unary(
+                UnaryFunc::CastUint32ToUint64(scalar_func::CastUint32ToUint64),
+            ),
+
+            // SumUInt64 takes UInt64s as input, but outputs numerics.
+            AggregateFunc::SumUInt64 => {
+                self.expr.clone().call_unary(UnaryFunc::CastUint64ToNumeric(
+                    scalar_func::CastUint64ToNumeric(Some(NumericMaxScale::ZERO)),
+                ))
+            }
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
             AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
@@ -1960,6 +2025,9 @@ impl AggregateExpr {
             | AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxUInt16
+            | AggregateFunc::MaxUInt32
+            | AggregateFunc::MaxUInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
             | AggregateFunc::MaxBool
@@ -1971,6 +2039,9 @@ impl AggregateExpr {
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
+            | AggregateFunc::MinUInt16
+            | AggregateFunc::MinUInt32
+            | AggregateFunc::MinUInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
             | AggregateFunc::MinBool
@@ -2154,7 +2225,13 @@ impl RowSetFinishing {
     }
     /// Applies finishing actions to a row set,
     /// and unrolls it to a unary representation.
-    pub fn finish(&self, mut rows: Vec<(Row, NonZeroUsize)>) -> Vec<Row> {
+    pub fn finish(
+        &self,
+        mut rows: Vec<(Row, NonZeroUsize)>,
+        // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
+        max_result_size: u32,
+    ) -> Result<Vec<Row>, String> {
+        let max_result_size = usize::cast_from(max_result_size);
         let mut left_datum_vec = mz_repr::DatumVec::new();
         let mut right_datum_vec = mz_repr::DatumVec::new();
         let sort_by = |(left, _): &(Row, _), (right, _): &(Row, _)| {
@@ -2178,7 +2255,7 @@ impl RowSetFinishing {
             *nth_diff = NonZeroUsize::new(nth_diff.get() - offset_kth_copy).unwrap();
         }
 
-        let limit = self.limit.unwrap_or(std::usize::MAX);
+        let limit = self.limit.unwrap_or(usize::MAX);
 
         // The code below is logically equivalent to:
         //
@@ -2205,6 +2282,7 @@ impl RowSetFinishing {
         let mut remaining = limit;
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
+        let mut total_bytes = 0;
         for (row, count) in &rows[offset_nth_row..] {
             if remaining == 0 {
                 break;
@@ -2218,12 +2296,19 @@ impl RowSetFinishing {
                         .extend(self.project.iter().map(|i| &datums[*i]));
                     row_buf.clone()
                 };
+                total_bytes += new_row.byte_len();
+                if total_bytes > max_result_size {
+                    return Err(format!(
+                        "result exceeds max size of {}",
+                        ByteSize::b(u64::cast_from(max_result_size))
+                    ));
+                }
                 ret.push(new_row);
             }
             remaining -= count;
         }
 
-        ret
+        Ok(ret)
     }
 }
 
@@ -2460,10 +2545,12 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use proptest::prelude::*;
+
     use mz_proto::protobuf_roundtrip;
     use mz_repr::explain_new::text_string_at;
-    use proptest::prelude::*;
+
+    use super::*;
 
     proptest! {
         #[test]
