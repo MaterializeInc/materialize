@@ -310,36 +310,24 @@ impl AuthedClient {
                         }
                     };
 
-                    if stmts.len() > 1 {
+                    if stmts.len() != 1 {
                         results.push(SimpleResult::err(
-                            "each query can contain at most 1 statement",
+                            "each query must contain exactly 1 statement",
                         ));
                         break;
                     }
 
-                    match stmts.pop() {
-                        Some(stmt) => {
-                            // Mirror the behavior of the PostgreSQL simple query protocol.
-                            // See the pgwire::protocol::StateMachine::query method for details.
-                            if let Err(e) = self.0.start_transaction(Some(1)).await {
-                                results.push(SimpleResult::err(e));
-                                break;
-                            }
-                            let res = self.execute_stmt(stmt, params).await;
-                            if matches!(res, SimpleResult::Err { .. }) {
-                                self.0.fail_transaction();
-                            }
-                            results.push(res);
-                        }
-                        None => {
-                            if !params.is_empty() {
-                                results.push(SimpleResult::err(
-                                    "cannot provide parameters to an empty query",
-                                ));
-                                break;
-                            }
-                        }
+                    // Mirror the behavior of the PostgreSQL simple query protocol.
+                    // See the pgwire::protocol::StateMachine::query method for details.
+                    if let Err(e) = self.0.start_transaction(Some(1)).await {
+                        results.push(SimpleResult::err(e));
+                        break;
                     }
+                    let res = self.execute_stmt(stmts.pop().unwrap(), params).await;
+                    if matches!(res, SimpleResult::Err { .. }) {
+                        self.0.fail_transaction();
+                    }
+                    results.push(res);
                 }
             }
         }
