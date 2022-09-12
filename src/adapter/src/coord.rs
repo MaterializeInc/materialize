@@ -392,7 +392,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids().iter());
+                persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids());
 
                 self.controller
                     .active_compute()

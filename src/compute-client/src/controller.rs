@@ -243,38 +243,35 @@ pub enum ConcreteComputeInstanceReplicaLogging {
 }
 
 impl ConcreteComputeInstanceReplicaLogging {
-    /// Return all persisted introspection sources contained
-    pub fn get_sources(&self) -> Vec<(LogVariant, GlobalId)> {
+    /// Return all persisted introspection sources contained.
+    pub fn get_sources(&self) -> &[(LogVariant, GlobalId)] {
         match self {
-            ConcreteComputeInstanceReplicaLogging::Default => vec![],
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(logs, _) => logs.clone(),
+            ConcreteComputeInstanceReplicaLogging::Default => &[],
+            ConcreteComputeInstanceReplicaLogging::ConcreteViews(logs, _) => logs,
         }
     }
 
-    /// Return all persisted introspection views contained
-    pub fn get_views(&self) -> Vec<(LogView, GlobalId)> {
+    /// Return all persisted introspection views contained.
+    pub fn get_views(&self) -> &[(LogView, GlobalId)] {
         match self {
-            ConcreteComputeInstanceReplicaLogging::Default => vec![],
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(_, views) => views.clone(),
+            ConcreteComputeInstanceReplicaLogging::Default => &[],
+            ConcreteComputeInstanceReplicaLogging::ConcreteViews(_, views) => views,
         }
     }
 
-    /// Return all ids of the persisted introspection views contained
-    pub fn get_view_ids(&self) -> Vec<GlobalId> {
-        self.get_views().into_iter().map(|(_, id)| id).collect()
+    /// Return all ids of the persisted introspection views contained.
+    pub fn get_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.get_views().into_iter().map(|(_, id)| *id)
     }
 
-    /// Return all ids of the persisted introspection sources contained
-    pub fn get_source_ids(&self) -> Vec<GlobalId> {
-        self.get_sources().into_iter().map(|(_, id)| id).collect()
+    /// Return all ids of the persisted introspection sources contained.
+    pub fn get_source_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.get_sources().into_iter().map(|(_, id)| *id)
     }
 
-    /// Return all ids of the persisted introspection sources and logs contained
-    pub fn get_source_and_view_ids(&self) -> Vec<GlobalId> {
-        self.get_source_ids()
-            .into_iter()
-            .chain(self.get_view_ids().into_iter())
-            .collect()
+    /// Return all ids of the persisted introspection sources and logs contained.
+    pub fn get_source_and_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.get_source_ids().chain(self.get_view_ids())
     }
 }
 
@@ -433,16 +430,19 @@ where
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), ComputeError> {
+        let persisted_logs = config
+            .persisted_logs
+            .get_sources()
+            .iter()
+            .cloned()
+            .collect();
+
         // Add replicas backing that instance.
         match config.location {
             ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
                 self.instance(instance_id)
                     .ok_or(ComputeError::InstanceMissing(instance_id))?
-                    .add_replica(
-                        replica_id,
-                        addrs.into_iter().collect(),
-                        config.persisted_logs.get_sources().into_iter().collect(),
-                    );
+                    .add_replica(replica_id, addrs.into_iter().collect(), persisted_logs);
             }
             ConcreteComputeInstanceReplicaLocation::Managed {
                 allocation,
@@ -457,11 +457,7 @@ where
 
                 self.instance(instance_id)
                     .ok_or(ComputeError::InstanceMissing(instance_id))?
-                    .add_replica(
-                        replica_id,
-                        replica_addrs,
-                        config.persisted_logs.get_sources().into_iter().collect(),
-                    );
+                    .add_replica(replica_id, replica_addrs, persisted_logs);
             }
         }
 
