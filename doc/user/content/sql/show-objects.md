@@ -23,7 +23,7 @@ _schema&lowbar;name_ | The schema to show objects from. Defaults to `public` in 
 
 ### Output format
 
-`SHOW OBJECTS` will output a table with one column, `name`.
+`SHOW OBJECTS` will output a table with two columns, `name`and `type`.
 
 ## Examples
 
@@ -39,22 +39,22 @@ SHOW SCHEMAS;
 SHOW OBJECTS FROM public;
 ```
 ```nofmt
-  name
-----------------
-my_table
-my_source
-my_view
-my_other_source
+  name          | type
+----------------+-------
+my_table        | table
+my_source       | source
+my_view         | view
+my_other_source | source
 ```
 ```sql
 SHOW OBJECTS;
 ```
 ```nofmt
-  name
-----------
-my_table
-my_source
-my_view
+  name    | type
+----------+-------
+my_table  | table
+my_source | source
+my_view   | view
 ```
 
 ## Related pages

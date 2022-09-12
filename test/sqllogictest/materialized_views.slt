@@ -318,13 +318,18 @@ SELECT count(*) FROM mz_materialized_views
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT 1
 
-query T colnames,rowsort
+mode standard
+
+query TT colnames,rowsort
 SHOW OBJECTS
 ----
-name
+name type
 mv
+materialized view
 t
+table
 
+mode cockroach
 
 # Test: Indexes on materialized views show in `SHOW INDEXES`.
 
