@@ -148,7 +148,7 @@ $ kafka-verify format=avro sink=materialize.public.nums_sink sort-messages=true
 # # Test that a Debezium sink created `AS OF 3` (the latest completed timestamp)
 # # is fully consolidated.
 # > CREATE SINK nums_sink FROM nums
-#   INTO KAFKA CONNECTION kafka_conn (TOPIC 'nums-sink')
+#   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-sink-${testdrive.seed}')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   AS OF 3
 #

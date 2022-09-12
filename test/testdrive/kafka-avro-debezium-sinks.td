@@ -23,7 +23,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SINK data_sink FROM data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
