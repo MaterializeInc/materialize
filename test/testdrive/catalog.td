@@ -67,8 +67,8 @@ $ psql-execute command="\dn mz_*"
 
 # What objects do we have by default?
 > SHOW OBJECTS
-name
-----
+name    type
+-------------
 
 # Creating a schema should be reflected in the output of SHOW SCHEMAS.
 > CREATE SCHEMA s
@@ -216,10 +216,10 @@ v2
 2
 
 > SHOW OBJECTS
-name
-----
-v1
-v2
+name    type
+-------------
+v1      view
+v2      view
 
 # Test minimizing name qualification
 
@@ -255,12 +255,12 @@ public.bool
 contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or MATERIALIZED or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
 
 > SHOW OBJECTS
-name
---------
-bool
-int_list
-v1
-v2
+name        type
+-----------------
+bool        type
+int_list    type
+v1          view
+v2          view
 
 # Create one of every mz_object type
 $ set schema={
@@ -292,19 +292,19 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 
 > SHOW OBJECTS
-name
------------
-bool
-csr_conn
-int_list
-v1
-v2
-tbl
-pass_secret
-kafka_conn
-mv
-source_data
-snk
+name        type
+----------------
+bool        type
+csr_conn    connection
+int_list    type
+v1          view
+v2          view
+tbl         table
+pass_secret secret
+kafka_conn  connection
+mv          "materialized view"
+source_data source
+snk         sink
 
 > SELECT DISTINCT(TYPE) FROM mz_objects
 type
@@ -321,17 +321,17 @@ function
 secret
 
 > SELECT * FROM (SHOW OBJECTS) ORDER BY name DESC
-bool
-csr_conn
-int_list
-kafka_conn
-mv
-pass_secret
-snk
-source_data
-tbl
-v1
-v2
+bool        type
+csr_conn    connection
+int_list    type
+kafka_conn  connection
+mv          "materialized view"
+pass_secret secret
+snk         sink
+source_data source
+tbl         table
+v1          view
+v2          view
 
 > SELECT "Create Table" FROM (SHOW CREATE TABLE tbl)
 "CREATE TABLE \"d\".\"public\".\"tbl\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\")"

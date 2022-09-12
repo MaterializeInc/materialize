@@ -439,7 +439,7 @@ fn show_all_objects<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT o.name
+        "SELECT o.name, o.type
         FROM mz_catalog.mz_objects o
         JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
         WHERE o.schema_id = {schema_spec}",
