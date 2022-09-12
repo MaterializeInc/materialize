@@ -1205,23 +1205,6 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
 }
 
 impl SourceDesc {
-    /// Returns `true` if this connection yields input data (including
-    /// timestamps) that is stable across restarts. This is important for
-    /// exactly-once Sinks that need to ensure that the same data is written,
-    /// even when failures/restarts happen.
-    pub fn yields_stable_input(&self) -> bool {
-        // Conservatively, set all Kafka/File sources as having stable inputs because
-        // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
-        match self.connection {
-            // TODO(guswynn): does postgres count here as well?
-            SourceConnection::Kafka(_) => true,
-            // Currently, the Kinesis connection assigns "offsets" by counting the message in the order it was received
-            // and this order is not replayable across different reads of the same Kinesis stream.
-            SourceConnection::Kinesis(_) => false,
-            _ => false,
-        }
-    }
-
     /// Returns `true` if this connection yields data that is
     /// append-only/monotonic. Append-monly means the source
     /// never produces retractions.
@@ -1258,10 +1241,6 @@ impl SourceDesc {
 
     pub fn name(&self) -> &'static str {
         self.connection.name()
-    }
-
-    pub fn requires_single_materialization(&self) -> bool {
-        self.connection.requires_single_materialization()
     }
 }
 
@@ -1428,17 +1407,6 @@ impl SourceConnection {
             SourceConnection::S3(_) => None,
             SourceConnection::Postgres(_) => None,
             SourceConnection::LoadGenerator(_) => None,
-        }
-    }
-
-    pub fn requires_single_materialization(&self) -> bool {
-        match self {
-            SourceConnection::S3(c) => c.requires_single_materialization(),
-
-            SourceConnection::Kafka(_)
-            | SourceConnection::Kinesis(_)
-            | SourceConnection::Postgres(_)
-            | SourceConnection::LoadGenerator(_) => false,
         }
     }
 }
@@ -1644,16 +1612,6 @@ impl RustType<ProtoS3SourceConnection> for S3SourceConnection {
                 .compression
                 .into_rust_if_some("ProtoS3SourceConnection::compression")?,
         })
-    }
-}
-
-impl S3SourceConnection {
-    fn requires_single_materialization(&self) -> bool {
-        // SQS Notifications are not durable, multiple sources depending on them will get
-        // non-intersecting subsets of objects to read
-        self.key_sources
-            .iter()
-            .any(|s| matches!(s, S3KeySource::SqsNotifications { .. }))
     }
 }
 
