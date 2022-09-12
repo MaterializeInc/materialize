@@ -602,7 +602,7 @@ where
                             writers: expired_writers,
                         });
 
-                        if let Some(gc) = garbage_collection {
+                        if let Some(gc) = garbage_collection.as_ref() {
                             info!("Assigned gc request: {:?}", gc);
                         }
 
