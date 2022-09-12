@@ -357,7 +357,7 @@ impl CatalogState {
             // CatalogItem::Log. For now  we just use the log variant to lookup the unique CatalogItem
             // in BUILTINS.
             let log = BUILTINS::logs()
-                .find(|log| log.variant == variant)
+                .find(|log| log.variant == *variant)
                 .expect("variant must be included in builtins");
 
             let source_name = QualifiedObjectName {
@@ -367,7 +367,7 @@ impl CatalogState {
                 },
                 item: format!("{}_{}", log.name, replica_id),
             };
-            self.insert_item(source_id, oid, source_name, CatalogItem::Log(log));
+            self.insert_item(*source_id, oid, source_name, CatalogItem::Log(log));
         }
 
         for (logview, id) in persisted_logs.get_views() {
@@ -397,7 +397,7 @@ impl CatalogState {
                         item: name,
                     };
 
-                    self.insert_item(id, oid, view_name, item);
+                    self.insert_item(*id, oid, view_name, item);
                 }
                 Err(e) => {
                     // This error should never happen, but if we add a logging
@@ -3966,7 +3966,8 @@ impl<S: Append> Catalog<S> {
                     config,
                 } => {
                     let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
-                    let introspection_ids = config.persisted_logs.get_source_and_view_ids();
+                    let introspection_ids: Vec<_> =
+                        config.persisted_logs.get_source_and_view_ids().collect();
                     state.insert_compute_instance_replica(
                         compute_instance_id,
                         name.clone(),
@@ -4960,8 +4961,8 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
             .replicas_by_id
             .get(self.replica_id_by_name.get(name)?)?;
         Some((
-            replica.config.persisted_logs.get_source_ids(),
-            replica.config.persisted_logs.get_view_ids(),
+            replica.config.persisted_logs.get_source_ids().collect(),
+            replica.config.persisted_logs.get_view_ids().collect(),
         ))
     }
 }

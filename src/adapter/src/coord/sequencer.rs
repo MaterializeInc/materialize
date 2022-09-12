@@ -9,7 +9,7 @@
 
 //! Logic for executing a planned SQL query.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::{Duration, Instant};
@@ -805,7 +805,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
 
-        let persisted_source_ids = persisted_logs.get_source_ids();
+        let persisted_source_ids = persisted_logs.get_source_ids().collect();
         let persisted_sources = persisted_logs
             .get_sources()
             .iter()
@@ -1502,7 +1502,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for replica in instance.replicas_by_id.values() {
                 let persisted_logs = replica.config.persisted_logs.clone();
                 let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-                let view_ids = persisted_logs.get_view_ids();
+                let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
                 for log_id in log_and_view_ids {
                     // We consider the dependencies of both views and logs, but remove the
                     // views itself. The views are included as they depend on the source,
@@ -1567,7 +1567,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .clone();
 
             let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-            let view_ids = persisted_logs.get_view_ids();
+            let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
 
             for log_id in log_and_view_ids {
                 // We consider the dependencies of both views and logs, but remove the
