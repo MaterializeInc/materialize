@@ -220,8 +220,7 @@ impl SimpleResult {
     /// Generates a `SimpleResult::Ok` based on an `ExecuteResponse`.
     ///
     /// # Panics
-    /// - If [`ExecuteResponse::partial_err`] returns an error with
-    ///   [`ClientSeverity::Error`].
+    /// - If `ExecuteResponse::partial_err(&res)` panics.
     pub(crate) fn ok(res: ExecuteResponse) -> SimpleResult {
         let ok = res.tag();
         let partial_err = res.partial_err();
