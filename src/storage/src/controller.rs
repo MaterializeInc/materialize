@@ -1055,8 +1055,6 @@ where
 
             let from_collection = self.collection(from)?;
             let from_storage_metadata = from_collection.collection_metadata.clone();
-            // We've added the dependency above in `exported_collections` so this guaranteed not to change at least until the sink is started up.
-            let from_since = from_collection.implied_capability.clone();
 
             let initial_as_of = MetadataExportFetcher::get_stash_collection()
                 .insert_without_overwrite(
@@ -1069,16 +1067,6 @@ where
                 .await?
                 .initial_as_of;
 
-            let as_of = if PartialOrder::less_equal(&initial_as_of.frontier, &from_since) {
-                SinkAsOf {
-                    frontier: from_since,
-                    // If we're using the since, never read the snapshot
-                    strict: true,
-                }
-            } else {
-                initial_as_of
-            };
-
             let cmd = ExportSinkCommand {
                 id,
                 description: StorageSinkDesc {
@@ -1086,7 +1074,7 @@ where
                     from_desc: description.sink.from_desc,
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
-                    as_of,
+                    as_of: initial_as_of,
                     from_storage_metadata,
                 },
             };
