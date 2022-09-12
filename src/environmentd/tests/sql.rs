@@ -1512,6 +1512,33 @@ fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn test_storage_usage_collection_interval() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config =
+        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    let initial_storage = client
+        .query_one("SELECT SUM(size_bytes)::int8 FROM mz_storage_usage;", &[])?
+        .get::<_, i64>(0);
+
+    client.batch_execute(&"CREATE TABLE t (a INT)")?;
+    client.batch_execute(&"INSERT INTO t VALUES (1), (2)")?;
+
+    std::thread::sleep(Duration::from_secs(3));
+
+    let updated_storage = client
+        .query_one("SELECT SUM(size_bytes)::int8 FROM mz_storage_usage;", &[])?
+        .get::<_, i64>(0);
+
+    assert!(updated_storage > initial_storage);
+
+    Ok(())
+}
+
 /// Group commit will block writes until the current time has advanced. This can make
 /// performing inserts while using deterministic time difficult. This is a helper
 /// method to perform writes and advance the current time.

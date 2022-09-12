@@ -22,6 +22,7 @@ use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -356,6 +357,13 @@ pub struct Args {
         requires = "storage-host-sizes"
     )]
     default_storage_host_size: Option<String>,
+    /// The interval in seconds at which to collect storage usage information.
+    #[clap(
+        long,
+        env = "STORAGE_USAGE_COLLECTION_INTERVAL_SEC",
+        default_value = "3600"
+    )]
+    storage_usage_collection_interval_sec: u64,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -685,6 +693,9 @@ max log level: {max_log_level}",
             secrets_reader,
         ),
         otel_enable_callback,
+        storage_usage_collection_interval: Duration::from_secs(
+            args.storage_usage_collection_interval_sec,
+        ),
     }))?;
 
     println!(
