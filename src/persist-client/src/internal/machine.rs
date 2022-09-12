@@ -602,6 +602,10 @@ where
                             writers: expired_writers,
                         });
 
+                        if let Some(gc) = garbage_collection {
+                            info!("Assigned gc request: {:?}", gc);
+                        }
+
                         let maintenance = RoutineMaintenance {
                             garbage_collection,
                             lease_expiration,

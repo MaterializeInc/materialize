@@ -19,7 +19,7 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, debug_span, warn, Instrument, Span};
+use tracing::{debug, debug_span, info, warn, Instrument, Span};
 
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::paths::{PartialRollupKey, RollupId};
@@ -195,7 +195,7 @@ where
             .await
             .expect("shard codecs should not change");
 
-        debug!(
+        info!(
             "gc {} for [{},{}) got {} versions from scan",
             req.shard_id,
             req.old_seqno_since,
@@ -207,10 +207,15 @@ where
         // bother running any of the below logic.
         //
         // Also a fix for #14580.
-        if states
+
+        let peek = states
             .peek_seqno()
-            .map_or(true, |x| x > req.new_seqno_since)
-        {
+            .map_or(true, |x| x > req.new_seqno_since);
+        if peek {
+            info!(
+                "gc {} early returning, already GC'd past {}",
+                req.shard_id, req.new_seqno_since,
+            );
             return;
         }
 
@@ -262,6 +267,13 @@ where
         }
         let state = states.into_inner();
 
+        info!(
+            "gc {} collected {} deleteable batch blobs, {} deleteable rollup blobs",
+            req.shard_id,
+            deleteable_batch_blobs.len(),
+            deleteable_rollup_blobs.len()
+        );
+
         // As described in the big rustdoc comment on [StateVersions], we
         // maintain the invariant that there is always a rollup corresponding to
         // the seqno of the first live version in consensus. So, write a new
@@ -289,6 +301,10 @@ where
                 .delete_rollup(&state.shard_id, &rollup_key)
                 .await;
         }
+        info!(
+            "gc {} wrote rollup at seqno {}. applied={}",
+            req.shard_id, rollup_seqno, applied
+        );
 
         // There's also a bulk delete API in s3 if the performance of this
         // becomes an issue. Maybe make Blob::delete take a list of keys?
@@ -315,6 +331,7 @@ where
                 .delete_rollup(&req.shard_id, &key)
                 .await;
         }
+        info!("gc {} deleted batch and rollup blobs", req.shard_id);
 
         // Now that we've deleted the eligible blobs, "commit" this info by
         // truncating the state versions that referenced them.
@@ -322,5 +339,9 @@ where
             .state_versions
             .truncate_diffs(&req.shard_id, req.new_seqno_since)
             .await;
+        info!(
+            "gc {} truncated diffs through seqno {}",
+            req.shard_id, req.new_seqno_since
+        );
     }
 }
