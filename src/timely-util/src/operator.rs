@@ -9,19 +9,23 @@
 
 //! Common operator transformations on timely streams and differential collections.
 
+use std::future::Future;
+
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{
     operator::{self, Operator},
-    InputHandle, OperatorInfo, OutputHandle,
+    InputHandle, OperatorInfo, OutputHandle, OutputWrapper,
 };
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
+
+use crate::builder_async::{AsyncInputHandle, OperatorBuilder as OperatorBuilderAsync};
 
 /// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<G, D1>
@@ -58,6 +62,55 @@ where
                     &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, E>>,
                 ) + 'static,
         >,
+        P: ParallelizationContract<G::Timestamp, D1>;
+
+    /// Creates a new dataflow operator that partitions its input stream by a parallelization
+    /// strategy pact, and repeatedly schedules logic, the future returned by the function passed
+    /// as constructor. logic can read from the input stream, and write to the output stream.
+    fn unary_async<D2, P, B, BFut>(&self, pact: P, name: String, constructor: B) -> Stream<G, D2>
+    where
+        D2: Data,
+        B: FnOnce(
+            Capability<G::Timestamp>,
+            OperatorInfo,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>,
+            OutputWrapper<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
+        ) -> BFut,
+        BFut: Future + 'static,
+        P: ParallelizationContract<G::Timestamp, D1>;
+
+    /// Creates a new dataflow operator that partitions its input streams by a parallelization
+    /// strategy pact, and repeatedly schedules logic, the future returned by the function passed
+    /// as constructor. logic can read from the input streams, and write to the output stream.
+    fn binary_async<D2, D3, P1, P2, B, BFut>(
+        &self,
+        other: &Stream<G, D2>,
+        pact1: P1,
+        pact2: P2,
+        name: String,
+        constructor: B,
+    ) -> Stream<G, D3>
+    where
+        D2: Data,
+        D3: Data,
+        B: FnOnce(
+            Capability<G::Timestamp>,
+            OperatorInfo,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, P1::Puller>,
+            AsyncInputHandle<G::Timestamp, Vec<D2>, P2::Puller>,
+            OutputWrapper<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
+        ) -> BFut,
+        BFut: Future + 'static,
+        P1: ParallelizationContract<G::Timestamp, D1>,
+        P2: ParallelizationContract<G::Timestamp, D2>;
+
+    /// Creates a new dataflow operator that partitions its input stream by a parallelization
+    /// strategy pact, and repeatedly schedules logic which can read from the input stream and
+    /// inspect the frontier at the input.
+    fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
+    where
+        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>) -> BFut,
+        BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, D1>;
 
     /// Like [`timely::dataflow::operators::map::Map::map`], but `logic`
@@ -168,7 +221,7 @@ where
         >,
         P: ParallelizationContract<G::Timestamp, D1>,
     {
-        let mut builder = OperatorBuilder::new(name.into(), self.scope());
+        let mut builder = OperatorBuilderRc::new(name.into(), self.scope());
         builder.set_notify(false);
 
         let operator_info = builder.operator_info();
@@ -189,6 +242,88 @@ where
         });
 
         (ok_stream, err_stream)
+    }
+
+    fn unary_async<D2, P, B, BFut>(&self, pact: P, name: String, constructor: B) -> Stream<G, D2>
+    where
+        D2: Data,
+        B: FnOnce(
+            Capability<G::Timestamp>,
+            OperatorInfo,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>,
+            OutputWrapper<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
+        ) -> BFut,
+        BFut: Future + 'static,
+        P: ParallelizationContract<G::Timestamp, D1>,
+    {
+        let mut builder = OperatorBuilderAsync::new(name, self.scope());
+        let operator_info = builder.operator_info();
+
+        let input = builder.new_input(self, pact);
+        let (output, stream) = builder.new_output();
+
+        builder.build(move |mut capabilities| {
+            // `capabilities` should be a single-element vector.
+            let capability = capabilities.pop().unwrap();
+            constructor(capability, operator_info, input, output)
+        });
+
+        stream
+    }
+
+    fn binary_async<D2, D3, P1, P2, B, BFut>(
+        &self,
+        other: &Stream<G, D2>,
+        pact1: P1,
+        pact2: P2,
+        name: String,
+        constructor: B,
+    ) -> Stream<G, D3>
+    where
+        D2: Data,
+        D3: Data,
+        B: FnOnce(
+            Capability<G::Timestamp>,
+            OperatorInfo,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, P1::Puller>,
+            AsyncInputHandle<G::Timestamp, Vec<D2>, P2::Puller>,
+            OutputWrapper<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
+        ) -> BFut,
+        BFut: Future + 'static,
+        P1: ParallelizationContract<G::Timestamp, D1>,
+        P2: ParallelizationContract<G::Timestamp, D2>,
+    {
+        let mut builder = OperatorBuilderAsync::new(name, self.scope());
+        let operator_info = builder.operator_info();
+
+        let input1 = builder.new_input(self, pact1);
+        let input2 = builder.new_input(other, pact2);
+        let (output, stream) = builder.new_output();
+
+        builder.build(move |mut capabilities| {
+            // `capabilities` should be a single-element vector.
+            let capability = capabilities.pop().unwrap();
+            constructor(capability, operator_info, input1, input2, output)
+        });
+
+        stream
+    }
+
+    /// Creates a new dataflow operator that partitions its input stream by a parallelization
+    /// strategy pact, and repeatedly schedules logic which can read from the input stream and
+    /// inspect the frontier at the input.
+    fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
+    where
+        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>) -> BFut,
+        BFut: Future + 'static,
+        P: ParallelizationContract<G::Timestamp, D1>,
+    {
+        let mut builder = OperatorBuilderAsync::new(name, self.scope());
+        let operator_info = builder.operator_info();
+
+        let input = builder.new_input(self, pact);
+
+        builder.build(move |_capabilities| constructor(operator_info, input));
     }
 
     // XXX(guswynn): file an minimization bug report for the logic flat_map
@@ -303,4 +438,33 @@ where
             })
             .as_collection()
     }
+}
+
+/// Creates a new async data stream source for a scope.
+///
+/// The source is defined by a name, and a constructor which takes a default capability and an
+/// output handle to a future. The future is then repeatedly scheduled, and is expected to
+/// eventually send data and downgrade and release capabilities.
+pub fn source_async<G: Scope, D, B, BFut>(scope: &G, name: String, constructor: B) -> Stream<G, D>
+where
+    D: Data,
+    B: FnOnce(
+        Capability<G::Timestamp>,
+        OperatorInfo,
+        OutputWrapper<G::Timestamp, Vec<D>, Tee<G::Timestamp, D>>,
+    ) -> BFut,
+    BFut: Future + 'static,
+{
+    let mut builder = OperatorBuilderAsync::new(name, scope.clone());
+    let operator_info = builder.operator_info();
+
+    let (output, stream) = builder.new_output();
+
+    builder.build(move |mut capabilities| {
+        // `capabilities` should be a single-element vector.
+        let capability = capabilities.pop().unwrap();
+        constructor(capability, operator_info, output)
+    });
+
+    stream
 }
