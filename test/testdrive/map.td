@@ -15,19 +15,21 @@
 
 > CREATE TYPE custom AS MAP (key_type=text, value_type=bool)
 
+$ set-regex match=^s\d*$ replacement=<GID>
 # Without qualifiers, should default to builtin bool.
-> SELECT mz_internal.mz_classify_object_id(value_id)
+> SELECT value_id
   FROM mz_map_types JOIN mz_types ON mz_map_types.type_id = mz_types.id
   WHERE name = 'custom'
-system
+<GID>
 
 > CREATE TYPE another_custom AS MAP (key_type=text, value_type=public.bool)
 
+$ set-regex match=^u\d*$ replacement=<GID>
 # Qualified name should point to user-defined bool.
-> SELECT mz_internal.mz_classify_object_id(value_id)
+> SELECT value_id
   FROM mz_map_types JOIN mz_types ON mz_map_types.type_id = mz_types.id
   WHERE name = 'another_custom'
-user
+<GID>
 
 > CREATE SCHEMA test_schema
 

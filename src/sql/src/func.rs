@@ -3002,15 +3002,6 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|
                 )
             }), oid::FUNC_MZ_AVG_PROMOTION_U32_OID;
         },
-        "mz_classify_object_id" => Scalar {
-            params!(String) => sql_impl_func(
-                "CASE
-                        WHEN $1 LIKE 'u%' THEN 'user'
-                        WHEN $1 LIKE 's%' THEN 'system'
-                        WHEN $1 like 't%' THEN 'temp'
-                    END"
-            ) => String, oid::FUNC_MZ_CLASSIFY_OBJECT_ID_OID;
-        },
         "mz_error_if_null" => Scalar {
             // If the first argument is NULL, returns an EvalError::Internal whose error
             // message is the second argument.

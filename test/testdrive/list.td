@@ -15,19 +15,21 @@
 
 > CREATE TYPE custom AS LIST (element_type=bool)
 
+$ set-regex match=^s\d*$ replacement=<GID>
 # Without qualifiers, should default to builtin bool.
-> SELECT mz_internal.mz_classify_object_id(element_id)
+> SELECT element_id
   FROM mz_list_types JOIN mz_types ON mz_list_types.type_id = mz_types.id
   WHERE name = 'custom'
-system
+<GID>
 
 > CREATE TYPE another_custom AS LIST (element_type=public.bool)
 
+$ set-regex match=^u\d*$ replacement=<GID>
 # Qualified name should point to user-defined bool.
-> SELECT mz_internal.mz_classify_object_id(element_id)
+> SELECT element_id
   FROM mz_list_types JOIN mz_types ON mz_list_types.type_id = mz_types.id
   WHERE name = 'another_custom'
-user
+<GID>
 
 > CREATE SCHEMA test_schema
 
