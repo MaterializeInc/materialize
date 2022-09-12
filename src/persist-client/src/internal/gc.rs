@@ -223,6 +223,10 @@ where
         // Also a fix for #14580.
         if earliest_live_seqno > req.new_seqno_since {
             machine.metrics.gc.noop.inc();
+            debug!(
+                "gc {} early returning, already GC'd past {}",
+                req.shard_id, req.new_seqno_since,
+            );
             return;
         }
 
@@ -270,6 +274,13 @@ where
             }
         }
 
+        debug!(
+            "gc {} collected {} deleteable batch blobs, {} deleteable rollup blobs",
+            req.shard_id,
+            deleteable_batch_blobs.len(),
+            deleteable_rollup_blobs.len()
+        );
+
         // Delete the rollup blobs before removing them from state.
         for (_, key) in deleteable_rollup_blobs.iter() {
             machine
@@ -277,6 +288,7 @@ where
                 .delete_rollup(&req.shard_id, key)
                 .await;
         }
+        debug!("gc {} deleted rollup blobs", req.shard_id);
 
         // As described in the big rustdoc comment on [StateVersions], we
         // maintain the invariant that there is always a rollup corresponding to
@@ -306,6 +318,10 @@ where
                 .delete_rollup(&state.shard_id, &rollup_key)
                 .await;
         }
+        debug!(
+            "gc {} wrote rollup at seqno {}. applied={}",
+            req.shard_id, rollup_seqno, applied
+        );
 
         // There's also a bulk delete API in s3 if the performance of this
         // becomes an issue. Maybe make Blob::delete take a list of keys?
@@ -326,6 +342,7 @@ where
             .instrument(debug_span!("batch::delete"))
             .await;
         }
+        debug!("gc {} deleted batch blobs", req.shard_id);
 
         // Now that we've deleted the eligible blobs, "commit" this info by
         // truncating the state versions that referenced them.
@@ -333,5 +350,9 @@ where
             .state_versions
             .truncate_diffs(&req.shard_id, req.new_seqno_since)
             .await;
+        debug!(
+            "gc {} truncated diffs through seqno {}",
+            req.shard_id, req.new_seqno_since
+        );
     }
 }
