@@ -22,6 +22,7 @@ pub mod error;
 pub mod file;
 pub mod gen;
 pub mod indexed;
+pub mod intercept;
 pub mod location;
 pub mod mem;
 pub mod metrics;

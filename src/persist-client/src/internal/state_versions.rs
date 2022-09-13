@@ -21,7 +21,7 @@ use mz_persist::location::{Atomicity, Blob, Consensus, Indeterminate, SeqNo, Ver
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
-use tracing::{debug, debug_span, trace, Instrument};
+use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::error::CodecMismatch;
 use crate::internal::machine::{retry_determinate, retry_external};
@@ -290,10 +290,27 @@ impl StateVersions {
                 Some(x) => x?,
                 None => {
                     // The rollup that this diff referenced is gone, so the diff
-                    // must be out of date. Try again.
-                    all_live_diffs = self.fetch_live_diffs(shard_id).await;
-                    // Intentionally don't sleep on retry.
+                    // must be out of date. Try again. Intentionally don't sleep on retry.
                     retry.retries.inc();
+                    let earliest_before_refetch = all_live_diffs
+                        .first()
+                        .expect("initialized shard should have at least one diff")
+                        .seqno;
+                    all_live_diffs = self.fetch_live_diffs(shard_id).await;
+
+                    // We should only hit the race condition that leads to a
+                    // refetch if the set of live diffs changed out from under
+                    // us.
+                    //
+                    // TODO: Make this an assert once we're 100% sure the above
+                    // is always true.
+                    let earliest_after_refetch = all_live_diffs
+                        .first()
+                        .expect("initialized shard should have at least one diff")
+                        .seqno;
+                    if earliest_before_refetch >= earliest_after_refetch {
+                        warn!("logic error: fetch_current_state refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
+                    }
                     continue;
                 }
             };
@@ -361,14 +378,14 @@ impl StateVersions {
             .retries
             .fetch_live_states
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+        let mut all_live_diffs = self.fetch_live_diffs(&shard_id).await;
         loop {
-            let live_diffs = self.fetch_live_diffs(&shard_id).await;
-            let earliest_live_diff = match live_diffs.first() {
+            let earliest_live_diff = match all_live_diffs.first() {
                 Some(x) => x,
                 None => panic!("fetch_live_states should only be called on an initialized shard"),
             };
             let state = match self
-                .fetch_rollup_at_seqno(shard_id, live_diffs.clone(), earliest_live_diff.seqno)
+                .fetch_rollup_at_seqno(shard_id, all_live_diffs.clone(), earliest_live_diff.seqno)
                 .await
             {
                 Some(x) => x?,
@@ -380,6 +397,22 @@ impl StateVersions {
                     // be rare in practice, so inc a counter and try again.
                     // Intentionally don't sleep on retry.
                     retry.retries.inc();
+                    let earliest_before_refetch = earliest_live_diff.seqno;
+                    all_live_diffs = self.fetch_live_diffs(shard_id).await;
+
+                    // We should only hit the race condition that leads to a
+                    // refetch if the set of live diffs changed out from under
+                    // us.
+                    //
+                    // TODO: Make this an assert once we're 100% sure the above
+                    // is always true.
+                    let earliest_after_refetch = all_live_diffs
+                        .first()
+                        .expect("initialized shard should have at least one diff")
+                        .seqno;
+                    if earliest_before_refetch >= earliest_after_refetch {
+                        warn!("logic error: fetch_current_state refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
+                    }
                     continue;
                 }
             };
@@ -388,7 +421,7 @@ impl StateVersions {
                 self.cfg.clone(),
                 Arc::clone(&self.metrics),
                 state,
-                live_diffs,
+                all_live_diffs,
             ));
         }
     }
