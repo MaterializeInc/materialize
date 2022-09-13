@@ -23,8 +23,7 @@ _schema&lowbar;name_ | The schema to show objects from. Defaults to `public` in 
 
 ### Output format
 
-`SHOW OBJECTS`'s output is a table with one column, `name`. `SHOW FULL OBJECTS` will output a table with
-two columns, `name` and `type`. `type` indicates whether the object was created by the `system` or a `user`.
+`SHOW OBJECTS` will output a table with two columns, `name`and `type`.
 
 ## Examples
 
@@ -32,45 +31,30 @@ two columns, `name` and `type`. `type` indicates whether the object was created 
 SHOW SCHEMAS;
 ```
 ```nofmt
-public
+  name
+--------
+ public
 ```
 ```sql
 SHOW OBJECTS FROM public;
 ```
 ```nofmt
-my_table
-my_source
-my_view
-my_other_source
+  name          | type
+----------------+-------
+my_table        | table
+my_source       | source
+my_view         | view
+my_other_source | source
 ```
 ```sql
 SHOW OBJECTS;
 ```
 ```nofmt
-my_table
-my_source
-my_view
-```
-
-```sql
-SHOW FULL OBJECTS;
-```
-```nofmt
-my_table
-my_source
-my_view
-my_other_source
-```
-
-```sql
-SHOW EXTENDED FULL OBJECTS;
-```
-```nofmt
-my_table        user
-my_source       user
-my_view         user
-my_other_source user
-builtin_view    system
+  name    | type
+----------+-------
+my_table  | table
+my_source | source
+my_view   | view
 ```
 
 ## Related pages

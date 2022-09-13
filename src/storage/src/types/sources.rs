@@ -13,28 +13,22 @@ use std::collections::{BTreeMap, HashMap};
 use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::BufMut;
-use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
-use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::Codec;
 use mz_proto::{any_uuid, TryFromProtoError};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::{ColumnType, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::controller::CollectionMetadata;
 use crate::types::connections::aws::AwsConfig;
@@ -82,51 +76,6 @@ where
                 typ,
             })
             .boxed()
-    }
-}
-
-impl IngestionDescription<CollectionMetadata> {
-    pub async fn get_resume_upper<T>(&self, persist: Arc<Mutex<PersistClientCache>>) -> Antichain<T>
-    where
-        T: timely::progress::Timestamp + Lattice + Codec64,
-    {
-        let persist = persist
-            .lock()
-            .await
-            .open(self.storage_metadata.persist_location.clone())
-            .await
-            .unwrap();
-        // Calculate the point at which we can resume ingestion computing the greatest
-        // antichain that is less or equal to all state and output shard uppers.
-        let mut resume_upper: Antichain<T> = Antichain::new();
-        let remap_write = persist
-            .open_writer::<(), PartitionId, T, MzOffset>(self.storage_metadata.remap_shard)
-            .await
-            .unwrap();
-        for t in remap_write.upper().elements() {
-            resume_upper.insert(t.clone());
-        }
-        let data_write = persist
-            .open_writer::<SourceData, (), T, Diff>(self.storage_metadata.data_shard)
-            .await
-            .unwrap();
-        for t in data_write.upper().elements() {
-            resume_upper.insert(t.clone());
-        }
-
-        // Check if this ingestion is using any operators that are stateful AND are not
-        // storing their state in persist shards. This whole section should be eventually
-        // removed as we make each operator durably record its state in persist shards.
-        let resume_upper = match self.desc.envelope {
-            // We can only resume with the None envelope, which is stateless,
-            // or with the [Debezium] Upsert envelope, which is easy
-            //   (re-ingest the last emitted state)
-            SourceEnvelope::None(_) => resume_upper,
-            SourceEnvelope::Upsert(_) => resume_upper,
-            // Otherwise re-ingest everything
-            _ => Antichain::from_elem(T::minimum()),
-        };
-        resume_upper
     }
 }
 
@@ -1256,23 +1205,6 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
 }
 
 impl SourceDesc {
-    /// Returns `true` if this connection yields input data (including
-    /// timestamps) that is stable across restarts. This is important for
-    /// exactly-once Sinks that need to ensure that the same data is written,
-    /// even when failures/restarts happen.
-    pub fn yields_stable_input(&self) -> bool {
-        // Conservatively, set all Kafka/File sources as having stable inputs because
-        // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
-        match self.connection {
-            // TODO(guswynn): does postgres count here as well?
-            SourceConnection::Kafka(_) => true,
-            // Currently, the Kinesis connection assigns "offsets" by counting the message in the order it was received
-            // and this order is not replayable across different reads of the same Kinesis stream.
-            SourceConnection::Kinesis(_) => false,
-            _ => false,
-        }
-    }
-
     /// Returns `true` if this connection yields data that is
     /// append-only/monotonic. Append-monly means the source
     /// never produces retractions.
@@ -1309,10 +1241,6 @@ impl SourceDesc {
 
     pub fn name(&self) -> &'static str {
         self.connection.name()
-    }
-
-    pub fn requires_single_materialization(&self) -> bool {
-        self.connection.requires_single_materialization()
     }
 }
 
@@ -1479,17 +1407,6 @@ impl SourceConnection {
             SourceConnection::S3(_) => None,
             SourceConnection::Postgres(_) => None,
             SourceConnection::LoadGenerator(_) => None,
-        }
-    }
-
-    pub fn requires_single_materialization(&self) -> bool {
-        match self {
-            SourceConnection::S3(c) => c.requires_single_materialization(),
-
-            SourceConnection::Kafka(_)
-            | SourceConnection::Kinesis(_)
-            | SourceConnection::Postgres(_)
-            | SourceConnection::LoadGenerator(_) => false,
         }
     }
 }
@@ -1695,16 +1612,6 @@ impl RustType<ProtoS3SourceConnection> for S3SourceConnection {
                 .compression
                 .into_rust_if_some("ProtoS3SourceConnection::compression")?,
         })
-    }
-}
-
-impl S3SourceConnection {
-    fn requires_single_materialization(&self) -> bool {
-        // SQS Notifications are not durable, multiple sources depending on them will get
-        // non-intersecting subsets of objects to read
-        self.key_sources
-            .iter()
-            .any(|s| matches!(s, S3KeySource::SqsNotifications { .. }))
     }
 }
 

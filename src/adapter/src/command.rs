@@ -594,52 +594,6 @@ impl ExecuteResponse {
     }
 }
 
-/// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).
-#[derive(Debug, Serialize)]
-pub struct SimpleExecuteResponse {
-    pub results: Vec<SimpleResult>,
-}
-
-/// The result of a single query executed with `simple_execute`.
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-pub enum SimpleResult {
-    /// The query returned rows.
-    Rows {
-        /// The result rows.
-        rows: Vec<Vec<serde_json::Value>>,
-        /// The name of the columns in the row.
-        col_names: Vec<String>,
-    },
-    /// The query executed successfully but did not return rows.
-    Ok {
-        ok: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        partial_err: Option<ExecuteResponsePartialError>,
-    },
-    /// The query returned an error.
-    Err { error: String },
-}
-
-impl SimpleResult {
-    pub(crate) fn err(msg: impl fmt::Display) -> SimpleResult {
-        SimpleResult::Err {
-            error: msg.to_string(),
-        }
-    }
-
-    /// Generates a `SimpleResult::Ok` based on an `ExecuteResponse`.
-    ///
-    /// # Panics
-    /// - If [`ExecuteResponse::partial_err`] returns an error with
-    ///   [`ClientSeverity::Error`].
-    pub(crate) fn ok(res: ExecuteResponse) -> SimpleResult {
-        let ok = res.tag();
-        let partial_err = res.partial_err();
-        SimpleResult::Ok { ok, partial_err }
-    }
-}
-
 /// The state of a cancellation request.
 #[derive(Debug, Clone, Copy)]
 pub enum Canceled {

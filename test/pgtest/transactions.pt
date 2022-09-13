@@ -473,3 +473,189 @@ ReadyForQuery {"status":"I"}
 DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
+
+# Verify implicit transactions are properly upgraded
+send
+Query {"query": "CREATE TABLE t (a INT)"}
+Parse {"query": "INSERT INTO t VALUES (1)"}
+Bind
+Execute
+Parse {"query": "BEGIN"}
+Bind
+Execute
+Parse {"query": "COMMIT"}
+Bind
+Execute
+Sync
+Parse {"query": "SELECT a FROM t"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"BEGIN"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# Verify implicit transactions are properly upgraded, and share fate
+# with upgraded txn; the insert of 2 should get discarded
+send
+Parse {"query": "INSERT INTO t VALUES (2)"}
+Bind
+Execute
+Parse {"query": "BEGIN"}
+Bind
+Execute
+Parse {"query": "SELECT 0/0"}
+Bind
+Execute
+Sync
+Parse {"query": "COMMIT"}
+Bind
+Execute
+Sync
+Parse {"query": "SELECT a FROM t"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"BEGIN"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"E"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# PG permits starting a read only txn with writes blended into its ops;
+# evidence of this behavior by an errored txn does not commit write.
+send
+Parse {"query": "INSERT INTO t VALUES (2)"}
+Bind
+Execute
+Parse {"query": "BEGIN READ ONLY"}
+Bind
+Execute
+Parse {"query": "SELECT 0/0"}
+Bind
+Execute
+Sync
+Parse {"query": "COMMIT"}
+Bind
+Execute
+Sync
+Parse {"query": "SELECT a FROM t"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"BEGIN"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"E"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# PG permits commits writes that are part of read-only txns
+# n.b. this is possible only because we support selecting constants
+# in write-only txns
+send
+Parse {"query": "INSERT INTO t VALUES (2)"}
+Bind
+Execute
+Parse {"query": "BEGIN READ ONLY"}
+Bind
+Execute
+Parse {"query": "SELECT 1"}
+Bind
+Execute
+Parse {"query": "COMMIT"}
+Bind
+Execute
+Sync
+Parse {"query": "SELECT a FROM t"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"BEGIN"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 2"}
+ReadyForQuery {"status":"I"}

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="573" height="69">
+<svg xmlns="http://www.w3.org/2000/svg" width="459" height="69">
    <polygon points="9 17 1 13 1 21"/>
    <polygon points="17 17 9 13 9 21"/>
    <rect x="31" y="3" width="64" height="32" rx="10"/>
@@ -9,35 +9,27 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="39" y="21">SHOW</text>
-   <rect x="135" y="35" width="54" height="32" rx="10"/>
-   <rect x="133"
-         y="33"
-         width="54"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="143" y="53">FULL</text>
-   <rect x="229" y="3" width="62" height="32" rx="10"/>
-   <rect x="227"
+   <rect x="115" y="3" width="62" height="32" rx="10"/>
+   <rect x="113"
          y="1"
          width="62"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="237" y="21">SINKS</text>
-   <rect x="331" y="35" width="60" height="32" rx="10"/>
-   <rect x="329"
+   <text class="terminal" x="123" y="21">SINKS</text>
+   <rect x="217" y="35" width="60" height="32" rx="10"/>
+   <rect x="215"
          y="33"
          width="60"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="339" y="53">FROM</text>
-   <rect x="411" y="35" width="114" height="32"/>
-   <rect x="409" y="33" width="114" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="419" y="53">schema_name</text>
+   <text class="terminal" x="225" y="53">FROM</text>
+   <rect x="297" y="35" width="114" height="32"/>
+   <rect x="295" y="33" width="114" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="305" y="53">schema_name</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m64 0 h10 m20 0 h10 m0 0 h64 m-94 0 h20 m74 0 h20 m-114 0 q10 0 10 10 m94 0 q0 -10 10 -10 m-104 10 v12 m94 0 v-12 m-94 12 q0 10 10 10 m74 0 q10 0 10 -10 m-84 10 h10 m54 0 h10 m20 -32 h10 m62 0 h10 m20 0 h10 m0 0 h204 m-234 0 h20 m214 0 h20 m-254 0 q10 0 10 10 m234 0 q0 -10 10 -10 m-244 10 v12 m234 0 v-12 m-234 12 q0 10 10 10 m214 0 q10 0 10 -10 m-224 10 h10 m60 0 h10 m0 0 h10 m114 0 h10 m23 -32 h-3"/>
-   <polygon points="563 17 571 13 571 21"/>
-   <polygon points="563 17 555 13 555 21"/>
+         d="m17 17 h2 m0 0 h10 m64 0 h10 m0 0 h10 m62 0 h10 m20 0 h10 m0 0 h204 m-234 0 h20 m214 0 h20 m-254 0 q10 0 10 10 m234 0 q0 -10 10 -10 m-244 10 v12 m234 0 v-12 m-234 12 q0 10 10 10 m214 0 q10 0 10 -10 m-224 10 h10 m60 0 h10 m0 0 h10 m114 0 h10 m23 -32 h-3"/>
+   <polygon points="449 17 457 13 457 21"/>
+   <polygon points="449 17 441 13 441 21"/>
 </svg>

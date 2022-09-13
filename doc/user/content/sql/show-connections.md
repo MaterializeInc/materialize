@@ -17,7 +17,6 @@ aliases:
 Field                | Use
 ---------------------|-----
 _schema&lowbar;name_ | The schema to show connections from. If omitted, connections from all schemas are shown. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-**FULL**             | Returns all connections, including information about the connection type.
 
 ## Examples
 
@@ -26,21 +25,10 @@ SHOW CONNECTIONS;
 ```
 
 ```nofmt
-       name
-------------------
- kafka_connection
- postgres_connection
-```
-
-```sql
-SHOW FULL CONNECTIONS;
-```
-
-```nofmt
        name          | type
----------------------+------
- kafka_connection    | user
- postgres_connection | user
+---------------------+---------
+ kafka_connection    | kafka
+ postgres_connection | postgres
 ```
 
 ```sql
@@ -48,9 +36,9 @@ SHOW CONNECTIONS LIKE 'kafka%';
 ```
 
 ```nofmt
-       name
-------------------
- kafka_connection
+       name       | type
+------------------+------
+ kafka_connection | kafka
 ```
 
 

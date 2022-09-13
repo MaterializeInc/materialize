@@ -10,20 +10,14 @@
 use axum::response::IntoResponse;
 use axum::Json;
 use http::StatusCode;
-use serde::Deserialize;
 
-use crate::http::AuthedClient;
-
-#[derive(Deserialize)]
-pub struct SqlRequest {
-    sql: String,
-}
+use crate::http::{AuthedClient, HttpSqlRequest};
 
 pub async fn handle_sql(
-    AuthedClient(mut client): AuthedClient,
-    Json(SqlRequest { sql }): Json<SqlRequest>,
+    mut client: AuthedClient,
+    Json(request): Json<HttpSqlRequest>,
 ) -> impl IntoResponse {
-    match client.simple_execute(&sql).await {
+    match client.execute_sql_http_request(request).await {
         Ok(res) => Ok(Json(res)),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }

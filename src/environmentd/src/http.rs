@@ -16,11 +16,13 @@
 // Axum handlers must use async, but often don't actually use `await`.
 #![allow(clippy::unused_async)]
 
+use std::convert::From;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use axum::extract::{FromRequest, RequestParts};
 use axum::middleware::{self, Next};
@@ -34,9 +36,11 @@ use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
+use itertools::izip;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use openssl::x509::X509;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -45,18 +49,21 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_adapter::catalog::HTTP_DEFAULT_USER;
-use mz_adapter::session::Session;
-use mz_adapter::SessionClient;
+use mz_adapter::session::{EndTransactionAction, Session, TransactionStatus};
+use mz_adapter::{ExecuteResponse, ExecuteResponsePartialError, PeekResponseUnary, SessionClient};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryEnableCallback;
+use mz_repr::{Datum, RowArena};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{Raw, Statement};
 
 use crate::BUILD_INFO;
 
 mod catalog;
 mod memory;
 mod root;
-mod sql;
+pub(crate) mod sql;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -182,7 +189,345 @@ struct AuthedUser {
     create_if_not_exists: bool,
 }
 
+/// The result of a single query executed with `simple_execute`.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum SimpleResult {
+    /// The query returned rows.
+    Rows {
+        /// The result rows.
+        rows: Vec<Vec<serde_json::Value>>,
+        /// The name of the columns in the row.
+        col_names: Vec<String>,
+    },
+    /// The query executed successfully but did not return rows.
+    Ok {
+        ok: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        partial_err: Option<ExecuteResponsePartialError>,
+    },
+    /// The query returned an error.
+    Err { error: String },
+}
+
+impl SimpleResult {
+    pub(crate) fn err(msg: impl std::fmt::Display) -> SimpleResult {
+        SimpleResult::Err {
+            error: msg.to_string(),
+        }
+    }
+
+    /// Generates a `SimpleResult::Ok` based on an `ExecuteResponse`.
+    ///
+    /// # Panics
+    /// - If `ExecuteResponse::partial_err(&res)` panics.
+    pub(crate) fn ok(res: ExecuteResponse) -> SimpleResult {
+        let ok = res.tag();
+        let partial_err = res.partial_err();
+        SimpleResult::Ok { ok, partial_err }
+    }
+}
+
+/// The response to [`AuthedClient::execute_sql_http_request`].
+#[derive(Debug, Serialize)]
+pub struct SqlHttpExecuteResponse {
+    pub results: Vec<SimpleResult>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ExtendedRequest {
+    // TODO: we can remove this alias once platforms issues these requests
+    // using `query`.
+    #[serde(alias = "sql")]
+    /// 0 or 1 queries
+    pub query: String,
+    /// Optional parameters for the query
+    #[serde(default)]
+    pub params: Vec<Option<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(untagged)]
+pub enum HttpSqlRequest {
+    /// 0 or more queries delimited by semicolons in the same strings. Do not
+    /// support parameters.
+    Simple {
+        #[serde(alias = "sql")]
+        query: String,
+    },
+    /// 0 or more [`ExtendedRequest`]s.
+    Extended { queries: Vec<ExtendedRequest> },
+}
+
 pub struct AuthedClient(pub SessionClient);
+
+impl AuthedClient {
+    /// Executes an [`HttpSqlRequest`].
+    ///
+    /// The provided `stmts` are executed directly, and their results
+    /// are returned as a vector of rows, where each row is a vector of JSON
+    /// objects.
+    pub async fn execute_sql_http_request(
+        &mut self,
+        request: HttpSqlRequest,
+    ) -> Result<SqlHttpExecuteResponse, anyhow::Error> {
+        let mut results = vec![];
+
+        match request {
+            HttpSqlRequest::Simple { query } => {
+                let stmts = mz_sql::parse::parse(&query).map_err(|e| anyhow!(e))?;
+                let num_stmts = stmts.len();
+
+                for stmt in stmts {
+                    if matches!(self.0.session().transaction(), TransactionStatus::Failed(_)) {
+                        break;
+                    }
+                    // Mirror the behavior of the PostgreSQL simple query protocol.
+                    // See the pgwire::protocol::StateMachine::query method for details.
+                    if let Err(e) = self.0.start_transaction(Some(num_stmts)).await {
+                        results.push(SimpleResult::err(e));
+                        break;
+                    }
+                    let res = self.execute_stmt(stmt, vec![]).await;
+                    if matches!(res, SimpleResult::Err { .. }) {
+                        self.0.fail_transaction();
+                    }
+                    results.push(res);
+                }
+            }
+            HttpSqlRequest::Extended { queries } => {
+                for ExtendedRequest { query, params } in queries {
+                    if matches!(self.0.session().transaction(), TransactionStatus::Failed(_)) {
+                        break;
+                    }
+
+                    let mut stmts = match mz_sql::parse::parse(&query) {
+                        Ok(stmts) => stmts,
+                        Err(e) => {
+                            results.push(SimpleResult::err(e));
+                            break;
+                        }
+                    };
+
+                    if stmts.len() != 1 {
+                        results.push(SimpleResult::err(
+                            "each query must contain exactly 1 statement",
+                        ));
+                        break;
+                    }
+
+                    // Mirror the behavior of the PostgreSQL simple query protocol.
+                    // See the pgwire::protocol::StateMachine::query method for details.
+                    if let Err(e) = self.0.start_transaction(Some(1)).await {
+                        results.push(SimpleResult::err(e));
+                        break;
+                    }
+                    let res = self.execute_stmt(stmts.pop().unwrap(), params).await;
+                    if matches!(res, SimpleResult::Err { .. }) {
+                        self.0.fail_transaction();
+                    }
+                    results.push(res);
+                }
+            }
+        }
+        if self.0.session().transaction().is_implicit() {
+            self.0.end_transaction(EndTransactionAction::Commit).await?;
+        }
+        Ok(SqlHttpExecuteResponse { results })
+    }
+
+    async fn execute_stmt(
+        &mut self,
+        stmt: Statement<Raw>,
+        raw_params: Vec<Option<String>>,
+    ) -> SimpleResult {
+        let client = &mut self.0;
+
+        const EMPTY_PORTAL: &str = "";
+        if let Err(e) = client
+            .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
+            .await
+        {
+            return SimpleResult::err(e);
+        }
+
+        let prep_stmt = match client.get_prepared_statement(&EMPTY_PORTAL).await {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                return SimpleResult::err(err);
+            }
+        };
+
+        let param_types = &prep_stmt.desc().param_types;
+        if param_types.len() != raw_params.len() {
+            let message = format!(
+                "request supplied {actual} parameters, \
+                         but {statement} requires {expected}",
+                statement = (&stmt).to_ast_string(),
+                actual = raw_params.len(),
+                expected = param_types.len()
+            );
+            return SimpleResult::err(message);
+        }
+
+        let buf = RowArena::new();
+        let mut params = vec![];
+        for (raw_param, mz_typ) in izip!(raw_params, param_types) {
+            let pg_typ = mz_pgrepr::Type::from(mz_typ);
+            let datum = match raw_param {
+                None => Datum::Null,
+                Some(raw_param) => {
+                    match mz_pgrepr::Value::decode(
+                        mz_pgrepr::Format::Text,
+                        &pg_typ,
+                        &raw_param.as_bytes(),
+                    ) {
+                        Ok(param) => param.into_datum(&buf, &pg_typ),
+                        Err(err) => {
+                            let msg = format!("unable to decode parameter: {}", err);
+                            return SimpleResult::err(msg);
+                        }
+                    }
+                }
+            };
+            params.push((datum, mz_typ.clone()))
+        }
+
+        let result_formats = vec![
+            mz_pgrepr::Format::Text;
+            prep_stmt
+                .desc()
+                .relation_desc
+                .clone()
+                .map(|desc| desc.typ().column_types.len())
+                .unwrap_or(0)
+        ];
+
+        let desc = prep_stmt.desc().clone();
+        let revision = prep_stmt.catalog_revision;
+        let stmt = prep_stmt.sql().cloned();
+        if let Err(err) = client.session().set_portal(
+            EMPTY_PORTAL.into(),
+            desc,
+            stmt,
+            params,
+            result_formats,
+            revision,
+        ) {
+            return SimpleResult::err(err.to_string());
+        }
+
+        let desc = client
+            .session()
+            // We do not need to verify here because `self.execute` verifies below.
+            .get_portal_unverified(EMPTY_PORTAL)
+            .map(|portal| portal.desc.clone())
+            .expect("unnamed portal should be present");
+
+        let res = match client.execute(EMPTY_PORTAL.into()).await {
+            Ok(res) => res,
+            Err(e) => {
+                return SimpleResult::err(e);
+            }
+        };
+
+        match res {
+            ExecuteResponse::Canceled => {
+                SimpleResult::err("statement canceled due to user request")
+            }
+            res @ (ExecuteResponse::CreatedConnection { existed: _ }
+            | ExecuteResponse::CreatedDatabase { existed: _ }
+            | ExecuteResponse::CreatedSchema { existed: _ }
+            | ExecuteResponse::CreatedRole
+            | ExecuteResponse::CreatedComputeInstance { existed: _ }
+            | ExecuteResponse::CreatedComputeInstanceReplica { existed: _ }
+            | ExecuteResponse::CreatedTable { existed: _ }
+            | ExecuteResponse::CreatedIndex { existed: _ }
+            | ExecuteResponse::CreatedSecret { existed: _ }
+            | ExecuteResponse::CreatedSource { existed: _ }
+            | ExecuteResponse::CreatedSources
+            | ExecuteResponse::CreatedSink { existed: _ }
+            | ExecuteResponse::CreatedView { existed: _ }
+            | ExecuteResponse::CreatedViews { existed: _ }
+            | ExecuteResponse::CreatedMaterializedView { existed: _ }
+            | ExecuteResponse::CreatedType
+            | ExecuteResponse::Deleted(_)
+            | ExecuteResponse::DiscardedTemp
+            | ExecuteResponse::DiscardedAll
+            | ExecuteResponse::DroppedDatabase
+            | ExecuteResponse::DroppedSchema
+            | ExecuteResponse::DroppedRole
+            | ExecuteResponse::DroppedComputeInstance
+            | ExecuteResponse::DroppedComputeInstanceReplicas
+            | ExecuteResponse::DroppedSource
+            | ExecuteResponse::DroppedIndex
+            | ExecuteResponse::DroppedSink
+            | ExecuteResponse::DroppedTable
+            | ExecuteResponse::DroppedView
+            | ExecuteResponse::DroppedMaterializedView
+            | ExecuteResponse::DroppedType
+            | ExecuteResponse::DroppedSecret
+            | ExecuteResponse::DroppedConnection
+            | ExecuteResponse::EmptyQuery
+            | ExecuteResponse::Inserted(_)
+            | ExecuteResponse::StartedTransaction { duplicated: _ }
+            | ExecuteResponse::TransactionExited {
+                tag: _,
+                was_implicit: _,
+            }
+            | ExecuteResponse::Updated(_)
+            | ExecuteResponse::AlteredObject(_)
+            | ExecuteResponse::AlteredIndexLogicalCompaction
+            | ExecuteResponse::AlteredSystemConfiguraion
+            | ExecuteResponse::Deallocate { all: _ }
+            | ExecuteResponse::Prepare) => SimpleResult::ok(res),
+            ExecuteResponse::SendingRows {
+                future: rows,
+                span: _,
+            } => {
+                let rows = match rows.await {
+                    PeekResponseUnary::Rows(rows) => rows,
+                    PeekResponseUnary::Error(e) => {
+                        return SimpleResult::err(e);
+                    }
+                    PeekResponseUnary::Canceled => {
+                        return SimpleResult::err("statement canceled due to user request");
+                    }
+                };
+                let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
+                let col_names = match desc.relation_desc {
+                    Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
+                    None => vec![],
+                };
+                let mut datum_vec = mz_repr::DatumVec::new();
+                for row in rows {
+                    let datums = datum_vec.borrow_with(&row);
+                    sql_rows.push(datums.iter().map(From::from).collect());
+                }
+                SimpleResult::Rows {
+                    rows: sql_rows,
+                    col_names,
+                }
+            }
+            ExecuteResponse::Fetch { .. }
+            | ExecuteResponse::SetVariable { .. }
+            | ExecuteResponse::Tailing { .. }
+            | ExecuteResponse::CopyTo { .. }
+            | ExecuteResponse::CopyFrom { .. }
+            | ExecuteResponse::Raise { .. }
+            | ExecuteResponse::DeclaredCursor
+            | ExecuteResponse::ClosedCursor => {
+                // NOTE(benesch): it is a bit scary to ignore the response
+                // to these types of planning *after* they have been
+                // planned, as they may have mutated state. On a quick
+                // glance, though, ignoring the execute response in all of
+                // the above situations seems safe enough, and it's a more
+                // target allowlist than the code that was here before.
+                SimpleResult::err("executing statements of this type is unsupported via this API")
+            }
+        }
+    }
+}
 
 #[async_trait]
 impl<B> FromRequest<B> for AuthedClient

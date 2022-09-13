@@ -527,52 +527,56 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    // Gather the relevant values into a vec of rows ordered by aggregation_index
-    let mut row_buf = Row::default();
-    let input = input.map(move |(key, row)| {
-        let mut values = Vec::with_capacity(skips.len());
-        let mut row_iter = row.iter();
-        for skip in skips.iter() {
-            row_buf.packer().push((&mut row_iter).nth(*skip).unwrap());
-            values.push(row_buf.clone());
-        }
+    input.scope().region_named("ReduceHierarchical", |inner| {
+        let input = input.enter(inner);
 
-        (key, values)
-    });
-
-    // Repeatedly apply hierarchical reduction with a progressively coarser key.
-    let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
-    for b in buckets.into_iter() {
-        stage = build_bucketed_stage(stage, aggr_funcs.clone(), b);
-    }
-
-    // Discard the hash from the key and return to the format of the input data.
-    let partial = stage.map(|((key, _hash), values)| (key, values));
-
-    // Build a series of stages for the reduction
-    // Arrange the final result into (key, Row)
-    partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
+        // Gather the relevant values into a vec of rows ordered by aggregation_index
         let mut row_buf = Row::default();
-        move |_key, source, target| {
-            // Negative counts would be surprising, but until we are 100% certain we wont
-            // see them, we should report when we do. We may want to bake even more info
-            // in here in the future.
-            if source.iter().any(|(_val, cnt)| cnt < &0) {
-                // XXX: This reports user data, which we perhaps should not do!
-                for (val, cnt) in source.iter() {
-                    if cnt < &0 {
-                        error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?}", val, cnt);
-                    }
-                }
-            } else {
-                let mut row_packer = row_buf.packer();
-                for (aggr_index, func) in aggr_funcs.iter().enumerate() {
-                    let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                    row_packer.push(func.eval(iter, &RowArena::new()));
-                }
-                target.push((row_buf.clone(), 1));
+        let input = input.map(move |(key, row)| {
+            let mut values = Vec::with_capacity(skips.len());
+            let mut row_iter = row.iter();
+            for skip in skips.iter() {
+                row_buf.packer().push((&mut row_iter).nth(*skip).unwrap());
+                values.push(row_buf.clone());
             }
+
+            (key, values)
+        });
+
+        // Repeatedly apply hierarchical reduction with a progressively coarser key.
+        let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
+        for b in buckets.into_iter() {
+            stage = build_bucketed_stage(stage, aggr_funcs.clone(), b);
         }
+
+        // Discard the hash from the key and return to the format of the input data.
+        let partial = stage.map(|((key, _hash), values)| (key, values));
+
+        // Build a series of stages for the reduction
+        // Arrange the final result into (key, Row)
+        partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
+            let mut row_buf = Row::default();
+            move |_key, source, target| {
+                // Negative counts would be surprising, but until we are 100% certain we wont
+                // see them, we should report when we do. We may want to bake even more info
+                // in here in the future.
+                if source.iter().any(|(_val, cnt)| cnt < &0) {
+                    // XXX: This reports user data, which we perhaps should not do!
+                    for (val, cnt) in source.iter() {
+                        if cnt < &0 {
+                            error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?}", val, cnt);
+                        }
+                    }
+                } else {
+                    let mut row_packer = row_buf.packer();
+                    for (aggr_index, func) in aggr_funcs.iter().enumerate() {
+                        let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                        row_packer.push(func.eval(iter, &RowArena::new()));
+                    }
+                    target.push((row_buf.clone(), 1));
+                }
+            }
+        }).leave_region()
     })
 }
 

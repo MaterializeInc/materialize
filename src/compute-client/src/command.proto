@@ -11,6 +11,7 @@ syntax = "proto3";
 
 import "compute-client/src/logging.proto";
 import "compute-client/src/plan.proto";
+import "compute-client/src/sinks.proto";
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
 import "expr/src/scalar.proto";
@@ -19,9 +20,8 @@ import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
-import "storage/src/protocol/client.proto";
 import "storage/src/controller.proto";
-import "storage/src/types/sinks.proto";
+import "storage/src/protocol/client.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -44,12 +44,14 @@ message ProtoComputeCommand {
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;
+        ProtoUpdateMaxResultSize update_max_result_size = 8;
     }
 }
 
 message ProtoInstanceConfig {
     mz_compute_client.logging.ProtoLoggingConfig logging = 1;
     uint64 replica_id = 2;
+    uint32 max_result_size = 3;
 }
 
 message ProtoDataflowDescription {
@@ -74,7 +76,7 @@ message ProtoDataflowDescription {
 
     message ProtoSinkExport {
         mz_repr.global_id.ProtoGlobalId id = 1;
-        mz_storage.types.sinks.ProtoComputeSinkDesc sink_desc = 2;
+        mz_compute_client.sinks.ProtoComputeSinkDesc sink_desc = 2;
     }
 
     repeated ProtoSourceImport source_imports = 1;
@@ -117,4 +119,8 @@ message ProtoPeek {
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
     optional uint64 target_replica = 7;
     map<string, string> otel_ctx = 8;
+}
+
+message ProtoUpdateMaxResultSize {
+    uint32 max_result_size = 1;
 }

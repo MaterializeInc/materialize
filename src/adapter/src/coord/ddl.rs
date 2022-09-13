@@ -250,11 +250,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for id in &sources {
             self.drop_read_policy(id);
         }
-        self.controller
-            .storage_mut()
-            .drop_sources(sources)
-            .await
-            .unwrap();
+        self.controller.storage.drop_sources(sources).await.unwrap();
     }
 
     pub(crate) async fn drop_compute_sinks(&mut self, sinks: Vec<ComputeSinkId>) {
@@ -267,10 +263,11 @@ impl<S: Append + 'static> Coordinator<S> {
                  }| (compute_instance, global_id),
             )
             .into_group_map();
+        let mut compute = self.controller.active_compute();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.controller.active_compute(compute_instance) {
-                compute.drop_collections(ids).await.unwrap();
+            if let Some(mut instance) = compute.instance(compute_instance) {
+                instance.drop_collections(ids).await.unwrap();
             }
         }
     }
@@ -279,11 +276,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for id in &sinks {
             self.drop_read_policy(id);
         }
-        self.controller
-            .storage_mut()
-            .drop_sinks(sinks)
-            .await
-            .unwrap();
+        self.controller.storage.drop_sinks(sinks).await.unwrap();
     }
 
     pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
@@ -300,7 +293,8 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         for (compute_instance, ids) in by_compute_instance {
             self.controller
-                .active_compute(compute_instance)
+                .active_compute()
+                .instance(compute_instance)
                 .unwrap()
                 .drop_collections(ids)
                 .await
@@ -325,16 +319,17 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Drop compute sinks.
         // TODO(chae): Drop storage sinks when they're moved over
+        let mut compute = self.controller.active_compute();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.controller.active_compute(compute_instance) {
-                compute.drop_collections(ids).await.unwrap();
+            if let Some(mut instance) = compute.instance(compute_instance) {
+                instance.drop_collections(ids).await.unwrap();
             }
         }
 
         // Drop storage sources.
         self.controller
-            .storage_mut()
+            .storage
             .drop_sources(source_ids)
             .await
             .unwrap();
@@ -367,7 +362,7 @@ impl<S: Append + 'static> Coordinator<S> {
         connection: StorageSinkConnection,
     ) -> Result<(), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
-        self.controller.storage().collection(sink.from)?;
+        self.controller.storage.collection(sink.from)?;
 
         // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
@@ -400,7 +395,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         Ok(self
             .controller
-            .storage_mut()
+            .storage
             .create_exports(vec![(
                 id,
                 ExportDescription {

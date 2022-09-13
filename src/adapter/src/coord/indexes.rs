@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_compute_client::controller::{ComputeController, ComputeInstanceId};
+use mz_compute_client::controller::{ComputeInstanceId, Instance as ComputeInstanceController};
 use mz_expr::MirScalarExpr;
 use mz_repr::GlobalId;
 use mz_stash::Append;
@@ -25,7 +25,7 @@ use crate::coord::{CollectionIdBundle, Coordinator};
 #[derive(Debug)]
 pub struct ComputeInstanceIndexOracle<'a, T> {
     catalog: &'a CatalogState,
-    compute: &'a ComputeController<T>,
+    compute: &'a ComputeInstanceController<T>,
 }
 
 impl<S: Append> Coordinator<S> {
@@ -36,7 +36,7 @@ impl<S: Append> Coordinator<S> {
     ) -> ComputeInstanceIndexOracle<mz_repr::Timestamp> {
         ComputeInstanceIndexOracle {
             catalog: self.catalog.state(),
-            compute: self.controller.compute(instance).unwrap(),
+            compute: self.controller.compute.instance(instance).unwrap(),
         }
     }
 }

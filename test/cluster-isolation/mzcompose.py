@@ -174,7 +174,13 @@ t1
 
 # Sources
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+# Explicitly set a progress topic to ensure multiple runs (which the
+# mzcompose.py driver does) do not clash.
+# TODO: remove this once we add some form of nonce to the default progress
+# topic name.
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}',
+  PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}';
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

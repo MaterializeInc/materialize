@@ -13,7 +13,7 @@ set -euo pipefail
 
 echo "~~~ Assuming scratch AWS role"
 
-creds=$(aws sts assume-role --role-arn "$AWS_SCRATCH_ROLE_ARN" --role-session-name ci)
+creds=$(aws sts assume-role --role-arn "$AWS_SCRATCH_ROLE_ARN" --duration-seconds 43200 --role-session-name ci)
 
 AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' <<< "$creds")
 AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' <<< "$creds")
