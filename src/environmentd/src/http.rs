@@ -37,6 +37,7 @@ use http::{Request, StatusCode};
 use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
 use itertools::izip;
+use mz_sql::plan::Plan;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use openssl::x509::X509;
@@ -50,7 +51,10 @@ use tracing::{error, warn};
 
 use mz_adapter::catalog::HTTP_DEFAULT_USER;
 use mz_adapter::session::{EndTransactionAction, Session, TransactionStatus};
-use mz_adapter::{ExecuteResponse, ExecuteResponsePartialError, PeekResponseUnary, SessionClient};
+use mz_adapter::{
+    ExecuteResponse, ExecuteResponseKind, ExecuteResponsePartialError, PeekResponseUnary,
+    SessionClient,
+};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryEnableCallback;
@@ -271,6 +275,43 @@ impl AuthedClient {
         &mut self,
         request: HttpSqlRequest,
     ) -> Result<SqlHttpExecuteResponse, anyhow::Error> {
+        // This API prohibits executing statements with responses whose
+        // semantics are at odds with an HTTP response.
+        fn prohibit_stmts(stmt: &Statement<Raw>, results: &mut Vec<SimpleResult>) -> bool {
+            let execute_responses = Plan::generated_from(stmt.into())
+                .into_iter()
+                .map(ExecuteResponse::generated_from)
+                .flatten()
+                .collect::<Vec<_>>();
+
+            if execute_responses.iter().any(|execute_response| {
+                matches!(
+                    execute_response,
+                    ExecuteResponseKind::Fetch
+                        | ExecuteResponseKind::SetVariable
+                        | ExecuteResponseKind::Tailing
+                        | ExecuteResponseKind::CopyTo
+                        | ExecuteResponseKind::CopyFrom
+                        | ExecuteResponseKind::Raise
+                        | ExecuteResponseKind::DeclaredCursor
+                        | ExecuteResponseKind::ClosedCursor
+                )
+            }) && !matches!(
+                stmt,
+                // Both `SelectStatement` and `CopyStatement` generate
+                // `PeekPlan`, but `SELECT` should be permitted and `COPY` not.
+                Statement::Select(mz_sql::ast::SelectStatement { query: _, as_of: _ })
+            ) {
+                results.push(SimpleResult::err(format!(
+                    "unsupported via this API: {}",
+                    stmt.to_ast_string()
+                )));
+                true
+            } else {
+                false
+            }
+        }
+
         let mut results = vec![];
 
         match request {
@@ -280,6 +321,9 @@ impl AuthedClient {
 
                 for stmt in stmts {
                     if matches!(self.0.session().transaction(), TransactionStatus::Failed(_)) {
+                        break;
+                    }
+                    if prohibit_stmts(&stmt, &mut results) {
                         break;
                     }
                     // Mirror the behavior of the PostgreSQL simple query protocol.
@@ -316,13 +360,18 @@ impl AuthedClient {
                         break;
                     }
 
+                    let stmt = stmts.pop().unwrap();
+                    if prohibit_stmts(&stmt, &mut results) {
+                        break;
+                    }
+
                     // Mirror the behavior of the PostgreSQL simple query protocol.
                     // See the pgwire::protocol::StateMachine::query method for details.
                     if let Err(e) = self.0.start_transaction(Some(1)).await {
                         results.push(SimpleResult::err(e));
                         break;
                     }
-                    let res = self.execute_stmt(stmts.pop().unwrap(), params).await;
+                    let res = self.execute_stmt(stmt, params).await;
                     if matches!(res, SimpleResult::Err { .. }) {
                         self.0.fail_transaction();
                     }
@@ -517,13 +566,7 @@ impl AuthedClient {
             | ExecuteResponse::Raise { .. }
             | ExecuteResponse::DeclaredCursor
             | ExecuteResponse::ClosedCursor => {
-                // NOTE(benesch): it is a bit scary to ignore the response
-                // to these types of planning *after* they have been
-                // planned, as they may have mutated state. On a quick
-                // glance, though, ignoring the execute response in all of
-                // the above situations seems safe enough, and it's a more
-                // target allowlist than the code that was here before.
-                SimpleResult::err("executing statements of this type is unsupported via this API")
+                unreachable!("already prohibited statements with these responses")
             }
         }
     }
