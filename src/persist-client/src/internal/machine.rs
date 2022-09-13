@@ -778,11 +778,16 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use differential_dataflow::trace::Description;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::cast::CastFrom;
     use mz_ore::now::SYSTEM_TIME;
+    use mz_ore::task::spawn;
+    use mz_persist::intercept::{InterceptBlob, InterceptHandle};
+    use mz_persist::location::Blob;
+    use timely::progress::Antichain;
     use tokio::sync::Mutex;
 
     use crate::async_runtime::CpuHeavyRuntime;
@@ -1213,5 +1218,57 @@ mod tests {
             live_diffs.len(),
             max_live_diffs
         );
+    }
+
+    // A regression test for #14719, where a bug in gc led to an incremental
+    // state invariant being violated which resulted in gc being permanently
+    // wedged for the shard.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn regression_gc_skipped_req_and_interrupted() {
+        let mut client = new_test_client().await;
+        let intercept = InterceptHandle::default();
+        client.blob = Arc::new(InterceptBlob::new(
+            Arc::clone(&client.blob),
+            intercept.clone(),
+        )) as Arc<dyn Blob + Send + Sync>;
+        let (_, mut read) = client
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+        let old_seqno_since = read.machine.seqno();
+
+        // Create a new SeqNo
+        read.downgrade_since(&Antichain::from_elem(1)).await;
+        let new_seqno_since = read.machine.seqno();
+
+        // Start a GC in the background for some SeqNo range that is not
+        // contiguous compared to the last gc req (in this case, n/a) and then
+        // crash when it gets to the blob deletes. In the regression case, this
+        // renders the shard permanently un-gc-able.
+        assert!(old_seqno_since > SeqNo(0));
+        assert!(new_seqno_since > old_seqno_since);
+        intercept.set_post_delete(Some(Arc::new(|_, _| panic!("boom"))));
+        let mut machine = read.machine.clone();
+        // Run this in a spawn so we can catch the boom panic
+        let gc = spawn(|| "", async move {
+            let req = GcReq {
+                shard_id: machine.shard_id(),
+                old_seqno_since,
+                new_seqno_since,
+            };
+            GarbageCollector::gc_and_truncate(&mut machine, req).await
+        });
+        // Wait for gc to either panic (regression case) or finish (good case)
+        // because it happens to not call blob delete.
+        let _ = gc.await;
+
+        // Allow blob deletes to go through and try GC again. In the regression
+        // case, this hangs.
+        intercept.set_post_delete(None);
+        let req = GcReq {
+            shard_id: read.machine.shard_id(),
+            old_seqno_since,
+            new_seqno_since,
+        };
+        let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
     }
 }
