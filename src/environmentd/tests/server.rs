@@ -405,3 +405,44 @@ fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[test]
+fn test_storage_usage_collection_interval() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config =
+        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    // Retry because it may take some time for the initial snapshot to be taken.
+    let initial_storage: i64 = Retry::default().retry(|_| {
+        Ok::<i64, String>(
+            client
+                .query_one("SELECT SUM(size_bytes)::int8 FROM mz_storage_usage;", &[])
+                .map_err(|e| e.to_string())?
+                .try_get::<_, i64>(0)
+                .map_err(|e| e.to_string())?,
+        )
+    })?;
+
+    client.batch_execute(&"CREATE TABLE t (a INT)")?;
+    client.batch_execute(&"INSERT INTO t VALUES (1), (2)")?;
+
+    // Retry until storage usage is updated.
+    Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+        let updated_storage = client
+            .query_one("SELECT SUM(size_bytes)::int8 FROM mz_storage_usage;", &[])
+            .map_err(|e| e.to_string())?
+            .try_get::<_, i64>(0)
+            .map_err(|e| e.to_string())?;
+
+        if updated_storage > initial_storage {
+            Ok(())
+        } else {
+            Err(format!("updated storage count {updated_storage} is not greater than initial storage {initial_storage}"))
+        }
+    })?;
+
+    Ok(())
+}
