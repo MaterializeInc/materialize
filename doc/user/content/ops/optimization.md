@@ -11,175 +11,55 @@ aliases:
   - /ops/speedup/
 ---
 
-In this operational guide you will find ways to optimize Materialize for:
-
-- Speedup queries
-- Save memory
-- Minimize crash chances
-
 ## Speedup
 
-Indexes are one of the fastest ways to optimize Materialize query speed. The following sections will display different indexes for everyday use cases in familiar scenarios.
+Use indexes to speedup queries. Improvements can be significant, reducing some query times down to single-digit milliseconds. In particular, when the query filters only by the indexed fields.
 
-Before continuing, consider the following example, a simple table with contacts data:
+Building an efficient index for distinct **clauses** and **operators** can be puzzling. To create the correct one, use the following sections, separated by clauses, as a guide:
 
-```sql
-CREATE TABLE contacts (
-    first_name TEXT,
-    last_name TEXT,
-    phone INT,
-    prefix INT
-);
+* [`WHERE`](#where)
+* [`JOIN`](#join)
+* [`GROUP BY`](#group-by)
 
--- Data sample:
-INSERT INTO contacts
-SELECT 'Charlie' as first_name,
-      'Jones' as last_name,
-      generate_series(1, 1000000) as phone,
-      1 as prefix;
-```
+`ORDER BY` and `LIMIT` aren't clauses that benefit from an index.
 
-<!-- This will be removed till the PR makes it into production and is available to everyone -->
-<!-- ### Checking if a query is using an index
+### `WHERE`
+Speedup a query involving a `WHERE` clause with equality comparisons, using the following table as a guide:
 
-The [EXPLAIN](https://materialize.com/docs/sql/explain/#conceptual-framework) command displays if the query plan is including an index to read from.
+Clause                    | Index                                                                   |
+--------------------------|-------------------------------------------------------------------------|
+`WHERE x = $1`            | `CREATE INDEX ON view_name (x);`                                        |
+`WHERE x IN ($1)`         | `CREATE INDEX ON view_name (x);`                                        |
+`WHERE x * 2 = $1`        | `CREATE INDEX ON view_name (x * 2);`                                    |
+`WHERE upper(x) = $1`     | `CREATE INDEX ON view_name (upper(x));`                                 |
+`WHERE x = $1 AND y = $2` | `CREATE INDEX ON view_name (x, y);`                                     |
+`WHERE x = $1 OR y = $2`  | `CREATE INDEX ON view_name (x);`<br /> `CREATE INDEX ON view_name (y);` |
 
-```sql
-EXPLAIN SELECT * FROM contacts WHERE first_name = 'Jann';
-```
+**Note:** to speedup a query using a multi-column index, as in `WHERE x = $1 AND y = $2;`, the query must use all the fields in the index chained together via the `AND` operator.
 
-```
-                      Optimized Plan
-------------------------------------------------------------------
- %0 =                                                            +
- | ReadExistingIndex materialize.public.contacts_first_name_idx  +
- | Get materialize.public.contacts (u23)                         +
- | Filter (#0 = "Jann")                                          +
-```
+### `JOIN`
+Speedup a query using a `JOIN` on two relations by indexing their join keys:
 
-`ReadExistingIndex` indicates that the query is using the `contacts_first_name_idx`. An absence of it would mean
-that the query is scanning the whole table resulting in slower results. -->
+Clause                                      | Index                                                                       |
+--------------------------------------------|-----------------------------------------------------------------------------|
+`FROM view V JOIN table T ON (V.id = T.id)` | `CREATE INDEX ON view (id);` <br /> `CREATE INDEX ON table (id);`           |
 
-### WHERE
+### `GROUP BY`
+Speedup a query using a `GROUP BY` by indexing the aggregation keys:
 
-The filtering clause is one of the most used. Setting up an index on the filtered columns will increase the query speed.
+Clause          | Index                             |
+----------------|-----------------------------------|
+`GROUP BY x,y`  | `CREATE INDEX ON view_name (x,y);`|
 
-#### Literal Values
+### Default
 
-Filtering by literal values is a typical case. An index over the filtered column will do the work for any literal value.
+Implement the default index when there is no particular `WHERE`, `JOIN`, or `GROUP BY` clause to fulfill. Or, as a shorthand for a multi-column index using all the available columns:
 
-Back to the example, creating an index over the `phone` column will improve the speed of retrieving the contacts with a particular phone number (the literal value, `234722` in the example):
+Clause                                               | Index                                |
+-----------------------------------------------------|--------------------------------------|
+`SELECT x, y FROM view_name`                         | `CREATE DEFAULT INDEX ON view_name;` |
+`SELECT x, y FROM view_name WHERE x = $1 AND y = $2` | `CREATE DEFAULT INDEX ON view_name;` |
 
-```sql
-CREATE INDEX contacts_phone_idx ON contacts (phone);
-
--- Query performance improvement like:
-SELECT *
-FROM contacts
-WHERE phone = 234722;
-```
-
-#### Expressions
-
-Expressions can also be part of the index. Rather than calculating an expression's value on the fly in every query request, Materialize can store the expression result in the index and look it up, improving the query's performance.
-
-E.g., Formatting a text is a common practice to match a particular search, like using a function to upper case the names. An index over the column with the `upper()` expression will speed up the query.
-
-```sql
-CREATE INDEX contacts_upper_first_name_idx ON contacts (upper(first_name));
-
-SELECT *
-FROM contacts
-WHERE upper(first_name) = 'CHARLIE';
-```
-
-An _expression_ goes beyond a function. It could be a mathematical expression that is present in the filtering clause:
-
-```sql
-CREATE INDEX contacts_multiples_idx ON contacts (phone % 10000);
-
-SELECT *
-FROM contacts
-WHERE phone % 100000 = 0;
-
--- A more complex expressions (Concat first name and phone):
-CREATE INDEX contacts_complex_idx ON contacts (upper(first_name) || '-' || phone);
-
-SELECT *
-FROM contacts
-WHERE upper(first_name) || '-' || phone = 'CHARLIE-1';
-```
-
-[Unmaterialized functions](/sql/functions/#unmaterializable-functions), like `now()` or `current_user()`, are not possible to use in an index.
-
-
-#### Literal Values and Expressions
-
-Creating a multi-column index makes it possible to combine both worlds, literal values and expressions.
-
-```sql
-CREATE INDEX contacts_upper_first_name_phone_idx ON contacts (upper(first_name), phone);
-
-SELECT *
-FROM contacts
-WHERE upper(first_name) = 'CHARLIE' AND phone = 873090;
-```
-
-#### Multi-column index
-
-When using a multi-column index, consider that only the queries using all the columns from the index concatenated by an `AND` operator will improve.
-
-E.g., There is indecision about what to index by, and someone decides to create an index over all the columns.
-
-```sql
--- Shorthand for: CREATE INDEX contacts_all_index ON contacts(first_name, last_name, phone, prefix);
-CREATE DEFAULT INDEX ON contacts;
-
--- Improves a query using all the fields.
-SELECT *
-FROM contacts
-WHERE first_name = 'Charlie' AND last_name = 'Jones' AND phone = 87309 AND prefix = 1;
-```
-
-<!-- Info: -->
-<!-- Slack thread: https://materializeinc.slack.com/archives/C01BE3RN82F/p1658422234896599 -->
-<!-- Join physical optimization: https://github.com/MaterializeInc/materialize/blob/main/src/transform/src/join_implementation.rs -->
-<!-- Filtering physical optimization: https://github.com/MaterializeInc/materialize/blob/e94f1a02faa83014a23fcc801da28c3cbf61ce3a/src/compute-client/src/plan/mod.rs#L59 -->
-
-The field order doesn't need to match the index.
-
-### JOIN
-
-Optimize the performance of `JOIN` on two relations by ensuring their
-join keys are the key columns in an index.
-
-E.g., We want to know very fast from which country a prefix is:
-
-```sql
-CREATE TABLE geo (country TEXT, prefix INT);
-
-INSERT INTO geo SELECT 'Country', generate_series(1, 1000000);
-
-CREATE INDEX contacts_prefix_idx ON contacts (prefix);
-CREATE INDEX geo_prefix_idx ON geo (prefix);
-
-SELECT phone, country, G.prefix
-FROM geo G
-JOIN contacts C ON C.prefix = G.prefix
-WHERE phone = 442233;
-```
-
-In the above example, the index `contacts_prefix_idx`...
-
--   Helps because it contains a key the the query can
-    use to look up values for the join condition (`contacts.prefix`).
-
-    Because this index is exactly what the query requires, the Materialize
-    optimizer will choose to use `contacts_prefix_idx` rather than build
-    and maintain a private copy of the index just for this query.
-
--   Obeys the [restrictions](/sql/create-index/#restrictions) by containing only a subset of columns in the result
-    set.
 
 ## Memory
 
