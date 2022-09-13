@@ -37,6 +37,12 @@ use serde::{Serialize, Serializer};
 
 use crate::{ColumnType, GlobalId, Row, ScalarType};
 
+#[cfg(feature = "tracing_")]
+mod tracing;
+
+#[cfg(feature = "tracing_")]
+pub use self::tracing::{trace_plan, PlanTrace, TraceEntry};
+
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ExplainFormat {

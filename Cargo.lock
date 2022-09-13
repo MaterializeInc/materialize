@@ -3961,6 +3961,8 @@ dependencies = [
  "smallvec",
  "thiserror",
  "timely",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]
