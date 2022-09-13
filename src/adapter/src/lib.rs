@@ -46,8 +46,8 @@ pub mod session;
 
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};
 pub use crate::command::{
-    Canceled, ExecuteResponse, ExecuteResponsePartialError, RowsFuture, StartupMessage,
-    StartupResponse,
+    Canceled, ExecuteResponse, ExecuteResponseKind, ExecuteResponsePartialError, RowsFuture,
+    StartupMessage, StartupResponse,
 };
 pub use crate::coord::peek::PeekResponseUnary;
 pub use crate::coord::{serve, Config, DUMMY_AVAILABILITY_ZONE};
