@@ -25,9 +25,9 @@ SHOW MATERIALIZED VIEWS;
 ```
 
 ```nofmt
- cluster |     name
----------+--------------
- default | winning_bids
+     name     | cluster
+--------------+----------
+ winning_bids | default
 ```
 
 ```sql
@@ -35,9 +35,9 @@ SHOW MATERIALIZED VIEWS LIKE '%bid%';
 ```
 
 ```nofmt
- cluster |     name
----------+--------------
- default | winning_bids
+     name     | cluster
+--------------+----------
+ winning_bids | default
 ```
 
 ## Related pages

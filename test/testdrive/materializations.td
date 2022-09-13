@@ -47,9 +47,9 @@ name
 data_view
 
 > SHOW MATERIALIZED VIEWS
-cluster   name
+name    cluster
 ---------------
-default   test1
+test1   default
 
 > SELECT * FROM test1
 b  sum
