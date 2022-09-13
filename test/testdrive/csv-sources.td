@@ -216,7 +216,7 @@ contains:Decode error: Text: CSV error at record number 2: invalid UTF-8
 
 # Declare a key constraint (PRIMARY KEY NOT ENFORCED)
 
-$ kafka-create-topic topic=static-csv-pkne-sink
+$ kafka-create-topic topic=static-csv-pkne-sink partitions=1
 
 > CREATE SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
   FROM S3 CONNECTION s3_conn
