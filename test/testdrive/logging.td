@@ -10,6 +10,10 @@
 # This test only verifies that the log relations are published, not that they
 # have any specific output.
 
+# log sources require a single replica
+$ skip-if
+SELECT ${arg.replicas} > 1
+
 $ set-regex match=s\d+ replacement=SID
 
 > CREATE VIEW count_operates AS SELECT count(*) FROM mz_dataflow_operators;
