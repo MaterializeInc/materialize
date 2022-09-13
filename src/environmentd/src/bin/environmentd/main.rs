@@ -54,6 +54,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
+use mz_repr::util::parse_duration;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
 
@@ -360,10 +361,11 @@ pub struct Args {
     /// The interval in seconds at which to collect storage usage information.
     #[clap(
         long,
-        env = "STORAGE_USAGE_COLLECTION_INTERVAL_SEC",
-        default_value = "3600"
+        env = "STORAGE_USAGE_COLLECTION_INTERVAL",
+        parse(try_from_str = parse_duration),
+        default_value = "3600s"
     )]
-    storage_usage_collection_interval_sec: u64,
+    storage_usage_collection_interval_sec: Duration,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -693,9 +695,7 @@ max log level: {max_log_level}",
             secrets_reader,
         ),
         otel_enable_callback,
-        storage_usage_collection_interval: Duration::from_secs(
-            args.storage_usage_collection_interval_sec,
-        ),
+        storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
     }))?;
 
     println!(
