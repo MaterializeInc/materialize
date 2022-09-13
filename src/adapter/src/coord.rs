@@ -145,9 +145,6 @@ mod timestamp_selection;
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<mz_repr::Timestamp> =
     Some(Timestamp::new(1_000));
 
-/// The default interval at which to collect storage usage information.
-pub const DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL: Duration = Duration::from_secs(3600);
-
 /// A dummy availability zone to use when no availability zones are explicitly
 /// specified.
 pub const DUMMY_AVAILABILITY_ZONE: &str = "";
@@ -232,6 +229,7 @@ pub struct Config<S> {
     pub default_storage_host_size: Option<String>,
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
+    pub storage_usage_collection_interval: Duration,
 }
 
 /// Soft-state metadata about a compute replica
@@ -352,7 +350,7 @@ pub struct Coordinator<S> {
     /// dropped and for which no further updates should be recorded.
     transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
 
-    // Persist client for fetching storage metadata such as size metrics.
+    /// Persist client for fetching storage metadata such as size metrics.
     storage_usage_client: StorageUsageClient,
     /// The interval at which to collect storage usage information.
     storage_usage_collection_interval: Duration,
@@ -820,6 +818,7 @@ pub async fn serve<S: Append + 'static>(
         mut availability_zones,
         connection_context,
         storage_usage_client,
+        storage_usage_collection_interval,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -923,7 +922,7 @@ pub async fn serve<S: Append + 'static>(
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
                 storage_usage_client,
-                storage_usage_collection_interval: DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL,
+                storage_usage_collection_interval,
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
