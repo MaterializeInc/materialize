@@ -1303,6 +1303,16 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =
             .with_column("error", ScalarType::String.nullable(true))
             .with_column("metadata", ScalarType::Jsonb.nullable(true)),
     });
+
+pub static MZ_STORAGE_SHARDS: Lazy<BuiltinStorageCollection> =
+    Lazy::new(|| BuiltinStorageCollection {
+        name: "mz_storage_shards",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("object_id", ScalarType::String.nullable(false))
+            .with_column("shard_id", ScalarType::String.nullable(false)),
+    });
+
 pub static MZ_STORAGE_USAGE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage",
     schema: MZ_CATALOG_SCHEMA,
@@ -2319,6 +2329,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
         // Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),
+        Builtin::StorageCollection(&MZ_STORAGE_SHARDS),
     ]);
 
     builtins
