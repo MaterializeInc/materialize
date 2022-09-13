@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ set schema={
     "name": "row",
@@ -62,8 +62,8 @@ a
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
 
 $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
-{"before": null, "after": {"row": {"a": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 1}}}
+{"before": null, "after": {"row": {"a": 2}}}
 
 # Old with options do not work
 ! CREATE SOURCE connector_source
