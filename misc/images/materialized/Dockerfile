@@ -46,6 +46,7 @@ RUN apt-get update \
         curl \
         postgresql-client-14 \
         tini \
+        ssh \
     && groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
     && mkdir /mzdata \
