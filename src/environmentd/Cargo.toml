@@ -52,6 +52,7 @@ num_cpus = "1.13.1"
 openssl = { version = "0.10.41", features = ["vendored"] }
 openssl-sys = { version = "0.9.75", features = ["vendored"] }
 os_info = "3.5.0"
+parse_duration = "2.1.1"
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 rand = "0.8.5"
 reqwest = { version = "0.11.11", features = ["json"] }

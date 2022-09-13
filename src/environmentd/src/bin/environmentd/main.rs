@@ -31,6 +31,8 @@ use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use once_cell::sync::Lazy;
+#[allow(unused_imports)] // False positive.
+use parse_duration::parse;
 use sysinfo::{CpuExt, SystemExt};
 use tokio::sync::Mutex;
 use tower_http::cors::{self, AllowOrigin};
@@ -54,7 +56,6 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
-use mz_repr::util::parse_duration;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
 
@@ -362,7 +363,7 @@ pub struct Args {
     #[clap(
         long,
         env = "STORAGE_USAGE_COLLECTION_INTERVAL",
-        parse(try_from_str = parse_duration),
+        parse(try_from_str = parse_duration::parse),
         default_value = "3600s"
     )]
     storage_usage_collection_interval_sec: Duration,
