@@ -898,7 +898,11 @@ impl Row {
 
     /// Returns the total amount of bytes used by this row.
     pub fn byte_len(&self) -> usize {
-        let heap_size = self.data.len().saturating_sub(self.data.inline_size());
+        let heap_size = if self.data.spilled() {
+            self.data.len()
+        } else {
+            0
+        };
         let inline_size = std::mem::size_of::<Self>();
         inline_size.saturating_add(heap_size)
     }
