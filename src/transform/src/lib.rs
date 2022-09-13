@@ -344,7 +344,7 @@ impl Optimizer {
             }),
         ];
         Self {
-            name: "mir_logical_optimizer",
+            name: "logical",
             transforms,
         }
     }
@@ -384,7 +384,7 @@ impl Optimizer {
             Box::new(crate::threshold_elision::ThresholdElision),
         ];
         Self {
-            name: "mir_physical_optimizer",
+            name: "physical",
             transforms,
         }
     }
@@ -416,7 +416,7 @@ impl Optimizer {
             }),
         ];
         Self {
-            name: "mir_logical_cleanup_pass",
+            name: "logical_cleanup",
             transforms,
         }
     }
@@ -425,13 +425,22 @@ impl Optimizer {
     ///
     /// These optimizations are performed with no information about available arrangements,
     /// which makes them suitable for pre-optimization before dataflow deployment.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = self.name)
+    )]
     pub fn optimize(
         &mut self,
         mut relation: MirRelationExpr,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
         let transform_result = self.transform(&mut relation, &EmptyIndexOracle);
         match transform_result {
-            Ok(_) => Ok(mz_expr::OptimizedMirRelationExpr(relation)),
+            Ok(_) => {
+                mz_ore::tracing::trace_plan(&relation);
+                Ok(mz_expr::OptimizedMirRelationExpr(relation))
+            }
             Err(e) => {
                 // Without this, the dropping of `relation` (which happens automatically when
                 // returning from this function) might run into a stack overflow, see
@@ -447,13 +456,6 @@ impl Optimizer {
     ///
     /// This method should only be called with non-empty `indexes` when optimizing a dataflow,
     /// as the optimizations may lock in the use of arrangements that may cease to exist.
-    #[tracing::instrument(
-        target = "optimizer",
-        level = "trace",
-        name = "mir_optimize",
-        skip_all,
-        fields(optimize.pipeline = %self.name)
-    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -469,6 +471,7 @@ impl Optimizer {
                 },
             )?;
         }
+
         Ok(())
     }
 }

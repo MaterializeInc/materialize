@@ -357,7 +357,7 @@ impl From<serde_json::Error> for ExplainError {
 }
 
 /// A set of options for controlling the output of [`Explain`] implementations.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ExplainConfig {
     /// Show the number of columns.
     pub arity: bool,

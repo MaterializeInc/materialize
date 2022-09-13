@@ -3063,6 +3063,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tracing",
+ "tracing-subscriber",
  "uncased",
  "uuid",
 ]
