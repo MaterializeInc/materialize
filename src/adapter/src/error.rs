@@ -106,6 +106,8 @@ pub enum AdapterError {
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
     ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
+    /// The transaction in in read-only mode and a read already occurred.
+    ReadWriteUnavailable,
     /// The recursion limit of some operation was exceeded.
     RecursionLimit(RecursionLimitError),
     /// A query in a transaction referenced a relation outside the first query's
@@ -354,6 +356,9 @@ impl fmt::Display for AdapterError {
             AdapterError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             AdapterError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
+            }
+            AdapterError::ReadWriteUnavailable => {
+                f.write_str("transaction read-write mode must be set before any query")
             }
             AdapterError::StatementTimeout => {
                 write!(f, "canceling statement due to statement timeout")

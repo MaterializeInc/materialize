@@ -9,7 +9,7 @@
 
 //! Logic for executing a planned SQL query.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::{Duration, Instant};
@@ -22,14 +22,16 @@ use tracing::{event, warn, Level};
 use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
-use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
+use mz_compute_client::controller::{
+    ComputeInstanceId, ComputeSinkId, ConcreteComputeInstanceReplicaConfig,
+    ConcreteComputeInstanceReplicaLogging,
+};
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
 use mz_compute_client::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, TailSinkConnection,
 };
-use mz_controller::{ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -211,13 +213,13 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::StartTransaction(plan) => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
-                let session = session.start_transaction(
+                let (session, result) = session.start_transaction(
                     self.now_datetime(),
                     plan.access,
                     plan.isolation_level,
                 );
                 tx.send(
-                    Ok(ExecuteResponse::StartedTransaction { duplicated }),
+                    result.map(|_| ExecuteResponse::StartedTransaction { duplicated }),
                     session,
                 )
             }
@@ -466,7 +468,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
 
                 self.controller
-                    .storage_mut()
+                    .storage
                     .create_collections(vec![(
                         source_id,
                         CollectionDescription {
@@ -744,7 +746,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect();
 
         self.controller
-            .storage_mut()
+            .storage
             .create_collections(persisted_introspection_sources)
             .await
             .unwrap();
@@ -753,15 +755,14 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
-        self.controller
-            .create_instance(
-                instance.id,
-                instance.logging.clone(),
-                self.catalog.system_config().max_result_size(),
-            )
-            .await;
+        self.controller.compute.create_instance(
+            instance.id,
+            instance.logging.clone(),
+            self.catalog.system_config().max_result_size(),
+        )?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
+                .active_compute()
                 .add_replica_to_instance(instance.id, replica_id, replica.config)
                 .await
                 .unwrap();
@@ -804,7 +805,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
 
-        let persisted_source_ids = persisted_logs.get_source_ids();
+        let persisted_source_ids = persisted_logs.get_source_ids().collect();
         let persisted_sources = persisted_logs
             .get_sources()
             .iter()
@@ -878,7 +879,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let replica_concrete_config = instance.replicas_by_id[&replica_id].config.clone();
 
         self.controller
-            .storage_mut()
+            .storage
             .create_collections(persisted_sources)
             .await
             .unwrap();
@@ -896,6 +897,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         self.controller
+            .active_compute()
             .add_replica_to_instance(instance_id, replica_id, replica_concrete_config)
             .await
             .unwrap();
@@ -943,14 +945,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 let collection_desc = table.desc.clone().into();
                 self.controller
-                    .storage_mut()
+                    .storage
                     .create_collections(vec![(table_id, collection_desc)])
                     .await
                     .unwrap();
 
                 let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
                 self.controller
-                    .storage_mut()
+                    .storage
                     .set_read_policy(vec![(table_id, policy)])
                     .await
                     .unwrap();
@@ -1095,7 +1097,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(Some(&session), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
                 txn.dataflow_client
-                    .storage()
+                    .storage
                     .collection(sink.from)
                     .map_err(|e| match e {
                         StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
@@ -1320,7 +1322,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok(df) => {
                 // Announce the creation of the materialized view source.
                 self.controller
-                    .storage_mut()
+                    .storage
                     .create_collections(vec![(
                         id,
                         CollectionDescription {
@@ -1500,7 +1502,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for replica in instance.replicas_by_id.values() {
                 let persisted_logs = replica.config.persisted_logs.clone();
                 let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-                let view_ids = persisted_logs.get_view_ids();
+                let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
                 for log_id in log_and_view_ids {
                     // We consider the dependencies of both views and logs, but remove the
                     // views itself. The views are included as they depend on the source,
@@ -1528,7 +1530,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
             }
-            self.controller.drop_instance(instance_id).await.unwrap();
+            self.controller.compute.drop_instance(instance_id);
         }
 
         Ok(ExecuteResponse::DroppedComputeInstance)
@@ -1565,7 +1567,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .clone();
 
             let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-            let view_ids = persisted_logs.get_view_ids();
+            let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
 
             for log_id in log_and_view_ids {
                 // We consider the dependencies of both views and logs, but remove the
@@ -1617,8 +1619,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
         }
         self.controller
+            .active_compute()
             .drop_replica(instance_id, replica_id, replica_config)
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn sequence_drop_items(
@@ -2056,15 +2060,24 @@ impl<S: Append + 'static> Coordinator<S> {
             thinning.len(),
         )?;
 
-        // We only track the peeks in the session if the query doesn't use AS OF, it's a
-        // non-constant or timestamp dependent query.
-        if when == QueryWhen::Immediately
-            && (!matches!(
+        // We only track the peeks in the session if the query doesn't use AS
+        // OF or we're inside an explicit transaction. The latter case is
+        // necessary to support PG's `BEGIN` semantics, whose behavior can
+        // depend on whether or not reads have occurred in the txn.
+        if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
+            || when == QueryWhen::Immediately
+        {
+            let peek_ts = if matches!(
                 peek_plan,
                 peek::PeekPlan::FastPath(peek::FastPathPlan::Constant(_, _))
-            ) || !timestamp_independent)
-        {
-            session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
+            ) && timestamp_independent
+            {
+                None
+            } else {
+                Some(timestamp)
+            };
+
+            session.add_transaction_ops(TransactionOps::Peeks(peek_ts))?;
         }
 
         // Implement the peek, and capture the response.
@@ -2542,9 +2555,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
                 let mut sources = Vec::new();
                 {
-                    let storage = self.controller.storage();
                     for id in id_bundle.storage_ids.iter() {
-                        let state = storage.collection(*id).unwrap();
+                        let state = self.controller.storage.collection(*id).unwrap();
                         let name = self
                             .catalog
                             .try_get_entry(id)
@@ -2564,7 +2576,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 {
                     if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-                        let compute = self.controller.compute(compute_instance).unwrap();
+                        let compute = self.controller.compute.instance(compute_instance).unwrap();
                         for id in compute_ids {
                             let state = compute.collection(*id).unwrap();
                             let name = self
@@ -3189,7 +3201,7 @@ impl<S: Append + 'static> Coordinator<S> {
         })?;
 
         self.controller
-            .storage_mut()
+            .storage
             .alter_collections(vec![(id, updated_source.host_config.clone())])
             .await?;
 
@@ -3316,9 +3328,10 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn update_max_result_size(&mut self) {
+        let mut compute = self.controller.active_compute();
         for compute_instance in self.catalog.compute_instances() {
-            let mut compute = self.controller.active_compute(compute_instance.id).unwrap();
-            compute
+            let mut instance = compute.instance(compute_instance.id).unwrap();
+            instance
                 .update_max_result_size(self.catalog.system_config().max_result_size())
                 .await;
         }

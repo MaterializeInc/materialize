@@ -20,8 +20,7 @@ use uuid::Uuid;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_controller::ConcreteComputeInstanceReplicaConfig;
+use mz_compute_client::controller::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
-use mz_controller::ComputeInstanceReplicaAllocation;
+use mz_compute_client::controller::ComputeInstanceReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
 use mz_secrets::SecretsReader;
 use mz_storage::types::hosts::StorageHostResourceAllocation;
