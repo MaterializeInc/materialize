@@ -10,9 +10,8 @@
 import time
 
 from materialize.cloudtest.application import MaterializeApplication
-from materialize.cloudtest.wait import wait
-
 from materialize.cloudtest.k8s.minio import mc_command
+from materialize.cloudtest.wait import wait
 
 
 def test_usage_snapshots(mz: MaterializeApplication) -> None:

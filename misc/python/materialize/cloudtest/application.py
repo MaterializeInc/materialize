@@ -10,8 +10,6 @@
 import subprocess
 from typing import List
 
-
-
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.k8s import K8sResource
 from materialize.cloudtest.k8s.environmentd import (

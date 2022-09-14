@@ -70,7 +70,6 @@ class K8sResource:
                 raise AssertionError(f"Error creating {self}: {e}") from e
             pass
 
-
     def image(self, service: str) -> str:
         repo = mzbuild.Repository(ROOT)
         deps = repo.resolve_dependencies([repo.images[service]])
