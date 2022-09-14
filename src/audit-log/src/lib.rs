@@ -277,4 +277,13 @@ impl VersionedStorageUsage {
     pub fn serialize(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("must serialize")
     }
+
+    pub fn timestamp(&self) -> EpochMillis {
+        match self {
+            VersionedStorageUsage::V1(StorageUsageV1 {
+                collection_timestamp,
+                ..
+            }) => *collection_timestamp,
+        }
+    }
 }

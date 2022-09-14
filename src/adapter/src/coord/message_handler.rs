@@ -11,12 +11,14 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use chrono::DurationRound;
 use tracing::{event, warn, Level};
 
 use mz_compute_client::controller::ComputeInstanceEvent;
 use mz_controller::ControllerResponse;
+use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
@@ -131,6 +133,28 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
+        self.schedule_storage_usage_collection().await;
+    }
+
+    pub async fn schedule_storage_usage_collection(&self) {
+        let previous_collection_ts = self
+            .catalog
+            .most_recent_storage_usage_collection()
+            .await
+            .expect("unable to get storage usage")
+            .unwrap_or(EpochMillis::MIN);
+        let time_since_previous_collection = self.now().saturating_sub(previous_collection_ts);
+        let next_collection_interval = self
+            .storage_usage_collection_interval
+            .saturating_sub(Duration::from_millis(time_since_previous_collection));
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        task::spawn(|| "storage_usage_collection", async move {
+            tokio::time::sleep(next_collection_interval).await;
+            // If sending fails, the main thread has shutdown.
+            if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
+                return;
+            }
+        });
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
