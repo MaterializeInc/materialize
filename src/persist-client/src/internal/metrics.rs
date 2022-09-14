@@ -499,6 +499,7 @@ pub struct CompactionMetrics {
     pub(crate) failed: IntCounter,
     pub(crate) noop: IntCounter,
     pub(crate) seconds: Counter,
+    pub(crate) memory_violations: IntCounter,
 
     pub(crate) batch: BatchWriteMetrics,
 }
@@ -529,6 +530,10 @@ impl CompactionMetrics {
             seconds: registry.register(metric!(
                 name: "mz_persist_compaction_seconds",
                 help: "time spent in compaction",
+            )),
+            memory_violations: registry.register(metric!(
+                name: "mz_persist_compaction_memory_violations",
+                help: "count of compaction memory requirement violations",
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
         }

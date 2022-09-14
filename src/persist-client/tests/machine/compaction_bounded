@@ -189,3 +189,96 @@ part 2
 part 3
 <run 2>
 part 4
+
+# compact b0, b1, b2 even though our memory isn't enough to hold any 2 runs at a time. this is an edge case
+# where we still force 2 runs to be merged together when possible, even at the expense of our memory requirement.
+# we set the target size so that we can hold 2 keys in memory at a time, so compaction should produce identical
+# output to the test above, where b0 and b1 are compacted together, and b2 is compacted in isolation
+set-batch-parts-size input=b0 size=1000
+----
+ok
+
+set-batch-parts-size input=b1 size=1000
+----
+ok
+
+set-batch-parts-size input=b2 size=1000
+----
+ok
+
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=200
+----
+parts=5 len=7
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+a 8 2
+<part 1>
+b 8 2
+<part 2>
+c 8 1
+d 8 1
+<part 3>
+e 8 1
+f 8 1
+<part 4>
+a 8 1
+<run 0>
+part 0
+part 1
+part 2
+<run 1>
+part 3
+<run 2>
+part 4
+
+# for good measure, repeatedly compacting a single batch of several runs should eventually
+# converge to 1 run even if there isn't enough memory to hold more than 2 runs at a time
+set-batch-parts-size input=b0_1_2 size=1000
+----
+ok
+
+compact output=b0_1_2_iter1 inputs=(b0_1_2) lower=0 upper=9 since=8 target_size=100 memory_bound=1000
+----
+parts=3 len=7
+
+fetch-batch input=b0_1_2_iter1
+----
+<part 0>
+a 8 2
+b 8 2
+c 8 1
+d 8 1
+<part 1>
+e 8 1
+f 8 1
+<part 2>
+a 8 1
+<run 0>
+part 0
+part 1
+<run 1>
+part 2
+
+set-batch-parts-size input=b0_1_2_iter1 size=1000
+----
+ok
+
+compact output=b0_1_2_iter2 inputs=(b0_1_2_iter1) lower=0 upper=9 since=8 target_size=100 memory_bound=1000
+----
+parts=2 len=6
+
+fetch-batch input=b0_1_2_iter2
+----
+<part 0>
+a 8 3
+b 8 2
+c 8 1
+<part 1>
+d 8 1
+e 8 1
+f 8 1
+<run 0>
+part 0
+part 1

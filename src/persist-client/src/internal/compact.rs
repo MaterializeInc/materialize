@@ -259,7 +259,7 @@ impl Compactor {
         let mut len = 0;
 
         for (runs, run_chunk_max_memory_usage) in
-            Self::chunk_runs::<T, D>(&req, &cfg, run_reserved_memory_bytes)
+            Self::chunk_runs::<T, D>(&req, &cfg, metrics.as_ref(), run_reserved_memory_bytes)
         {
             // given the runs we actually have in our batch, we might have extra memory
             // available. we reserved enough space to always have 1 in-progress part in
@@ -334,6 +334,7 @@ impl Compactor {
     fn chunk_runs<'a, T, D>(
         req: &'a CompactReq<T>,
         cfg: &PersistConfig,
+        metrics: &Metrics,
         run_reserved_memory_bytes: usize,
     ) -> Vec<(Vec<(&'a Description<T>, &'a [HollowBatchPart])>, usize)>
     where
@@ -368,6 +369,19 @@ impl Compactor {
                 if current_chunk_max_memory_usage + next_run_greatest_part_size
                     <= run_reserved_memory_bytes
                 {
+                    continue;
+                }
+
+                // NB: There's an edge case where we cannot fit at least 2 runs into a chunk
+                // with our reserved memory. This could happen if blobs were written with a
+                // larger target size than the current build. When this happens, we violate
+                // our memory requirement and force chunks to be at least length 2, so that we
+                // can be assured runs are merged and converge over time.
+                if current_chunk.len() == 1 {
+                    // in the steady state we expect this counter to be 0, and would only
+                    // anticipate it being temporarily nonzero if we changed target blob size
+                    // or our memory requirement calculations
+                    metrics.compaction.memory_violations.inc();
                     continue;
                 }
             }
