@@ -256,10 +256,14 @@ impl AdapterError {
                     format!("Valid availability zones are: {}", expected.join(", "))
                 })
             }
-            AdapterError::InvalidClusterReplicaSize { expected, size: _ } => Some(format!(
-                "Valid cluster replica sizes are: {}",
-                expected.join(", ")
-            )),
+            AdapterError::InvalidClusterReplicaSize { expected, size: _ } => {
+                let mut sorted = expected.clone();
+                sorted.sort_unstable();
+                Some(format!(
+                    "Valid cluster replica sizes are: {}",
+                    sorted.join(", ")
+                ))
+            }
             AdapterError::InvalidStorageHostSize { expected, .. } => {
                 Some(format!("Valid source sizes are: {}", expected.join(", ")))
             }
