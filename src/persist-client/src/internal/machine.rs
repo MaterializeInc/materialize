@@ -29,7 +29,6 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::compact::CompactReq;
-use crate::internal::gc::GcReq;
 use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics, ShardMetrics,
@@ -558,14 +557,7 @@ where
                 // run though the loop (i.e. no `if let Some` here). When we
                 // lose a CaS race, we might discover that the winner got
                 // assigned the gc.
-                garbage_collection =
-                    new_state
-                        .maybe_gc(is_write)
-                        .map(|(old_seqno_since, new_seqno_since)| GcReq {
-                            shard_id: self.shard_id(),
-                            old_seqno_since,
-                            new_seqno_since,
-                        });
+                garbage_collection = new_state.maybe_gc(is_write);
 
                 // SUBTLE! Unlike the other consensus and blob uses, we can't
                 // automatically retry indeterminate ExternalErrors here. However,
@@ -793,10 +785,11 @@ mod tests {
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::fetch::fetch_batch_part;
-    use crate::internal::compact::CompactReq;
+    use crate::internal::compact::{CompactReq, Compactor};
+    use crate::internal::gc::GcReq;
     use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
-    use crate::{Compactor, GarbageCollector, PersistConfig, ShardId};
+    use crate::{GarbageCollector, PersistConfig, ShardId};
 
     use super::*;
 
@@ -1080,8 +1073,6 @@ mod tests {
                             }
                         }
                         "gc" => {
-                            let old_seqno_since =
-                                SeqNo(get_u64(&tc.args, "from_seqno").expect("missing from_seqno"));
                             let new_seqno_since =
                                 SeqNo(get_u64(&tc.args, "to_seqno").expect("missing to_seqno"));
 
@@ -1089,7 +1080,6 @@ mod tests {
                                 &mut write.lock().await.machine,
                                 GcReq {
                                     shard_id,
-                                    old_seqno_since,
                                     new_seqno_since,
                                 },
                             )
@@ -1234,7 +1224,6 @@ mod tests {
         let (_, mut read) = client
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;
-        let old_seqno_since = read.machine.seqno();
 
         // Create a new SeqNo
         read.downgrade_since(&Antichain::from_elem(1)).await;
@@ -1244,15 +1233,13 @@ mod tests {
         // contiguous compared to the last gc req (in this case, n/a) and then
         // crash when it gets to the blob deletes. In the regression case, this
         // renders the shard permanently un-gc-able.
-        assert!(old_seqno_since > SeqNo(0));
-        assert!(new_seqno_since > old_seqno_since);
+        assert!(new_seqno_since > SeqNo::minimum());
         intercept.set_post_delete(Some(Arc::new(|_, _| panic!("boom"))));
         let mut machine = read.machine.clone();
         // Run this in a spawn so we can catch the boom panic
         let gc = spawn(|| "", async move {
             let req = GcReq {
                 shard_id: machine.shard_id(),
-                old_seqno_since,
                 new_seqno_since,
             };
             GarbageCollector::gc_and_truncate(&mut machine, req).await
@@ -1266,7 +1253,6 @@ mod tests {
         intercept.set_post_delete(None);
         let req = GcReq {
             shard_id: read.machine.shard_id(),
-            old_seqno_since,
             new_seqno_since,
         };
         let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;

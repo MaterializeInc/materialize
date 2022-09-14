@@ -27,9 +27,9 @@ use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::ShardId;
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct GcReq {
     pub shard_id: ShardId,
-    pub old_seqno_since: SeqNo,
     pub new_seqno_since: SeqNo,
 }
 
@@ -90,7 +90,7 @@ impl<K, V, T, D> Clone for GarbageCollector<K, V, T, D> {
 ///   possible that some future request has already deleted the blobs and
 ///   truncated consensus. It's also possible that this is the future request.
 ///   As a result, the only guarantee that we get is that the current version of
-///   head is >= new_seqno_since >= old_seqno_since.
+///   head is >= new_seqno_since.
 /// - (Aside: The above also means that if Blob is not linearizable, there is a
 ///   possible race where a blob gets deleted before it written and thus is
 ///   leaked. We anyway always have the possibility of a write process being
@@ -119,8 +119,6 @@ where
                 while let Ok((req, completer)) = gc_req_recv.try_recv() {
                     assert_eq!(req.shard_id, consolidated_req.shard_id);
                     gc_completed_senders.push(completer);
-                    consolidated_req.old_seqno_since =
-                        std::cmp::min(req.old_seqno_since, consolidated_req.old_seqno_since);
                     consolidated_req.new_seqno_since =
                         std::cmp::max(req.new_seqno_since, consolidated_req.new_seqno_since);
                 }
@@ -203,9 +201,8 @@ where
             .expect("shard codecs should not change");
 
         debug!(
-            "gc {} for [{},{}) got {} versions from scan",
+            "gc {} for {} got {} versions from scan",
             req.shard_id,
-            req.old_seqno_since,
             req.new_seqno_since,
             states.len()
         );

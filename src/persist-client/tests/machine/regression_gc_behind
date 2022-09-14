@@ -28,12 +28,12 @@ seqno=v2 batches=
 seqno=v3 batches=b0
 
 # Run gc up to our latest seqno
-gc from_seqno=0 to_seqno=3
+gc to_seqno=3
 ----
 ok
 
 # Now some slow gc req comes in that's behind. In the regression case, this
 # panics.
-gc from_seqno=0 to_seqno=1
+gc to_seqno=1
 ----
 ok
