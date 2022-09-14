@@ -10,6 +10,8 @@
 import subprocess
 from typing import List
 
+
+
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.k8s import K8sResource
 from materialize.cloudtest.k8s.environmentd import (
@@ -36,7 +38,7 @@ class Application:
     def create(self) -> None:
         self.acquire_images()
         for resource in self.resources:
-            resource.create()
+            resource.ensure()
 
     def acquire_images(self) -> None:
         repo = mzbuild.Repository(ROOT)

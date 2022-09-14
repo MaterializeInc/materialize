@@ -61,6 +61,16 @@ class K8sResource:
     def create(self) -> None:
         assert False
 
+    def ensure(self) -> None:
+        try:
+            return self.create()
+        except ApiException as e:
+            # Presumably, if the service is already running, it's OK
+            if e.status != 409:
+                raise AssertionError(f"Error creating {self}: {e}") from e
+            pass
+
+
     def image(self, service: str) -> str:
         repo = mzbuild.Repository(ROOT)
         deps = repo.resolve_dependencies([repo.images[service]])

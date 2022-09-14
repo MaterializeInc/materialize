@@ -9,6 +9,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# mzcompose — runs Docker Compose with Materialize customizations.
+# pytest — runs pytest with Materialize customizations.
+set -euo pipefail
 
-exec "$(dirname "$0")"/../../bin/pytest "$@"
+REPO_ROOT="$(dirname "$0")"/../../
+
+CLUSTERS=$(kind get clusters 2>/dev/null)
+if [ "$CLUSTERS" == "" ]; then
+    echo "No kind clusters found; creating..."
+    kind create cluster --config="$REPO_ROOT/misc/kind/cluster.yaml"
+fi
+
+exec "$REPO_ROOT/bin/pytest" "$@"

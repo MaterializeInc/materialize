@@ -12,18 +12,32 @@ import time
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.wait import wait
 
+from materialize.cloudtest.k8s.minio import mc_command
+
 
 def test_usage_snapshots(mz: MaterializeApplication) -> None:
-    mz.environmentd.sql(f"CREATE CLUSTER sized1 REPLICAS (sized_replica1 (SIZE '2-1'))")
+    mz.environmentd.sql(f"CREATE CLUSTER c REPLICAS (cr1 (SIZE '2'))")
+    time.sleep(2)
+    audit_rows = mz.environmentd.sql_query(
+        "SELECT id, event_type, object_type, event_details, user FROM mz_audit_events"
+    )
+    # event_type, object_type, event_details, user
+    assert audit_rows[0][1:] == ["create", "cluster", {"name": "c"}, "materialize"]
+    assert audit_rows[1][1:] == [
+        "create",
+        "cluster-replica",
+        {"cluster_name": "c", "logical_size": "2", "replica_name": "cr1"},
+        "materialize",
+    ]
 
-    time.sleep(1)
-
-    mz.environmentd.sql(f"CREATE CLUSTER sized2 REPLICAS (sized_replica2 (SIZE '1-1'))")
-
-    time.sleep(1)
-
-    # TODO: confirm the `mz_audit_events` get created
-    # TODO: list blobs in Minio
-    # TODO: read blobs from Minio
-
+    blobs = mc_command(
+        mz,
+        " && ".join(
+            [
+                "mc config host add myminio http://minio-service.default:9000 minio minio123",
+                "mc ls myminio/usage",
+            ]
+        ),
+    )
+    assert blobs == "potato"
     raise NotImplementedError()
