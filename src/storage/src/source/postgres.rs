@@ -48,6 +48,12 @@ static PG_EPOCH: Lazy<SystemTime> = Lazy::new(|| UNIX_EPOCH + Duration::from_sec
 /// How often a status update message should be sent to the server
 static FEEDBACK_INTERVAL: Duration = Duration::from_secs(30);
 
+/// The amount of time we should wait after the last received message before worrying about WAL lag
+static WAL_LAG_GRACE_PERIOD: Duration = Duration::from_secs(5 * 60); // 5 minutes
+
+/// The maximum amount of WAL lag allowed before restarting the replication process
+static MAX_WAL_LAG: u64 = 100 * 1024 * 1024;
+
 trait ErrorExt {
     fn is_recoverable(&self) -> bool;
 }
@@ -636,6 +642,60 @@ impl PostgresTaskInfo {
 
         let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
 
+        // Before consuming the replication stream we will peek into the replication slot using a
+        // normal SQL query and the `pg_logical_slot_peek_binary_changes` administrative function.
+        //
+        // By doing so we can get a positive statement about existence or absence of relevant data
+        // from the LSN we wish to restart from until the last known LSN end of the database. If
+        // there are no message then it is safe to fast forward to the end WAL LSN and start the
+        // replication stream from there.
+        let cur_lsn = {
+            let rows = try_recoverable!(
+                client
+                    .simple_query("SELECT pg_current_wal_flush_lsn()")
+                    .await
+            );
+            match rows.first().expect("query returns exactly one row") {
+                SimpleQueryMessage::Row(row) => row
+                    .get(0)
+                    .expect("query returns one column")
+                    .parse::<PgLsn>()
+                    .expect("pg_current_wal_flush_lsn returned invalid lsn"),
+                _ => panic!(),
+            }
+        };
+
+        self.lsn = {
+            let query = format!(
+                "SELECT COUNT(*) FROM pg_logical_slot_peek_binary_changes(
+                     '{name}', '{lsn}', 1,
+                     'proto_version', '1',
+                     'publication_names', '{publication}'
+                )",
+                name = &self.slot,
+                lsn = cur_lsn,
+                publication = self.publication
+            );
+            let rows = try_recoverable!(client.simple_query(&query).await);
+
+            match rows.first().expect("query returns exactly one row") {
+                SimpleQueryMessage::Row(row) => {
+                    let changes: u64 = row
+                        .get(0)
+                        .expect("query returns one column")
+                        .parse()
+                        .expect("count returned invalid number");
+                    if changes == 0 {
+                        // If there are no changes until the end of the WAL it's safe to fast forward
+                        cur_lsn
+                    } else {
+                        self.lsn
+                    }
+                }
+                _ => panic!(),
+            }
+        };
+
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
               ("proto_version" '1', "publication_names" '{publication}')"#,
@@ -648,6 +708,7 @@ impl PostgresTaskInfo {
         let stream = LogicalReplicationStream::new(copy_stream).take_until(self.sender.closed());
         tokio::pin!(stream);
 
+        let mut last_data_message = Instant::now();
         let mut last_feedback = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
@@ -670,6 +731,7 @@ impl PostgresTaskInfo {
             match &item {
                 XLogData(xlog_data) => match xlog_data.data() {
                     Begin(_) => {
+                        last_data_message = Instant::now();
                         if !inserts.is_empty() || !deletes.is_empty() {
                             return Err(Fatal(anyhow!(
                                 "got BEGIN statement after uncommitted data"
@@ -677,6 +739,7 @@ impl PostgresTaskInfo {
                         }
                     }
                     Insert(insert) if self.source_tables.contains_key(&insert.rel_id()) => {
+                        last_data_message = Instant::now();
                         self.metrics.inserts.inc();
                         let rel_id = insert.rel_id();
                         let new_tuple = insert.tuple().tuple_data();
@@ -684,6 +747,7 @@ impl PostgresTaskInfo {
                         inserts.push(row);
                     }
                     Update(update) if self.source_tables.contains_key(&update.rel_id()) => {
+                        last_data_message = Instant::now();
                         self.metrics.updates.inc();
                         let rel_id = update.rel_id();
                         let err = || {
@@ -714,6 +778,7 @@ impl PostgresTaskInfo {
                         inserts.push(new_row);
                     }
                     Delete(delete) if self.source_tables.contains_key(&delete.rel_id()) => {
+                        last_data_message = Instant::now();
                         self.metrics.deletes.inc();
                         let rel_id = delete.rel_id();
                         let err = || {
@@ -728,6 +793,7 @@ impl PostgresTaskInfo {
                         deletes.push(row);
                     }
                     Commit(commit) => {
+                        last_data_message = Instant::now();
                         self.metrics.transactions.inc();
                         self.lsn = commit.end_lsn().into();
 
@@ -742,6 +808,7 @@ impl PostgresTaskInfo {
                         self.metrics.lsn.set(self.lsn.into());
                     }
                     Relation(relation) => {
+                        last_data_message = Instant::now();
                         let rel_id = relation.rel_id();
                         if let Some(source_table) = self.source_tables.get(&rel_id) {
                             // Start with the cheapest check first, this will catch the majority of alters
@@ -801,6 +868,7 @@ impl PostgresTaskInfo {
                         }
                     }
                     Insert(_) | Update(_) | Delete(_) | Origin(_) | Type(_) => {
+                        last_data_message = Instant::now();
                         self.metrics.ignored.inc();
                     }
                     Truncate(truncate) => {
@@ -822,6 +890,12 @@ impl PostgresTaskInfo {
                 },
                 PrimaryKeepAlive(keepalive) => {
                     needs_status_update = needs_status_update || keepalive.reply() == 1;
+
+                    if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD
+                        && keepalive.wal_end().saturating_sub(self.lsn.into()) > MAX_WAL_LAG
+                    {
+                        return Err(Recoverable(anyhow!("reached maximum WAL lag")));
+                    }
                 }
                 // The enum is marked non_exhaustive, better be conservative
                 _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
