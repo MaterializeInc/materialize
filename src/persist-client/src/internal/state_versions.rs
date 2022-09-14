@@ -28,7 +28,7 @@ use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::State;
-use crate::internal::state_diff::StateDiff;
+use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
 /// A durable, truncatable log of versions of [State].
@@ -502,6 +502,22 @@ impl StateVersions {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
+        let rollup_key_for_migration = all_live_diffs.iter().find_map(|x| {
+            let diff = self
+                .metrics
+                .codecs
+                .state_diff
+                .decode(|| StateDiff::<T>::decode(&self.cfg.build_version, &x.data));
+            diff.rollups
+                .iter()
+                .find(|x| x.key == seqno)
+                .map(|x| match &x.val {
+                    StateFieldValDiff::Insert(x) => x.clone(),
+                    StateFieldValDiff::Update(_, x) => x.clone(),
+                    StateFieldValDiff::Delete(x) => x.clone(),
+                })
+        });
+
         let state = match self
             .fetch_current_state::<K, V, T, D>(shard_id, all_live_diffs)
             .await
@@ -509,8 +525,47 @@ impl StateVersions {
             Ok(x) => x,
             Err(err) => return Some(Err(err)),
         };
-        let rollup_key = state.collections.rollups.get(&seqno)?;
-        self.fetch_rollup_at_key(shard_id, rollup_key).await
+        if let Some(rollup_key) = state.collections.rollups.get(&seqno) {
+            return self.fetch_rollup_at_key(shard_id, rollup_key).await;
+        }
+
+        // MIGRATION: We maintain an invariant that the _current state_ contains
+        // a rollup for the _earliest live diff_ in consensus (and that the
+        // referenced rollup exists). At one point, we fixed a bug that could
+        // lead to that invariant being violated.
+        //
+        // If the earliest live diff is X and we receive a gc req for X+Y to
+        // X+Y+Z (this can happen e.g. if some cmd ignores an earlier req for X
+        // to X+Y, or if they're processing concurrently and the X to X+Y req
+        // loses the race), then the buggy version of gc would delete any
+        // rollups strictly less than old_seqno_since (X+Y in this example). But
+        // our invariant is that the rollup exists for the earliest live diff,
+        // in this case X. So if the first call to gc was interrupted after this
+        // but before truncate (when all the blob deletes happen), later calls
+        // to gc would attempt to call `fetch_live_states` and end up infinitely
+        // in its loop.
+        //
+        // The fix was to base which rollups are deleteable on the earliest live
+        // diff, not old_seqno_since.
+        //
+        // Sadly, some envs in prod now violate this invariant. So, even with
+        // the fix, existing shards will never successfully run gc. We add a
+        // temporary migration to fix them in `fetch_rollup_at_seqno`. This
+        // method normally looks in the latest version of state for the
+        // specifically requested seqno. In the invariant violation case, some
+        // version of state in the range `[earliest, current]` has a rollup for
+        // earliest, but current doesn't. So, for the migration, if
+        // fetch_rollup_at_seqno doesn't find a rollup in current, then we fall
+        // back to sniffing one out of raw diffs. If this success, we increment
+        // a counter and log, so we can track how often this migration is
+        // bailing us out. After the next deploy, this should initially start at
+        // > 0 and then settle down to 0. After the next prod envs wipe, we can
+        // remove the migration.
+        let rollup_key =
+            rollup_key_for_migration.expect("someone should have a key for this rollup");
+        tracing::info!("only found rollup for {} {} via migration", shard_id, seqno);
+        self.metrics.state.rollup_at_seqno_migration.inc();
+        self.fetch_rollup_at_key(shard_id, &rollup_key).await
     }
 
     /// Fetches the rollup at the given key, if it exists.

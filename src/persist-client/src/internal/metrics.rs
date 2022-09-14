@@ -680,6 +680,7 @@ pub struct StateMetrics {
     pub(crate) apply_spine_slow_path: IntCounter,
     pub(crate) update_state_fast_path: IntCounter,
     pub(crate) update_state_slow_path: IntCounter,
+    pub(crate) rollup_at_seqno_migration: IntCounter,
 }
 
 impl StateMetrics {
@@ -700,6 +701,10 @@ impl StateMetrics {
             update_state_slow_path: registry.register(metric!(
                 name: "mz_persist_state_update_state_slow_path",
                 help: "count of state update applications that hit the slow path",
+            )),
+            rollup_at_seqno_migration: registry.register(metric!(
+                name: "mz_persist_state_rollup_at_seqno_migration",
+                help: "count of fetch_rollup_at_seqno calls that only worked because of the migration",
             )),
         }
     }
