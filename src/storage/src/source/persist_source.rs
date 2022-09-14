@@ -205,14 +205,13 @@ where
     let (inner, token) = crate::source::util::source(
         scope,
         format!("persist_source {}: part distribution", source_id),
-        None,
         move |info| {
             let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures::task::waker(waker_activator);
 
             let mut current_ts = timely::progress::Timestamp::minimum();
 
-            move |cap_set, output, _optional_input| {
+            move |cap_set, output| {
                 let mut context = Context::from_waker(&waker);
 
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
