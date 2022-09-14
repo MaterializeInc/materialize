@@ -38,7 +38,7 @@ use crate::source::metrics::SourceBaseMetrics;
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::{DecodeError, SourceErrorDetails};
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{MzOffset, SourceConnection};
+use crate::types::sources::MzOffset;
 
 /// This trait defines the interface between Materialize and external sources,
 /// and must be implemented for every new kind of source.
@@ -69,6 +69,7 @@ pub trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
     type Diff: timely::Data;
+    type Connection: SourceConnection;
 
     /// Create a new source reader.
     ///
@@ -81,7 +82,7 @@ pub trait SourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        connection: Self::Connection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
@@ -151,6 +152,10 @@ pub trait SourceReader {
             }
         }))
     }
+}
+
+pub trait SourceConnection: Clone {
+    fn name(&self) -> &'static str;
 }
 
 /// A `SourceToken` manages interest in a source.

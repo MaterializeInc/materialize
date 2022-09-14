@@ -1003,6 +1003,12 @@ pub struct KafkaSourceConnection {
     pub include_headers: Option<IncludedColumnPos>,
 }
 
+impl crate::source::types::SourceConnection for KafkaSourceConnection {
+    fn name(&self) -> &'static str {
+        "kafka"
+    }
+}
+
 impl Arbitrary for KafkaSourceConnection {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -1386,12 +1392,13 @@ impl SourceConnection {
 
     /// Returns the name of the external source connection.
     pub fn name(&self) -> &'static str {
+        use crate::source::types::SourceConnection as _;
         match self {
-            SourceConnection::Kafka(_) => "kafka",
-            SourceConnection::Kinesis(_) => "kinesis",
-            SourceConnection::S3(_) => "s3",
-            SourceConnection::Postgres(_) => "postgres",
-            SourceConnection::LoadGenerator(_) => "loadgen",
+            SourceConnection::Kafka(c) => c.name(),
+            SourceConnection::Kinesis(c) => c.name(),
+            SourceConnection::S3(c) => c.name(),
+            SourceConnection::Postgres(c) => c.name(),
+            SourceConnection::LoadGenerator(c) => c.name(),
         }
     }
 
@@ -1417,6 +1424,12 @@ pub struct KinesisSourceConnection {
     pub aws: AwsConfig,
 }
 
+impl crate::source::types::SourceConnection for KinesisSourceConnection {
+    fn name(&self) -> &'static str {
+        "kinesis"
+    }
+}
+
 impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
     fn into_proto(&self) -> ProtoKinesisSourceConnection {
         ProtoKinesisSourceConnection {
@@ -1440,6 +1453,12 @@ pub struct PostgresSourceConnection {
     pub connection: PostgresConnection,
     pub publication: String,
     pub details: PostgresSourceDetails,
+}
+
+impl crate::source::types::SourceConnection for PostgresSourceConnection {
+    fn name(&self) -> &'static str {
+        "postgres"
+    }
 }
 
 impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
@@ -1496,6 +1515,12 @@ pub struct LoadGeneratorSourceConnection {
     pub tick_micros: Option<u64>,
 }
 
+impl crate::source::types::SourceConnection for LoadGeneratorSourceConnection {
+    fn name(&self) -> &'static str {
+        "loadgen"
+    }
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
@@ -1548,6 +1573,12 @@ pub struct S3SourceConnection {
     pub pattern: Option<Glob>,
     pub aws: AwsConfig,
     pub compression: Compression,
+}
+
+impl crate::source::types::SourceConnection for S3SourceConnection {
+    fn name(&self) -> &'static str {
+        "s3"
+    }
 }
 
 fn any_glob() -> impl Strategy<Value = Glob> {

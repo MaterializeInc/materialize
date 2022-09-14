@@ -61,6 +61,7 @@ use crate::source::healthcheck::Healthchecker;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::ReclockFollower;
 use crate::source::reclock::ReclockOperator;
+use crate::source::types::SourceConnection;
 use crate::source::types::SourceOutput;
 use crate::source::types::{MaybeLength, SourceMessageType};
 use crate::source::types::{SourceMessage, SourceMetrics, SourceReader, SourceToken};
@@ -68,7 +69,7 @@ use crate::source::util::source;
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::SourceError;
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{MzOffset, SourceConnection};
+use crate::types::sources::MzOffset;
 
 // Interval after which the source operator will yield control.
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);
@@ -143,7 +144,7 @@ struct SourceUpperSummary {
 /// sources are used.
 pub fn create_raw_source<G, S: 'static, R>(
     config: RawSourceCreationConfig<G>,
-    source_connection: &SourceConnection,
+    source_connection: S::Connection,
     connection_context: ConnectionContext,
     calc: R,
 ) -> (
@@ -190,7 +191,7 @@ where
 /// stream produces NO data.
 fn source_reader_operator<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
-    source_connection: &SourceConnection,
+    source_connection: S::Connection,
     connection_context: ConnectionContext,
     resume_stream: timely::dataflow::Stream<G, ()>,
 ) -> (
@@ -238,7 +239,6 @@ where
 
         let sync_activator = scope.sync_activator_for(&info.address[..]);
         let base_metrics = base_metrics.clone();
-        let source_connection = source_connection.clone();
         let mut source_reader = Box::pin(async_stream::stream!({
             let upper_ts = resume_upper.as_option().copied().unwrap();
             let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
