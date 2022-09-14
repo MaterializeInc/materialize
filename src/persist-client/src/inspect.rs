@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
-use crate::internal::state::ProtoStateRollup;
+use crate::internal::paths::PartialRollupKey;
+use crate::internal::state::{ProtoStateDiff, ProtoStateRollup};
 use crate::internal::state_versions::StateVersions;
 use crate::{Metrics, PersistConfig, ShardId};
 use anyhow::anyhow;
@@ -29,19 +30,29 @@ use mz_persist_types::{Codec, Codec64};
 use prost::Message;
 use timely::progress::Timestamp;
 
-/// Fetches the current state of a given shard
-pub async fn fetch_current_state(
+/// Fetches the latest rollup of a given shard
+pub async fn fetch_latest_rollup(
     shard_id: ShardId,
     consensus_uri: &str,
+    blob_uri: &str,
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Metrics::new(&cfg, &MetricsRegistry::new());
     let consensus =
         ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus).await?;
     let consensus = consensus.clone().open().await?;
+    let blob = BlobConfig::try_from(&blob_uri).await?;
+    let blob = blob.clone().open().await?;
 
-    if let Some(data) = consensus.head(&shard_id.to_string()).await? {
-        let proto = ProtoStateRollup::decode(data.data).expect("invalid encoded state");
+    if let Some(diff_buf) = consensus.head(&shard_id.to_string()).await? {
+        let diff = ProtoStateDiff::decode(diff_buf.data).expect("invalid encoded diff");
+        let rollup_key = PartialRollupKey(diff.latest_rollup_key);
+        let rollup_buf = blob
+            .get(&rollup_key.complete(&shard_id))
+            .await
+            .unwrap()
+            .unwrap();
+        let proto = ProtoStateRollup::decode(rollup_buf.as_slice()).expect("invalid encoded state");
         return Ok(proto);
     }
 

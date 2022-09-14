@@ -75,6 +75,9 @@ pub struct StateArgs {
     ///
     #[clap(long, verbatim_doc_comment)]
     consensus_uri: String,
+
+    #[clap(long, verbatim_doc_comment)]
+    blob_uri: String,
 }
 
 #[derive(Debug, Clone, clap::Parser)]
@@ -112,9 +115,12 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
     match command.command {
         Command::State(args) => {
             let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
-            let state =
-                mz_persist_client::inspect::fetch_current_state(shard_id, &args.consensus_uri)
-                    .await?;
+            let state = mz_persist_client::inspect::fetch_latest_rollup(
+                shard_id,
+                &args.consensus_uri,
+                &args.blob_uri,
+            )
+            .await?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&state).expect("unserializable state")

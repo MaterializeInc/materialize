@@ -83,10 +83,10 @@ use crate::{Metrics, PersistConfig, ShardId};
 ///     for other live states to reference rollups that no longer exist.
 #[derive(Debug)]
 pub struct StateVersions {
-    cfg: PersistConfig,
+    pub(crate) cfg: PersistConfig,
     pub(crate) consensus: Arc<dyn Consensus + Send + Sync>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
-    metrics: Arc<Metrics>,
+    pub(crate) metrics: Arc<Metrics>,
 }
 
 impl StateVersions {
