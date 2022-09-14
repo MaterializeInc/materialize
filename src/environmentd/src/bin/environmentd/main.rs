@@ -589,6 +589,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         storage_stash_url: args.storage_stash_url,
         storaged_image: args.storaged_image.expect("clap enforced"),
         computed_image: args.computed_image.expect("clap enforced"),
+        now: now.clone(),
     };
 
     // When inside a cgroup with a cpu limit,

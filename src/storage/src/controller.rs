@@ -33,7 +33,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::StreamExt;
 use itertools::Itertools;
-use mz_persist_client::read::ReadHandle;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::PersistClient;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -53,7 +53,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{write::WriteHandle, PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
@@ -240,6 +240,8 @@ pub trait StorageController: Debug + Send {
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError>;
+
+    async fn set_shard_id(&mut self, id: GlobalId);
 
     /// Assigns a read policy to specific identifiers.
     ///
@@ -696,6 +698,7 @@ pub struct StorageControllerState<
     pub(super) stash: S,
     /// Write handle for persist shards.
     pub(super) persist_write_handles: persist_write_handles::PersistWorker<T>,
+    pub(super) shard_collection_global_id: Option<GlobalId>,
     /// Read handles for persist shards.
     ///
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
@@ -716,9 +719,10 @@ pub struct Controller<T: Timestamp + Lattice + Codec64> {
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
     persist: Arc<Mutex<PersistClientCache>>,
+    now: NowFn,
 }
 
-impl<T: Timestamp + Lattice + Codec64> Controller<T> {
+impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
     async fn open_persist_client(&mut self) -> PersistClient {
         self.persist
             .lock()
@@ -726,6 +730,130 @@ impl<T: Timestamp + Lattice + Codec64> Controller<T> {
             .open(self.persist_location.clone())
             .await
             .unwrap()
+    }
+
+    /// Tracks the mapping of `GlobalId` to data shards in the collection at
+    /// `self.state.shard_collection_global_id`.
+    async fn register_shards(
+        &mut self,
+        global_id: GlobalId,
+        shard_id: ShardId,
+    ) -> Result<(), StorageError> {
+        let id = match self.state.shard_collection_global_id {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        let persist_client = self.open_persist_client().await;
+
+        if let Some(collection) = self.state.collections.get(&id) {
+            let (mut write, mut read) = persist_client
+                .open::<SourceData, (), T, Diff>(collection.collection_metadata.data_shard)
+                .await
+                .expect("invalid persist usage");
+
+            // Write values as of now.
+            let now = (self.now)();
+            let as_of = Antichain::from_elem(T::from(now - 1));
+            let lower = T::from(now);
+            let upper = T::from(now + 1);
+
+            // Downgrade write capability to now.
+            let _ = write
+                .append(
+                    Vec::<((SourceData, ()), T, Diff)>::new(),
+                    Antichain::from_elem(T::minimum()),
+                    Antichain::from_elem(lower.clone()),
+                )
+                .await;
+
+            // Find all data at time less than now. If there is no data, we
+            // need to initialize this shard with all data.
+            // ???: What is the best way to do this?
+            let needs_init = read.snapshot_and_fetch(as_of).await.unwrap().is_empty();
+
+            let updates = if needs_init {
+                // Include all data shards in this update; this will include
+                // the shards passed into this function as arguments, so we can
+                // safely ignore them.
+                let mut updates = Vec::with_capacity(self.state.collections.len());
+                for (
+                    global_id,
+                    CollectionState {
+                        collection_metadata: CollectionMetadata { data_shard, .. },
+                        ..
+                    },
+                ) in self.state.collections.iter()
+                {
+                    updates.push((global_id.to_string(), data_shard.to_string()));
+                }
+                updates
+            } else {
+                vec![(global_id.to_string(), shard_id.to_string())]
+            };
+
+            // Pack updates into rows
+            let mut row_buf = Row::default();
+            let updates = updates
+                .iter()
+                .map(|(global_id, shard_id)| {
+                    let mut packer = row_buf.packer();
+                    packer.push(Datum::from(global_id.to_string().as_str()));
+                    packer.push(Datum::from(shard_id.to_string().as_str()));
+                    ((SourceData(Ok(row_buf.clone())), ()), lower.clone(), 1)
+                })
+                .collect::<Vec<_>>();
+
+            // Write data in a way that makes it immediately readable
+            write
+                .append(
+                    updates,
+                    Antichain::from_elem(lower.clone()),
+                    Antichain::from_elem(upper.clone()),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+
+            // TODO: make this work on reboot
+            if needs_init {
+                let now = self.now.clone();
+                let persist_location = self.persist_location.clone();
+                let persist = Arc::clone(&self.persist);
+                let source_id_data_shard = collection.collection_metadata.data_shard.clone();
+                let mut next_since = upper;
+
+                mz_ore::task::spawn(|| "ShardIdSourceTimestampProgress", async move {
+                    let mut interval =
+                        tokio::time::interval(tokio::time::Duration::from_millis(1_000));
+                    loop {
+                        interval.tick().await;
+                        let persist_client = persist
+                            .lock()
+                            .await
+                            .open(persist_location.clone())
+                            .await
+                            .unwrap();
+                        let (mut write, mut read) = persist_client
+                            .open::<SourceData, (), T, Diff>(source_id_data_shard)
+                            .await
+                            .expect("invalid persist usage");
+
+                        let upper = T::from(now());
+                        let _ = write
+                            .append(
+                                Vec::<((SourceData, ()), T, Diff)>::new(),
+                                Antichain::from_elem(next_since.clone()),
+                                Antichain::from_elem(upper.clone()),
+                            )
+                            .await;
+                        read.downgrade_since(&Antichain::from_elem(next_since.clone()))
+                            .await;
+                        next_since = upper;
+                    }
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -837,6 +965,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
             persist_write_handles: persist_write_handles::PersistWorker::new(tx),
             persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
+            shard_collection_global_id: None,
         }
     }
 }
@@ -844,7 +973,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis>,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -892,6 +1021,7 @@ where
                 return Err(StorageError::SourceIdReused(collections[pos].0));
             }
         }
+
         for (id, description) in collections.iter() {
             if let Ok(collection) = self.collection(*id) {
                 if &collection.description != description {
@@ -902,26 +1032,28 @@ where
 
         // Install collection state for each bound description.
         for (id, description) in collections {
+            let remap_shard = ShardId::new();
+            let data_shard = ShardId::new();
+
             let durable_metadata = METADATA_COLLECTION
                 .insert_without_overwrite(
                     &mut self.state.stash,
                     &id,
                     DurableCollectionMetadata {
-                        remap_shard: ShardId::new(),
-                        data_shard: ShardId::new(),
+                        remap_shard: remap_shard.clone(),
+                        data_shard: data_shard.clone(),
                     },
                 )
                 .await?;
 
             let status_shard = if let Some(status_collection_id) = description.status_collection_id
             {
-                Some(
-                    METADATA_COLLECTION
-                        .peek_key_one(&mut self.state.stash, &status_collection_id)
-                        .await?
-                        .ok_or(StorageError::IdentifierMissing(status_collection_id))?
-                        .data_shard,
-                )
+                let status_shard = METADATA_COLLECTION
+                    .peek_key_one(&mut self.state.stash, &status_collection_id)
+                    .await?
+                    .ok_or(StorageError::IdentifierMissing(status_collection_id))?
+                    .data_shard;
+                Some(status_shard)
             } else {
                 None
             };
@@ -996,6 +1128,8 @@ where
                     .await?;
                 client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
             }
+
+            self.register_shards(id, data_shard).await?;
         }
 
         Ok(())
@@ -1186,6 +1320,10 @@ where
             .unwrap()
     }
 
+    async fn set_shard_id(&mut self, id: GlobalId) {
+        self.state.shard_collection_global_id = Some(id);
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     async fn set_read_policy(
         &mut self,
@@ -1360,6 +1498,7 @@ where
         persist_clients: Arc<Mutex<PersistClientCache>>,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         storaged_image: String,
+        now: NowFn,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -1376,6 +1515,7 @@ where
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
+            now,
         }
     }
 }
@@ -1529,6 +1669,52 @@ impl<T: Timestamp> ExportState<T> {
     }
     fn from(&self) -> GlobalId {
         self.description.sink.from
+    }
+}
+
+pub trait CoordTimestamp:
+    timely::progress::Timestamp
+    + timely::order::TotalOrder
+    + differential_dataflow::lattice::Lattice
+    + std::fmt::Debug
+{
+    /// Advance a timestamp by the least amount possible such that
+    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
+    fn step_forward(&self) -> Self;
+
+    /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
+    fn step_forward_by(&self, amount: &Self) -> Self;
+
+    /// Retreat a timestamp by the least amount possible such that
+    /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
+    /// which must only happen if the timestamp is `Timestamp::minimum()`.
+    fn step_back(&self) -> Option<Self>;
+
+    /// Return the maximum value for this timestamp.
+    fn maximum() -> Self;
+}
+
+impl CoordTimestamp for mz_repr::Timestamp {
+    fn step_forward(&self) -> Self {
+        match self.checked_add(1) {
+            Some(ts) => ts,
+            None => panic!("could not step forward"),
+        }
+    }
+
+    fn step_forward_by(&self, amount: &Self) -> Self {
+        match self.checked_add(*amount) {
+            Some(ts) => ts,
+            None => panic!("could not step {self} forward by {amount}"),
+        }
+    }
+
+    fn step_back(&self) -> Option<Self> {
+        self.checked_sub(1)
+    }
+
+    fn maximum() -> Self {
+        Self::MAX
     }
 }
 

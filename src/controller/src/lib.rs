@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use mz_ore::now::NowFn;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -70,6 +71,7 @@ pub struct ControllerConfig {
     pub storaged_image: String,
     /// The computed image to use when starting new compute processes.
     pub computed_image: String,
+    pub now: NowFn,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -208,6 +210,7 @@ where
             config.persist_clients,
             config.orchestrator.namespace("storage"),
             config.storaged_image,
+            config.now,
         )
         .await;
 
