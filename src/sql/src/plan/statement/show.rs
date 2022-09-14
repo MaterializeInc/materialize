@@ -278,8 +278,9 @@ pub fn show_schemas<'a>(
         }
     };
     let query = format!(
-        "SELECT name, CASE WHEN database_id IS NULL THEN 'system' ELSE 'user' END AS type
-            FROM mz_catalog.mz_schemas WHERE database_id IS NULL OR database_id = {database_id}",
+        "SELECT name
+        FROM mz_catalog.mz_schemas
+        WHERE database_id IS NULL OR database_id = {database_id}",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -317,7 +318,7 @@ fn show_connections<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
+        "SELECT t.name, t.type
         FROM mz_catalog.mz_connections t
         JOIN mz_catalog.mz_schemas s on t.schema_id = s.id
         WHERE schema_id = {schema_spec}",
@@ -332,7 +333,7 @@ fn show_tables<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
+        "SELECT t.name
         FROM mz_catalog.mz_tables t
         JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
         WHERE schema_id = {schema_spec}",
@@ -347,12 +348,9 @@ fn show_sources<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT
-                 name,
-                 mz_internal.mz_classify_object_id(id) AS type,
-                 type
-             FROM mz_catalog.mz_sources
-             WHERE schema_id = {schema_spec}"
+        "SELECT name, type
+        FROM mz_catalog.mz_sources
+        WHERE schema_id = {schema_spec}"
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -364,11 +362,9 @@ fn show_views<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT
-                name,
-                mz_internal.mz_classify_object_id(id) AS type
-             FROM mz_catalog.mz_views
-             WHERE schema_id = {schema_spec}"
+        "SELECT name
+        FROM mz_catalog.mz_views
+        WHERE schema_id = {schema_spec}"
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -388,14 +384,11 @@ fn show_materialized_views<'a>(
     }
 
     let query = format!(
-        "SELECT
-                clusters.name AS cluster,
-                mviews.name,
-                mz_internal.mz_classify_object_id(mviews.id) AS type
-             FROM mz_materialized_views AS mviews
-             JOIN mz_clusters AS clusters
-                ON clusters.id = mviews.cluster_id
-             WHERE {where_clause}"
+        "SELECT mviews.name, clusters.name AS cluster
+         FROM mz_materialized_views AS mviews
+         JOIN mz_clusters AS clusters
+            ON clusters.id = mviews.cluster_id
+         WHERE {where_clause}"
     );
 
     ShowSelect::new(scx, query, filter, None, None)
@@ -417,13 +410,9 @@ fn show_sinks<'a>(
     let query_filters = itertools::join(query_filters.iter(), " AND ");
 
     let query = format!(
-        "SELECT
-            sinks.name,
-            mz_internal.mz_classify_object_id(sinks.id) AS type
-        FROM
-            mz_catalog.mz_sinks AS sinks
-        WHERE {}",
-        query_filters
+        "SELECT sinks.name
+        FROM mz_catalog.mz_sinks AS sinks
+        WHERE {query_filters}",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -435,7 +424,7 @@ fn show_types<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
+        "SELECT t.name
         FROM mz_catalog.mz_types t
         JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
         WHERE t.schema_id = {schema_spec}",
@@ -450,7 +439,7 @@ fn show_all_objects<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT o.name, mz_internal.mz_classify_object_id(o.id) AS type
+        "SELECT o.name, o.type
         FROM mz_catalog.mz_objects o
         JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
         WHERE o.schema_id = {schema_spec}",
@@ -575,8 +564,7 @@ pub fn show_secrets<'a>(
     let query = format!(
         "SELECT sec.name FROM mz_catalog.mz_secrets sec
         JOIN mz_catalog.mz_schemas s ON sec.schema_id = s.id
-        WHERE schema_id = {}",
-        schema_spec,
+        WHERE schema_id = {schema_spec}",
     );
 
     ShowSelect::new(scx, query, filter, None, None)

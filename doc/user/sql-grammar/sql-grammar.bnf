@@ -283,6 +283,8 @@ select_stmt ::=
   ( 'LIMIT' integer )?
   ( 'OFFSET' integer )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
+set_transaction_isolation ::=
+  'SET' 'TRANSACTION_ISOLATION' ( 'TO' | '=' ) isolation_level
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)
 show_connections ::=
@@ -305,9 +307,9 @@ show_create_view ::=
   'SHOW' 'CREATE' 'VIEW' view_name
 show_databases ::=
     'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)?
-show_index ::=
-    'SHOW' ('INDEX' | 'INDEXES' | 'KEYS')
-    (('FROM' | 'IN') on_name)?
+show_indexes ::=
+    'SHOW' 'INDEXES'
+    (('FROM' | 'ON') on_name)?
     ('IN' 'CLUSTER' cluster_name)?
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=

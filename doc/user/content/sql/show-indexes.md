@@ -1,19 +1,16 @@
 ---
-title: "SHOW INDEX"
-description: "SHOW INDEX provides details about indexes built on a source, view, or materialized view"
+title: "SHOW INDEXES"
+description: "SHOW INDEXES provides details about indexes built on a source, view, or materialized view"
 menu:
   main:
     parent: commands
-aliases:
-    - /sql/show-indexes
-    - /sql/show-keys
 ---
 
-`SHOW INDEX` provides details about indexes built on a source, view, or materialized view.
+`SHOW INDEXES` provides details about indexes built on a source, view, or materialized view.
 
 ## Syntax
 
-{{< diagram "show-index.svg" >}}
+{{< diagram "show-indexes.svg" >}}
 
 Field | Use
 ------|-----
@@ -48,10 +45,10 @@ Field | Meaning
 SHOW VIEWS;
 ```
 ```nofmt
-          name           | type
--------------------------+------
- my_nonmaterialized_view | user
- my_materialized_view    | user
+          name
+-------------------------
+ my_nonmaterialized_view
+ my_materialized_view
 ```
 
 ```sql

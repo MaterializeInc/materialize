@@ -123,14 +123,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx,
             } => {
                 let now = self.now_datetime();
-                let session = match implicit {
+                let (session, result) = match implicit {
                     None => session.start_transaction(now, None, None),
-                    Some(stmts) => session.start_transaction_implicit(now, stmts),
+                    Some(stmts) => (session.start_transaction_implicit(now, stmts), Ok(())),
                 };
-                let _ = tx.send(Response {
-                    result: Ok(()),
-                    session,
-                });
+                let _ = tx.send(Response { result, session });
             }
 
             Command::Commit {

@@ -14,7 +14,7 @@ autobenches = false
 [dependencies]
 anyhow = "1.0.64"
 byteorder = { version = "1.4.3", optional = true }
-chrono = { version = "0.4.21", default-features = false, features = ["std"] }
+chrono = { version = "0.4.22", default-features = false, features = ["std"] }
 crc32fast = { version = "1.3.2", optional = true }
 digest = "0.10.3"
 enum-kinds = "0.5.1"
@@ -30,7 +30,7 @@ tracing = "0.1.36"
 uuid = "1.1.2"
 
 [dev-dependencies]
-once_cell = "1.13.1"
+once_cell = "1.14.0"
 md-5 = "0.10.4"
 
 [features]

@@ -15,35 +15,37 @@
 
 > CREATE TYPE custom AS LIST (element_type=bool)
 
+$ set-regex match=^s\d*$ replacement=<GID>
 # Without qualifiers, should default to builtin bool.
-> SELECT mz_internal.mz_classify_object_id(element_id)
+> SELECT element_id
   FROM mz_list_types JOIN mz_types ON mz_list_types.type_id = mz_types.id
   WHERE name = 'custom'
-system
+<GID>
 
 > CREATE TYPE another_custom AS LIST (element_type=public.bool)
 
+$ set-regex match=^u\d*$ replacement=<GID>
 # Qualified name should point to user-defined bool.
-> SELECT mz_internal.mz_classify_object_id(element_id)
+> SELECT element_id
   FROM mz_list_types JOIN mz_types ON mz_list_types.type_id = mz_types.id
   WHERE name = 'another_custom'
-user
+<GID>
 
 > CREATE SCHEMA test_schema
 
 > CREATE TYPE test_schema.bool AS LIST (element_type=float4)
 
 > SHOW TYPES
-name             type
-----------------------
-bool             user
-custom           user
-another_custom   user
+name
+--------------
+bool
+custom
+another_custom
 
 > SHOW TYPES FROM test_schema
-name             type
-----------------------
-bool             user
+name
+----
+bool
 
 ! DROP TYPE bool
 contains:cannot drop item pg_catalog.bool because it is required by the database system

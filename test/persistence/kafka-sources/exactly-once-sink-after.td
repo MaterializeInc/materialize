@@ -31,11 +31,11 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 10
 
 # We expect just the 6 new messages, having consumed the older ones in xactly-once-sink-before.td
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 $ kafka-verify format=avro sink=materialize.public.exactly_once_sink sort-messages=true
-{"before":null,"after":{"row":{"f1":20,"f2":20}},"transaction":{"id":"<TIMESTAMP>"}}
-{"before":null,"after":{"row":{"f1":21,"f2":21}},"transaction":{"id":"<TIMESTAMP>"}}
-{"before":null,"after":{"row":{"f1":30,"f2":30}},"transaction":{"id":"<TIMESTAMP>"}}
-{"before":null,"after":{"row":{"f1":31,"f2":31}},"transaction":{"id":"<TIMESTAMP>"}}
-{"before":null,"after":{"row":{"f1":40,"f2":40}},"transaction":{"id":"<TIMESTAMP>"}}
-{"before":null,"after":{"row":{"f1":41,"f2":41}},"transaction":{"id":"<TIMESTAMP>"}}
+{"before":null,"after":{"row":{"f1":20,"f2":20}}}
+{"before":null,"after":{"row":{"f1":21,"f2":21}}}
+{"before":null,"after":{"row":{"f1":30,"f2":30}}}
+{"before":null,"after":{"row":{"f1":31,"f2":31}}}
+{"before":null,"after":{"row":{"f1":40,"f2":40}}}
+{"before":null,"after":{"row":{"f1":41,"f2":41}}}

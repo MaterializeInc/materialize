@@ -15,14 +15,15 @@ use std::collections::HashMap;
 use chrono::DurationRound;
 use tracing::{event, warn, Level};
 
-use mz_controller::{ComputeInstanceEvent, ControllerResponse};
+use mz_compute_client::controller::ComputeInstanceEvent;
+use mz_controller::ControllerResponse;
 use mz_ore::task;
 use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_stash::Append;
 
-use crate::catalog::{self};
+use crate::catalog;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
 

@@ -46,13 +46,13 @@ contains:column "a" specified more than once
 > SELECT * FROM t;
 
 > SHOW TABLES;
-name    type
-------------
-t       user
+name
+----
+t
 
 > SHOW SOURCES;
-name    type    type
---------------------
+name    type
+------------
 
 > SHOW INDEXES FROM t;
 
@@ -111,6 +111,11 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 # joining a table with a logging source selects some reasonable timestamp,
 # rather than e.g. blocking forever, or producing an error about being
 # unable to select a timestamp.
+
+# log sources require a single replica
+$ skip-if
+SELECT ${arg.replicas} > 1
+
 > SELECT * FROM t CROSS JOIN mz_dataflow_operators LIMIT 0
 
 > DROP SOURCE data
@@ -213,19 +218,19 @@ contains:unknown catalog item 't'
 contains:unknown catalog item 't'
 
 > SHOW TABLES;
-name    type
-------------
-v       user
+name
+----
+v
 
 > SHOW TABLES LIKE 'foo'
 > SHOW TABLES LIKE 'v%'
-v   user
+v
 > SHOW TABLES WHERE name = 'v'
-v   user
+v
 
 > SHOW SOURCES;
-name    type    type
---------------------
+name    type
+------------
 
 > CREATE TABLE t (a int, b text NOT NULL)
 

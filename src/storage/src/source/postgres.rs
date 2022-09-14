@@ -38,7 +38,7 @@ use crate::source::{
 };
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::SourceErrorDetails;
-use crate::types::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
+use crate::types::sources::{encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection};
 
 mod metrics;
 
@@ -170,6 +170,7 @@ impl SourceReader for PostgresSourceReader {
     type Value = Row;
     // Postgres can produce deletes that cause retractions
     type Diff = Diff;
+    type Connection = PostgresSourceConnection;
 
     fn new(
         _source_name: String,
@@ -177,19 +178,12 @@ impl SourceReader for PostgresSourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        connection: Self::Connection,
         start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
         connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let connection = match connection {
-            SourceConnection::Postgres(pg) => pg,
-            _ => {
-                panic!("Postgres is the only legitimate SourceConnection for PostgresSourceReader")
-            }
-        };
-
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 

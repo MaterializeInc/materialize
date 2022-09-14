@@ -15,75 +15,75 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 > SHOW TYPES
 
 > SHOW TYPES FROM pg_catalog
-name             type
-----------------------
-_bool                       system
-_bpchar                     system
-_bytea                      system
-_char                       system
-_date                       system
-_float4                     system
-_float8                     system
-_int2                       system
-_int2vector                 system
-_int4                       system
-_int8                       system
-_uint2                      system
-_uint4                      system
-_uint8                      system
-_interval                   system
-_jsonb                      system
-_numeric                    system
-_oid                        system
-_record                     system
-_regclass                   system
-_regproc                    system
-_regtype                    system
-_text                       system
-_time                       system
-_timestamp                  system
-_timestamptz                system
-_uuid                       system
-_varchar                    system
-any                         system
-anyarray                    system
-anycompatible               system
-anycompatiblearray          system
-anycompatiblelist           system
-anycompatiblemap            system
-anycompatiblenonarray       system
-anyelement                  system
-anynonarray                 system
-bool                        system
-bpchar                      system
-bytea                       system
-char                        system
-date                        system
-float4                      system
-float8                      system
-int2                        system
-int2vector                  system
-int4                        system
-int8                        system
-uint2                       system
-uint4                       system
-uint8                       system
-interval                    system
-jsonb                       system
-list                        system
-map                         system
-numeric                     system
-oid                         system
-regclass                    system
-regproc                     system
-regtype                     system
-record                      system
-text                        system
-time                        system
-timestamp                   system
-timestamptz                 system
-uuid                        system
-varchar                     system
+name
+---------------------
+_bool
+_bpchar
+_bytea
+_char
+_date
+_float4
+_float8
+_int2
+_int2vector
+_int4
+_int8
+_uint2
+_uint4
+_uint8
+_interval
+_jsonb
+_numeric
+_oid
+_record
+_regclass
+_regproc
+_regtype
+_text
+_time
+_timestamp
+_timestamptz
+_uuid
+_varchar
+any
+anyarray
+anycompatible
+anycompatiblearray
+anycompatiblelist
+anycompatiblemap
+anycompatiblenonarray
+anyelement
+anynonarray
+bool
+bpchar
+bytea
+char
+date
+float4
+float8
+int2
+int2vector
+int4
+int8
+uint2
+uint4
+uint8
+interval
+jsonb
+list
+map
+numeric
+oid
+regclass
+regproc
+regtype
+record
+text
+time
+timestamp
+timestamptz
+uuid
+varchar
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_tables = 10000
@@ -157,13 +157,13 @@ ALTER SYSTEM SET max_tables = 10000
 > CREATE TYPE int_record_record_c AS (j1 int, j2 int_record_c);
 
 > SHOW TYPES
-name                type
-------------------------
-int_list_c          user
-int_map_c           user
-int_list_list_c     user
-int_record_c        user
-int_record_record_c user
+name
+-------------------
+int_list_c
+int_map_c
+int_list_list_c
+int_record_c
+int_record_record_c
 
 # Allow creating tables using custom types
 > CREATE TABLE custom_types (a int_list_c, b int_map_c);
@@ -188,11 +188,11 @@ int_record_record_c user
 > CREATE TYPE other.other_record_c AS (a int, b text);
 
 > SHOW TYPES FROM other;
-name                type
--------------------------
-other_int_list_c    user
-other_int_map_c     user
-other_record_c      user
+name
+----------------
+other_int_list_c
+other_int_map_c
+other_record_c
 
 > CREATE TABLE custom_types_4 (a other.other_int_list_c, b other.other_int_map_c);
 

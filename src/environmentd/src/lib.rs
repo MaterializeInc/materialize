@@ -18,6 +18,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context};
 use futures::StreamExt;
@@ -105,6 +106,8 @@ pub struct Config {
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
     pub default_storage_host_size: Option<String>,
+    /// The interval at which to collect storage usage information.
+    pub storage_usage_collection_interval: Duration,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -270,6 +273,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
         storage_usage_client,
+        storage_usage_collection_interval: config.storage_usage_collection_interval,
     })
     .await?;
 

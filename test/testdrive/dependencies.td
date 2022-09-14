@@ -110,20 +110,20 @@ contains:unknown catalog item 'test4'
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE SINK s1 FROM s
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'v')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 ! CREATE SINK s1 FROM s
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'v')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:catalog item 's1' already exists
 
 > CREATE SINK IF NOT EXISTS s1 FROM s
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'v2')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK s2 FROM s
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'v3')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v3-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # Test that sinks cannot be depended upon.

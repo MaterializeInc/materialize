@@ -203,14 +203,18 @@ where
             states.len()
         );
 
+        let earliest_live_seqno = match states.peek_seqno() {
+            Some(x) => x,
+            None => panic!(
+                "initialized shard {} should have at least one live state",
+                req.shard_id
+            ),
+        };
         // Fast-path: Someone already GC'd past `req.new_seqno_since`, don't
         // bother running any of the below logic.
         //
         // Also a fix for #14580.
-        if states
-            .peek_seqno()
-            .map_or(true, |x| x > req.new_seqno_since)
-        {
+        if earliest_live_seqno > req.new_seqno_since {
             return;
         }
 
@@ -238,14 +242,11 @@ where
                 // We only need to detect deletable rollups in the last iter
                 // through the live_diffs loop because they accumulate in state.
                 for (seqno, key) in state.collections.rollups.iter() {
-                    // SUBTLE: This is intentionally comparing vs
-                    // old_seqno_since, not new_seqno_since. We could collect
-                    // all rollups less than new_seqno_since, and then remove
-                    // them from state _after the truncate_, but the state
-                    // change to add the new rollups has to be before the
-                    // truncate and we don't want to create 2 state changes per
-                    // call into gc.
-                    if seqno < &req.old_seqno_since {
+                    // SUBTLE: We only guarantee that a rollup exists for the
+                    // first live state. Anything before that is not allowed to
+                    // be used and so is free to be deleted and removed from
+                    // state.
+                    if seqno < &earliest_live_seqno {
                         deleteable_rollup_blobs.push((*seqno, key.clone()));
                     } else {
                         // We iterate in order, may as well short circuit the
@@ -260,7 +261,14 @@ where
                 break;
             }
         }
-        let state = states.into_inner();
+
+        // Delete the rollup blobs before removing them from state.
+        for (_, key) in deleteable_rollup_blobs.iter() {
+            machine
+                .state_versions
+                .delete_rollup(&req.shard_id, key)
+                .await;
+        }
 
         // As described in the big rustdoc comment on [StateVersions], we
         // maintain the invariant that there is always a rollup corresponding to
@@ -271,6 +279,7 @@ where
         // NB: We write rollups periodically (via maintenance) to cover the case
         // when GC is being held up by a long seqno hold (such as the 15m read
         // lease timeouts whenever environmentd restarts).
+        let state = states.into_inner();
         assert_eq!(state.seqno, req.new_seqno_since);
         let rollup_seqno = state.seqno;
         let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
@@ -308,12 +317,6 @@ where
             })
             .instrument(debug_span!("batch::delete"))
             .await;
-        }
-        for (_, key) in deleteable_rollup_blobs {
-            machine
-                .state_versions
-                .delete_rollup(&req.shard_id, &key)
-                .await;
         }
 
         // Now that we've deleted the eligible blobs, "commit" this info by

@@ -254,12 +254,12 @@ a    b
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 2, "b": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 4, "b": 5}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 2, "b": 3}}}
+{"before": null, "after": {"row": {"a": 4, "b": 5}}}
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 8, "b": 9}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 8, "b": 9}}}
 
 #
 # Test reading from the source when tx and data don't match

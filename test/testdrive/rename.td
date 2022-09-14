@@ -63,11 +63,16 @@ cluster on_name  key_name             seq_in_index  column_name  expression  nul
     "materialize"."public"."mz_data"
     ';
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_data%';
+> CREATE VIEW public_objects AS
+    SELECT mz_objects.* FROM mz_objects
+    JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
+    WHERE mz_schemas.name = 'public';
+
+> SELECT name FROM public_objects WHERE name LIKE 'mz_data%';
 name
 -----
-materialize.public.mz_data
-materialize.public.mz_data_primary_idx
+mz_data
+mz_data_primary_idx
 
 # Test that data can be selected from the source before renaming.
 > SELECT * FROM mz_data
@@ -77,15 +82,15 @@ a  b
 
 > ALTER SOURCE mz_data RENAME TO renamed_mz_data;
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_data%';
+> SELECT name FROM public_objects WHERE name LIKE 'mz_data%';
 name
 -----
-materialize.public.mz_data_primary_idx
+mz_data_primary_idx
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_mz_data%';
+> SELECT name FROM public_objects WHERE name LIKE 'renamed_mz_data%';
 name
 -----
-materialize.public.renamed_mz_data
+renamed_mz_data
 
 # Test that data can be selected from the source after renaming.
 > SELECT * FROM renamed_mz_data
@@ -104,76 +109,79 @@ a  b
 ------
 1  dog
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view%';
+> SELECT name FROM public_objects WHERE name LIKE 'mz_view%';
 name
 -----
-materialize.public.mz_view
-materialize.public.mz_view_primary_idx
+mz_view
+mz_view_primary_idx
 
 > ALTER VIEW mz_view RENAME TO renamed_mz_view;
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view%';
+> SELECT name FROM public_objects WHERE name LIKE 'mz_view%';
 name
 -----
-materialize.public.mz_view_primary_idx
+mz_view_primary_idx
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_mz_view%';
+> SELECT name FROM public_objects WHERE name LIKE 'renamed_mz_view%';
 name
 -----
-materialize.public.renamed_mz_view
+renamed_mz_view
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view_primary_idx%';
+> SELECT name FROM public_objects WHERE name LIKE 'mz_view_primary_idx%';
 name
 -----
-materialize.public.mz_view_primary_idx
+mz_view_primary_idx
 
 > ALTER INDEX mz_view_primary_idx RENAME TO renamed_index;
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.mz_view_primary_idx%';
+> SELECT name FROM public_objects WHERE name LIKE 'mz_view_primary_idx%';
 name
 -----
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_index%';
+> SELECT name FROM public_objects WHERE name LIKE 'renamed_index%';
 name
 -----
-materialize.public.renamed_index
+renamed_index
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.sink1%';
+> SELECT name FROM public_objects WHERE name LIKE 'sink1%';
 name
 -----
-materialize.public.sink1
+sink1
 
 > ALTER SINK sink1 RENAME TO renamed_sink
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.sink1%';
+> SELECT name FROM public_objects WHERE name LIKE 'sink1%';
 name
 -----
 
-> SELECT name FROM mz_catalog_names WHERE name LIKE '%materialize.public.renamed_sink%';
+> SELECT name FROM public_objects WHERE name LIKE 'renamed_sink%';
 name
 -----
-materialize.public.renamed_sink
+renamed_sink
+
+# Clean up temp view
+> DROP VIEW public_objects;
 
 # Source was successfully renamed
 > SHOW SOURCES;
-name            type    type
------------------------------
-renamed_mz_data user    kafka
+name               type
+------------------------
+renamed_mz_data    kafka
 
 # Sink was successfully renamed
 > SHOW SINKS
-name            type
---------------------
-renamed_sink    user
+name
+------------
+renamed_sink
 
 # View was successfully renamed
 > SHOW VIEWS
-name                type
-------------------------
-byzantine_view      user
-dependent_view      user
-oppositional_view   user
-renamed_mz_view     user
+name
+-----------------
+byzantine_view
+dependent_view
+oppositional_view
+renamed_mz_view
 
 # Item's own `CREATE VIEW` statement updated
 > SHOW CREATE VIEW renamed_mz_view
@@ -773,16 +781,16 @@ materialize.public.count "CREATE VIEW \"materialize\".\"public\".\"count\" AS SE
 > CREATE TABLE j (b int)
 
 > SHOW TABLES
-name    type
-------------
-j       user
+name
+----
+j
 
 > ALTER TABLE j RENAME TO renamed_j
 
 > SHOW TABLES
-name        type
-----------------
-renamed_j   user
+name
+---------
+renamed_j
 
 > SELECT name FROM mz_tables WHERE id like 'u%';
 name

@@ -11,8 +11,9 @@ use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::{ProcessId, ReplicaId};
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation};
+use mz_compute_client::controller::{
+    ComputeInstanceId, ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation,
+};
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;

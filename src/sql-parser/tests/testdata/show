@@ -187,7 +187,7 @@ SHOW INDEXES FROM foo
 Show(ShowIndexes(ShowIndexesStatement { table_name: Some(Name(UnresolvedObjectName([Ident("foo")]))), in_cluster: None, filter: None }))
 
 parse-statement
-SHOW INDEXES IN foo
+SHOW INDEXES ON foo
 ----
 SHOW INDEXES FROM foo
 =>

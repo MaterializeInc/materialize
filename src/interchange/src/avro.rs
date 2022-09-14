@@ -152,7 +152,7 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
-            let schema_generator = AvroSchemaGenerator::new(None, None, None, desc, false, false);
+            let schema_generator = AvroSchemaGenerator::new(None, None, None, desc, false);
             let avro_value =
                 encode_datums_as_avro(std::iter::once(datum), schema_generator.value_columns());
             assert_eq!(

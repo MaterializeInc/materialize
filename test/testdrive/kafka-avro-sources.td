@@ -116,8 +116,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 contains:unexpected parameters for CREATE SOURCE: badoption
 
 > SHOW SOURCES
-name    type    type
---------------------
+name    type
+------------
 
 
 # Create a source using an inline schema.
@@ -446,7 +446,7 @@ a b
 -1 7
 
 ! CREATE SOURCE recursive
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'ignored')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ignored-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}'
 contains:validating avro schema: Recursive types are not supported: .a
 
