@@ -9,25 +9,24 @@
 
 # Insert some len=1 batches followed by a larger batch to squish them up and
 # force a compaction. In the middle, advance the since so our merge req has a non-zero since.
-insert
-0 1 0 1 k0
-1 2 0 1 k1
-2 3 0 1 k2
-3 4 0 1 k3
+push-batch
+[0][1][0] 1 k0
+[1][2][0] 1 k1
+[2][3][0] 1 k2
+[3][4][0] 1 k3
 ----
 ok
 
-downgrade-since
-4
+downgrade-since since=4
 ----
 ok
 
-insert
-4 5 4 100 k4
+push-batch
+[4][5][4] 100 k4
 ----
 ok
 
-batches
+spine-batches
 ----
 [0][4][4] 4/4 k0 k1 k2 k3
 [4][5][4] 100 k4
@@ -40,7 +39,7 @@ take-merge-reqs
 
 # We cannot use a compaction response with a since in advance of the spine batch
 apply-merge-res
-0 4 5 0 nope
+[0][4][5] 0 nope
 ----
 no-op
 
@@ -48,11 +47,11 @@ no-op
 # compaction response's since (we've simply lost more fidelity than we're
 # allowed to).
 apply-merge-res
-0 4 3 2 k0-4
+[0][4][3] 2 k0-4
 ----
 applied
 
-batches
+spine-batches
 ----
 [0][4][3] 2 k0-4
 [4][5][4] 100 k4

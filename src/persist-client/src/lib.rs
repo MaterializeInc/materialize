@@ -71,6 +71,9 @@ pub(crate) mod internal {
     pub mod state_diff;
     pub mod state_versions;
     pub mod trace;
+
+    #[cfg(test)]
+    pub mod datadriven;
 }
 
 // TODO: Remove this in favor of making it possible for all PersistClients to be
