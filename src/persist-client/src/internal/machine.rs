@@ -784,10 +784,10 @@ mod tests {
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::fetch::fetch_batch_part;
-    use crate::internal::compact::{CompactReq, Compactor};
+    use crate::internal::compact::CompactReq;
     use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
-    use crate::{GarbageCollector, PersistConfig, ShardId};
+    use crate::{Compactor, GarbageCollector, PersistConfig, ShardId};
 
     use super::*;
 
@@ -882,6 +882,8 @@ mod tests {
                             let upper = get_u64(&tc.args, "upper").expect("missing upper");
                             let target_size = get_arg(&tc.args, "target_size")
                                 .map(|x| x.parse::<usize>().expect("invalid target_size"));
+                            let parts_size_override = get_arg(&tc.args, "parts_size_override")
+                                .map(|x| x.parse::<usize>().expect("invalid parts_size_override"));
 
                             let updates = tc
                                 .input
@@ -922,7 +924,17 @@ mod tests {
                                 .await
                                 .expect("invalid batch")
                                 .into_hollow_batch();
-                            state.batches.insert(output.to_owned(), batch.clone());
+
+                            if let Some(size) = parts_size_override {
+                                let mut batch = batch.clone();
+                                for part in batch.parts.iter_mut() {
+                                    part.encoded_size_bytes = size;
+                                }
+                                state.batches.insert(output.to_owned(), batch);
+                            } else {
+                                state.batches.insert(output.to_owned(), batch.clone());
+                            }
+
                             format!("parts={} len={}\n", batch.parts.len(), batch.len)
                         }
                         "fetch-batch" => {
@@ -957,7 +969,19 @@ mod tests {
                                     write!(s, "{k} {t} {d}\n");
                                 }
                             }
-                            if s.is_empty() {
+                            if !s.is_empty() {
+                                for (idx, run) in batch.runs().enumerate() {
+                                    write!(s, "<run {idx}>\n");
+                                    for part in run {
+                                        let part_idx = batch
+                                            .parts
+                                            .iter()
+                                            .position(|p| p == part)
+                                            .expect("part should exist");
+                                        write!(s, "part {part_idx}\n");
+                                    }
+                                }
+                            } else {
                                 s.push_str("<empty>\n");
                             }
                             s
@@ -984,6 +1008,15 @@ mod tests {
                                 Err(err) => format!("error: {}\n", err),
                             }
                         }
+                        "set-batch-parts-size" => {
+                            let input = get_arg(&tc.args, "input").expect("missing input");
+                            let size = get_u64(&tc.args, "size").expect("missing size");
+                            let batch = state.batches.get_mut(input).expect("unknown batch");
+                            for part in batch.parts.iter_mut() {
+                                part.encoded_size_bytes = usize::cast_from(size);
+                            }
+                            format!("ok\n")
+                        }
                         "compact" => {
                             let output = get_arg(&tc.args, "output").expect("missing output");
                             let lower = get_u64(&tc.args, "lower").expect("missing lower");
@@ -991,6 +1024,8 @@ mod tests {
                             let since = get_u64(&tc.args, "since").expect("missing since");
                             let target_size = get_arg(&tc.args, "target_size")
                                 .map(|x| x.parse::<usize>().expect("invalid target_size"));
+                            let memory_bound = get_arg(&tc.args, "memory_bound")
+                                .map(|x| x.parse::<usize>().expect("invalid memory_bound"));
 
                             let mut inputs = Vec::new();
                             for input in tc.args.get("inputs").expect("missing inputs") {
@@ -1002,6 +1037,9 @@ mod tests {
                             if let Some(target_size) = target_size {
                                 cfg.blob_target_size = target_size;
                             };
+                            if let Some(memory_bound) = memory_bound {
+                                cfg.compaction_memory_bound_bytes = memory_bound;
+                            }
                             let req = CompactReq {
                                 shard_id,
                                 desc: Description::new(
@@ -1012,7 +1050,7 @@ mod tests {
                                 inputs,
                             };
                             let res = Compactor::compact::<u64, i64>(
-                                cfg,
+                                cfg.clone(),
                                 Arc::clone(&client.blob),
                                 Arc::clone(&client.metrics),
                                 Arc::clone(&cpu_heavy_runtime),

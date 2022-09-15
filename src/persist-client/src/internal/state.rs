@@ -76,6 +76,14 @@ pub struct HollowBatch<T> {
     pub parts: Vec<HollowBatchPart>,
     /// The number of updates in the batch.
     pub len: usize,
+    /// Runs of sequential sorted batch parts, stored as indices into `parts`.
+    /// ex.
+    /// ```text
+    ///     parts=[p1, p2, p3], runs=[]     --> run  is  [p1, p2, p2]
+    ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
+    ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
+    /// ```
+    pub runs: Vec<usize>,
 }
 
 impl<T: Ord> PartialOrd for HollowBatch<T> {
@@ -92,11 +100,13 @@ impl<T: Ord> Ord for HollowBatch<T> {
             desc: self_desc,
             parts: self_parts,
             len: self_len,
+            runs: self_runs,
         } = self;
         let HollowBatch {
             desc: other_desc,
             parts: other_parts,
             len: other_len,
+            runs: other_runs,
         } = other;
         (
             self_desc.lower().elements(),
@@ -104,6 +114,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             self_desc.since().elements(),
             self_parts,
             self_len,
+            self_runs,
         )
             .cmp(&(
                 other_desc.lower().elements(),
@@ -111,6 +122,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
                 other_desc.since().elements(),
                 other_parts,
                 other_len,
+                other_runs,
             ))
     }
 }
@@ -710,6 +722,7 @@ mod tests {
                 })
                 .collect(),
             len,
+            runs: vec![],
         }
     }
 

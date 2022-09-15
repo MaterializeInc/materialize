@@ -114,12 +114,16 @@ fetch-batch input=b0
 ----
 <part 0>
 k1 0 1
+<run 0>
+part 0
 
 fetch-batch input=b1
 ----
 <part 0>
 k2 1 -1
 k3 1 1
+<run 0>
+part 0
 
 # run gc to clear up to the latest state.
 gc from_seqno=6 to_seqno=8
@@ -137,11 +141,15 @@ fetch-batch input=b0
 ----
 <part 0>
 <empty>
+<run 0>
+part 0
 
 fetch-batch input=b1
 ----
 <part 0>
 <empty>
+<run 0>
+part 0
 
 fetch-batch input=b0_1
 ----
@@ -149,9 +157,13 @@ fetch-batch input=b0_1
 k1 0 1
 k2 1 -1
 k3 1 1
+<run 0>
+part 0
 
 fetch-batch input=b2
 ----
 <part 0>
 k3 2 -1
 k4 2 1
+<run 0>
+part 0
