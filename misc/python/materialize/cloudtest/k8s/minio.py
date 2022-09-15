@@ -63,7 +63,8 @@ class Minio(K8sResource):
         self.create_bucket("usage")
 
     def create_bucket(self, bucket: str) -> None:
-        mc_command(self,
+        mc_command(
+            self,
             "mc alias set myminio http://minio-service.default:9000 minio minio123",
             f"mc rm -r --force myminio/{bucket}",
             f"mc mb myminio/{bucket}",
