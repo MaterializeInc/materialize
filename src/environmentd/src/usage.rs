@@ -115,6 +115,7 @@ struct SinkDetails {
     size: String,
 }
 
+#[derive(Debug)]
 pub(crate) struct Config {
     pub(crate) interval: time::Duration,
     pub(crate) adapter_client: AdapterClient,
@@ -195,14 +196,99 @@ async fn write_blobs(
 
 #[instrument(level = "debug")]
 #[allow(clippy::unused_async)] // TODO: fix
-async fn query_usage(client: &AdapterClient) -> Result<Vec<Event>, anyhow::Error> {
-    debug!("Have a {:?}", client);
-    let mut events = Vec::<Event>::with_capacity(2);
+async fn query_usage(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event>, anyhow::Error> {
+    let events = query_compute(cfg, client)
+        .await?
+        .into_iter()
+        .chain(query_storage(cfg, client).await?)
+        // .chain(query_network(cfg, client).await?)
+        // .chain(query_sources(cfg, client).await?)
+        // .chain(query_sinks(cfg, client).await?)
+        .collect::<Vec<Event>>();
+    Ok(events)
+}
+
+async fn query_compute(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event>, anyhow::Error> {
+    let timestamp = Utc::now().timestamp_millis() as f64 / 1000f64;
+    let variety = &Variety::Compute;
+    let organization_id = &cfg.organization_id;
+
+    let mut events = vec![];
+
+    // TODO: make not dummy
+    let clusters = vec!["foo", "bar", "baz", "quux"];
+    let sizes = vec!["xsmall", "small", "medium", "large"];
+
+    let mut rng = rand::thread_rng();
     for _ in 1..rand::random::<u8>() {
-        events.push(dummy_usage())
+        let chosen_cluster = clusters.choose(&mut rng).unwrap();
+        let chosen_size = sizes.choose(&mut rng).unwrap();
+        let details = EventDetails::Compute(ComputeDetails {
+            cluster_name: chosen_cluster.to_string(),
+            replica_name: chosen_cluster.to_string(),
+            replica_size: chosen_size.to_string(),
+            uptime_seconds: rand::random::<u8>() as u32,
+        });
+        let properties = Properties {
+            environment_id: format!("environment-{}-0", cfg.organization_id),
+            cloud_provider: cfg.cloud_provider.to_string(),
+            cloud_region: cfg.cloud_region.to_string(),
+            details,
+        };
+
+        events.push(Event {
+            external_customer_id: cfg.organization_id.to_string(),
+            timestamp,
+            idempotency_key: format!("{variety}-{organization_id}-{chosen_cluster}-{timestamp}"),
+            event_name: variety.clone(),
+            properties,
+        })
     }
     Ok(events)
 }
+
+async fn query_storage(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event>, anyhow::Error> {
+    let timestamp = Utc::now().timestamp_millis() as f64 / 1000f64;
+    let variety = &Variety::Storage;
+    let organization_id = &cfg.organization_id;
+
+    let mut events = vec![];
+
+    // TODO: make not dummy!
+    for _ in 1..rand::random::<u8>() {
+        let details = EventDetails::Storage(StorageDetails {
+            object_id: Some("potato".to_string()),
+            bytes_used: rand::random::<u16>() as u64,
+        });
+        let properties = Properties {
+            environment_id: format!("environment-{}-0", cfg.organization_id),
+            cloud_provider: cfg.cloud_provider.to_string(),
+            cloud_region: cfg.cloud_region.to_string(),
+            details,
+        };
+
+        events.push(Event {
+            external_customer_id: cfg.organization_id.to_string(),
+            timestamp,
+            idempotency_key: format!("{variety}-{organization_id}-STORAGE-{timestamp}"),
+            event_name: variety.clone(),
+            properties,
+        })
+    }
+    Ok(events)
+}
+
+// async fn query_network(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event>, anyhow::Error> {
+//     Ok(vec![])
+// }
+
+// async fn query_sources(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event>, anyhow::Error> {
+//     Ok(vec![])
+// }
+
+// async fn query_sinks(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event>, anyhow::Error> {
+//     Ok(vec![])
+// }
 
 pub(crate) struct Snapshotter {
     config: Config,
@@ -217,7 +303,7 @@ impl Snapshotter {
         let mut interval = time::interval(self.config.interval);
         loop {
             interval.tick().await;
-            let possible_snapshots = query_usage(&self.config.adapter_client).await;
+            let possible_snapshots = query_usage(&self.config, &self.config.adapter_client).await;
             if let Err(e) = possible_snapshots {
                 warn!("Could not query usage: {}", e);
                 continue;
@@ -238,56 +324,5 @@ impl Snapshotter {
                 warn!("Could not upload usage to S3: {}", e);
             }
         }
-    }
-}
-
-fn dummy_usage() -> Event {
-    let mut rng = rand::thread_rng();
-    let org_ids = vec![
-        "536c75a1-68d9-4449-835c-215ea1915ce1",
-        "82684ea7-fcee-4796-8b6a-ca319f5d70e6",
-        "f9d68118-3640-42fa-be4f-b7c5df58658d",
-        "e349d671-81bd-4539-bae9-3b90e6c51722",
-    ];
-    let clusters = vec!["foo", "bar", "baz", "quux"];
-    let sizes = vec!["xsmall", "small", "medium", "large"];
-
-    let typez = vec![Variety::Compute, Variety::Storage];
-
-    let timestamp = Utc::now().timestamp_millis() as f64 / 1000f64;
-    let chosen_org = org_ids.choose(&mut rng).unwrap();
-    let chosen_type = typez.choose(&mut rng).unwrap();
-    let chosen_cluster = clusters.choose(&mut rng).unwrap();
-    let chosen_size = sizes.choose(&mut rng).unwrap();
-
-    let idempotency_key = format!("{chosen_type}-{chosen_org}-{chosen_cluster}-{timestamp}");
-    let chosen_dets = match chosen_type {
-        Variety::Compute => EventDetails::Compute(ComputeDetails {
-            cluster_name: chosen_cluster.to_string(),
-            replica_name: chosen_cluster.to_string(),
-            replica_size: chosen_size.to_string(),
-            uptime_seconds: rand::random::<u8>() as u32,
-        }),
-        Variety::Storage => EventDetails::Storage(StorageDetails {
-            object_id: Some("potato".to_string()),
-            bytes_used: rand::random::<u16>() as u64,
-        }),
-        Variety::Network => unreachable!(),
-        Variety::Sources => unreachable!(),
-        Variety::Sinks => unreachable!(),
-    };
-    let props = Properties {
-        environment_id: format!("environment-{}-0", chosen_org),
-        cloud_provider: "aws".to_string(),
-        cloud_region: "us-east-1".to_string(),
-        details: chosen_dets,
-    };
-
-    Event {
-        external_customer_id: chosen_org.to_string(),
-        timestamp,
-        idempotency_key,
-        event_name: chosen_type.clone(),
-        properties: props,
     }
 }
