@@ -733,10 +733,10 @@ max log level: {max_log_level}",
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
         segment_api_key: args.segment_api_key,
         // Usage snapshots
-        usage_snapshots: match (args.usage_snapshot_url) {
+        usage_snapshots: match args.usage_snapshot_url {
             None => None,
-            Some(ref url) => Some(UsageSnapshotConfig {
-                url: args.usage_snapshot_url.unwrap(),
+            Some(url) => Some(UsageSnapshotConfig {
+                url,
                 interval: args.usage_snapshot_interval,
                 organization_id: args.usage_snapshot_organization_id,
                 environment_id: args.usage_snapshot_environment_id,

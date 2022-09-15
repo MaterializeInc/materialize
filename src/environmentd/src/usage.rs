@@ -151,51 +151,7 @@ async fn write_blobs(
     Ok(())
 }
 
-// const COMPUTE_QUERY: &str = r"
-// -- TODO: fix this
-// SELECT
-//     event_type,
-//     object_type,
-//     event_details,
-//     occurred_at
-// FROM mz_audit_events
-// WHERE occurred_at > (NOW() - DURATION {{sync_window}})
-//   AND event_type =
-// ";
-
-// const STORAGE_QUERY: &str = r"
-// SELECT
-//   SUM(size_bytes)
-// FROM mz_storage_usage
-// WHERE collection_timestamp > (NOW() - DURATION {{sync_window}})
-// ";
-
-// const SOURCES_QUERY: &str = r"
-// -- TODO: fix this
-// SELECT
-//     event_type,
-//     object_type,
-//     event_details,
-//     occurred_at
-// FROM mz_audit_events
-// WHERE occurred_at > (NOW() - DURATION {{sync_window}})
-//   AND event_type =
-// ";
-
-// const SINKS_QUERY: &str = r"
-// -- TODO: fix this
-// SELECT
-//     event_type,
-//     object_type,
-//     event_details,
-//     occurred_at
-// FROM mz_audit_events
-// WHERE occurred_at > (NOW() - DURATION {{sync_window}})
-//   AND event_type =
-// ";
-
 #[instrument(level = "debug")]
-#[allow(clippy::unused_async)] // TODO: fix
 async fn query_usage(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event>, anyhow::Error> {
     let events = query_compute(cfg, client)
         .await?
@@ -208,6 +164,18 @@ async fn query_usage(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event>,
     Ok(events)
 }
 
+// const COMPUTE_QUERY: &str = r"
+// -- TODO: fix this
+// SELECT
+//     event_type,
+//     object_type,
+//     event_details,
+//     occurred_at
+// FROM mz_audit_events
+// WHERE occurred_at > (NOW() - DURATION {{sync_window}})
+//   AND event_type =
+// ";
+#[instrument(level = "debug")]
 async fn query_compute(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event>, anyhow::Error> {
     let timestamp = Utc::now().timestamp_millis() as f64 / 1000f64;
     let variety = &Variety::Compute;
@@ -230,7 +198,7 @@ async fn query_compute(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event
             uptime_seconds: rand::random::<u8>() as u32,
         });
         let properties = Properties {
-            environment_id: format!("environment-{}-0", cfg.organization_id),
+            environment_id: cfg.environment_id.to_string(),
             cloud_provider: cfg.cloud_provider.to_string(),
             cloud_region: cfg.cloud_region.to_string(),
             details,
@@ -247,6 +215,13 @@ async fn query_compute(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event
     Ok(events)
 }
 
+// const STORAGE_QUERY: &str = r"
+// SELECT
+//   SUM(size_bytes)
+// FROM mz_storage_usage
+// WHERE collection_timestamp > (NOW() - DURATION {{sync_window}})
+// ";
+#[instrument(level = "debug")]
 async fn query_storage(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event>, anyhow::Error> {
     let timestamp = Utc::now().timestamp_millis() as f64 / 1000f64;
     let variety = &Variety::Storage;
@@ -261,7 +236,7 @@ async fn query_storage(cfg: &Config, client: &AdapterClient) -> Result<Vec<Event
             bytes_used: rand::random::<u16>() as u64,
         });
         let properties = Properties {
-            environment_id: format!("environment-{}-0", cfg.organization_id),
+            environment_id: cfg.organization_id.to_string(),
             cloud_provider: cfg.cloud_provider.to_string(),
             cloud_region: cfg.cloud_region.to_string(),
             details,
