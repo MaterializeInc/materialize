@@ -669,6 +669,7 @@ impl Runner {
             unsafe_mode: true,
             metrics_registry,
             now,
+            environment_id: Uuid::from_u128(0),
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             storage_host_sizes: Default::default(),

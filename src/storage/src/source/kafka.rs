@@ -99,13 +99,13 @@ impl SourceReader for KafkaSourceReader {
             options,
             topic,
             group_id_prefix,
-            cluster_id,
+            environment_id,
             ..
         } = kc;
         let kafka_config = TokioHandle::current().block_on(create_kafka_config(
             &source_name,
             group_id_prefix,
-            cluster_id,
+            environment_id,
             &connection,
             &options,
             &connection_context,
@@ -536,7 +536,7 @@ impl KafkaSourceReader {
 async fn create_kafka_config(
     name: &str,
     group_id_prefix: Option<String>,
-    cluster_id: Uuid,
+    environment_id: Uuid,
     kafka_connection: &KafkaConnection,
     options: &BTreeMap<String, StringOrSecret>,
     connection_context: &ConnectionContext,
@@ -589,7 +589,7 @@ async fn create_kafka_config(
         &format!(
             "{}materialize-{}-{}",
             group_id_prefix.unwrap_or_else(String::new),
-            cluster_id,
+            environment_id,
             name
         ),
     );

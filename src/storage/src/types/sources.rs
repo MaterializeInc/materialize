@@ -991,7 +991,7 @@ pub struct KafkaSourceConnection {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, MzOffset>,
     pub group_id_prefix: Option<String>,
-    pub cluster_id: Uuid,
+    pub environment_id: Uuid,
     /// If present, include the timestamp as an output column of the source with the given name
     pub include_timestamp: Option<IncludedColumnPos>,
     /// If present, include the partition as an output column of the source with the given name.
@@ -1034,7 +1034,7 @@ impl Arbitrary for KafkaSourceConnection {
                     topic,
                     start_offsets,
                     group_id_prefix,
-                    cluster_id,
+                    environment_id,
                     include_timestamp,
                     include_partition,
                     include_topic,
@@ -1046,7 +1046,7 @@ impl Arbitrary for KafkaSourceConnection {
                     topic,
                     start_offsets,
                     group_id_prefix,
-                    cluster_id,
+                    environment_id,
                     include_timestamp,
                     include_partition,
                     include_topic,
@@ -1074,7 +1074,7 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
                 .map(|(k, v)| (*k, v.into_proto()))
                 .collect(),
             group_id_prefix: self.group_id_prefix.clone(),
-            cluster_id: Some(self.cluster_id.into_proto()),
+            environment_id: Some(self.environment_id.into_proto()),
             include_timestamp: self.include_timestamp.into_proto(),
             include_partition: self.include_partition.into_proto(),
             include_topic: self.include_topic.into_proto(),
@@ -1102,8 +1102,8 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
             topic: proto.topic,
             start_offsets: start_offsets?,
             group_id_prefix: proto.group_id_prefix,
-            cluster_id: proto
-                .cluster_id
+            environment_id: proto
+                .environment_id
                 .into_rust_if_some("ProtoPostgresSourceConnection::details")?,
             include_timestamp: proto.include_timestamp.into_rust()?,
             include_partition: proto.include_partition.into_rust()?,

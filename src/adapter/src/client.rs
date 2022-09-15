@@ -32,21 +32,12 @@ pub type ConnectionId = u32;
 /// the coordinator's thread to exit, which will only occur after all
 /// outstanding [`Client`]s for the coordinator have dropped.
 pub struct Handle {
-    pub(crate) cluster_id: Uuid,
     pub(crate) session_id: Uuid,
     pub(crate) start_instant: Instant,
     pub(crate) _thread: JoinOnDropHandle<()>,
 }
 
 impl Handle {
-    /// Returns the cluster ID associated with this coordinator.
-    ///
-    /// The cluster ID is recorded in the data directory when it is first
-    /// created and persists until the data directory is deleted.
-    pub fn cluster_id(&self) -> Uuid {
-        self.cluster_id
-    }
-
     /// Returns the session ID associated with this coordinator.
     ///
     /// The session ID is generated on coordinator boot. It lasts for the

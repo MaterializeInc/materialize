@@ -499,8 +499,8 @@
 
 - type: UUID
   functions:
-  - signature: mz_cluster_id() -> uuid
-    description: The `uuid` uniquely identifying this Materialize cluster.
+  - signature: mz_environment_id() -> uuid
+    description: The `uuid` uniquely identifying this Materialize environment.
     unmaterializable: true
 
 - type: JSON
