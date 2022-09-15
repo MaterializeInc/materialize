@@ -796,7 +796,6 @@ pub mod datadriven {
         pub client: PersistClient,
         pub shard_id: ShardId,
         pub state_versions: Arc<StateVersions>,
-        pub writer_id: WriterId,
         pub machine: Machine<String, (), u64, i64>,
         pub batches: HashMap<String, HollowBatch<u64>>,
         pub listens: HashMap<String, Listen<String, (), u64, i64>>,
@@ -816,7 +815,7 @@ pub mod datadriven {
                 Arc::clone(&client.blob),
                 Arc::clone(&client.metrics),
             ));
-            let mut machine = Machine::new(
+            let machine = Machine::new(
                 client.cfg.clone(),
                 shard_id,
                 Arc::clone(&client.metrics),
@@ -824,19 +823,10 @@ pub mod datadriven {
             )
             .await
             .expect("codecs should match");
-            let writer_id = WriterId::new();
-            let _ = machine
-                .register_writer(
-                    &writer_id,
-                    client.cfg.writer_lease_duration,
-                    (client.cfg.now)(),
-                )
-                .await;
             MachineState {
                 shard_id,
                 client,
                 state_versions,
-                writer_id,
                 machine,
                 batches: HashMap::default(),
                 listens: HashMap::default(),
@@ -1131,17 +1121,33 @@ pub mod datadriven {
         }
     }
 
+    pub async fn register_writer(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let writer_id = args.expect("writer_id");
+        let (upper, _state) = datadriven
+            .machine
+            .register_writer(
+                &writer_id,
+                datadriven.client.cfg.writer_lease_duration,
+                (datadriven.client.cfg.now)(),
+            )
+            .await;
+        Ok(format!("{:?}\n", upper.0.elements()))
+    }
+
     pub async fn compare_and_append(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
+        let writer_id = args.expect("writer_id");
         let batch = datadriven
             .batches
             .get(input)
             .expect("unknown batch")
             .clone();
-        let writer_id = datadriven.writer_id.clone();
         let now = (datadriven.client.cfg.now)();
         let (_, _) = datadriven
             .machine

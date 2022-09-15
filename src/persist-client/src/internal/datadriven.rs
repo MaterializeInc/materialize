@@ -174,6 +174,9 @@ mod tests {
                             "register-listen" => {
                                 machine_dd::register_listen(&mut state, args).await
                             }
+                            "register-writer" => {
+                                machine_dd::register_writer(&mut state, args).await
+                            }
                             "set-batch-parts-size" => {
                                 machine_dd::set_batch_parts_size(&mut state, args).await
                             }
