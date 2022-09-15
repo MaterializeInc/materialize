@@ -329,7 +329,8 @@ impl Compactor {
     }
 
     /// Sorts and groups all runs from the inputs into chunks, each of which has been determined
-    /// to consume no more than `run_reserved_memory_bytes` at a time. Uses [Self::order_runs] to
+    /// to consume no more than `run_reserved_memory_bytes` at a time, unless the input parts
+    /// were written with a different target size than this build. Uses [Self::order_runs] to
     /// determine the order in which runs are selected.
     fn chunk_runs<'a, T, D>(
         req: &'a CompactReq<T>,
