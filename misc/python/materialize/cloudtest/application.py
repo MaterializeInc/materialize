@@ -100,3 +100,4 @@ class MaterializeApplication(Application):
     def create(self) -> None:
         super().create()
         wait(condition="condition=Ready", resource="pod/compute-cluster-1-replica-1-0")
+        print("Materialize application up and ready!")

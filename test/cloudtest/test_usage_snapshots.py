@@ -15,12 +15,14 @@ from materialize.cloudtest.wait import wait
 
 
 def test_usage_snapshots(mz: MaterializeApplication) -> None:
+    print("Hi! Beginning test session...")
     mz.environmentd.sql(f"CREATE CLUSTER c REPLICAS (cr1 (SIZE '2'))")
-    time.sleep(2)
+    print(" - created cluster, now snoozing")
+    time.sleep(3)
+    print(" - woke up after 3 seconds, now querying audit")
     audit_rows = mz.environmentd.sql_query(
         "SELECT id, event_type, object_type, event_details, user FROM mz_audit_events"
     )
-    # event_type, object_type, event_details, user
     assert audit_rows[0][1:] == ["create", "cluster", {"name": "c"}, "materialize"]
     assert audit_rows[1][1:] == [
         "create",
@@ -28,15 +30,11 @@ def test_usage_snapshots(mz: MaterializeApplication) -> None:
         {"cluster_name": "c", "logical_size": "2", "replica_name": "cr1"},
         "materialize",
     ]
+    print(" - audit logs look good! Now listing blobs in minio...")
 
     blobs = mc_command(
         mz,
-        " && ".join(
-            [
-                "mc config host add myminio http://minio-service.default:9000 minio minio123",
-                "mc ls myminio/usage",
-            ]
-        ),
+        "mc config host add myminio http://minio-service.default:9000 minio minio123",
+        "mc ls -r myminio",
     )
     assert blobs == "potato"
-    raise NotImplementedError()

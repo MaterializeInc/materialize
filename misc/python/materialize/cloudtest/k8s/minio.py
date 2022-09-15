@@ -41,6 +41,8 @@ class Minio(K8sResource):
             "true",
         )
 
+        # TODO: we should probably vendor these, so we have a reproducible configuration
+        # and can pin to specific `minio` tags
         for yaml in [
             "minio-standalone-pvc",
             "minio-standalone-deployment",
@@ -58,14 +60,11 @@ class Minio(K8sResource):
         )
 
         self.create_bucket("persist")
-        # self.create_bucket("usage")
-
-    def mc(self, *cmds: str) -> str:
-        return mc_command(self, *cmds)
+        self.create_bucket("usage")
 
     def create_bucket(self, bucket: str) -> None:
-        self.mc(
-            "mc config host add myminio http://minio-service.default:9000 minio minio123",
-            # f"mc rm -r --force myminio/{bucket}",
-            f"mc mb -p myminio/{bucket}",
+        mc_command(self,
+            "mc alias set myminio http://minio-service.default:9000 minio minio123",
+            f"mc rm -r --force myminio/{bucket}",
+            f"mc mb myminio/{bucket}",
         )
