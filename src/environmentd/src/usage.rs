@@ -121,6 +121,10 @@ pub(crate) struct Config {
     pub(crate) s3_bucket: String,
     pub(crate) s3_prefix: String,
     pub(crate) s3_client: S3Client,
+    pub(crate) organization_id: String,
+    pub(crate) environment_id: String,
+    pub(crate) cloud_provider: String,
+    pub(crate) cloud_region: String,
 }
 
 #[instrument(level = "debug")]

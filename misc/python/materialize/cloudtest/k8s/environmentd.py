@@ -89,6 +89,10 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--adapter-stash-url=postgres://postgres@postgres.default?options=--search_path=catalog",
                 "--storage-stash-url=postgres://postgres@postgres.default?options=--search_path=storage",
                 "--internal-sql-listen-addr=0.0.0.0:6877",
+                "--usage-snapshot-organization-id=43866b1a-382d-4f32-ad57-c8b062e03efc",
+                "--usage-snapshot-environment-id=environment-43866b1a-382d-4f32-ad57-c8b062e03efc-0",
+                "--usage-snapshot-cloud-provider=aws",
+                "--usage-snapshot-cloud-region=minio",
                 f"--usage-snapshot-url=s3://minio:minio123@usage/usage?endpoint={s3_endpoint}&region=minio",
                 f"--usage-snapshot-interval=1",  # higher frequency for testing
                 "--unsafe-mode",

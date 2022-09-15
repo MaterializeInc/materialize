@@ -121,14 +121,28 @@ pub struct Config {
     /// Callbacks used to modify tracing/logging filters
     pub tracing_target_callbacks: TracingTargetCallbacks,
 
-    /// (S3-compatible) URL to which to send usage snapshots
-    pub usage_snapshot_url: Option<Url>,
-    /// How often (in seconds) to send snapshots
-    pub usage_snapshot_interval: u64,
-
+    /// Collection of configuration for usage snapshots
+    pub usage_snapshots: Option<UsageSnapshotConfig>,
     // === Testing options. ===
     /// A now generation function for mocking time.
     pub now: NowFn,
+}
+
+/// Configure usage snapshots for monitoring and billing
+#[derive(Debug, Clone)]
+pub struct UsageSnapshotConfig {
+    /// (S3-compatible) URL to which to send usage snapshots
+    pub url: Url,
+    /// How often (in seconds) to send snapshots
+    pub interval: u64,
+    /// Metadata: how do we identify the current organization?
+    pub organization_id: String,
+    /// Metadata: how do we identify the current environment?
+    pub environment_id: String,
+    /// What cloud provider is hosting us?
+    pub cloud_provider: String,
+    /// What region are we running in?
+    pub cloud_region: String,
 }
 
 /// Configures TLS encryption for connections.
@@ -338,15 +352,16 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         (internal_sql_drain_trigger, internal_sql_local_addr)
     };
 
-    if let Some(url) = config.usage_snapshot_url {
-        if let None = url.host() {
-            bail!("missing S3 bucket: {}", &url.as_str());
+    if let Some(usage_config) = config.usage_snapshots {
+        if let None = usage_config.url.host() {
+            bail!("missing S3 bucket: {}", &usage_config.url.as_str());
         }
-        let bucket = url.host().unwrap().to_string();
-        let prefix = url
+        let bucket = usage_config.url.host().unwrap().to_string();
+        let prefix = usage_config
+            .url
             .path()
             .strip_prefix('/')
-            .unwrap_or_else(|| url.path())
+            .unwrap_or_else(|| usage_config.url.path())
             .to_string();
 
         let adapter_client2 = adapter_client.clone();
@@ -354,7 +369,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         task::spawn(|| "usage_snapshotter", {
             async move {
                 let mut loader = aws_config::from_env();
-                for (k, v) in url.query_pairs() {
+                for (k, v) in usage_config.url.query_pairs() {
                     if k == "endpoint" {
                         loader = loader.endpoint_resolver(Endpoint::immutable(
                             v.parse().expect("valid S3 endpoint URI"),
@@ -363,11 +378,15 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 }
                 let s3_client = S3Client::new(&loader.load().await);
                 let cfg = usage::Config {
-                    interval: Duration::from_secs(config.usage_snapshot_interval),
+                    interval: Duration::from_secs(usage_config.interval),
                     s3_bucket: bucket,
                     s3_prefix: prefix,
                     s3_client,
                     adapter_client: adapter_client2,
+                    organization_id: usage_config.organization_id,
+                    environment_id: usage_config.environment_id,
+                    cloud_provider: usage_config.cloud_provider,
+                    cloud_region: usage_config.cloud_region,
                 };
 
                 let usage_snapshot_task = usage::Snapshotter::new(cfg);

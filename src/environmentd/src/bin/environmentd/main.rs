@@ -30,6 +30,7 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
+use mz_environmentd::UsageSnapshotConfig;
 use once_cell::sync::Lazy;
 use sysinfo::{CpuExt, SystemExt};
 use tokio::sync::Mutex;
@@ -383,6 +384,26 @@ pub struct Args {
     /// How often to write usage snapshots, in seconds
     #[clap(long, env = "USAGE_SNAPSHOT_INTERVAL", default_value = "5")]
     usage_snapshot_interval: u64,
+    /// Metadata for usage snapshots: how do we identify the current organization?
+    #[clap(
+        long,
+        env = "USAGE_SNAPSHOT_ORGANIZATION_ID",
+        default_value = "materialize"
+    )]
+    usage_snapshot_organization_id: String,
+    /// Metadata for usage snapshots: how do we identify the current environment?
+    #[clap(
+        long,
+        env = "USAGE_SNAPSHOT_ENVIRONMENT_ID",
+        default_value = "materialize"
+    )]
+    usage_snapshot_environment_id: String,
+    /// What cloud provider is hosting us?
+    #[clap(long, env = "USAGE_SNAPSHOT_CLOUD_PROVIDER", default_value = "aws")]
+    usage_snapshot_cloud_provider: String,
+    /// What region are we running in?
+    #[clap(long, env = "USAGE_SNAPSHOT_CLOUD_REGION", default_value = "kind")]
+    usage_snapshot_cloud_region: String,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -711,8 +732,18 @@ max log level: {max_log_level}",
         tracing_target_callbacks,
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
         segment_api_key: args.segment_api_key,
-        usage_snapshot_url: args.usage_snapshot_url,
-        usage_snapshot_interval: args.usage_snapshot_interval,
+        // Usage snapshots
+        usage_snapshots: match (args.usage_snapshot_url) {
+            None => None,
+            Some(ref url) => Some(UsageSnapshotConfig {
+                url: args.usage_snapshot_url.unwrap(),
+                interval: args.usage_snapshot_interval,
+                organization_id: args.usage_snapshot_organization_id,
+                environment_id: args.usage_snapshot_environment_id,
+                cloud_provider: args.usage_snapshot_cloud_provider,
+                cloud_region: args.usage_snapshot_cloud_region,
+            }),
+        },
     }))?;
 
     println!(
