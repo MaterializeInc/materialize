@@ -326,6 +326,12 @@ where
         // If we've filled up a chunk of ColumnarRecords, flush it out now to
         // blob storage to keep our memory usage capped.
         let mut part_written = false;
+        // TODO: we need to ensure batch parts don't exceed [crate::PersistConfig::blob_target_size].
+        // currently our logic undercounts batch part sizes by separately checking key and value
+        // size against the target size, rather than their sum. a template for how to do this lives
+        // in [crate::internal::compact::Compactor].
+        //
+        // Related issue: https://github.com/MaterializeInc/materialize/issues/14579
         for part in self.records.take_filled() {
             // TODO: This upper would ideally be `[self.max_ts+1]` but
             // there's nothing that lets us increment a timestamp. An empty

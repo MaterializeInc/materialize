@@ -589,9 +589,9 @@ impl Compactor {
         updates.len()
     }
 
-    /// Encodes `updates` into columnar format and writes its parts out to blob.
-    /// The caller is expected to chunk `updates` into batches no greater than
-    /// [crate::PersistConfig::blob_target_size]
+    /// Encodes `updates` into columnar format and writes them as a single part to blob. It is the
+    /// caller's responsibility to chunk `updates` into a batch no greater than [crate::PersistConfig::blob_target_size]
+    /// and must absolutely be less than [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
     async fn write_run<T, D>(
         batch_parts: &mut BatchParts<T>,
         updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
