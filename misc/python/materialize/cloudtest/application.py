@@ -26,7 +26,7 @@ from materialize.cloudtest.k8s.testdrive import Testdrive
 from materialize.cloudtest.wait import wait
 
 
-class Application:
+class Application(K8sResource):
     resources: List[K8sResource]
     images: List[str]
 
