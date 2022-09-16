@@ -33,6 +33,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::StreamExt;
 use itertools::Itertools;
+use mz_persist_client::read::ReadHandle;
 use mz_persist_client::PersistClient;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -717,6 +718,17 @@ pub struct Controller<T: Timestamp + Lattice + Codec64> {
     persist: Arc<Mutex<PersistClientCache>>,
 }
 
+impl<T: Timestamp + Lattice + Codec64> Controller<T> {
+    async fn open_persist_client(&mut self) -> PersistClient {
+        self.persist
+            .lock()
+            .await
+            .open(self.persist_location.clone())
+            .await
+            .unwrap()
+    }
+}
+
 #[derive(Debug)]
 pub enum StorageError {
     /// The source identifier was re-created after having been dropped,
@@ -928,14 +940,7 @@ where
                 id, metadata.remap_shard, metadata.data_shard, status_shard
             );
 
-            let persist_client = self
-                .persist
-                .lock()
-                .await
-                .open(self.persist_location.clone())
-                .await
-                .unwrap();
-
+            let persist_client = self.open_persist_client().await;
             let (write, mut read) = persist_client
                 .open(metadata.data_shard)
                 .await
