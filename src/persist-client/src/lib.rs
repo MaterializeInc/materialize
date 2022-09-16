@@ -443,9 +443,7 @@ impl PersistClient {
         let writer_id = WriterId::new();
         let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
-                self.cfg.clone(),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
+                machine.clone(),
                 Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
             )
