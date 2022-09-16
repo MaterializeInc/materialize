@@ -323,22 +323,22 @@ where
     /// Create a compute instance.
     pub fn create_instance(
         &mut self,
-        instance: ComputeInstanceId,
+        id: ComputeInstanceId,
         logging: Option<LoggingConfig>,
         max_result_size: u32,
     ) -> Result<(), ComputeError> {
-        if self.instances.contains_key(&instance) {
-            return Err(ComputeError::InstanceExists(instance));
+        if self.instances.contains_key(&id) {
+            return Err(ComputeError::InstanceExists(id));
         }
 
         self.instances.insert(
-            instance,
-            Instance::new(instance, self.build_info, &logging, max_result_size),
+            id,
+            Instance::new(id, self.build_info, &logging, max_result_size),
         );
 
         if self.initialized {
             self.instances
-                .get_mut(&instance)
+                .get_mut(&id)
                 .expect("instance just added")
                 .initialization_complete();
         }
@@ -350,8 +350,8 @@ where
     ///
     /// # Panics
     /// - If the identified `instance` still has active replicas.
-    pub fn drop_instance(&mut self, instance: ComputeInstanceId) {
-        if let Some(compute_state) = self.instances.remove(&instance) {
+    pub fn drop_instance(&mut self, id: ComputeInstanceId) {
+        if let Some(compute_state) = self.instances.remove(&id) {
             compute_state.drop();
         }
     }
