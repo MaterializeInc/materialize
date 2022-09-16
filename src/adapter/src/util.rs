@@ -11,7 +11,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::ComputeInstanceId;
-use mz_repr::{RelationDesc, Row, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql::names::FullObjectName;
 use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -181,4 +181,11 @@ pub fn describe<S: Append>(
             )?)
         }
     }
+}
+
+/// Type identifying a sink maintained by a compute instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ComputeSinkId {
+    pub compute_instance: ComputeInstanceId,
+    pub global_id: GlobalId,
 }

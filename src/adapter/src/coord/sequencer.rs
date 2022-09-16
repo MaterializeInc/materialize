@@ -23,8 +23,7 @@ use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeSinkId, ConcreteComputeInstanceReplicaConfig,
-    ConcreteComputeInstanceReplicaLogging,
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging,
 };
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
@@ -81,7 +80,7 @@ use crate::session::{
     WriteOp,
 };
 use crate::tail::PendingTail;
-use crate::util::{send_immediate_rows, ClientTransmitter};
+use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
 use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
 
 impl<S: Append + 'static> Coordinator<S> {

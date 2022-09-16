@@ -20,7 +20,6 @@ use derivative::Derivative;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::OwnedMutexGuard;
 
-use mz_compute_client::controller::ComputeSinkId;
 use mz_pgrepr::Format;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
@@ -33,6 +32,7 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::coord::CoordTimestamp;
 use crate::error::AdapterError;
 use crate::session::vars::IsolationLevel;
+use crate::util::ComputeSinkId;
 
 pub use self::vars::{
     ClientSeverity, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,

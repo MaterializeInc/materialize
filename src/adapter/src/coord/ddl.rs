@@ -18,7 +18,7 @@ use timely::progress::Antichain;
 use tracing::Level;
 use tracing::{event, warn};
 
-use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
@@ -36,6 +36,7 @@ use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::vars::SystemVars;
 use crate::session::Session;
+use crate::util::ComputeSinkId;
 use crate::{catalog, AdapterError};
 
 /// State provided to a catalog transaction closure.
