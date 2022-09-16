@@ -79,12 +79,6 @@ pub struct ComputeInstanceEvent {
     pub time: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ComputeSinkId {
-    pub compute_instance: ComputeInstanceId,
-    pub global_id: GlobalId,
-}
-
 /// Responses from the compute controller.
 pub enum ComputeControllerResponse<T> {
     /// See [`ComputeResponse::PeekResponse`].
