@@ -432,7 +432,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
-    let otel_enable_callback =
+    let (otel_enable_callback, stderr_filter_callback) =
         runtime.block_on(mz_ore::tracing::configure("environmentd", &args.tracing))?;
 
     // Initialize fail crate for failpoint support
@@ -704,6 +704,7 @@ max log level: {max_log_level}",
             secrets_reader,
         ),
         otel_enable_callback,
+        stderr_filter_callback,
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
     }))?;
 

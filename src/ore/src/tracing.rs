@@ -79,6 +79,40 @@ pub struct StderrLogConfig {
     pub filter: Targets,
 }
 
+/// A callback that can be used to modify stderr logging filters
+pub struct StderrFilterCallback {
+    callback: Arc<dyn Fn(Targets) -> Result<(), anyhow::Error> + Send + Sync>,
+}
+
+impl StderrFilterCallback {
+    /// Updates stderr log filtering with `targets`
+    pub fn call(&self, targets: Targets) -> Result<(), anyhow::Error> {
+        (self.callback)(targets)
+    }
+
+    /// A callback that does nothing. Useful for tests.
+    pub fn none() -> Self {
+        Self {
+            callback: Arc::new(|_| Ok(())),
+        }
+    }
+}
+
+impl std::fmt::Debug for StderrFilterCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("StderrLogFilterCallback")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Clone for StderrFilterCallback {
+    fn clone(&self) -> Self {
+        StderrFilterCallback {
+            callback: Arc::clone(&self.callback),
+        }
+    }
+}
+
 /// Configuration for the [`opentelemetry`] library.
 #[derive(Debug, Clone)]
 pub struct OpenTelemetryConfig {
@@ -200,7 +234,7 @@ pub struct TokioConsoleConfig {
 pub async fn configure<C>(
     service_name: &str,
     config: C,
-) -> Result<OpenTelemetryEnableCallback, anyhow::Error>
+) -> Result<(OpenTelemetryEnableCallback, StderrFilterCallback), anyhow::Error>
 where
     C: Into<TracingConfig>,
 {
@@ -217,6 +251,14 @@ where
         .with_writer(io::stderr)
         .with_ansi(!no_color && atty::is(atty::Stream::Stderr))
         .with_filter(config.stderr_log.filter);
+
+    let (stderr_log_layer, stderr_reloader) = reload::Layer::new(stderr_log_layer);
+    let stderr_callback = StderrFilterCallback {
+        callback: Arc::new(move |targets| {
+            stderr_reloader.modify(|layer| *layer.filter_mut() = targets)?;
+            Ok(())
+        }),
+    };
 
     let (otel_layer, otel_reloader) = if let Some(otel_config) = config.opentelemetry {
         // TODO(guswynn): figure out where/how to call
@@ -328,7 +370,7 @@ where
         );
     }
 
-    Ok(otel_reloader)
+    Ok((otel_reloader, stderr_callback))
 }
 
 /// Shutdown any tracing infra, if any.

@@ -96,7 +96,8 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-    let otel_enable_callback = mz_ore::tracing::configure("computed", &args.tracing).await?;
+    let (otel_enable_callback, stderr_filter_callback) =
+        mz_ore::tracing::configure("computed", &args.tracing).await?;
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
@@ -130,6 +131,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         "/api/opentelemetry/config",
                         routing::put(move |payload| async move {
                             mz_http_util::handle_enable_otel(otel_enable_callback, payload).await
+                        }),
+                    )
+                    .route(
+                        "/api/stderr/config",
+                        routing::put(move |payload| async move {
+                            mz_http_util::handle_modify_stderr_filter(
+                                stderr_filter_callback,
+                                payload,
+                            )
+                            .await
                         }),
                     )
                     .into_make_service(),

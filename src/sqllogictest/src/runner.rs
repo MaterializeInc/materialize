@@ -682,6 +682,7 @@ impl Runner {
                 (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
             ),
             otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+            stderr_filter_callback: mz_ore::tracing::StderrFilterCallback::none(),
             storage_usage_collection_interval: Duration::from_secs(3600),
         };
         // We need to run the server on its own Tokio runtime, which in turn
