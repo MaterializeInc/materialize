@@ -70,6 +70,7 @@ pub struct CompactRes<T> {
 /// new since and consolidating the resulting updates.
 #[derive(Debug, Clone)]
 pub struct Compactor<T, D> {
+    metrics: Arc<Metrics>,
     sender: UnboundedSender<(CompactReq<T>, oneshot::Sender<bool>)>,
     _phantom: PhantomData<D>,
 }
@@ -90,6 +91,7 @@ where
     {
         let (compact_req_sender, mut compact_req_receiver) =
             mpsc::unbounded_channel::<(CompactReq<T>, oneshot::Sender<bool>)>();
+        let metrics = Arc::clone(&machine.metrics);
 
         // spin off a single task responsible for executing compaction requests.
         // work is enqueued into the task through a channel
@@ -176,6 +178,7 @@ where
         });
 
         Compactor {
+            metrics,
             sender: compact_req_sender,
             _phantom: PhantomData,
         }
@@ -200,6 +203,7 @@ where
             return None;
         }
 
+        self.metrics.compaction.requested.inc();
         Some(compaction_completed_receiver)
     }
 
