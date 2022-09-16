@@ -276,6 +276,8 @@ pub struct ComputeController<T> {
     orchestrator: ComputeOrchestrator,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
+    /// A response to handle on the next call to `ActiveComputeController::process`.
+    stashed_response: Option<(ComputeInstanceId, ActiveReplicationResponse<T>)>,
 }
 
 impl<T> ComputeController<T> {
@@ -290,6 +292,7 @@ impl<T> ComputeController<T> {
             build_info,
             orchestrator: ComputeOrchestrator::new(orchestrator, computed_image),
             initialized: false,
+            stashed_response: None,
         }
     }
 
@@ -369,11 +372,16 @@ where
     ///
     /// This method may block for an arbitrarily long time.
     ///
-    /// When the method returns, the caller should call [`ActiveComputeController::process`] with
-    /// the returned compute instance ID, to process the ready message.
+    /// When the method returns, the caller should call [`ActiveComputeController::process`] to
+    /// process the ready message.
     ///
     /// This method is cancellation safe.
-    pub async fn ready(&mut self) -> ComputeInstanceId {
+    pub async fn ready(&mut self) {
+        if self.stashed_response.is_some() {
+            // We still have a response stashed, which we are immediately ready to process.
+            return;
+        }
+
         if self.instances.is_empty() {
             // If there are no clients, block forever. This signals that there may be more work to
             // do (e.g., if a compute instance is created). Calling `select_all` with an empty list
@@ -381,15 +389,15 @@ where
             future::pending().await
         }
 
-        // The underlying `ready` methods are cancellation safe, so it is safe to construct this
+        // `ActiveReplication::recv` is cancellation safe, so it is safe to construct this
         // `select_all`.
-        future::select_all(
-            self.instances
-                .iter_mut()
-                .map(|(id, instance)| Box::pin(instance.ready().map(|()| *id))),
-        )
-        .map(|(id, _index, _remaining)| id)
-        .await
+        let receives = self
+            .instances
+            .iter_mut()
+            .map(|(id, instance)| Box::pin(instance.replicas.recv().map(|resp| (*id, resp))));
+        let (resp, _index, _remaining) = future::select_all(receives).await;
+
+        self.stashed_response = Some(resp);
     }
 
     /// Listen for changes to compute services reported by the orchestrator.
@@ -482,18 +490,66 @@ where
         Ok(())
     }
 
-    /// Process the work queued by [`ComputeController::ready`].
+    /// Processes the work queued by [`ComputeController::ready`].
     ///
     /// This method is guaranteed to return "quickly" unless doing so would
     /// compromise the correctness of the system.
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    pub async fn process(
-        &mut self,
-        instance_id: ComputeInstanceId,
-    ) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
-        self.instance(instance_id)?.process().await
+    pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
+        let (instance_id, ar_response) = match self.compute.stashed_response.take() {
+            Some(resp) => resp,
+            None => return Ok(None),
+        };
+
+        let response = match ar_response {
+            ActiveReplicationResponse::ComputeResponse(resp) => resp,
+            ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when) => {
+                return Ok(Some(ComputeControllerResponse::ReplicaHeartbeat(
+                    replica_id, when,
+                )))
+            }
+        };
+
+        let mut instance = self.instance(instance_id)?;
+
+        match response {
+            ComputeResponse::FrontierUppers(updates) => {
+                instance.update_write_frontiers(&updates).await?;
+                Ok(None)
+            }
+            ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+                instance.remove_peeks(std::iter::once(uuid)).await?;
+                Ok(Some(ComputeControllerResponse::PeekResponse(
+                    uuid,
+                    peek_response,
+                    otel_ctx,
+                )))
+            }
+            ComputeResponse::TailResponse(global_id, response) => {
+                let new_upper = match &response {
+                    TailResponse::Batch(TailBatch { lower, upper, .. }) => {
+                        // Ensure there are no gaps in the tail stream we receive.
+                        assert_eq!(
+                            lower,
+                            &instance.compute.collections[&global_id].write_frontier
+                        );
+
+                        upper.clone()
+                    }
+                    // The tail will not be written to again, but we should not confuse that
+                    // with the source of the TAIL being complete through this time.
+                    TailResponse::DroppedAt(_) => Antichain::new(),
+                };
+                instance
+                    .update_write_frontiers(&[(global_id, new_upper)])
+                    .await?;
+                Ok(Some(ComputeControllerResponse::TailResponse(
+                    global_id, response,
+                )))
+            }
+        }
     }
 }
 
@@ -508,8 +564,6 @@ pub struct Instance<T> {
     collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
     peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
-    /// A response to handle on the next call to `ActiveInstance::process`.
-    stashed_response: Option<ActiveReplicationResponse<T>>,
 }
 
 /// A wrapper around [`Instance`] with a live storage controller.
@@ -582,7 +636,6 @@ where
             replicas,
             collections,
             peeks: Default::default(),
-            stashed_response: None,
         }
     }
 
@@ -591,20 +644,6 @@ where
     /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
     pub fn initialization_complete(&mut self) {
         self.replicas.send(ComputeCommand::InitializationComplete);
-    }
-
-    /// Waits until the controller is ready to process a response.
-    ///
-    /// This method may block for an arbitrarily long time.
-    ///
-    /// When the method returns, the owner should call
-    /// [`ActiveInstance::process`] to process the ready message.
-    ///
-    /// This method is cancellation safe.
-    pub async fn ready(&mut self) {
-        if self.stashed_response.is_none() {
-            self.stashed_response = Some(self.replicas.recv().await);
-        }
     }
 
     /// Drop this compute instance.
@@ -949,54 +988,6 @@ where
         self.compute
             .replicas
             .send(ComputeCommand::UpdateMaxResultSize(max_result_size))
-    }
-
-    /// Processes the work queued by [`ComputeController::ready`].
-    ///
-    /// This method is guaranteed to return "quickly" unless doing so would
-    /// compromise the correctness of the system.
-    ///
-    /// This method is **not** guaranteed to be cancellation safe. It **must**
-    /// be awaited to completion.
-    pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
-        match self.compute.stashed_response.take() {
-            None => Ok(None),
-            Some(ActiveReplicationResponse::ComputeResponse(response)) => match response {
-                ComputeResponse::FrontierUppers(updates) => {
-                    self.update_write_frontiers(&updates).await?;
-                    Ok(None)
-                }
-                ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
-                    self.remove_peeks(std::iter::once(uuid)).await?;
-                    Ok(Some(ComputeControllerResponse::PeekResponse(
-                        uuid,
-                        peek_response,
-                        otel_ctx,
-                    )))
-                }
-                ComputeResponse::TailResponse(global_id, response) => {
-                    let new_upper = match &response {
-                        TailResponse::Batch(TailBatch { lower, upper, .. }) => {
-                            // Ensure there are no gaps in the tail stream we receive.
-                            assert_eq!(lower, &self.compute.collections[&global_id].write_frontier);
-
-                            upper.clone()
-                        }
-                        // The tail will not be written to again, but we should not confuse that
-                        // with the source of the TAIL being complete through this time.
-                        TailResponse::DroppedAt(_) => Antichain::new(),
-                    };
-                    self.update_write_frontiers(&[(global_id, new_upper)])
-                        .await?;
-                    Ok(Some(ComputeControllerResponse::TailResponse(
-                        global_id, response,
-                    )))
-                }
-            },
-            Some(ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when)) => Ok(Some(
-                ComputeControllerResponse::ReplicaHeartbeat(replica_id, when),
-            )),
-        }
     }
 }
 

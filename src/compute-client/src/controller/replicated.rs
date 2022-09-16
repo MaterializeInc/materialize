@@ -512,6 +512,8 @@ where
     }
 
     /// Receives the next response from any replica.
+    ///
+    /// This method is cancellation safe.
     pub(super) async fn recv(&mut self) -> ActiveReplicationResponse<T> {
         // If we have a pending response, we should send it immediately.
         if let Some(response) = self.state.pending_response.pop_front() {
