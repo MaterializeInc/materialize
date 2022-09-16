@@ -120,7 +120,6 @@ impl Compactor {
 
         let cfg = self.cfg.clone();
         let blob = Arc::clone(&self.blob);
-        let metrics = Arc::clone(&self.metrics);
         let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
         let mut machine = machine.clone();
         let writer_id = self.writer_id.clone();
@@ -134,20 +133,20 @@ impl Compactor {
         Some(mz_ore::task::spawn(
             || "persist::compact::apply",
             async move {
-                metrics.compaction.started.inc();
+                machine.metrics.compaction.started.inc();
                 let start = Instant::now();
 
                 let res = Compactor::compact::<T, D>(
                     cfg.clone(),
                     Arc::clone(&blob),
-                    Arc::clone(&metrics),
+                    Arc::clone(&machine.metrics),
                     Arc::clone(&cpu_heavy_runtime),
                     req,
                     writer_id.clone(),
                 )
                 .await;
-
-                metrics
+                machine
+                    .metrics
                     .compaction
                     .seconds
                     .inc_by(start.elapsed().as_secs_f64());
@@ -155,7 +154,7 @@ impl Compactor {
                 let res = match res {
                     Ok(res) => res,
                     Err(err) => {
-                        metrics.compaction.failed.inc();
+                        machine.metrics.compaction.failed.inc();
                         warn!("compaction for {} failed: {:#}", machine.shard_id(), err);
                         return;
                     }
@@ -163,14 +162,16 @@ impl Compactor {
                 let res = FueledMergeRes { output: res.output };
                 let applied = machine.merge_res(&res).await;
                 if applied {
-                    metrics.compaction.applied.inc();
+                    machine.metrics.compaction.applied.inc();
+                    machine.shard_metrics.compaction_applied.inc();
                 } else {
-                    metrics.compaction.noop.inc();
+                    machine.metrics.compaction.noop.inc();
                     for part in res.output.parts {
                         let key = part.key.complete(&machine.shard_id());
-                        retry_external(&metrics.retries.external.compaction_noop_delete, || {
-                            blob.delete(&key)
-                        })
+                        retry_external(
+                            &machine.metrics.retries.external.compaction_noop_delete,
+                            || blob.delete(&key),
+                        )
                         .await;
                     }
                 }

@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
@@ -26,9 +27,9 @@ use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::ShardId;
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct GcReq {
     pub shard_id: ShardId,
-    pub old_seqno_since: SeqNo,
     pub new_seqno_since: SeqNo,
 }
 
@@ -89,7 +90,7 @@ impl<K, V, T, D> Clone for GarbageCollector<K, V, T, D> {
 ///   possible that some future request has already deleted the blobs and
 ///   truncated consensus. It's also possible that this is the future request.
 ///   As a result, the only guarantee that we get is that the current version of
-///   head is >= new_seqno_since >= old_seqno_since.
+///   head is >= new_seqno_since.
 /// - (Aside: The above also means that if Blob is not linearizable, there is a
 ///   possible race where a blob gets deleted before it written and thus is
 ///   leaked. We anyway always have the possibility of a write process being
@@ -118,14 +119,17 @@ where
                 while let Ok((req, completer)) = gc_req_recv.try_recv() {
                     assert_eq!(req.shard_id, consolidated_req.shard_id);
                     gc_completed_senders.push(completer);
-                    consolidated_req.old_seqno_since =
-                        std::cmp::min(req.old_seqno_since, consolidated_req.old_seqno_since);
                     consolidated_req.new_seqno_since =
                         std::cmp::max(req.new_seqno_since, consolidated_req.new_seqno_since);
                 }
 
                 let merged_requests = gc_completed_senders.len() - 1;
                 if merged_requests > 0 {
+                    machine
+                        .metrics
+                        .gc
+                        .merged
+                        .inc_by(u64::cast_from(merged_requests));
                     debug!(
                         "Merged {} gc requests together for shard {}",
                         merged_requests, consolidated_req.shard_id
@@ -141,6 +145,7 @@ where
                     .instrument(gc_span)
                     .await;
                 machine.metrics.gc.finished.inc();
+                machine.shard_metrics.gc_finished.inc();
                 machine
                     .metrics
                     .gc
@@ -196,9 +201,8 @@ where
             .expect("shard codecs should not change");
 
         debug!(
-            "gc {} for [{},{}) got {} versions from scan",
+            "gc {} for {} got {} versions from scan",
             req.shard_id,
-            req.old_seqno_since,
             req.new_seqno_since,
             states.len()
         );
@@ -215,6 +219,11 @@ where
         //
         // Also a fix for #14580.
         if earliest_live_seqno > req.new_seqno_since {
+            machine.metrics.gc.noop.inc();
+            debug!(
+                "gc {} early returning, already GC'd past {}",
+                req.shard_id, req.new_seqno_since,
+            );
             return;
         }
 
@@ -262,6 +271,13 @@ where
             }
         }
 
+        debug!(
+            "gc {} collected {} deleteable batch blobs, {} deleteable rollup blobs",
+            req.shard_id,
+            deleteable_batch_blobs.len(),
+            deleteable_rollup_blobs.len()
+        );
+
         // Delete the rollup blobs before removing them from state.
         for (_, key) in deleteable_rollup_blobs.iter() {
             machine
@@ -269,6 +285,7 @@ where
                 .delete_rollup(&req.shard_id, key)
                 .await;
         }
+        debug!("gc {} deleted rollup blobs", req.shard_id);
 
         // As described in the big rustdoc comment on [StateVersions], we
         // maintain the invariant that there is always a rollup corresponding to
@@ -298,6 +315,10 @@ where
                 .delete_rollup(&state.shard_id, &rollup_key)
                 .await;
         }
+        debug!(
+            "gc {} wrote rollup at seqno {}. applied={}",
+            req.shard_id, rollup_seqno, applied
+        );
 
         // There's also a bulk delete API in s3 if the performance of this
         // becomes an issue. Maybe make Blob::delete take a list of keys?
@@ -318,6 +339,7 @@ where
             .instrument(debug_span!("batch::delete"))
             .await;
         }
+        debug!("gc {} deleted batch blobs", req.shard_id);
 
         // Now that we've deleted the eligible blobs, "commit" this info by
         // truncating the state versions that referenced them.
@@ -325,5 +347,9 @@ where
             .state_versions
             .truncate_diffs(&req.shard_id, req.new_seqno_since)
             .await;
+        debug!(
+            "gc {} truncated diffs through seqno {}",
+            req.shard_id, req.new_seqno_since
+        );
     }
 }

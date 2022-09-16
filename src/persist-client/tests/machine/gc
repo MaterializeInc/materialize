@@ -59,7 +59,7 @@ seqno=v3 batches=b0
 seqno=v4 batches=b0,b1
 
 # run gc up to our latest seqno
-gc from_seqno=0 to_seqno=4
+gc to_seqno=4
 ----
 ok
 
@@ -99,7 +99,7 @@ seqno=v6 batches=b0,b1,b2
 seqno=v7 batches=b0_1,b2
 
 # run gc to clear only the b0,b1 seqnos
-gc from_seqno=0 to_seqno=6
+gc to_seqno=6
 ----
 ok
 
@@ -126,7 +126,7 @@ k3 1 1
 part 0
 
 # run gc to clear up to the latest state.
-gc from_seqno=6 to_seqno=8
+gc to_seqno=8
 ----
 ok
 

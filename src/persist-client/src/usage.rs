@@ -90,10 +90,15 @@ impl StorageUsageClient {
 
     #[cfg(test)]
     fn open_from_blob(blob: Arc<dyn Blob + Send + Sync>) -> StorageUsageClient {
+        use mz_build_info::DUMMY_BUILD_INFO;
         use mz_ore::metrics::MetricsRegistry;
+        use mz_ore::now::SYSTEM_TIME;
+
+        use crate::PersistConfig;
+        let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         StorageUsageClient {
             blob: Arc::clone(&blob),
-            metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
+            metrics: Arc::new(Metrics::new(&cfg, &MetricsRegistry::new())),
         }
     }
 }

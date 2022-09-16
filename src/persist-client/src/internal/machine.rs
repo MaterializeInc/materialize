@@ -29,7 +29,6 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::compact::CompactReq;
-use crate::internal::gc::GcReq;
 use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics, ShardMetrics,
@@ -534,6 +533,22 @@ where
                     }
                 };
 
+                // Find out if this command has been selected to perform gc, so
+                // that it will fire off a background request to the
+                // GarbageCollector to delete eligible blobs and truncate the
+                // state history. This is dependant both on `maybe_gc` returning
+                // Some _and_ on this state being successfully compare_and_set.
+                //
+                // NB: Make sure this overwrites `garbage_collection` on every
+                // run though the loop (i.e. no `if let Some` here). When we
+                // lose a CaS race, we might discover that the winner got
+                // assigned the gc.
+                garbage_collection = new_state.maybe_gc(is_write);
+
+                // NB: Make sure this is the very last thing before the
+                // `try_compare_and_set_current` call. (In particular, it needs
+                // to come after anything that might modify new_state, such as
+                // `maybe_gc`.)
                 let diff = StateDiff::from_diff(&self.state, &new_state);
                 // Sanity check that our diff logic roundtrips and adds back up
                 // correctly.
@@ -547,25 +562,6 @@ where
                         panic!("validate_roundtrips failed: {}", err);
                     }
                 }
-
-                // Find out if this command has been selected to perform gc, so
-                // that it will fire off a background request to the
-                // GarbageCollector to delete eligible blobs and truncate the
-                // state history. This is dependant both on `maybe_gc` returning
-                // Some _and_ on this state being successfully compare_and_set.
-                //
-                // NB: Make sure this overwrites `garbage_collection` on every
-                // run though the loop (i.e. no `if let Some` here). When we
-                // lose a CaS race, we might discover that the winner got
-                // assigned the gc.
-                garbage_collection =
-                    new_state
-                        .maybe_gc(is_write)
-                        .map(|(old_seqno_since, new_seqno_since)| GcReq {
-                            shard_id: self.shard_id(),
-                            old_seqno_since,
-                            new_seqno_since,
-                        });
 
                 // SUBTLE! Unlike the other consensus and blob uses, we can't
                 // automatically retry indeterminate ExternalErrors here. However,
@@ -603,6 +599,10 @@ where
                             readers: expired_readers,
                             writers: expired_writers,
                         });
+
+                        if let Some(gc) = garbage_collection.as_ref() {
+                            debug!("Assigned gc request: {:?}", gc);
+                        }
 
                         let maintenance = RoutineMaintenance {
                             garbage_collection,
@@ -774,20 +774,26 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use differential_dataflow::trace::Description;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::cast::CastFrom;
     use mz_ore::now::SYSTEM_TIME;
+    use mz_ore::task::spawn;
+    use mz_persist::intercept::{InterceptBlob, InterceptHandle};
+    use mz_persist::location::Blob;
+    use timely::progress::Antichain;
     use tokio::sync::Mutex;
 
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::fetch::fetch_batch_part;
-    use crate::internal::compact::CompactReq;
+    use crate::internal::compact::{CompactReq, Compactor};
+    use crate::internal::gc::GcReq;
     use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
-    use crate::{Compactor, GarbageCollector, PersistConfig, ShardId};
+    use crate::{GarbageCollector, PersistConfig, ShardId};
 
     use super::*;
 
@@ -1071,8 +1077,6 @@ mod tests {
                             }
                         }
                         "gc" => {
-                            let old_seqno_since =
-                                SeqNo(get_u64(&tc.args, "from_seqno").expect("missing from_seqno"));
                             let new_seqno_since =
                                 SeqNo(get_u64(&tc.args, "to_seqno").expect("missing to_seqno"));
 
@@ -1080,7 +1084,6 @@ mod tests {
                                 &mut write.lock().await.machine,
                                 GcReq {
                                     shard_id,
-                                    old_seqno_since,
                                     new_seqno_since,
                                 },
                             )
@@ -1209,5 +1212,53 @@ mod tests {
             live_diffs.len(),
             max_live_diffs
         );
+    }
+
+    // A regression test for #14719, where a bug in gc led to an incremental
+    // state invariant being violated which resulted in gc being permanently
+    // wedged for the shard.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn regression_gc_skipped_req_and_interrupted() {
+        let mut client = new_test_client().await;
+        let intercept = InterceptHandle::default();
+        client.blob = Arc::new(InterceptBlob::new(
+            Arc::clone(&client.blob),
+            intercept.clone(),
+        )) as Arc<dyn Blob + Send + Sync>;
+        let (_, mut read) = client
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        // Create a new SeqNo
+        read.downgrade_since(&Antichain::from_elem(1)).await;
+        let new_seqno_since = read.machine.seqno();
+
+        // Start a GC in the background for some SeqNo range that is not
+        // contiguous compared to the last gc req (in this case, n/a) and then
+        // crash when it gets to the blob deletes. In the regression case, this
+        // renders the shard permanently un-gc-able.
+        assert!(new_seqno_since > SeqNo::minimum());
+        intercept.set_post_delete(Some(Arc::new(|_, _| panic!("boom"))));
+        let mut machine = read.machine.clone();
+        // Run this in a spawn so we can catch the boom panic
+        let gc = spawn(|| "", async move {
+            let req = GcReq {
+                shard_id: machine.shard_id(),
+                new_seqno_since,
+            };
+            GarbageCollector::gc_and_truncate(&mut machine, req).await
+        });
+        // Wait for gc to either panic (regression case) or finish (good case)
+        // because it happens to not call blob delete.
+        let _ = gc.await;
+
+        // Allow blob deletes to go through and try GC again. In the regression
+        // case, this hangs.
+        intercept.set_post_delete(None);
+        let req = GcReq {
+            shard_id: read.machine.shard_id(),
+            new_seqno_since,
+        };
+        let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
     }
 }

@@ -98,18 +98,12 @@ pub fn bench_persist(c: &mut Criterion) {
 }
 
 async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
+    let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
     let consensus = Arc::new(MemConsensus::default());
-    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    PersistClient::new(
-        PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
-        blob,
-        consensus,
-        metrics,
-        cpu_heavy_runtime,
-    )
-    .await
+    PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime).await
 }
 
 async fn create_file_pg_client(
@@ -121,19 +115,13 @@ async fn create_file_pg_client(
     let dir = tempfile::tempdir().map_err(anyhow::Error::new)?;
     let file = FileBlobConfig::from(dir.path());
 
+    let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let blob = Arc::new(FileBlob::open(file).await?) as Arc<dyn Blob + Send + Sync>;
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
-    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let client = PersistClient::new(
-        PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
-        blob,
-        consensus,
-        metrics,
-        cpu_heavy_runtime,
-    )
-    .await?;
+    let client = PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime).await?;
     Ok(Some((postgres_consensus, client, dir)))
 }
 
@@ -148,19 +136,13 @@ async fn create_s3_pg_client(
         None => return Ok(None),
     };
 
+    let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let blob = Arc::new(S3Blob::open(s3).await?) as Arc<dyn Blob + Send + Sync>;
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
-    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let client = PersistClient::new(
-        PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
-        blob,
-        consensus,
-        metrics,
-        cpu_heavy_runtime,
-    )
-    .await?;
+    let client = PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime).await?;
     Ok(Some((postgres_consensus, client)))
 }
 

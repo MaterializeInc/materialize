@@ -18,8 +18,8 @@ use bytes::Bytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt,
-    IntCounter, MetricsRegistry,
+    ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
+    DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry,
 };
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
@@ -31,7 +31,7 @@ use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{CounterVec, IntCounterVec};
 use timely::progress::Antichain;
 
-use crate::ShardId;
+use crate::{PersistConfig, ShardId};
 
 /// Prometheus monitoring metrics.
 ///
@@ -40,6 +40,7 @@ use crate::ShardId;
 #[derive(Debug)]
 pub struct Metrics {
     _vecs: MetricsVecs,
+    _uptime: ComputedGauge,
 
     /// Metrics for [Blob] usage.
     pub blob: BlobMetrics,
@@ -71,8 +72,20 @@ pub struct Metrics {
 
 impl Metrics {
     /// Returns a new [Metrics] instance connected to the given registry.
-    pub fn new(registry: &MetricsRegistry) -> Self {
+    pub fn new(cfg: &PersistConfig, registry: &MetricsRegistry) -> Self {
         let vecs = MetricsVecs::new(registry);
+        let start = Instant::now();
+        let uptime = registry.register_computed_gauge(
+            metric!(
+                name: "mz_persist_metadata_seconds",
+                help: "server uptime, labels are build metadata",
+                const_labels: {
+                    "version" => cfg.build_version,
+                    "build_type" => if cfg!(release) { "release" } else { "debug" }
+                },
+            ),
+            move || start.elapsed().as_secs_f64(),
+        );
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -87,6 +100,7 @@ impl Metrics {
             shards: ShardsMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
             _vecs: vecs,
+            _uptime: uptime,
         }
     }
 
@@ -548,14 +562,20 @@ impl CompactionMetrics {
 
 #[derive(Debug)]
 pub struct GcMetrics {
+    pub(crate) noop: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) finished: IntCounter,
+    pub(crate) merged: IntCounter,
     pub(crate) seconds: Counter,
 }
 
 impl GcMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         GcMetrics {
+            noop: registry.register(metric!(
+                name: "mz_persist_gc_noop",
+                help: "count of garbage collections skipped because they were already done",
+            )),
             started: registry.register(metric!(
                 name: "mz_persist_gc_started",
                 help: "count of garbage collections started",
@@ -563,6 +583,10 @@ impl GcMetrics {
             finished: registry.register(metric!(
                 name: "mz_persist_gc_finished",
                 help: "count of garbage collections finished",
+            )),
+            merged: registry.register(metric!(
+                name: "mz_persist_gc_merged_reqs",
+                help: "count of garbage collection requests merged",
             )),
             seconds: registry.register(metric!(
                 name: "mz_persist_gc_seconds",
@@ -732,6 +756,8 @@ pub struct ShardsMetrics {
     update_count: mz_ore::metrics::UIntGaugeVec,
     encoded_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
+    gc_finished: mz_ore::metrics::IntCounterVec,
+    compaction_applied: mz_ore::metrics::IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -810,6 +836,20 @@ impl ShardsMetrics {
                     var_labels: ["shard"],
                 ),
             ),
+            gc_finished: registry.register(
+                metric!(
+                    name: "mz_persist_shard_gc_finished",
+                    help: "count of garbage collections finished by shard",
+                    var_labels: ["shard"],
+                ),
+            ),
+            compaction_applied: registry.register(
+                metric!(
+                    name: "mz_persist_shard_compaction_applied",
+                    help: "count of compactions applied to state by shard",
+                    var_labels: ["shard"],
+                ),
+            ),
             shards,
         }
     }
@@ -860,6 +900,10 @@ pub struct ShardMetrics {
     update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     encoded_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    // These are already counted elsewhere in aggregate, so delete them if we
+    // remove per-shard labels.
+    pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -890,7 +934,13 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             seqnos_held: shards_metrics
                 .seqnos_held
-                .get_delete_on_drop_gauge(vec![shard]),
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            gc_finished: shards_metrics
+                .gc_finished
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            compaction_applied: shards_metrics
+                .compaction_applied
+                .get_delete_on_drop_counter(vec![shard]),
         }
     }
 
