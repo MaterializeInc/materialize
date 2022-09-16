@@ -107,7 +107,7 @@ where
                 let should_compact = req.inputs.len()
                     >= machine.cfg.compaction_heuristic_min_inputs
                     || req.inputs.iter().map(|x| x.len).sum::<usize>()
-                    >= machine.cfg.compaction_heuristic_min_updates;
+                        >= machine.cfg.compaction_heuristic_min_updates;
                 if !should_compact {
                     machine.metrics.compaction.skipped.inc();
                     // we can safely ignore errors here, it's possible the caller
@@ -139,7 +139,7 @@ where
                         req,
                         writer_id.clone(),
                     )
-                        .await;
+                    .await;
 
                     metrics
                         .compaction
@@ -160,16 +160,18 @@ where
                                         &metrics.retries.external.compaction_noop_delete,
                                         || blob.delete(&key),
                                     )
-                                        .await;
+                                    .await;
                                 }
                             }
-                        },
+                        }
                         Err(err) => {
                             metrics.compaction.failed.inc();
                             warn!("compaction for {} failed: {:#}", machine.shard_id(), err);
                         }
                     };
-                }.instrument(compact_span).await;
+                }
+                .instrument(compact_span)
+                .await;
 
                 // we can safely ignore errors here, it's possible the caller
                 // wasn't interested in waiting and dropped their receiver
