@@ -87,6 +87,13 @@ create_source_kinesis ::=
   'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' format_spec
   ('ENVELOPE NONE')?
+create_source_load_generator ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )*)?
+  'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER')
+  ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
+load_generator_option ::=
+    'TICK INTERVAL' interval
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
