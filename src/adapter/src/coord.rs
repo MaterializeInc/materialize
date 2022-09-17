@@ -593,7 +593,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let collection_desc = coll.desc.clone().into();
                     self.controller
                         .storage
-                        .create_collections(vec![(entry.id(), collection_desc)])
+                        .create_managed_collections(vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap();
 

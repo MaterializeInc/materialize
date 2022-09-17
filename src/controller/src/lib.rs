@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use mz_ore::now::NowFn;
+use mz_ore::now::{EpochMillis, NowFn};
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -194,7 +194,14 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
+    T: Timestamp
+        + Lattice
+        + TotalOrder
+        + TryInto<i64>
+        + TryFrom<i64>
+        + Codec64
+        + Unpin
+        + From<EpochMillis>,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
     StorageCommand<T>: RustType<ProtoStorageCommand>,

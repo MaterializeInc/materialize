@@ -20,7 +20,7 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
@@ -163,6 +163,11 @@ pub trait StorageController: Debug + Send {
     /// collection also acquires a read capability at this frontier, which will need to
     /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
     async fn create_collections(
+        &mut self,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError>;
+
+    async fn create_managed_collections(
         &mut self,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
@@ -720,6 +725,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64> {
     /// A persist client used to write to storage collections
     persist: Arc<Mutex<PersistClientCache>>,
     now: NowFn,
+    managed_collections: Arc<Mutex<HashSet<ShardId>>>,
 }
 
 impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
@@ -813,45 +819,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
                 .await
                 .unwrap()
                 .unwrap();
-
-            // TODO: make this work on reboot
-            if needs_init {
-                let now = self.now.clone();
-                let persist_location = self.persist_location.clone();
-                let persist = Arc::clone(&self.persist);
-                let source_id_data_shard = collection.collection_metadata.data_shard.clone();
-                let mut next_since = upper;
-
-                mz_ore::task::spawn(|| "ShardIdSourceTimestampProgress", async move {
-                    let mut interval =
-                        tokio::time::interval(tokio::time::Duration::from_millis(1_000));
-                    loop {
-                        interval.tick().await;
-                        let persist_client = persist
-                            .lock()
-                            .await
-                            .open(persist_location.clone())
-                            .await
-                            .unwrap();
-                        let (mut write, mut read) = persist_client
-                            .open::<SourceData, (), T, Diff>(source_id_data_shard)
-                            .await
-                            .expect("invalid persist usage");
-
-                        let upper = T::from(now());
-                        let _ = write
-                            .append(
-                                Vec::<((SourceData, ()), T, Diff)>::new(),
-                                Antichain::from_elem(next_since.clone()),
-                                Antichain::from_elem(upper.clone()),
-                            )
-                            .await;
-                        read.downgrade_since(&Antichain::from_elem(next_since.clone()))
-                            .await;
-                        next_since = upper;
-                    }
-                });
-            }
         }
         Ok(())
     }
@@ -1003,6 +970,24 @@ where
             .collections
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn create_managed_collections(
+        &mut self,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError> {
+        let ids: Vec<_> = collections.iter().map(|(id, _)| id.clone()).collect();
+
+        self.create_collections(collections).await?;
+
+        let mut managed_shards = self.managed_collections.lock().await;
+        managed_shards.extend(
+            ids.iter()
+                .map(|id| self.state.collections[id].collection_metadata.data_shard),
+        );
+
+        Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -1484,13 +1469,19 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis>,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
     /// Create a new storage controller from a client it should wrap.
+    ///
+    /// WARNING!
+    ///
+    /// If you do not use this method to instantiate the `Controller`,
+    /// none of the collections it manages will have their timestamps advanced
+    /// and will be rendered unreadable.
     pub async fn new(
         build_info: &'static BuildInfo,
         postgres_url: String,
@@ -1502,7 +1493,7 @@ where
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        Self {
+        let c = Self {
             state: StorageControllerState::new(postgres_url, tx).await,
             hosts: StorageHosts::new(
                 StorageHostsConfig {
@@ -1516,7 +1507,51 @@ where
             persist_location,
             persist: persist_clients,
             now,
-        }
+            managed_collections: Arc::new(Mutex::new(HashSet::new())),
+        };
+
+        // Set up automatic timestamp advancer
+        let now = c.now.clone();
+        let persist_location = c.persist_location.clone();
+        let persist = Arc::clone(&c.persist);
+        let collections = Arc::clone(&c.managed_collections);
+        let mut next_since = T::from(now());
+
+        mz_ore::task::spawn(|| "ControllerManagedCollectionTimestamper", async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
+            loop {
+                interval.tick().await;
+                let persist_client = persist
+                    .lock()
+                    .await
+                    .open(persist_location.clone())
+                    .await
+                    .unwrap();
+
+                let upper = T::from(now());
+
+                for shard in collections.lock().await.iter() {
+                    let (mut write, mut read) = persist_client
+                        .open::<SourceData, (), T, Diff>(*shard)
+                        .await
+                        .expect("invalid persist usage");
+
+                    let _ = write
+                        .append(
+                            Vec::<((SourceData, ()), T, Diff)>::new(),
+                            Antichain::from_elem(next_since.clone()),
+                            Antichain::from_elem(upper.clone()),
+                        )
+                        .await;
+                    read.downgrade_since(&Antichain::from_elem(next_since.clone()))
+                        .await;
+                }
+
+                next_since = upper;
+            }
+        });
+
+        c
     }
 }
 
