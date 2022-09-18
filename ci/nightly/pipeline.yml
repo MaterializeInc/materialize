@@ -43,6 +43,7 @@ steps:
           - { value: checks-oneatatime-restart-environmentd-storaged }
           - { value: checks-oneatatime-kill-storaged }
           - { value: checks-oneatatime-restart-postgres-backend }
+          - { value: persist-maelstrom-long }
           - { value: unused-deps }
         multiple: true
         required: false
@@ -352,6 +353,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartPostgresBackend, --execution-mode=oneatatime]
+
+  - id: persist-maelstrom-long
+    label: Long Maelstrom coverage of persist
+    timeout_in_minutes: 20
+    agents:
+      queue: linux-x86_64
+    artifact_paths: [test/persist/maelstrom/**/*.log, junit_mzcompose_*.xml]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persist
+          args: [--node-count=4, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
   - id: persistence-failpoints
     label: Persistence failpoints
