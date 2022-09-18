@@ -116,44 +116,44 @@ grape:grape
 > SELECT * FROM append_time_offset_0
 text      offset
 -------------------
-apple     1
-banana    2
-cherry    1
-date      2
-eggfruit  3
-fig       4
-grape     1
+apple     0
+banana    1
+cherry    0
+date      1
+eggfruit  2
+fig       3
+grape     0
 
 > SELECT * FROM append_time_offset_1
 text      offset
 -------------------
-apple     1
-banana    2
-cherry    1
-date      2
-eggfruit  3
-fig       4
-grape     1
+apple     0
+banana    1
+cherry    0
+date      1
+eggfruit  2
+fig       3
+grape     0
 
 > SELECT * FROM append_time_offset_2
 text      offset
 -------------------
-cherry    1
-date      2
-eggfruit  3
-fig       4
-grape     1
+cherry    0
+date      1
+eggfruit  2
+fig       3
+grape     0
 
 > SELECT * FROM append_time_offset_3
 text      offset
 -------------------
-fig       4
-grape     1
+fig       3
+grape     0
 
 > SELECT * FROM append_time_offset_4
 text      offset
 -------------------
-grape     1
+grape     0
 
 > SELECT * FROM append_time_offset_5
 text      offset
@@ -169,7 +169,7 @@ $ set-sql-timeout duration=60s
 > SELECT * FROM append_time_offset_5
 text      offset
 -------------------
-hazelnut  1
+hazelnut  0
 
 #
 # Upsert
@@ -235,39 +235,39 @@ grape:grape
 > SELECT * FROM upsert_time_offset_0
 key       text      offset
 -----------------------------
-banana    banana    2
-date      date      2
-eggfruit  eggfruit  3
-fig       fig       5
-grape     grape     1
+banana    banana    1
+date      date      1
+eggfruit  eggfruit  2
+fig       fig       4
+grape     grape     0
 
 > SELECT * FROM upsert_time_offset_1
 key       text      offset
 -----------------------------
-banana    banana    2
-date      date      2
-eggfruit  eggfruit  3
-fig       fig       5
-grape     grape     1
+banana    banana    1
+date      date      1
+eggfruit  eggfruit  2
+fig       fig       4
+grape     grape     0
 
 > SELECT * FROM upsert_time_offset_2
 key       text      offset
 -----------------------------
-date      date      2
-eggfruit  eggfruit  3
-fig       fig       5
-grape     grape     1
+date      date      1
+eggfruit  eggfruit  2
+fig       fig       4
+grape     grape     0
 
 > SELECT * FROM upsert_time_offset_3
 key       text      offset
 -----------------------------
-fig       fig       5
-grape     grape     1
+fig       fig       4
+grape     grape     0
 
 > SELECT * FROM upsert_time_offset_4
 key       text      offset
 -----------------------------
-grape     grape     1
+grape     grape     0
 
 > SELECT * FROM upsert_time_offset_5
 key       text      offset
@@ -284,7 +284,7 @@ $ set-sql-timeout duration=60s
 > SELECT * FROM upsert_time_offset_5
 key       text      offset
 -----------------------------
-hazelnut  hazelnut  1
+hazelnut  hazelnut  0
 
 #
 # Relative timestamps
@@ -319,13 +319,13 @@ cherry
 > SELECT * FROM relative_time_offset_30_years_ago
 text      offset
 -------------------
-banana    2
-cherry    3
+banana    1
+cherry    2
 
 > SELECT * FROM relative_time_offset_today
 text      offset
 -------------------
-cherry    3
+cherry    2
 
 # Make sure that we don't fetch any messages that we don't want to fetch
 

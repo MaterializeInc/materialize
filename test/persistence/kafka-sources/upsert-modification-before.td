@@ -84,27 +84,27 @@ bìrd1:
 > select * from texttext
 key           text  kafka_partition  mz_offset
 ----------------------------------------------
-fish          fish  0                1
-bírdmore      geese 0                3
-mammal1       moose 0                4
+fish          fish  0                0
+bírdmore      geese 0                2
+mammal1       moose 0                3
 
 > select * from textbytes
 key           data  kafka_partition  mz_offset
 ----------------------------------------------
-fish          fish  0                1
-bírdmore      geese 0                3
-mammal1       moose 0                4
+fish          fish  0                0
+bírdmore      geese 0                2
+mammal1       moose 0                3
 
 > select * from bytestext
 key             text  kafka_partition  mz_offset
 ------------------------------------------------
-fish            fish  0                1
-b\xc3\xadrdmore geese 0                3
-mammal1         moose 0                4
+fish            fish  0                0
+b\xc3\xadrdmore geese 0                2
+mammal1         moose 0                3
 
 > select * from bytesbytes
 key             data  kafka_partition  mz_offset
 ------------------------------------------------
-fish            fish  0                1
-b\xc3\xadrdmore geese 0                3
-mammal1         moose 0                4
+fish            fish  0                0
+b\xc3\xadrdmore geese 0                2
+mammal1         moose 0                3

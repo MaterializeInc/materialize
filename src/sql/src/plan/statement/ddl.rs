@@ -56,7 +56,7 @@ use mz_storage::types::sources::encoding::{
 use mz_storage::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
-    KinesisSourceConnection, LoadGeneratorSourceConnection, MzOffset, PostgresSourceConnection,
+    KinesisSourceConnection, LoadGeneratorSourceConnection, PostgresSourceConnection,
     PostgresSourceDetails, ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection,
     SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
@@ -440,39 +440,23 @@ pub fn plan_create_source(
                     }
                 };
 
-            let parse_offset = |s: i64| {
-                // we parse an i64 here, because we don't yet support u64's in
-                // sql, but put it into an internal MzOffset that holds a u64
-                // TODO: make this an native u64 when
-                // https://github.com/MaterializeInc/materialize/issues/7629 is
-                // resolved.
-                if s >= 0 {
-                    Ok(MzOffset {
-                        offset: s.try_into().unwrap(),
-                    })
-                } else {
-                    sql_bail!("START OFFSET must be a nonnegative integer")
-                }
-            };
-
             let mut start_offsets = HashMap::new();
-            let has_nontrivial_start_offsets = match optional_start_offset {
-                None => {
-                    start_offsets.insert(0, MzOffset::from(0));
-                    false
-                }
-                Some(KafkaStartOffsetType::StartOffset(vs)) => {
-                    for (i, v) in vs.iter().enumerate() {
-                        start_offsets.insert(i32::try_from(i)?, parse_offset(*v)?);
+            match optional_start_offset {
+                None => (),
+                Some(KafkaStartOffsetType::StartOffset(offsets)) => {
+                    for (part, offset) in offsets.iter().enumerate() {
+                        if *offset < 0 {
+                            sql_bail!("START OFFSET must be a nonnegative integer");
+                        }
+                        start_offsets.insert(i32::try_from(part)?, *offset);
                     }
-                    true
                 }
                 Some(KafkaStartOffsetType::StartTimestamp(_)) => {
                     unreachable!("time offsets should be converted in purification")
                 }
-            };
+            }
 
-            if has_nontrivial_start_offsets && envelope.requires_all_input() {
+            if !start_offsets.is_empty() && envelope.requires_all_input() {
                 sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
             }
 
