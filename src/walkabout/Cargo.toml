@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.64"
-itertools = "0.10.3"
+itertools = "0.10.4"
 mz-ore = { path = "../ore", default-features = false }
 quote = "1.0.21"
 syn = { version = "1.0.99", features = ["extra-traits", "full", "parsing"] }
