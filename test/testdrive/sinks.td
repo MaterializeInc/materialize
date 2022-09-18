@@ -111,12 +111,12 @@ snk2
 snk3
 
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 1}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 0}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk2 sort-messages=true
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 1}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 0}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
 {"before": null, "after": {"row":{"c": "goofusgallant"}}}
@@ -156,12 +156,12 @@ $ kafka-ingest topic=test format=bytes
 extra,row
 
 $ kafka-verify format=avro sink=materialize.public.snk5
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 3}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 2}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk6 sort-messages=true
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 3}}}
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 2}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 1}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 2}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 1}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 0}}}
 
 # Test that we are correctly handling SNAPSHOT on views with empty upper
 # frontier
