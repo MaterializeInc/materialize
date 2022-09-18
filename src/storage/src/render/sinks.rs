@@ -20,8 +20,8 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::Scope;
 
 use crate::controller::CollectionMetadata;
+use crate::protocol::server::worker::{SinkToken, StorageState};
 use crate::source::persist_source;
-use crate::storage_state::{SinkToken, StorageState};
 use crate::types::errors::DataflowError;
 use crate::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkDesc};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};

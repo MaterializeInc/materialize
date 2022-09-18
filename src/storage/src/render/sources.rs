@@ -27,6 +27,7 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 
 use crate::controller::{CollectionMetadata, SourceResumptionFrontierCalculator};
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
+use crate::protocol::server::worker::StorageState;
 use crate::source::types::DecodeResult;
 use crate::source::{
     self, persist_source, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
@@ -69,7 +70,7 @@ pub fn render_source<G>(
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<G::Timestamp>,
-    storage_state: &mut crate::storage_state::StorageState,
+    storage_state: &mut StorageState,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
     Rc<dyn Any>,

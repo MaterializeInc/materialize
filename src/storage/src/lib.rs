@@ -17,7 +17,6 @@ pub mod protocol;
 pub mod render;
 pub mod sink;
 pub mod source;
-pub mod storage_state;
 pub mod types;
 
 pub use decode::metrics::DecodeMetrics;

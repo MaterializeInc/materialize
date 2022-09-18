@@ -24,11 +24,13 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_service::local::LocalClient;
 
 use crate::protocol::client::StorageClient;
+use crate::protocol::server::worker::{StorageState, Worker};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::storage_state::{StorageState, Worker};
 use crate::types::connections::ConnectionContext;
 use crate::DecodeMetrics;
+
+pub(crate) mod worker;
 
 /// Configures a dataflow server.
 pub struct Config {

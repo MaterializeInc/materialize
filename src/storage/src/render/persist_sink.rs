@@ -22,9 +22,8 @@ use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::PartialOrder;
 
-use crate::storage_state::StorageState;
-
 use crate::controller::CollectionMetadata;
+use crate::protocol::server::worker::StorageState;
 use crate::types::errors::DataflowError;
 use crate::types::sources::SourceData;
 

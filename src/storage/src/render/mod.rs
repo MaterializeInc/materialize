@@ -110,7 +110,7 @@ use timely::worker::Worker as TimelyWorker;
 use mz_repr::GlobalId;
 
 use crate::controller::CollectionMetadata;
-use crate::storage_state::StorageState;
+use crate::protocol::server::worker::StorageState;
 use crate::types::sinks::StorageSinkDesc;
 use crate::types::sources::IngestionDescription;
 
