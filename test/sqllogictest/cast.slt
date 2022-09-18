@@ -101,3 +101,19 @@ query T
 SELECT pg_typeof('{1}'::int4_list_list_too::int4_list_list)
 ----
 int4_list_list
+
+# Postgres also supports `typename ( expression )` cast expressions with some limitations.
+# TODO: Support these more generally instead of just `date`.
+
+query TTT
+SELECT date('2020-01-01'), date('2020-01-01'::timestamp), date('2020-01-01'::timestamptz)
+----
+2020-01-01
+2020-01-01
+2020-01-01
+
+query error invalid input syntax
+SELECT date('2000')
+
+query error function .* does not exist
+SELECT date('2000', 'a')
