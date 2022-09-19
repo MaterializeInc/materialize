@@ -649,7 +649,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         let parent_id = self.catalog.resolve_builtin_log(parent_log).to_string();
                         pairs.into_iter().map(move |(c, p)| {
                             let row = Row::pack_slice(&[
-                                Datum::String(&log_id),
+                                Datum::String(log_id),
                                 Datum::UInt64(u64::cast_from(c)),
                                 Datum::String(&parent_id),
                                 Datum::UInt64(u64::cast_from(p)),

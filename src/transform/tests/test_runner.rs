@@ -147,9 +147,9 @@ mod tests {
                         },
                     )?;
                 }
-                Ok(convert_rel_to_string(&rel, &cat, &format_type))
+                Ok(convert_rel_to_string(&rel, cat, &format_type))
             })?,
-            TestType::Build => convert_rel_to_string(&rel, &cat, &format_type),
+            TestType::Build => convert_rel_to_string(&rel, cat, &format_type),
             TestType::Steps => {
                 // TODO(justin): this thing does not currently peek into fixpoints, so it's not
                 // that helpful for optimizations that involve those (which is most of them).
@@ -157,7 +157,7 @@ mod tests {
                 // Buffer of the names of the transformations that have been applied with no changes.
                 let mut no_change: Vec<String> = Vec::new();
 
-                writeln!(out, "{}", convert_rel_to_string(&rel, &cat, &format_type))?;
+                writeln!(out, "{}", convert_rel_to_string(&rel, cat, &format_type))?;
                 writeln!(out, "====")?;
 
                 FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
@@ -184,7 +184,7 @@ mod tests {
                             no_change = vec![];
 
                             write!(out, "Applied {:?}:", transform)?;
-                            writeln!(out, "\n{}", convert_rel_to_string(&rel, &cat, &format_type))?;
+                            writeln!(out, "\n{}", convert_rel_to_string(&rel, cat, &format_type))?;
                             writeln!(out, "====")?;
                         } else {
                             no_change.push(format!("{:?}", transform));
@@ -204,7 +204,7 @@ mod tests {
                 }
 
                 writeln!(out, "Final:")?;
-                writeln!(out, "{}", convert_rel_to_string(&rel, &cat, &format_type))?;
+                writeln!(out, "{}", convert_rel_to_string(&rel, cat, &format_type))?;
                 writeln!(out, "====")?;
 
                 out
@@ -284,7 +284,7 @@ mod tests {
         args: &HashMap<String, Vec<String>>,
         test_type: TestType,
     ) -> Result<String, String> {
-        let mut input_stream = tokenize(&s)?.into_iter();
+        let mut input_stream = tokenize(s)?.into_iter();
         let mut dataflow = Vec::new();
         while let Some(token) = input_stream.next() {
             match token {

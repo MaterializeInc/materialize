@@ -178,7 +178,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     );
 
                     crate::render::build_ingestion_dataflow(
-                        &mut self.timely_worker,
+                        self.timely_worker,
                         &mut self.storage_state,
                         ingestion.id,
                         ingestion.description,
@@ -205,7 +205,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     );
 
                     crate::render::build_export_dataflow(
-                        &mut self.timely_worker,
+                        self.timely_worker,
                         &mut self.storage_state,
                         export.id,
                         export.description,
@@ -255,7 +255,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             let reported_frontier = self
                 .storage_state
                 .reported_frontiers
-                .get_mut(&id)
+                .get_mut(id)
                 .expect("Reported frontier missing!");
 
             let observed_frontier = frontier.borrow();

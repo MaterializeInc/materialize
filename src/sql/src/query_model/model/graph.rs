@@ -357,7 +357,7 @@ impl Model {
             model: self,
             r#ref: self
                 .boxes
-                .get(&box_id)
+                .get(box_id)
                 .expect("a valid box identifier")
                 .borrow(),
         })

@@ -467,7 +467,7 @@ where
 
                 trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
                 source_upper.filter_by_partition(|pid| {
-                    crate::source::responsible_for(&id, worker_id, worker_count, &pid)
+                    crate::source::responsible_for(&id, worker_id, worker_count, pid)
                 });
                 trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
 
@@ -539,7 +539,7 @@ where
                                 .source_upper_at_frontier(resume_frontier_update.borrow())
                                 .unwrap();
                             offset_upper.filter_by_partition(|pid| {
-                                crate::source::responsible_for(&id, worker_id, worker_count, &pid)
+                                crate::source::responsible_for(&id, worker_id, worker_count, pid)
                             });
                             offset_commit_handle.commit_offsets(offset_upper.as_data_offsets());
 

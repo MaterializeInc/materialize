@@ -39,12 +39,12 @@ pub fn bench_consensus_compare_and_set(
     num_shards: usize,
 ) {
     let mut g = c.benchmark_group(name);
-    let payload = Bytes::from(workload::flat_blob(&data));
+    let payload = Bytes::from(workload::flat_blob(data));
 
     bench_all_consensus(&mut g, runtime, data, |b, consensus| {
         bench_consensus_compare_and_set_all_iters(
-            &runtime,
-            Arc::clone(&consensus),
+            runtime,
+            Arc::clone(consensus),
             &payload,
             b,
             concurrency,
@@ -81,7 +81,7 @@ fn bench_consensus_compare_and_set_all_iters(
         let mut handles = Vec::new();
         for (idx, shard_keys) in keys.into_iter() {
             let consensus = Arc::clone(&consensus);
-            let data = Bytes::clone(&data);
+            let data = Bytes::clone(data);
             let handle = runtime.handle().spawn_named(
                 || format!("bench_compare_and_set-{}", idx),
                 async move {
@@ -140,7 +140,7 @@ pub fn bench_blob_get(
     if throughput {
         g.throughput(Throughput::Bytes(data.goodput_bytes()));
     }
-    let payload = Bytes::from(workload::flat_blob(&data));
+    let payload = Bytes::from(workload::flat_blob(data));
 
     bench_all_blob(&mut g, runtime, data, |b, blob| {
         let key = ShardId::new().to_string();
@@ -156,7 +156,7 @@ pub fn bench_blob_get(
 }
 
 async fn bench_blob_get_one_iter(blob: &dyn Blob, key: &str) -> Result<(), ExternalError> {
-    let value = blob.get(&key).await?;
+    let value = blob.get(key).await?;
     assert!(value.is_some());
     Ok(())
 }
@@ -172,7 +172,7 @@ pub fn bench_blob_set(
     if throughput {
         g.throughput(Throughput::Bytes(data.goodput_bytes()));
     }
-    let payload = Bytes::from(workload::flat_blob(&data));
+    let payload = Bytes::from(workload::flat_blob(data));
 
     bench_all_blob(&mut g, runtime, data, |b, blob| {
         b.iter(|| {

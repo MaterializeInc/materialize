@@ -663,7 +663,7 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            self.downgrade_since(&new_since).await;
+            self.downgrade_since(new_since).await;
         }
     }
 

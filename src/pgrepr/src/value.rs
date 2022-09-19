@@ -221,7 +221,7 @@ impl Value {
                 };
                 buf.make_datum(|packer| {
                     packer.push_list(elems.into_iter().map(|elem| match elem {
-                        Some(elem) => elem.into_datum(buf, &elem_pg_type),
+                        Some(elem) => elem.into_datum(buf, elem_pg_type),
                         None => Datum::Null,
                     }));
                 })
@@ -236,7 +236,7 @@ impl Value {
                         for (k, v) in map {
                             row.push(Datum::String(&k));
                             row.push(match v {
-                                Some(elem) => elem.into_datum(buf, &elem_pg_type),
+                                Some(elem) => elem.into_datum(buf, elem_pg_type),
                                 None => Datum::Null,
                             });
                         }

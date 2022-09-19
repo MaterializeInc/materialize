@@ -101,7 +101,7 @@ impl CanonicalizeMfp {
             ) -> Result<(), RecursionLimitError> {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
-                CanonicalizeMfp::canonicalize_predicates(mfp, &relation);
+                CanonicalizeMfp::canonicalize_predicates(mfp, relation);
                 // undo inline_literal_constraints
                 mfp.optimize();
                 // We can usually undo, but sometimes not (see comment on `distribute_and_over_or`),

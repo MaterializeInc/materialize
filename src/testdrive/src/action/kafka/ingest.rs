@@ -110,7 +110,7 @@ impl Transcoder {
                     // https://docs.confluent.io/3.3.0/schema-registry/docs/serializer-formatter.html#wire-format
                     out.write_u8(0).unwrap();
                     out.write_i32::<NetworkEndian>(*schema_id).unwrap();
-                    out.extend(avro::to_avro_datum(&schema, val)?);
+                    out.extend(avro::to_avro_datum(schema, val)?);
                     Ok(Some(out))
                 } else {
                     Ok(None)
@@ -120,7 +120,7 @@ impl Transcoder {
                 if let Some(val) = Self::decode_json(row)? {
                     let val = avro::from_json(&val, schema.top_node())?;
                     let mut out = vec![];
-                    out.extend(avro::to_avro_datum(&schema, val)?);
+                    out.extend(avro::to_avro_datum(schema, val)?);
                     Ok(Some(out))
                 } else {
                     Ok(None)
@@ -158,7 +158,7 @@ impl Transcoder {
                 match terminator {
                     Some(t) => {
                         row.read_until(*t, &mut out)?;
-                        if out.last() == Some(&t) {
+                        if out.last() == Some(t) {
                             out.pop();
                         }
                     }

@@ -480,9 +480,9 @@ impl fmt::Display for StashError {
         match &self.inner {
             InternalStashError::Sqlite(e) => write!(f, "sqlite: {e}"),
             InternalStashError::Postgres(e) => write!(f, "postgres: {e}"),
-            InternalStashError::Fence(e) => f.write_str(&e),
-            InternalStashError::PeekSinceUpper(e) => f.write_str(&e),
-            InternalStashError::Other(e) => f.write_str(&e),
+            InternalStashError::Fence(e) => f.write_str(e),
+            InternalStashError::PeekSinceUpper(e) => f.write_str(e),
+            InternalStashError::Other(e) => f.write_str(e),
         }
     }
 }
@@ -674,7 +674,7 @@ where
         match prev {
             Some(prev) => Ok(prev),
             None => {
-                collection.append_to_batch(&mut batch, &key, &value, 1);
+                collection.append_to_batch(&mut batch, key, &value, 1);
                 stash.append(&[batch]).await?;
                 Ok(value)
             }
@@ -710,9 +710,9 @@ where
             },
         };
         if let Some(prev) = &prev {
-            collection.append_to_batch(&mut batch, &key, &prev, -1);
+            collection.append_to_batch(&mut batch, key, prev, -1);
         }
-        collection.append_to_batch(&mut batch, &key, &value, 1);
+        collection.append_to_batch(&mut batch, key, value, 1);
         stash.append(&[batch]).await?;
         Ok(prev)
     }
@@ -742,7 +742,7 @@ where
         };
         for (k, v) in entries {
             if let Some(prev_v) = prev.get(&k) {
-                collection.append_to_batch(&mut batch, &k, &prev_v, -1);
+                collection.append_to_batch(&mut batch, &k, prev_v, -1);
             }
             collection.append_to_batch(&mut batch, &k, &v, 1);
         }

@@ -162,7 +162,7 @@ where
         // TODO: Do we even need to track self.upper on WriteHandle or could
         // WriteHandle::upper just get the one out of machine?
         let fresh_upper = self.machine.fetch_upper().await;
-        self.upper.clone_from(&fresh_upper);
+        self.upper.clone_from(fresh_upper);
         fresh_upper
     }
 

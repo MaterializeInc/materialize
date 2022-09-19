@@ -170,11 +170,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 }
             }
 
-            crate::render::build_compute_dataflow(
-                self.timely_worker,
-                &mut self.compute_state,
-                dataflow,
-            );
+            crate::render::build_compute_dataflow(self.timely_worker, self.compute_state, dataflow);
         }
     }
 
@@ -328,28 +324,28 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         if !logging.log_logging {
             // Construct logging dataflows and endpoints before registering any.
             t_traces.extend(logging::timely::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&t_linked),
                 t_activator.clone(),
             ));
             r_traces.extend(logging::reachability::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&r_linked),
                 r_activator.clone(),
             ));
             d_traces.extend(logging::differential::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&d_linked),
                 d_activator.clone(),
             ));
             c_traces.extend(logging::compute::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&c_linked),
@@ -469,28 +465,28 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             // Create log processing dataflows after registering logging so we can log the
             // logging.
             t_traces.extend(logging::timely::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 t_linked,
                 t_activator,
             ));
             r_traces.extend(logging::reachability::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 r_linked,
                 r_activator,
             ));
             d_traces.extend(logging::differential::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 d_linked,
                 d_activator,
             ));
             c_traces.extend(logging::compute::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 c_linked,
@@ -583,7 +579,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             }
 
             new_uppers.push((id, new_frontier.clone()));
-            prev_frontier.clone_from(&new_frontier);
+            prev_frontier.clone_from(new_frontier);
         };
 
         let mut new_frontier = Antichain::new();

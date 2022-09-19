@@ -207,8 +207,8 @@ async fn download_objects_task(
 
                 let download_result = download_object(
                     tx,
-                    &activator,
-                    &client,
+                    activator,
+                    client,
                     &msg_ref.bucket,
                     &msg_ref.key,
                     compression,
@@ -568,7 +568,7 @@ async fn process_message(
                             } else {
                                 let m = ScanBucketMetrics::new(
                                     &base_metrics,
-                                    &source_id,
+                                    source_id,
                                     &record.s3.bucket.name,
                                 );
                                 m.objects_discovered.inc();
@@ -591,7 +591,7 @@ async fn process_message(
                 }
             }
             Err(_) => {
-                let test: Result<TestEvent, _> = serde_json::from_str(&body);
+                let test: Result<TestEvent, _> = serde_json::from_str(body);
                 match test {
                     Ok(_) => {
                         trace!("got test event for new queue");

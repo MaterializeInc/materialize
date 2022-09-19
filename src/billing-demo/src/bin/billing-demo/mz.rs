@@ -38,7 +38,7 @@ pub async fn create_proto_source(
 
     debug!("creating kafka connection=> {}", query);
 
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     let query = format!(
         "CREATE SOURCE {source} FROM KAFKA CONNECTION kafka_conn (TOPIC '{topic}') \
@@ -52,7 +52,7 @@ pub async fn create_proto_source(
 
     debug!("creating source=> {}", query);
 
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
     Ok(())
 }
 
@@ -71,7 +71,7 @@ pub async fn create_kafka_sink(
     );
 
     debug!("creating kafka connection=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     let query = format!(
         "CREATE CONNECTION IF NOT EXISTS {sink}_csr_conn
@@ -82,7 +82,7 @@ pub async fn create_kafka_sink(
     );
 
     debug!("creating confluent schema registry connection=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     let query = format!(
             "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA CONNECTION {sink}_kafka_conn (TOPIC '{topic}') \
@@ -93,7 +93,7 @@ pub async fn create_kafka_sink(
          );
 
     debug!("creating sink=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     Ok(())
 }
@@ -110,14 +110,14 @@ pub async fn create_price_table(
     );
 
     debug!("creating price table=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     use rand::{Rng, SeedableRng};
     let rng = &mut rand::rngs::StdRng::seed_from_u64(seed);
     debug!("filling price table");
     for i in 1..num_clients {
         mz_client::execute(
-            &mz_client,
+            mz_client,
             &format!(
                 "INSERT into {} VALUES ('{}', '{}', '{}')",
                 source_name,
@@ -147,12 +147,12 @@ pub async fn reingest_sink(
     );
 
     debug!("creating confluent schema registry connection=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     let query =
         format!("CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '{kafka_url}'");
     debug!("creating kafka connection=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     let query = format!(
         "
@@ -165,7 +165,7 @@ pub async fn reingest_sink(
     );
 
     debug!("creating source to reingest sink=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     Ok(())
 }
@@ -328,7 +328,7 @@ pub async fn init_views(
     ];
 
     for v in views.iter() {
-        mz_client::execute(&client, v).await?;
+        mz_client::execute(client, v).await?;
     }
 
     Ok(())
@@ -371,7 +371,7 @@ WHERE
     ];
 
     for v in views.iter() {
-        mz_client::execute(&client, v).await?;
+        mz_client::execute(client, v).await?;
     }
 
     Ok(())

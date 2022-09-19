@@ -666,8 +666,8 @@ fn test_storage_usage_collection_interval() -> Result<(), Box<dyn Error>> {
         )
     })?;
 
-    client.batch_execute(&"CREATE TABLE t (a INT)")?;
-    client.batch_execute(&"INSERT INTO t VALUES (1), (2)")?;
+    client.batch_execute("CREATE TABLE t (a INT)")?;
+    client.batch_execute("INSERT INTO t VALUES (1), (2)")?;
 
     // Retry until storage usage is updated.
     Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {

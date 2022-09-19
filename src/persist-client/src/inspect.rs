@@ -42,9 +42,9 @@ pub async fn fetch_latest_state(
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let consensus =
-        ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus.clone())?;
+        ConsensusConfig::try_from(consensus_uri, 1, metrics.postgres_consensus.clone())?;
     let consensus = consensus.clone().open().await?;
-    let blob = BlobConfig::try_from(&blob_uri).await?;
+    let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
 
     let state_versions = StateVersions::new(cfg, consensus, blob, Arc::clone(&metrics));
@@ -80,9 +80,9 @@ pub async fn fetch_latest_state_rollup(
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let consensus =
-        ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus.clone())?;
+        ConsensusConfig::try_from(consensus_uri, 1, metrics.postgres_consensus.clone())?;
     let consensus = consensus.clone().open().await?;
-    let blob = BlobConfig::try_from(&blob_uri).await?;
+    let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
 
     if let Some(diff_buf) = consensus.head(&shard_id.to_string()).await? {
@@ -109,9 +109,9 @@ pub async fn fetch_state_diffs(
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let consensus =
-        ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus.clone())?;
+        ConsensusConfig::try_from(consensus_uri, 1, metrics.postgres_consensus.clone())?;
     let consensus = consensus.clone().open().await?;
-    let blob = BlobConfig::try_from(&blob_uri).await?;
+    let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
 
     let state_versions = StateVersions::new(cfg, consensus, blob, Arc::clone(&metrics));

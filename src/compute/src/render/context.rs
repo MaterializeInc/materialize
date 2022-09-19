@@ -240,7 +240,7 @@ where
             ArrangementFlavor::Local(oks, errs) => {
                 let mut logic = constructor();
                 let oks = CollectionBundle::<S, Row, T>::flat_map_core(
-                    &oks,
+                    oks,
                     key,
                     move |k, v, t, d| logic(&[&k, &v], t, d),
                     refuel,
@@ -251,7 +251,7 @@ where
             ArrangementFlavor::Trace(_, oks, errs) => {
                 let mut logic = constructor();
                 let oks = CollectionBundle::<S, Row, T>::flat_map_core(
-                    &oks,
+                    oks,
                     key,
                     move |k, v, t, d| logic(&[&k, &v], t, d),
                     refuel,

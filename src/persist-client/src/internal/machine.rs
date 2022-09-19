@@ -302,7 +302,7 @@ where
         let mut applied_ever_true = false;
         let (_seqno, _applied, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
-                let ret = state.apply_merge_res(&res);
+                let ret = state.apply_merge_res(res);
                 if let Continue(applied) = ret {
                     applied_ever_true = applied_ever_true || applied;
                 }
@@ -885,7 +885,7 @@ pub mod datadriven {
             .state_versions
             .blob
             .list_keys_and_metadata(&key_prefix, &mut |x| {
-                let (_, key) = BlobKey::parse_ids(&x.key).expect("key should be valid");
+                let (_, key) = BlobKey::parse_ids(x.key).expect("key should be valid");
                 if let PartialBlobKey::Batch(_, _) = key {
                     write!(s, "{}: {}b\n", x.key, x.size_in_bytes);
                 }

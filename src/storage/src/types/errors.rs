@@ -270,7 +270,7 @@ impl RustType<ProtoSourceError> for SourceError {
     fn into_proto(&self) -> ProtoSourceError {
         ProtoSourceError {
             source_id: Some(self.source_id.into_proto()),
-            error: Some((&self.error).into_proto()),
+            error: Some(self.error.into_proto()),
         }
     }
 

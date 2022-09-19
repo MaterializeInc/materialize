@@ -122,7 +122,7 @@ async fn ensure_kafka_topic(
     }
 
     let mut kafka_topic = NewTopic::new(
-        &topic,
+        topic,
         partition_count,
         TopicReplication::Fixed(replication_factor),
     );

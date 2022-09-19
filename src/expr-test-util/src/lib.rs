@@ -70,7 +70,7 @@ pub fn generate_explanation(
 /// 2. The commands to register sources referenced by the [MirRelationExpr] with
 ///    the test catalog.
 pub fn json_to_spec(rel_json: &str, catalog: &TestCatalog) -> (String, Vec<String>) {
-    let mut ctx = MirRelationExprDeserializeContext::new(&catalog);
+    let mut ctx = MirRelationExprDeserializeContext::new(catalog);
     let spec = serialize::<MirRelationExpr, _>(
         &serde_json::from_str(rel_json).unwrap(),
         "MirRelationExpr",
@@ -332,7 +332,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                         } else if let Some(inner_data) = obj.get("Err") {
                             let result = format!(
                                 "(err {} {})",
-                                serialize::<EvalError, _>(&inner_data, "EvalError", self),
+                                serialize::<EvalError, _>(inner_data, "EvalError", self),
                                 serialize::<ScalarType, _>(
                                     &serde_json::to_value(&column_type.scalar_type).unwrap(),
                                     "ScalarType",
@@ -655,7 +655,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                 } else if let Some(inner_data) = inner_map["rows"].get("Err") {
                                     return Some(format!(
                                         "(constant_err {} {})",
-                                        serialize::<EvalError, _>(&inner_data, "EvalError", self),
+                                        serialize::<EvalError, _>(inner_data, "EvalError", self),
                                         serialize::<RelationType, _>(
                                             &inner_map["typ"],
                                             "RelationType",

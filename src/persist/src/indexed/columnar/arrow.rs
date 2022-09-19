@@ -93,7 +93,7 @@ pub fn encode_trace_arrow<W: Write, T: Timestamp + Codec64>(
     let options = WriteOptions { compression: None };
     let mut writer = FileWriter::try_new(w, &schema, None, options)?;
     for records in batch.updates.iter() {
-        writer.write(&encode_arrow_batch_kvtd(&records), None)?;
+        writer.write(&encode_arrow_batch_kvtd(records), None)?;
     }
     writer.finish()?;
     Ok(())

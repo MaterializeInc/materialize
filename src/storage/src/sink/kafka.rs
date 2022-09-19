@@ -1282,7 +1282,7 @@ where
                 // sending progress records and commit transactions.
                 s.flush().await.expect("post-records flush");
 
-                if let Some(ref progress_state) = s.sink_state.unwrap_running() {
+                if let Some(progress_state) = s.sink_state.unwrap_running() {
                     s.send_progress_record(*ts, progress_state)
                         .await
                         .expect("send progress record");
@@ -1399,7 +1399,7 @@ where
     let name = format!("{}-{}_encode", name_prefix, encoder.get_format_name());
 
     let mut builder = OperatorBuilder::new(name, input_stream.scope());
-    let mut input = builder.new_input(&input_stream, Pipeline);
+    let mut input = builder.new_input(input_stream, Pipeline);
     let (mut output, output_stream) = builder.new_output();
     builder.set_notify(false);
 

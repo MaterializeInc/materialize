@@ -44,7 +44,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     let mut needed_tokens = Vec::new();
     for import_id in import_ids {
         if let Some(token) = tokens.get(&import_id) {
-            needed_tokens.push(Rc::clone(&token))
+            needed_tokens.push(Rc::clone(token))
         }
     }
 

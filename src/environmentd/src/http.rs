@@ -387,7 +387,7 @@ impl AuthedClient {
             return SimpleResult::err(e);
         }
 
-        let prep_stmt = match client.get_prepared_statement(&EMPTY_PORTAL).await {
+        let prep_stmt = match client.get_prepared_statement(EMPTY_PORTAL).await {
             Ok(stmt) => stmt,
             Err(err) => {
                 return SimpleResult::err(err);
@@ -399,7 +399,7 @@ impl AuthedClient {
             let message = format!(
                 "request supplied {actual} parameters, \
                          but {statement} requires {expected}",
-                statement = (&stmt).to_ast_string(),
+                statement = stmt.to_ast_string(),
                 actual = raw_params.len(),
                 expected = param_types.len()
             );
@@ -416,7 +416,7 @@ impl AuthedClient {
                     match mz_pgrepr::Value::decode(
                         mz_pgrepr::Format::Text,
                         &pg_typ,
-                        &raw_param.as_bytes(),
+                        raw_param.as_bytes(),
                     ) {
                         Ok(param) => param.into_datum(&buf, &pg_typ),
                         Err(err) => {

@@ -210,7 +210,7 @@ pub fn plan_create_table(
 
     for (i, c) in columns.into_iter().enumerate() {
         let aug_data_type = &c.data_type;
-        let ty = query::scalar_type_from_sql(scx, &aug_data_type)?;
+        let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
         for option in &c.options {
@@ -288,7 +288,7 @@ pub fn plan_create_table(
     };
     let desc = RelationDesc::new(typ, names);
 
-    let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
     let table = Table {
         create_sql,
         desc,
@@ -376,7 +376,7 @@ pub fn plan_create_source(
                 },
             key: _,
         }) => {
-            let item = scx.get_item_by_resolved_name(&connection_name)?;
+            let item = scx.get_item_by_resolved_name(connection_name)?;
             let kafka_connection = match item.connection()? {
                 Connection::Kafka(connection) => connection.clone(),
                 _ => sql_bail!("{} is not a kafka connection", item.name()),
@@ -393,7 +393,7 @@ pub fn plan_create_source(
             }
 
             kafka_util::validate_options_for_context(
-                &options,
+                options,
                 kafka_util::KafkaOptionCheckContext::Source,
             )?;
 
@@ -512,7 +512,7 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| sql_err!("Provided ARN does not include an AWS region"))?;
 
-            let item = scx.get_item_by_resolved_name(&aws_connection)?;
+            let item = scx.get_item_by_resolved_name(aws_connection)?;
             let aws_connection = match item.connection()? {
                 Connection::Aws(connection) => connection.clone(),
                 _ => sql_bail!("{} is not an AWS connection", item.name()),
@@ -523,7 +523,7 @@ pub fn plan_create_source(
                 Some(region.into()),
                 aws_connection,
             )?;
-            let encoding = get_encoding(scx, format, &envelope, &connection)?;
+            let encoding = get_encoding(scx, format, &envelope, connection)?;
             let connection =
                 SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
             (connection, Some(item.id()), encoding)
@@ -536,7 +536,7 @@ pub fn plan_create_source(
         } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
 
-            let item = scx.get_item_by_resolved_name(&aws_connection)?;
+            let item = scx.get_item_by_resolved_name(aws_connection)?;
             let aws_connection = match item.connection()? {
                 Connection::Aws(connection) => connection.clone(),
                 _ => sql_bail!("{} is not an AWS connection", item.name()),
@@ -559,7 +559,7 @@ pub fn plan_create_source(
                 };
                 converted_sources.push(dtks);
             }
-            let encoding = get_encoding(scx, format, &envelope, &connection)?;
+            let encoding = get_encoding(scx, format, &envelope, connection)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 sql_bail!("S3 sources do not support key decoding");
             }
@@ -587,7 +587,7 @@ pub fn plan_create_source(
             connection,
             options,
         } => {
-            let item = scx.get_item_by_resolved_name(&connection)?;
+            let item = scx.get_item_by_resolved_name(connection)?;
             let connection = match item.connection()? {
                 Connection::Postgres(connection) => connection.clone(),
                 _ => sql_bail!("{} is not a postgres connection", item.name()),
@@ -704,7 +704,7 @@ pub fn plan_create_source(
         desc = desc.without_keys();
     }
 
-    plan_utils::maybe_rename_columns(format!("source {}", name), &mut desc, &col_names)?;
+    plan_utils::maybe_rename_columns(format!("source {}", name), &mut desc, col_names)?;
 
     let names: Vec<_> = desc.iter_names().cloned().collect();
     if let Some(dup) = names.iter().duplicates().next() {
@@ -762,7 +762,7 @@ pub fn plan_create_source(
 
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
-    let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
     // Allow users to specify a timeline. If they do not, determine a default
     // timeline for the source.
@@ -972,7 +972,7 @@ fn get_encoding_inner(
                     },
             } => {
                 if let Some(CsrSeedProtobuf { key, value }) = seed {
-                    let item = scx.get_item_by_resolved_name(&connection)?;
+                    let item = scx.get_item_by_resolved_name(connection)?;
                     let _ = match item.connection()? {
                         Connection::Csr(connection) => connection,
                         _ => {
@@ -1009,7 +1009,7 @@ fn get_encoding_inner(
                 schema,
             } => {
                 let descriptors = match schema {
-                    mz_sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
+                    mz_sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(bytes)?,
                     mz_sql_parser::ast::Schema::File(_) => {
                         unreachable!("File schema should already have been inlined")
                     }
@@ -1023,7 +1023,7 @@ fn get_encoding_inner(
             }
         },
         Format::Regex(regex) => {
-            let regex = Regex::new(&regex).map_err(|e| sql_err!("parsing regex: {e}"))?;
+            let regex = Regex::new(regex).map_err(|e| sql_err!("parsing regex: {e}"))?;
             DataEncodingInner::Regex(RegexEncoding {
                 regex: mz_repr::adt::regex::Regex(regex),
             })
@@ -1146,7 +1146,7 @@ pub fn plan_view(
         finishing,
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
 
-    expr.bind_parameters(&params)?;
+    expr.bind_parameters(params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     expr.finish(finishing);
     let relation_expr = expr.optimize_and_lower(&scx.into())?;
@@ -1157,7 +1157,7 @@ pub fn plan_view(
         scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
     };
 
-    plan_utils::maybe_rename_columns(format!("view {}", name), &mut desc, &columns)?;
+    plan_utils::maybe_rename_columns(format!("view {}", name), &mut desc, columns)?;
     let names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
@@ -1886,7 +1886,7 @@ pub fn plan_create_index(
         with_options,
         if_not_exists,
     } = &mut stmt;
-    let on = scx.get_item_by_resolved_name(&on_name)?;
+    let on = scx.get_item_by_resolved_name(on_name)?;
 
     if CatalogItemType::View != on.item_type()
         && CatalogItemType::MaterializedView != on.item_type()
@@ -2024,7 +2024,7 @@ pub fn plan_create_type(
                         full_name
                     );
                 }
-                scx.catalog.get_item(&id)
+                scx.catalog.get_item(id)
             }
             d => sql_bail!(
                 "CREATE TYPE ... AS {}option {} can only use named data types, but \
@@ -2058,7 +2058,7 @@ pub fn plan_create_type(
     let mut record_fields = vec![];
     match &as_type {
         CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
-            let mut with_options = normalize::option_objects(&with_options);
+            let mut with_options = normalize::option_objects(with_options);
             let option_keys = match as_type {
                 CreateTypeAs::List { .. } => vec!["element_type"],
                 CreateTypeAs::Map { .. } => vec!["key_type", "value_type"],
@@ -2391,7 +2391,7 @@ pub fn plan_create_secret(
     } = &stmt;
 
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?;
-    let create_sql = normalize::create_statement(&scx, Statement::CreateSecret(stmt.clone()))?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateSecret(stmt.clone()))?;
     let secret_as = query::plan_secret_as(scx, value.clone())?;
 
     let secret = Secret {
@@ -2697,7 +2697,7 @@ pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let create_sql = normalize::create_statement(&scx, Statement::CreateConnection(stmt.clone()))?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateConnection(stmt.clone()))?;
     let CreateConnectionStatement {
         name,
         connection,

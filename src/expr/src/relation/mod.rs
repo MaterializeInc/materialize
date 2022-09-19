@@ -391,8 +391,8 @@ impl MirRelationExpr {
                 let input = input_types.next().unwrap();
                 group_key
                     .iter()
-                    .map(|e| e.typ(&input))
-                    .chain(aggregates.iter().map(|agg| agg.typ(&input)))
+                    .map(|e| e.typ(input))
+                    .chain(aggregates.iter().map(|agg| agg.typ(input)))
                     .collect()
             }
             TopK { .. } | Negate { .. } | Threshold { .. } | ArrangeBy { .. } => {
@@ -408,7 +408,7 @@ impl MirRelationExpr {
                 for input_col_types in input_types {
                     for (base_col, col) in result.iter_mut().zip_eq(input_col_types) {
                         *base_col = base_col
-                            .union(&col)
+                            .union(col)
                             .map_err(|e| format!("{}\nIn {:#?}", e, self))
                             .unwrap();
                     }
@@ -2242,7 +2242,7 @@ impl RowSetFinishing {
             let left_datums = left_datum_vec.borrow_with(left);
             let right_datums = right_datum_vec.borrow_with(right);
             compare_columns(&self.order_by, &left_datums, &right_datums, || {
-                left.cmp(&right)
+                left.cmp(right)
             })
         };
         rows.sort_by(sort_by);
@@ -2294,7 +2294,7 @@ impl RowSetFinishing {
             let count = std::cmp::min(count.get(), remaining);
             for _ in 0..count {
                 let new_row = {
-                    let datums = datum_vec.borrow_with(&row);
+                    let datums = datum_vec.borrow_with(row);
                     row_buf
                         .packer()
                         .extend(self.project.iter().map(|i| &datums[*i]));
@@ -2345,9 +2345,9 @@ where
             }
             (lval, rval) => {
                 if order.desc {
-                    rval.cmp(&lval)
+                    rval.cmp(lval)
                 } else {
-                    lval.cmp(&rval)
+                    lval.cmp(rval)
                 }
             }
         };

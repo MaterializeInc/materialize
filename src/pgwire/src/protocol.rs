@@ -839,7 +839,7 @@ where
         // Start a transaction if we aren't in one.
         self.start_transaction(Some(1)).await;
 
-        let stmt = match self.adapter_client.get_prepared_statement(&name).await {
+        let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
             Err(err) => {
                 return self
@@ -859,7 +859,7 @@ where
         // though the true result formats are not yet known. A bit
         // weird, but this is the behavior that PostgreSQL specifies.
         let formats = vec![mz_pgrepr::Format::Text; stmt.desc().arity()];
-        let row_desc = describe_rows(&stmt.desc(), &formats);
+        let row_desc = describe_rows(stmt.desc(), &formats);
         self.send_all([parameter_desc, row_desc]).await?;
         Ok(State::Ready)
     }
@@ -1382,7 +1382,7 @@ where
                                 .await;
                         }
                         for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
-                            if !d.is_instance_of(&t) {
+                            if !d.is_instance_of(t) {
                                 return self
                                     .error(ErrorResponse::error(
                                         SqlState::INTERNAL_ERROR,

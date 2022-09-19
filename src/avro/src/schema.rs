@@ -932,7 +932,7 @@ impl SchemaParser {
                 }
             }),
             Some(&Value::Object(ref data)) => match data.get("type") {
-                Some(ref value) => self.parse_inner(default_namespace, value),
+                Some(value) => self.parse_inner(default_namespace, value),
                 None => Err(
                     ParseSchemaError::new(format!("Unknown complex type: {:?}", complex)).into(),
                 ),

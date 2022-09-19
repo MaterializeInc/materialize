@@ -229,7 +229,7 @@ impl StateVersions {
                 );
 
                 shard_metrics.set_since(new_state.since());
-                shard_metrics.set_upper(&new_state.upper());
+                shard_metrics.set_upper(new_state.upper());
                 shard_metrics.set_batch_part_count(new_state.batch_part_count());
                 shard_metrics.set_update_count(new_state.num_updates());
                 shard_metrics.set_encoded_batch_size(new_state.encoded_batch_size());
@@ -376,7 +376,7 @@ impl StateVersions {
             .retries
             .fetch_live_states
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
-        let mut all_live_diffs = self.fetch_live_diffs(&shard_id).await;
+        let mut all_live_diffs = self.fetch_live_diffs(shard_id).await;
         loop {
             let earliest_live_diff = match all_live_diffs.first() {
                 Some(x) => x,
@@ -612,7 +612,7 @@ impl StateVersions {
         D: Semigroup + Codec64,
     {
         retry_external(&self.metrics.retries.external.rollup_get, || async {
-            self.blob.get(&rollup_key.complete(&shard_id)).await
+            self.blob.get(&rollup_key.complete(shard_id)).await
         })
         .instrument(debug_span!("rollup::get"))
         .await

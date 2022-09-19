@@ -77,7 +77,7 @@ pub fn plan_insert(
 ) -> Result<Plan, PlanError> {
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
-    expr.bind_parameters(&params)?;
+    expr.bind_parameters(params)?;
     let expr = expr.optimize_and_lower(&scx.into())?;
     let returning = returning
         .expr
@@ -137,11 +137,11 @@ pub fn plan_read_then_write(
         assignments,
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
-    selection.bind_parameters(&params)?;
+    selection.bind_parameters(params)?;
     let selection = selection.optimize_and_lower(&scx.into())?;
     let mut assignments_outer = HashMap::new();
     for (idx, mut set) in assignments {
-        set.bind_parameters(&params)?;
+        set.bind_parameters(params)?;
         let set = set.lower_uncorrelated()?;
         assignments_outer.insert(idx, set);
     }
@@ -330,7 +330,7 @@ pub fn plan_explain_old(
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (view.id(), names::resolve(qcx.scx.catalog, query)?.0)
         }
         Explainee::MaterializedView(name) => {
@@ -354,7 +354,7 @@ pub fn plan_explain_old(
                     panic!("Sql for existing materialized view should parse as a materialized view")
                 }
             };
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (mview.id(), names::resolve(qcx.scx.catalog, query)?.0)
         }
         Explainee::Query(query) => (mz_repr::GlobalId::Explain, query),
@@ -365,7 +365,7 @@ pub fn plan_explain_old(
         mut expr,
         desc,
         finishing,
-    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+    } = query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     let finishing = if is_view {
         // views don't use a separate finishing
         expr.finish(finishing);
@@ -375,7 +375,7 @@ pub fn plan_explain_old(
     } else {
         Some(finishing)
     };
-    expr.bind_parameters(&params)?;
+    expr.bind_parameters(params)?;
     Ok(Plan::Explain(ExplainPlan::Old(ExplainPlanOld {
         raw_plan: expr,
         row_set_finishing: finishing,
@@ -421,7 +421,7 @@ pub fn plan_explain_new(
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (
                 mz_repr::explain_new::Explainee::Dataflow(view.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
@@ -448,7 +448,7 @@ pub fn plan_explain_new(
                     panic!("Sql for existing materialized view should parse as a materialized view")
                 }
             };
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (
                 mz_repr::explain_new::Explainee::Dataflow(mview.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
@@ -462,7 +462,7 @@ pub fn plan_explain_new(
         mut expr,
         desc,
         finishing,
-    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+    } = query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     let finishing = if is_view {
         // views don't use a separate finishing
         expr.finish(finishing);
@@ -472,7 +472,7 @@ pub fn plan_explain_new(
     } else {
         Some(finishing)
     };
-    expr.bind_parameters(&params)?;
+    expr.bind_parameters(params)?;
 
     let config_flags = config_flags
         .iter()
@@ -509,7 +509,7 @@ pub fn plan_query(
         desc,
         finishing,
     } = query::plan_root_query(scx, query, lifetime)?;
-    expr.bind_parameters(&params)?;
+    expr.bind_parameters(params)?;
     Ok(query::PlannedQuery {
         expr: expr.optimize_and_lower(&scx.into())?,
         desc,

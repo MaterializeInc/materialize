@@ -230,7 +230,7 @@ impl SessionClient {
         .await?;
         Ok(self
             .session()
-            .get_prepared_statement_unverified(&name)
+            .get_prepared_statement_unverified(name)
             .expect("must exist"))
     }
 

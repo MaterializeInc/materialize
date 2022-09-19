@@ -596,7 +596,7 @@ mod tests {
         D: Codec64,
     {
         let value = blob
-            .get(&key)
+            .get(key)
             .await
             .expect("failed to fetch part")
             .expect("missing part");

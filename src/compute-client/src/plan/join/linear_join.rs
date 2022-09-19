@@ -180,8 +180,8 @@ impl LinearJoinPlan {
         // This state will evolves as we build the join dataflow.
         let mut join_build_state = JoinBuildState::new(
             input_mapper.global_columns(source_relation),
-            &equivalences,
-            &mfp_above,
+            equivalences,
+            mfp_above,
         );
 
         let unthinned_source_arity = input_mapper.input_arity(source_relation);

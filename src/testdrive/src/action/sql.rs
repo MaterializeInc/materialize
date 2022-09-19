@@ -60,7 +60,7 @@ impl SqlAction {
         use Statement::*;
 
         let query = &self.cmd.query;
-        print_query(&query);
+        print_query(query);
 
         let should_retry = match &self.stmt {
             // Do not retry FETCH statements as subsequent executions are likely
@@ -101,7 +101,7 @@ impl SqlAction {
             false => Retry::default().max_duration(state.timeout).max_tries(1),
         }
         .retry_async_canceling(|retry_state| async move {
-            match self.try_run(state, &query).await {
+            match self.try_run(state, query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();
@@ -343,7 +343,7 @@ impl FailSqlAction {
         use Statement::{Commit, Rollback};
 
         let query = &self.query;
-        print_query(&query);
+        print_query(query);
 
         let should_retry = match &self.stmt {
             // Do not retry statements that could not be parsed
@@ -364,7 +364,7 @@ impl FailSqlAction {
                 .max_tries(state.max_tries),
             false => Retry::default().max_duration(state.timeout).max_tries(1),
         }.retry_async_canceling(|retry_state| async move {
-            match self.try_run(state, &query).await {
+            match self.try_run(state, query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();

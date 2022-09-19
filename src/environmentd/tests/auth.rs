@@ -148,7 +148,7 @@ impl Ca {
             let mut builder = X509::builder()?;
             builder.set_version(2)?;
             builder.set_pubkey(&pkey)?;
-            builder.set_issuer_name(&self.cert.subject_name())?;
+            builder.set_issuer_name(self.cert.subject_name())?;
             builder.set_subject_name(&subject_name)?;
             builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
             builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;

@@ -1131,7 +1131,7 @@ where
 {
     fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
-            default_value: &parent.value,
+            default_value: parent.value,
             local_value: None,
             staged_value: None,
             session_value: None,

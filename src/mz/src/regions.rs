@@ -117,7 +117,7 @@ pub(crate) async fn list_regions(
 
     for cloud_provider in cloud_providers {
         let cloud_provider_region_details =
-            get_cloud_provider_region_details(client, &cloud_provider, valid_profile)
+            get_cloud_provider_region_details(client, cloud_provider, valid_profile)
                 .await
                 .with_context(|| "Retrieving region details.")?;
         match cloud_provider_region_details.get(0) {
@@ -207,7 +207,7 @@ pub(crate) async fn get_provider_by_region_name(
     valid_profile: &ValidProfile,
     cloud_provider_region: &CloudProviderRegion,
 ) -> Result<CloudProvider> {
-    let cloud_providers = list_cloud_providers(&client, &valid_profile)
+    let cloud_providers = list_cloud_providers(client, valid_profile)
         .await
         .with_context(|| "Retrieving cloud providers.")?;
 
@@ -225,10 +225,9 @@ pub(crate) async fn get_provider_region(
     valid_profile: &ValidProfile,
     cloud_provider_region: &CloudProviderRegion,
 ) -> Result<Region> {
-    let cloud_provider =
-        get_provider_by_region_name(&client, &valid_profile, &cloud_provider_region)
-            .await
-            .with_context(|| "Retrieving cloud provider.")?;
+    let cloud_provider = get_provider_by_region_name(client, valid_profile, cloud_provider_region)
+        .await
+        .with_context(|| "Retrieving cloud provider.")?;
 
     let cloud_provider_region_details =
         get_cloud_provider_region_details(client, &cloud_provider, valid_profile)
@@ -247,7 +246,7 @@ pub(crate) async fn get_region_environment(
     valid_profile: &ValidProfile,
     region: &Region,
 ) -> Result<Environment> {
-    let environment_details = region_environment_details(&client, &region, &valid_profile)
+    let environment_details = region_environment_details(client, region, valid_profile)
         .await
         .with_context(|| "Environment unavailable")?;
     let environment_list = environment_details.with_context(|| "Environment unlisted")?;

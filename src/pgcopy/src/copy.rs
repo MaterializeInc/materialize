@@ -385,7 +385,7 @@ pub fn decode_copy_format_text(
 ) -> Result<Vec<Row>, io::Error> {
     let mut rows = Vec::new();
 
-    let mut parser = CopyTextFormatParser::new(&data, &delimiter, &null);
+    let mut parser = CopyTextFormatParser::new(data, &delimiter, &null);
     while !parser.is_eof() && !parser.is_end_of_copy_marker() {
         let mut row = Vec::new();
         let buf = RowArena::new();
@@ -395,8 +395,8 @@ pub fn decode_copy_format_text(
             }
             let raw_value = parser.consume_raw_value()?;
             if let Some(raw_value) = raw_value {
-                match mz_pgrepr::Value::decode_text(&typ, raw_value) {
-                    Ok(value) => row.push(value.into_datum(&buf, &typ)),
+                match mz_pgrepr::Value::decode_text(typ, raw_value) {
+                    Ok(value) => row.push(value.into_datum(&buf, typ)),
                     Err(err) => {
                         let msg = format!("unable to decode column: {}", err);
                         return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
@@ -458,7 +458,7 @@ pub fn decode_copy_format_csv(
     let mut record = ByteRecord::new();
 
     while rdr.read_byte_record(&mut record)? {
-        if record.len() == 1 && record.iter().next() == Some(&END_OF_COPY_MARKER) {
+        if record.len() == 1 && record.iter().next() == Some(END_OF_COPY_MARKER) {
             break;
         }
 
@@ -482,7 +482,7 @@ pub fn decode_copy_format_csv(
                 row.push(Datum::Null);
             } else {
                 match mz_pgrepr::Value::decode_text(typ, raw_value) {
-                    Ok(value) => row.push(value.into_datum(&buf, &typ)),
+                    Ok(value) => row.push(value.into_datum(&buf, typ)),
                     Err(err) => {
                         let msg = format!("unable to decode column: {}", err);
                         return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn test_copy_format_text_parser() {
         let text = "\t\\nt e\t\\N\t\n\\x60\\xA\\x7D\\x4a\n\\44\\044\\123".as_bytes();
-        let mut parser = CopyTextFormatParser::new(&text, "\t", "\\N");
+        let mut parser = CopyTextFormatParser::new(text, "\t", "\\N");
         assert!(parser.is_column_delimiter());
         parser
             .expect_column_delimiter()
@@ -557,7 +557,7 @@ mod tests {
             vec![Some("30"), None],
             vec![Some("40"), None],
         ];
-        let mut parser = CopyTextFormatParser::new(&text, "\t", "");
+        let mut parser = CopyTextFormatParser::new(text, "\t", "");
         for line in expect {
             for (i, value) in line.iter().enumerate() {
                 if i > 0 {
@@ -647,7 +647,7 @@ mod tests {
         ];
 
         for test in tests {
-            let mut parser = CopyTextFormatParser::new(&test.input.as_bytes(), "\t", "\\N");
+            let mut parser = CopyTextFormatParser::new(test.input.as_bytes(), "\t", "\\N");
             assert_eq!(
                 parser
                     .consume_raw_value()

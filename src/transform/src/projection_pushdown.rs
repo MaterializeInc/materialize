@@ -192,7 +192,7 @@ impl ProjectionPushdown {
                 let unique_outputs = outputs.iter().map(|i| *i).collect::<BTreeSet<_>>();
                 if outputs.len() == unique_outputs.len() {
                     // Push down the project as is.
-                    self.action(input, &outputs, gets)?;
+                    self.action(input, outputs, gets)?;
                     *relation = input.take_dangerous();
                 } else {
                     // Push down only the unique elems in `outputs`.
