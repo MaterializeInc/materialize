@@ -214,7 +214,7 @@ i5      v5  <CLUSTER_NAME>  {substr}
 > SHOW INDEXES FROM multicol
 name    on          cluster         key
 -------------------------------------------------------------------------------
-i6      multicol    <CLUSTER_NAME>  {b, a, d}
+i6      multicol    <CLUSTER_NAME>  {b,a,d}
 
 # Test cascade deletes all indexes associated with cascaded views
 > DROP VIEW v4 CASCADE;
@@ -249,7 +249,7 @@ contains:unknown catalog item 'i4'
 > SHOW INDEXES FROM s3;
 name    on  cluster         key
 ----------------------------------------------------------------------------------------------
-j1      s3  <CLUSTER_NAME>  {"pg_catalog.ascii(y)"}
+j1      s3  <CLUSTER_NAME>  "{pg_catalog.ascii(y)}"
 
 > DROP SOURCE s3;
 
@@ -274,7 +274,7 @@ contains:unknown catalog item 'j1'
 > SHOW INDEXES FROM s4;
 name    on  cluster         key
 ------------------------------------------------------------------------------------
-j2      s4  <CLUSTER_NAME>  "{x * 2}"
+j2      s4  <CLUSTER_NAME>  "{x + 2}"
 
 > SHOW INDEXES FROM w;
 name    on          cluster         key

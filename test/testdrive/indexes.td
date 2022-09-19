@@ -138,7 +138,6 @@ data_view_expr_a_idx    data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 > CREATE INDEX named_idx ON data_view (b - a, a)
 
 > SHOW INDEXES FROM data_view
-cluster on_name    key_name    seq_in_index  column_name  expression  nullable
 name        on          cluster             key
 ---------------------------------------------------------------------------------------------
 named_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
@@ -170,8 +169,8 @@ materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\"
 > SHOW INDEXES FROM foo
 foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}
 foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
-foo_expr_idx1   foo <VARIABLE_OUTPUT>   {"pg_catalog.substr(z, 3)"}
-> SHOW INDEXES FROM foo WHERE Column_name = 'noexist'
+foo_expr_idx1   foo <VARIABLE_OUTPUT>   "{pg_catalog.substr(z, 3)}"
+> SHOW INDEXES FROM foo WHERE name = 'noexist'
 > SHOW INDEXES FROM foo WHERE name = 'foo_expr_idx'
 foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
 # TODO(justin): not handled in parser yet:
