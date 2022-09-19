@@ -28,7 +28,6 @@ use mz_stash::Append;
 use crate::catalog;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
-
 use crate::coord::{
     Coordinator, CreateSourceStatementReady, Message, PendingTxn, ReplicaMetadata, SendDiffs,
     SinkConnectionReady,
@@ -52,11 +51,16 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
             Message::GroupCommitInitiate => {
-                self.try_group_commit().await;
+                self.initiate_group_commit().await;
             }
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard) => {
-                self.group_commit_apply(timestamp, responses, false, write_lock_guard)
-                    .await;
+            Message::GroupCommitWaitForSystemClock => {
+                self.wait_for_system_clock().await;
+            }
+            Message::GroupCommitApply(timestamp, responses) => {
+                self.apply_group_commit(timestamp, responses).await
+            }
+            Message::AdvanceTimelines => {
+                self.advance_timelines().await;
             }
             Message::ComputeInstanceStatus(status) => {
                 self.message_compute_instance_status(status).await
@@ -343,7 +347,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
                         .await;
                 }
-                Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
+                Deferred::GroupCommit => self.append_group_commit(Some(write_lock_guard)).await,
             }
         }
         // N.B. if no deferred plans, write lock is released by drop

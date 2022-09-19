@@ -16,6 +16,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
+use timely::PartialOrder;
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::CollectionPlan;
@@ -630,5 +631,36 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         Ok(id_bundle)
+    }
+
+    pub(crate) async fn advance_timelines(&mut self) {
+        let global_timelines = std::mem::take(&mut self.global_timelines);
+        for (
+            timeline,
+            TimelineState {
+                mut oracle,
+                mut read_holds,
+            },
+        ) in global_timelines
+        {
+            let now = if timeline == Timeline::EpochMilliseconds {
+                oracle.read_ts()
+            } else {
+                // For non realtime sources, we define now as the largest timestamp, not in
+                // advance of any object's upper. This is the largest timestamp that is closed
+                // to writes.
+                let id_bundle = self.ids_in_timeline(&timeline);
+                self.largest_not_in_advance_of_upper(&id_bundle)
+            };
+            oracle
+                .apply_write(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
+                .await;
+            let read_ts = oracle.read_ts();
+            if read_holds.time.less_than(&read_ts) {
+                read_holds = self.update_read_hold(read_holds, read_ts).await;
+            }
+            self.global_timelines
+                .insert(timeline, TimelineState { oracle, read_holds });
+        }
     }
 }

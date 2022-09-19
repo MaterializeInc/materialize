@@ -82,7 +82,7 @@ use rand::seq::SliceRandom;
 use timely::progress::Timestamp as _;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{span, Level};
 use uuid::Uuid;
 
@@ -116,7 +116,9 @@ use crate::catalog::{
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
-use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
+use crate::coord::appends::{
+    BuiltinTableUpdateSource, Deferred, GroupCommitState, PendingWriteTxn,
+};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::{ReadCapability, ReadHolds};
@@ -151,24 +153,22 @@ pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<mz_repr::Timestamp> =
 pub const DUMMY_AVAILABILITY_ZONE: &str = "";
 
 #[derive(Debug)]
-pub enum Message<T = mz_repr::Timestamp> {
+pub enum Message {
     Command(Command),
     ControllerReady,
     CreateSourceStatementReady(CreateSourceStatementReady),
     SinkConnectionReady(SinkConnectionReady),
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
-    /// Initiates a group commit.
     GroupCommitInitiate,
-    /// Makes a group commit visible to all clients.
+    GroupCommitWaitForSystemClock,
     GroupCommitApply(
         /// Timestamp of the writes in the group commit.
-        T,
+        mz_repr::Timestamp,
         /// Clients waiting on responses from the group commit.
         Vec<CompletedClientTransmitter<ExecuteResponse>>,
-        /// Optional lock if the group commit contained writes to user tables.
-        Option<OwnedMutexGuard<()>>,
     ),
+    AdvanceTimelines,
     ComputeInstanceStatus(ComputeInstanceEvent),
     RemovePendingPeeks {
         conn_id: ConnectionId,
@@ -337,6 +337,8 @@ pub struct Coordinator<S> {
     write_lock_wait_group: VecDeque<Deferred>,
     /// Pending writes waiting for a group commit
     pending_writes: Vec<PendingWriteTxn>,
+    /// TODO(jkosh44)
+    group_commit_state: GroupCommitState,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -916,6 +918,7 @@ pub async fn serve<S: Append + 'static>(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
+                group_commit_state: GroupCommitState::Idle,
                 secrets_controller,
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
