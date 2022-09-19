@@ -657,13 +657,11 @@ fn test_storage_usage_collection_interval() -> Result<(), Box<dyn Error>> {
 
     // Retry because it may take some time for the initial snapshot to be taken.
     let initial_storage: i64 = Retry::default().retry(|_| {
-        Ok::<i64, String>(
-            client
-                .query_one("SELECT SUM(size_bytes)::int8 FROM mz_storage_usage;", &[])
-                .map_err(|e| e.to_string())?
-                .try_get::<_, i64>(0)
-                .map_err(|e| e.to_string())?,
-        )
+        client
+            .query_one("SELECT SUM(size_bytes)::int8 FROM mz_storage_usage;", &[])
+            .map_err(|e| e.to_string())?
+            .try_get::<_, i64>(0)
+            .map_err(|e| e.to_string())
     })?;
 
     client.batch_execute("CREATE TABLE t (a INT)")?;
@@ -703,16 +701,14 @@ fn test_storage_usage_updates_between_restarts() -> Result<(), Box<dyn Error>> {
         let mut client = server.connect(postgres::NoTls)?;
         // Retry because it may take some time for the initial snapshot to be taken.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
-            Ok::<f64, String>(
-                client
+            client
                     .query_one(
                         "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_storage_usage;",
                         &[],
                     )
                     .map_err(|e| e.to_string())?
                     .try_get::<_, f64>(0)
-                    .map_err(|e| e.to_string())?,
-            )
+                    .map_err(|e| e.to_string())
         })?
     };
 
@@ -758,16 +754,14 @@ fn test_storage_usage_doesnt_update_between_restarts() -> Result<(), Box<dyn Err
         let mut client = server.connect(postgres::NoTls)?;
         // Retry because it may take some time for the initial snapshot to be taken.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
-            Ok::<f64, String>(
-                client
+            client
                     .query_one(
                         "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_storage_usage;",
                         &[],
                     )
                     .map_err(|e| e.to_string())?
                     .try_get::<_, f64>(0)
-                    .map_err(|e| e.to_string())?,
-            )
+                    .map_err(|e| e.to_string())
         })?
     };
 

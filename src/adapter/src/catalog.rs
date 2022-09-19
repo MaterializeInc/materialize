@@ -5223,15 +5223,15 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        Ok(self.desc(name)?)
+        self.desc(name)
     }
 
     fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
-        Ok(self.func()?)
+        self.func()
     }
 
     fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
-        Ok(self.source_desc()?)
+        self.source_desc()
     }
 
     fn connection(&self) -> Result<&mz_storage::types::connections::Connection, SqlCatalogError> {

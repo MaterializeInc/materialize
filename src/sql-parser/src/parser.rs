@@ -4809,7 +4809,7 @@ impl<'a> Parser<'a> {
             if self.consume_token(&Token::LParen) {
                 return self.parse_derived_table_factor(Lateral);
             } else if self.parse_keywords(&[ROWS, FROM]) {
-                return Ok(self.parse_rows_from()?);
+                return self.parse_rows_from();
             } else {
                 let name = self.parse_object_name()?;
                 self.expect_token(&Token::LParen)?;

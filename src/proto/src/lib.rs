@@ -237,10 +237,10 @@ where
     }
 
     fn from_proto(proto: Vec<T>) -> Result<Self, TryFromProtoError> {
-        Ok(proto
+        proto
             .into_iter()
             .map(T::into_rust)
-            .collect::<Result<HashMap<_, _>, _>>()?)
+            .collect::<Result<HashMap<_, _>, _>>()
     }
 }
 
@@ -277,10 +277,10 @@ where
     }
 
     fn from_proto(proto: Vec<T>) -> Result<Self, TryFromProtoError> {
-        Ok(proto
+        proto
             .into_iter()
             .map(T::into_rust)
-            .collect::<Result<BTreeMap<_, _>, _>>()?)
+            .collect::<Result<BTreeMap<_, _>, _>>()
     }
 }
 
