@@ -312,6 +312,11 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             status: StatusCode::OK,
             body: r#"{"results":[{"error":"request supplied 0 parameters, but SELECT $1 requires 1"}]}"#,
         },
+        TestCase {
+            query: "tail (select * from t)",
+            status: StatusCode::BAD_REQUEST,
+            body: r#"unsupported via this API: TAIL (SELECT * FROM t)"#,
+        },
     ];
 
     for tc in tests {
@@ -414,19 +419,19 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         // Empty query
         TestCaseParams {
             requests: vec![("", vec![])],
-            status: StatusCode::OK,
-            body: r#"{"results":[{"error":"each query must contain exactly 1 statement"}]}"#,
+            status: StatusCode::BAD_REQUEST,
+            body: r#"each query must contain exactly 1 statement, but "" contains 0"#,
         },
         // Empty query w/ param
         TestCaseParams {
             requests: vec![("", vec![Some("1")])],
-            status: StatusCode::OK,
-            body: r#"{"results":[{"error":"each query must contain exactly 1 statement"}]}"#,
+            status: StatusCode::BAD_REQUEST,
+            body: r#"each query must contain exactly 1 statement, but "" contains 0"#,
         },
         TestCaseParams {
             requests: vec![("select 1 as col", vec![]), ("", vec![None])],
-            status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"error":"each query must contain exactly 1 statement"}]}"#,
+            status: StatusCode::BAD_REQUEST,
+            body: r#"each query must contain exactly 1 statement, but "" contains 0"#,
         },
         // Multiple statements
         TestCaseParams {
@@ -434,8 +439,8 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
                 ("select 1 as col", vec![]),
                 ("select 1; select 2;", vec![None]),
             ],
-            status: StatusCode::OK,
-            body: r#"{"results":[{"rows":[[1]],"col_names":["col"]},{"error":"each query must contain exactly 1 statement"}]}"#,
+            status: StatusCode::BAD_REQUEST,
+            body: r#"each query must contain exactly 1 statement, but "select 1; select 2;" contains 2"#,
         },
         // Txns
         // - Rolledback
@@ -512,6 +517,11 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             requests: vec![("select * from t", vec![])],
             status: StatusCode::OK,
             body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"]}]}"#,
+        },
+        TestCaseParams {
+            requests: vec![("tail (select * from t)", vec![])],
+            status: StatusCode::BAD_REQUEST,
+            body: r#"unsupported via this API: TAIL (SELECT * FROM t)"#,
         },
     ];
 
