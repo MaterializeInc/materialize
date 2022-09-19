@@ -17,7 +17,11 @@ k1 0 1
 ----
 parts=1 len=1
 
-compare-and-append input=b0
+register-writer writer_id=w11111111-1111-1111-1111-111111111111
+----
+[0]
+
+compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
 ----
 ok
 
