@@ -21,7 +21,7 @@ use timely::PartialOrder;
 use tracing::warn;
 
 use mz_compute_client::command::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_client::controller::{ComputeInstanceId, Instance as ComputeInstanceController};
+use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
 use mz_compute_client::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
 };
@@ -50,7 +50,7 @@ pub struct DataflowBuilder<'a, T> {
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
-    pub compute: &'a ComputeInstanceController<T>,
+    pub compute: ComputeInstanceRef<'a, T>,
     recursion_guard: RecursionGuard,
 }
 
@@ -75,7 +75,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.controller.compute.instance(instance).unwrap();
+        let compute = self.controller.compute.instance_ref(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
             compute,
@@ -103,9 +103,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         self.controller
             .active_compute()
-            .instance(instance)
-            .unwrap()
-            .create_dataflows(dataflow_plans)
+            .create_dataflows(instance, dataflow_plans)
             .await
             .unwrap();
         self.initialize_compute_read_policies(
@@ -185,7 +183,7 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.dataflow_client.compute.instance(instance).unwrap();
+        let compute = self.dataflow_client.compute.instance_ref(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog,
             compute,
