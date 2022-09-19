@@ -142,6 +142,8 @@ Field                       | Value            | Required | Description
 `PORT`                      | `int4`           | ✓        | Port for the connection.
 `USER`                      | `text`           | ✓        | Username for the connection.
 
+After executing the `CREATE CONNECTION my_tunnel FOR SSH TUNNEL ...` command, the public keys to be placed on the bastion server can be found by running `SELECT * FROM mz_ssh_tunnel_connections;`.
+
 ##### Example
 
 ```sql
