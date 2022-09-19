@@ -122,11 +122,25 @@ def main() -> int:
                 if args.reset:
                     _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
                 _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
+
+            os.mkdir(ROOT / "mzdata")
+            environment_file = ROOT / "mzdata" / "environment-id"
+            try:
+                with open(environment_file, "r") as file:
+                    environment_id = file.read().rstrip()
+            except FileNotFoundError:
+                import uuid
+
+                environment_id = f"environment-{uuid.uuid4()}-0"
+                with open(environment_file, "w+") as file:
+                    file.write(environment_id)
+
             command += [
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{ROOT}/mzdata/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
+                f"--environment-id={environment_id}",
             ]
         elif args.program == "sqllogictest":
             _handle_lingering_services(kill=True)
