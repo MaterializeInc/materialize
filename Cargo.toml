@@ -109,6 +109,7 @@ debug = 1
 csv = { git = "https://github.com/BurntSushi/rust-csv.git" }
 csv-core = { git = "https://github.com/BurntSushi/rust-csv.git" }
 headers = { git = "https://github.com/hyperium/headers.git" }
+hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 mysql_common = { git = "https://github.com/blackbeam/rust_mysql_common.git" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
