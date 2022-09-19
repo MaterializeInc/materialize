@@ -129,7 +129,7 @@ data_view_a_idx data_view   <VARIABLE_OUTPUT>   {a}
 name                    on          cluster             key
 -----------------------------------------------------------------------------------------------
 data_view_b_a_idx       data_view   <VARIABLE_OUTPUT>   {b,a}
-data_view_expr_a_idx    data_view   <VARIABLE_OUTPUT>   {"b - a", a}
+data_view_expr_a_idx    data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 
 > DROP INDEX data_view_b_a_idx
 > DROP INDEX data_view_expr_a_idx
@@ -141,7 +141,7 @@ data_view_expr_a_idx    data_view   <VARIABLE_OUTPUT>   {"b - a", a}
 cluster on_name    key_name    seq_in_index  column_name  expression  nullable
 name        on          cluster             key
 ---------------------------------------------------------------------------------------------
-named_idx   data_view   <VARIABLE_OUTPUT>   {"b - a", a}
+named_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 
 > DROP INDEX named_idx
 
@@ -152,7 +152,7 @@ named_idx   data_view   <VARIABLE_OUTPUT>   {"b - a", a}
 > SHOW INDEXES FROM data_view
 name                    on          cluster             key
 ------------------------------------------------------------------------------------------------------
-data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {"b - a", a}
+data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 
 > SHOW CREATE INDEX data_view_primary_idx
 Index                                    "Create Index"
@@ -169,11 +169,11 @@ materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\"
 > CREATE INDEX ON foo (substr(z, 3))
 > SHOW INDEXES FROM foo
 foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}
-foo_expr_idx    foo <VARIABLE_OUTPUT>   {"a + b"}
+foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
 foo_expr_idx1   foo <VARIABLE_OUTPUT>   {"pg_catalog.substr(z, 3)"}
 > SHOW INDEXES FROM foo WHERE Column_name = 'noexist'
 > SHOW INDEXES FROM foo WHERE name = 'foo_expr_idx'
-foo_expr_idx    foo <VARIABLE_OUTPUT>   {"a + b"}
+foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
 # TODO(justin): not handled in parser yet:
 #   SHOW INDEXES FROM v LIKE '%v'
 

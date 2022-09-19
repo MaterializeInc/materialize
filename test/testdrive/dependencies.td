@@ -146,7 +146,7 @@ contains:catalog item 'materialize.public.i1' is an index and so cannot be depen
 > SHOW INDEXES FROM v2a;
 name    on  cluster         key
 ---------------------------------------------------------------------------------------
-i2      v2a <CLUSTER_NAME>  {"x * 2"}
+i2      v2a <CLUSTER_NAME>  "{x * 2}"
 
 > SHOW INDEXES FROM v2;
 name    on  cluster         key
@@ -274,7 +274,7 @@ contains:unknown catalog item 'j1'
 > SHOW INDEXES FROM s4;
 name    on  cluster         key
 ------------------------------------------------------------------------------------
-j2      s4  <CLUSTER_NAME>  {"x + 2"}
+j2      s4  <CLUSTER_NAME>  "{x * 2}"
 
 > SHOW INDEXES FROM w;
 name    on          cluster         key
