@@ -193,7 +193,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             },
             persist_clients,
             storage_stash_url,
-            now: now.clone(),
+            now: SYSTEM_TIME.clone(),
         },
         secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
         sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

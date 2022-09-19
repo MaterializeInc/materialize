@@ -740,13 +740,38 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
             .unwrap()
     }
 
-    async fn truncate_managed_collection(&mut self, shard_id: ShardId) {
+    async fn register_managed_collection(&mut self, global_id: GlobalId) {
+        let shard_id = dbg!(
+            self.state.collections[&global_id]
+                .collection_metadata
+                .data_shard
+        );
+        self.managed_collections.lock().await.insert(shard_id);
+    }
+
+    /// Effectively truncates the `data_shard` correlated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `global_id` is not correlated to a collection.
+    /// - If `data_shard` of the collection correlated to `global_id` is not
+    ///   managed.
+    /// - If any fetched key or value from the collection is an error.
+    async fn truncate_managed_collection(&mut self, global_id: GlobalId) {
+        let shard_id = self.state.collections[&global_id]
+            .collection_metadata
+            .data_shard;
+
         assert!(
             self.managed_collections.lock().await.contains(&shard_id),
-            "cannot truncate managed collection before it's managed"
+            "cannot truncate collection before it's managed"
         );
+
         let persist = self.open_persist_client().await;
-        let (mut write_handle, mut read_handle) = persist.open(shard_id).await.unwrap();
+        let (mut write_handle, mut read_handle) = persist
+            .open::<SourceData, (), T, Diff>(shard_id)
+            .await
+            .unwrap();
 
         // Write values as of now.
         let now = (self.now)();
@@ -754,7 +779,8 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
         let lower = T::from(now);
         let upper = T::from(now + 1);
 
-        // Downgrade write capability to now.
+        // Downgrade write capability to now so we can perform snapshot at
+        // `as_of`.
         let _ = write_handle
             .append(
                 Vec::<((SourceData, ()), T, Diff)>::new(),
@@ -767,106 +793,123 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
 
         let negated: Vec<_> = updates
             .into_iter()
-            .map(|((k_res, _), _, d)| ((k_res.unwrap(), ()), lower.clone(), -d))
+            .map(|((k_res, v_res), _, d)| ((k_res.unwrap(), v_res.unwrap()), lower.clone(), -d))
             .collect();
 
         let _ = write_handle
             .append(
                 negated,
-                Antichain::from_elem(lower.clone()),
+                Antichain::from_elem(T::minimum()),
                 Antichain::from_elem(upper.clone()),
             )
-            .await;
+            .await
+            .unwrap()
+            .unwrap();
+    }
 
-        // Permit compaction.
-        read_handle
-            .downgrade_since(&Antichain::from_elem(lower))
-            .await;
+    /// Append `updates` to the `data_shard` correlated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `global_id` is not correlated to a collection.
+    /// - If `data_shard` of the collection correlated to `global_id` is not
+    ///   managed.
+    async fn append_to_managed_collection(
+        &mut self,
+        id: GlobalId,
+        updates: Vec<((SourceData, ()), Diff)>,
+    ) {
+        let shard_id = self.state.collections[&id].collection_metadata.data_shard;
+
+        assert!(
+            self.managed_collections.lock().await.contains(&shard_id),
+            "cannot append collection before it's managed"
+        );
+
+        let persist_client = self.open_persist_client().await;
+
+        let (mut write, _read) = persist_client
+            .open::<SourceData, (), T, Diff>(shard_id)
+            .await
+            .expect("invalid persist usage");
+
+        // Write values as of now.
+        let now = (self.now)();
+        let lower = T::from(now);
+        let upper = T::from(now + 1);
+
+        // Insert `T` into updates.
+        let updates: Vec<_> = updates
+            .into_iter()
+            .map(|(source_data, diff)| (source_data, lower.clone(), diff))
+            .collect();
+
+        // Write data in a way that makes it immediately readable
+        write
+            .append(
+                updates,
+                Antichain::from_elem(T::minimum()),
+                Antichain::from_elem(upper.clone()),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    async fn initialize_shard_mapping(&mut self) {
+        let id = self.state.shard_collection_global_id.unwrap();
+
+        // Pack updates into rows
+        let mut row_buf = Row::default();
+        let mut updates = Vec::with_capacity(self.state.collections.len());
+        for (
+            global_id,
+            CollectionState {
+                collection_metadata: CollectionMetadata { data_shard, .. },
+                ..
+            },
+        ) in self.state.collections.iter()
+        {
+            let mut packer = row_buf.packer();
+            packer.push(Datum::from(global_id.to_string().as_str()));
+            packer.push(Datum::from(data_shard.to_string().as_str()));
+            updates.push(((SourceData(Ok(row_buf.clone())), ()), 1));
+        }
+
+        self.append_to_managed_collection(id, updates).await;
     }
 
     /// Tracks the mapping of `GlobalId` to data shards in the collection at
     /// `self.state.shard_collection_global_id`.
-    async fn register_shards(
-        &mut self,
-        global_id: GlobalId,
-        shard_id: ShardId,
-    ) -> Result<(), StorageError> {
+    ///
+    /// However, data is written iff the `shard_collection_global_id` correlates
+    /// to a managed collection; in other cases, data is dropped on the floor.
+    /// In these cases, the data is later written by
+    /// [`Self::initialize_shard_mapping`].
+    async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId) {
         let id = match self.state.shard_collection_global_id {
-            Some(id) => id,
-            None => return Ok(()),
+            Some(id) if self.state.collections.get(&id).is_some() => id,
+            _ => return,
         };
-        let persist_client = self.open_persist_client().await;
 
-        if let Some(collection) = self.state.collections.get(&id) {
-            let (mut write, mut read) = persist_client
-                .open::<SourceData, (), T, Diff>(collection.collection_metadata.data_shard)
-                .await
-                .expect("invalid persist usage");
-
-            // Write values as of now.
-            let now = (self.now)();
-            let as_of = Antichain::from_elem(T::from(now - 1));
-            let lower = T::from(now);
-            let upper = T::from(now + 1);
-
-            // Downgrade write capability to now.
-            let _ = write
-                .append(
-                    Vec::<((SourceData, ()), T, Diff)>::new(),
-                    Antichain::from_elem(T::minimum()),
-                    Antichain::from_elem(lower.clone()),
-                )
-                .await;
-
-            // Find all data at time less than now. If there is no data, we
-            // need to initialize this shard with all data.
-            // ???: What is the best way to do this?
-            let needs_init = read.snapshot_and_fetch(as_of).await.unwrap().is_empty();
-
-            let updates = if needs_init {
-                // Include all data shards in this update; this will include
-                // the shards passed into this function as arguments, so we can
-                // safely ignore them.
-                let mut updates = Vec::with_capacity(self.state.collections.len());
-                for (
-                    global_id,
-                    CollectionState {
-                        collection_metadata: CollectionMetadata { data_shard, .. },
-                        ..
-                    },
-                ) in self.state.collections.iter()
-                {
-                    updates.push((global_id.to_string(), data_shard.to_string()));
-                }
-                updates
-            } else {
-                vec![(global_id.to_string(), shard_id.to_string())]
-            };
-
-            // Pack updates into rows
-            let mut row_buf = Row::default();
-            let updates = updates
-                .iter()
-                .map(|(global_id, shard_id)| {
-                    let mut packer = row_buf.packer();
-                    packer.push(Datum::from(global_id.to_string().as_str()));
-                    packer.push(Datum::from(shard_id.to_string().as_str()));
-                    ((SourceData(Ok(row_buf.clone())), ()), lower.clone(), 1)
-                })
-                .collect::<Vec<_>>();
-
-            // Write data in a way that makes it immediately readable
-            write
-                .append(
-                    updates,
-                    Antichain::from_elem(lower.clone()),
-                    Antichain::from_elem(upper.clone()),
-                )
-                .await
-                .unwrap()
-                .unwrap();
+        // Do not write values until collection is managed.
+        if !self
+            .managed_collections
+            .lock()
+            .await
+            .contains(&self.state.collections[&id].collection_metadata.data_shard)
+        {
+            return;
         }
-        Ok(())
+
+        // Pack updates into rows
+        let mut row_buf = Row::default();
+        let mut packer = row_buf.packer();
+        packer.push(Datum::from(global_id.to_string().as_str()));
+        packer.push(Datum::from(shard_id.to_string().as_str()));
+        let updates = vec![((SourceData(Ok(row_buf.clone())), ()), 1)];
+
+        self.append_to_managed_collection(id, updates).await;
     }
 }
 
@@ -1023,14 +1066,17 @@ where
         &mut self,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
-        let ids: Vec<_> = collections.iter().map(|(id, _)| id.clone()).collect();
+        let ids: Vec<GlobalId> = collections.iter().map(|(id, _)| id.clone()).collect();
 
         self.create_collections(collections).await?;
 
-        self.managed_collections.lock().await.extend(
-            ids.iter()
-                .map(|id| self.state.collections[id].collection_metadata.data_shard),
-        );
+        for id in ids {
+            self.register_managed_collection(id).await;
+            if Some(id) == self.state.shard_collection_global_id {
+                self.truncate_managed_collection(id).await;
+                self.initialize_shard_mapping().await;
+            }
+        }
 
         Ok(())
     }
@@ -1159,7 +1205,7 @@ where
                 client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
             }
 
-            self.register_shards(id, data_shard).await?;
+            self.register_shard_mapping(id, data_shard).await;
         }
 
         Ok(())
@@ -1560,7 +1606,6 @@ where
         let persist_location = c.persist_location.clone();
         let persist = Arc::clone(&c.persist);
         let collections = Arc::clone(&c.managed_collections);
-        let mut since = T::from(now());
 
         mz_ore::task::spawn(|| "ControllerManagedCollectionTimestamper", async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
@@ -1576,7 +1621,7 @@ where
                 let upper = T::from(now() + 1);
 
                 for shard in collections.lock().await.iter() {
-                    let (mut write, mut read) = persist_client
+                    let (mut write, _read) = persist_client
                         .open::<SourceData, (), T, Diff>(*shard)
                         .await
                         .expect("invalid persist usage");
@@ -1587,17 +1632,11 @@ where
                     let _ = write
                         .append(
                             Vec::<((SourceData, ()), T, Diff)>::new(),
-                            Antichain::from_elem(since.clone()),
+                            Antichain::from_elem(T::minimum()),
                             Antichain::from_elem(upper.clone()),
                         )
                         .await;
-
-                    // Permit compaction.
-                    read.downgrade_since(&Antichain::from_elem(since.clone()))
-                        .await;
                 }
-
-                since = upper;
             }
         });
 
@@ -1754,52 +1793,6 @@ impl<T: Timestamp> ExportState<T> {
     }
     fn from(&self) -> GlobalId {
         self.description.sink.from
-    }
-}
-
-pub trait CoordTimestamp:
-    timely::progress::Timestamp
-    + timely::order::TotalOrder
-    + differential_dataflow::lattice::Lattice
-    + std::fmt::Debug
-{
-    /// Advance a timestamp by the least amount possible such that
-    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
-    fn step_forward(&self) -> Self;
-
-    /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
-    fn step_forward_by(&self, amount: &Self) -> Self;
-
-    /// Retreat a timestamp by the least amount possible such that
-    /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
-    /// which must only happen if the timestamp is `Timestamp::minimum()`.
-    fn step_back(&self) -> Option<Self>;
-
-    /// Return the maximum value for this timestamp.
-    fn maximum() -> Self;
-}
-
-impl CoordTimestamp for mz_repr::Timestamp {
-    fn step_forward(&self) -> Self {
-        match self.checked_add(1) {
-            Some(ts) => ts,
-            None => panic!("could not step forward"),
-        }
-    }
-
-    fn step_forward_by(&self, amount: &Self) -> Self {
-        match self.checked_add(*amount) {
-            Some(ts) => ts,
-            None => panic!("could not step {self} forward by {amount}"),
-        }
-    }
-
-    fn step_back(&self) -> Option<Self> {
-        self.checked_sub(1)
-    }
-
-    fn maximum() -> Self {
-        Self::MAX
     }
 }
 
