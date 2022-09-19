@@ -404,11 +404,15 @@ pub fn plan_create_source(
 
                         // Starting offsets are allowed out unsafe mode, as they are a simple,
                         // useful way to specify where to start reading a topic.
-                        if options.iter().any(|opt| {
+                        if let Some(opt) = options.iter().find(|opt| {
                             opt.name != KafkaConfigOptionName::StartOffset
                                 && opt.name != KafkaConfigOptionName::StartTimestamp
+                                && opt.name != KafkaConfigOptionName::Topic
                         }) {
-                            scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
+                            scx.require_unsafe_mode(&format!(
+                                "KAFKA CONNECTION option {}",
+                                opt.name
+                            ))?;
                         }
 
                         kafka_util::validate_options_for_context(
