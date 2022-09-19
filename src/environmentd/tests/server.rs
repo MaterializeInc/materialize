@@ -693,7 +693,7 @@ fn test_storage_usage_updates_between_restarts() -> Result<(), Box<dyn Error>> {
         let server = util::start_server(config.clone())?;
         let mut client = server.connect(postgres::NoTls)?;
         // Retry because it may take some time for the initial snapshot to be taken.
-        Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+        Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
             Ok::<f64, String>(
                 client
                     .query_one(
@@ -715,7 +715,7 @@ fn test_storage_usage_updates_between_restarts() -> Result<(), Box<dyn Error>> {
         let mut client = server.connect(postgres::NoTls)?;
 
         // Retry until storage usage is updated.
-        Retry::default().max_duration(Duration::from_secs(2)).retry(|_| {
+        Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
             let updated_timestamp = client
                 .query_one("SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_storage_usage;", &[])
                 .map_err(|e| e.to_string())?
@@ -738,7 +738,7 @@ fn test_storage_usage_doesnt_update_between_restarts() -> Result<(), Box<dyn Err
     mz_ore::test::init_logging();
 
     let data_dir = tempfile::tempdir()?;
-    let storage_usage_collection_interval = Duration::from_secs(3);
+    let storage_usage_collection_interval = Duration::from_secs(60);
     let config = util::Config::default()
         .with_storage_usage_collection_interval(storage_usage_collection_interval)
         .data_directory(data_dir.path());
@@ -748,7 +748,7 @@ fn test_storage_usage_doesnt_update_between_restarts() -> Result<(), Box<dyn Err
         let server = util::start_server(config.clone())?;
         let mut client = server.connect(postgres::NoTls)?;
         // Retry because it may take some time for the initial snapshot to be taken.
-        Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+        Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
             Ok::<f64, String>(
                 client
                     .query_one(
