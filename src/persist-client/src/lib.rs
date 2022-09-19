@@ -130,6 +130,7 @@ impl PersistLocation {
 /// or otherwise used as an interchange format. It can be parsed back using
 /// [str::parse] or [std::str::FromStr::from_str].
 #[derive(Arbitrary, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct ShardId([u8; 16]);
 
 impl std::fmt::Display for ShardId {
@@ -149,6 +150,20 @@ impl std::str::FromStr for ShardId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         parse_id('s', "ShardId", s).map(ShardId)
+    }
+}
+
+impl From<ShardId> for String {
+    fn from(shard_id: ShardId) -> Self {
+        shard_id.to_string()
+    }
+}
+
+impl TryFrom<String> for ShardId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -507,6 +522,7 @@ mod tests {
     use mz_persist::workload::DataGenerator;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+    use serde_json::json;
     use timely::progress::Antichain;
     use timely::PartialOrder;
     use tokio::task::JoinHandle;
@@ -1436,6 +1452,39 @@ mod tests {
                 "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-zA-Z], found `O` at 38"
             ))
         );
+    }
+
+    #[test]
+    fn shard_id_human_readable_serde() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct ShardIdContainer {
+            shard_id: ShardId,
+        }
+
+        // roundtrip id through json
+        let id =
+            ShardId::from_str("s00000000-1234-5678-0000-000000000000").expect("valid shard id");
+        assert_eq!(
+            id,
+            serde_json::from_value(serde_json::to_value(id).expect("serializable"))
+                .expect("deserializable")
+        );
+
+        // deserialize a serialized string directly
+        assert_eq!(
+            id,
+            serde_json::from_str("\"s00000000-1234-5678-0000-000000000000\"")
+                .expect("deserializable")
+        );
+
+        // roundtrip shard id through a container type
+        let json = json!({ "shard_id": id });
+        assert_eq!(
+            "{\"shard_id\":\"s00000000-1234-5678-0000-000000000000\"}",
+            &json.to_string()
+        );
+        let container: ShardIdContainer = serde_json::from_value(json).expect("deserializable");
+        assert_eq!(container.shard_id, id);
     }
 
     #[tokio::test(flavor = "multi_thread")]
