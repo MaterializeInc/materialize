@@ -563,7 +563,7 @@ impl Value {
                 Ok(Value::UInt8(v))
             }
             Type::Interval { .. } => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
-            Type::Json => return Err("input of json types is not implemented".into()),
+            Type::Json => Err("input of json types is not implemented".into()),
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::List(_) => Err("binary decoding of list types is not implemented".into()),
             Type::Map { .. } => Err("binary decoding of map types is not implemented".into()),
@@ -576,7 +576,7 @@ impl Value {
             Type::BpChar { .. } => String::from_sql(ty.inner(), raw).map(Value::BpChar),
             Type::VarChar { .. } => String::from_sql(ty.inner(), raw).map(Value::VarChar),
             Type::Time { .. } => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
-            Type::TimeTz { .. } => return Err("input of timetz types is not implemented".into()),
+            Type::TimeTz { .. } => Err("input of timetz types is not implemented".into()),
             Type::Timestamp { .. } => {
                 NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp)
             }

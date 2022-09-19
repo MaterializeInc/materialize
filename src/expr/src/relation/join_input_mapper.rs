@@ -258,7 +258,7 @@ impl JoinInputMapper {
                 return true;
             }
         }
-        return false;
+        false
     }
 
     /// Takes an expression in the global context and looks in `equivalences`

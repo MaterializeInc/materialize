@@ -741,7 +741,7 @@ impl MultipartConfig {
                 blob_len
             ));
         }
-        return Ok(blob_len > self.multipart_threshold);
+        Ok(blob_len > self.multipart_threshold)
     }
 
     fn part_iter(&self, blob_len: usize) -> MultipartChunkIter {

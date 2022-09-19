@@ -550,7 +550,7 @@ impl FullName {
         if self.namespace.is_empty() {
             return self.name.clone();
         }
-        return format!("{}.{}", self.namespace, self.name);
+        format!("{}.{}", self.namespace, self.name)
     }
     /// Get the shortest unambiguous synonym of this name
     /// at a given point in the schema graph. If this name

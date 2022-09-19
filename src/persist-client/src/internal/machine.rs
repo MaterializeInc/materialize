@@ -442,7 +442,7 @@ where
                 // they are available.
                 Ok(())
             }
-            Err(Since(since)) => return Err(Since(since)),
+            Err(Since(since)) => Err(Since(since)),
         }
     }
 

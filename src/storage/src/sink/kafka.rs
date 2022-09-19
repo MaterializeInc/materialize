@@ -840,7 +840,7 @@ impl KafkaSinkState {
                 })
                 .await;
         }
-        return Ok(None);
+        Ok(None)
     }
 
     async fn send_progress_record(

@@ -138,7 +138,7 @@ fn read_v2_memory_limit(cgroups: &[CgroupEntry], mounts: &[Mountinfo]) -> Option
         let swap_max = read_file_to_usize(mount_point.join("memory.swap.max"));
         return Some(MemoryLimit { max, swap_max });
     }
-    return None;
+    None
 }
 
 /// Finds the cgroup v1 and mountpoint combination containing the memory controller,

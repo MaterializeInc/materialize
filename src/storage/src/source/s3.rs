@@ -802,10 +802,10 @@ where
         chunks,
         bytes_read
     );
-    return Ok(DownloadMetricUpdate {
+    Ok(DownloadMetricUpdate {
         bytes: bytes_read.try_into().expect("usize <= u64"),
         messages: chunks,
-    });
+    })
 }
 
 impl SourceReader for S3SourceReader {

@@ -390,7 +390,7 @@ mod tests {
                     Err(e) => Err(e.to_string()),
                 }
             }
-            _ => return Err(format!(
+            _ => Err(format!(
                 "no cross-view transform named {} (you might have to add it to apply_cross_view_transform)",
                 transform
             ))

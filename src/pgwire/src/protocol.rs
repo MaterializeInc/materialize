@@ -1017,7 +1017,7 @@ where
         if self.adapter_client.session().transaction().is_implicit() {
             self.commit_transaction().await?;
         }
-        return self.ready().await;
+        self.ready().await
     }
 
     async fn ready(&mut self) -> Result<State, io::Error> {

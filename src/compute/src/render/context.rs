@@ -246,7 +246,7 @@ where
                     refuel,
                 );
                 let errs = errs.as_collection(|k, &()| k.clone());
-                return (oks, errs);
+                (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
                 let mut logic = constructor();
@@ -257,7 +257,7 @@ where
                     refuel,
                 );
                 let errs = errs.as_collection(|k, &()| k.clone());
-                return (oks, errs);
+                (oks, errs)
             }
         }
     }

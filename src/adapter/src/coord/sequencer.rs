@@ -3272,7 +3272,7 @@ impl<S: Append + 'static> Coordinator<S> {
             coord_bail!("secret value must be valid UTF-8");
         }
 
-        return Ok(Vec::from(payload));
+        Ok(Vec::from(payload))
     }
 
     async fn sequence_alter_system_set(

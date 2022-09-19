@@ -554,7 +554,7 @@ pub fn describe_subscribe(
         }
         desc = desc.with_column(name, ty);
     }
-    return Ok(StatementDesc::new(Some(desc)));
+    Ok(StatementDesc::new(Some(desc)))
 }
 
 pub fn plan_subscribe(

@@ -95,7 +95,7 @@ macro_rules! make_handle_static {
 /// Serves a basic liveness check response
 #[allow(clippy::unused_async)]
 pub async fn handle_liveness_check() -> impl IntoResponse {
-    return (StatusCode::OK, "Liveness check successful!");
+    (StatusCode::OK, "Liveness check successful!")
 }
 
 /// Serves metrics from the selected metrics registry variant.

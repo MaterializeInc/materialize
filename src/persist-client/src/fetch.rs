@@ -544,7 +544,7 @@ where
             }
             return Some((k, v, t, d));
         }
-        return None;
+        None
     }
 }
 

@@ -914,7 +914,7 @@ impl<'a> SchemaResolver<'a> {
     }
 
     fn get_current_human_readable_path(&self) -> String {
-        return self.human_readable_field_path[self.current_human_readable_path_start..].join(".");
+        self.human_readable_field_path[self.current_human_readable_path_start..].join(".")
     }
 }
 

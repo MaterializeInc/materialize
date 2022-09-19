@@ -139,9 +139,7 @@ impl StateVersions {
         })
         .await;
         match cas_res {
-            Ok(()) => {
-                return Ok(initial_state);
-            }
+            Ok(()) => Ok(initial_state),
             Err(live_diffs) => {
                 // We lost a CaS race and someone else initialized the shard,
                 // use the value included in the CaS expectation error.
@@ -166,7 +164,7 @@ impl StateVersions {
                     self.delete_rollup(&shard_id, rollup_key).await;
                 }
 
-                return state;
+                state
             }
         }
     }

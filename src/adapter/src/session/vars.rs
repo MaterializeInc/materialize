@@ -449,7 +449,7 @@ impl SessionVars {
             // Unfortunately, some orm's like Prisma set NAMES to UTF8, thats the only
             // value we support, so we let is through
             if UncasedStr::new(value) != CLIENT_ENCODING.value {
-                return Err(AdapterError::FixedValueParameter(&CLIENT_ENCODING));
+                Err(AdapterError::FixedValueParameter(&CLIENT_ENCODING))
             } else {
                 Ok(())
             }
@@ -513,7 +513,7 @@ impl SessionVars {
         } else if name == INTERVAL_STYLE.name {
             // Only `postgres` is supported right now
             if UncasedStr::new(value) != INTERVAL_STYLE.value {
-                return Err(AdapterError::FixedValueParameter(&INTERVAL_STYLE));
+                Err(AdapterError::FixedValueParameter(&INTERVAL_STYLE))
             } else {
                 Ok(())
             }
@@ -543,11 +543,11 @@ impl SessionVars {
             if let Ok(_) = TimeZone::parse(value) {
                 self.timezone.set(value, local)
             } else {
-                return Err(AdapterError::ConstrainedParameter {
+                Err(AdapterError::ConstrainedParameter {
                     parameter: &TIMEZONE,
                     value: value.into(),
                     valid_values: None,
-                });
+                })
             }
         } else if name == TRANSACTION_ISOLATION.name {
             if let Ok(_) = IsolationLevel::parse(value) {

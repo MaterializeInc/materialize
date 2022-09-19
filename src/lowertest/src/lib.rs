@@ -851,7 +851,7 @@ fn find_next_type_in_tuple(type_name: &str, prev_elem_end: usize) -> Option<(usi
             }
         }
     };
-    return Some((current_elem_begin, current_elem_end));
+    Some((current_elem_begin, current_elem_end))
 }
 
 /* #endregion */

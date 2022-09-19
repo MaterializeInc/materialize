@@ -176,11 +176,11 @@ impl ClusterClient<PartitionedClient> {
         )
         .map_err(|e| anyhow!("{e}"))?;
 
-        return Ok(TimelyContainer {
+        Ok(TimelyContainer {
             comm_config,
             client_txs,
             worker_guards,
-        });
+        })
     }
 
     fn build(&mut self, comm_config: CommunicationConfig) -> Result<(), Error> {

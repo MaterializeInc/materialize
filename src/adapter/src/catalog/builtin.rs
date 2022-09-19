@@ -2410,7 +2410,7 @@ pub mod BUILTINS {
                 return Some(x);
             }
         }
-        return None;
+        None
     }
 
     pub fn types() -> impl Iterator<Item = &'static BuiltinType<NameReference>> {

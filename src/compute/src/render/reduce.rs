@@ -245,7 +245,7 @@ where
                 };
                 row_buf.packer().extend(val);
                 let row = row_buf.clone();
-                return Some((Ok((key, row)), time.clone(), diff.clone()));
+                Some((Ok((key, row)), time.clone(), diff.clone()))
             }
         });
 
