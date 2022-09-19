@@ -62,14 +62,16 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy, dummy, dummy
 | Filter (#1 = 1)
-| Project (#1)
+| Project (#4, #1, #5, #6)
 
 View materialize.public.v (UID):
 %0 =
 | Get materialize.public.data (UID)
 | Filter (#1 = 1)
 | Project (#1)
+
 
 > SELECT * FROM v
 1
@@ -87,8 +89,9 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy
 | Filter (#0 = 1), (#3 = 4)
-| Project (#0, #1, #3)
+| Project (#0, #1, #4, #3)
 
 View materialize.public.v (UID):
 %0 =
@@ -108,8 +111,9 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy, dummy
 | Filter (#0 = 1), (#3 = 4)
-| Project (#0, #3)
+| Project (#0, #4, #5, #3)
 
 View materialize.public.v (UID):
 %0 =
@@ -127,7 +131,8 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
-| Project (#0, #1, #3)
+| Map dummy
+| Project (#0, #1, #4, #3)
 
 View materialize.public.v (UID):
 %0 =
@@ -161,8 +166,9 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy
 | Filter (#3 = 4)
-| Project (#0, #1, #3)
+| Project (#0, #1, #4, #3)
 
 View materialize.public.v (UID):
 %0 =
@@ -192,8 +198,9 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy, dummy
 | Filter (#0) IS NOT NULL
-| Project (#0, #2)
+| Project (#0, #4, #2, #5)
 
 View materialize.public.v (UID):
 %0 = Let l0 =
@@ -229,8 +236,9 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy
 | Filter (#0 = 1)
-| Project (#0..=#2)
+| Project (#0..=#2, #4)
 
 View materialize.public.v (UID):
 %0 =
@@ -275,11 +283,13 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
-| Project (#0, #2)
+| Map dummy, dummy
+| Project (#0, #4, #2, #5)
 
 Source materialize.public.data2 (UID):
+| Map dummy
 | Filter (#3) IS NULL
-| Project (#0, #2, #3)
+| Project (#0, #4, #2, #3)
 
 View materialize.public.v (UID):
 %0 =

@@ -16,6 +16,7 @@ use derivative::Derivative;
 use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio_postgres::error::SqlState;
 
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
@@ -26,6 +27,7 @@ use mz_sql::plan::ExecuteTimeout;
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
+use crate::session::ClientSeverity;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 
 #[derive(Debug)]
@@ -154,6 +156,14 @@ impl fmt::Display for StartupMessage {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct ExecuteResponsePartialError {
+    pub severity: ClientSeverity,
+    #[serde(skip)]
+    pub code: SqlState,
+    pub message: String,
+}
+
 /// The response to [`SessionClient::execute`](crate::SessionClient::execute).
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -228,6 +238,10 @@ pub enum ExecuteResponse {
     },
     /// The requested view was created.
     CreatedView {
+        existed: bool,
+    },
+    /// The requested views were created.
+    CreatedViews {
         existed: bool,
     },
     /// The requested materialized view was created.
@@ -322,7 +336,6 @@ pub enum ExecuteResponse {
 
 impl ExecuteResponse {
     pub fn tag(&self) -> Option<String> {
-        // format!($($arg)*)
         use ExecuteResponse::*;
         macro_rules! generic_concat {
             ($lede:expr, $type:expr) => {{
@@ -353,7 +366,7 @@ impl ExecuteResponse {
             CreatedDatabase { .. } => created!("database"),
             CreatedSchema { .. } => created!("schema"),
             CreatedRole => created!("role"),
-            CreatedComputeInstance { .. } => created!("connection"),
+            CreatedComputeInstance { .. } => created!("cluster"),
             CreatedComputeInstanceReplica { .. } => created!("cluster replica"),
             CreatedIndex { .. } => created!("index"),
             CreatedSecret { .. } => created!("secret"),
@@ -362,6 +375,7 @@ impl ExecuteResponse {
             CreatedSources => created!("sources"),
             CreatedTable { .. } => created!("table"),
             CreatedView { .. } => created!("view"),
+            CreatedViews { .. } => created!("views"),
             CreatedMaterializedView { .. } => created!("materialized view"),
             CreatedType => created!("type"),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
@@ -404,36 +418,179 @@ impl ExecuteResponse {
             Raise { .. } => Some("RAISE".into()),
         }
     }
-}
 
-/// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).
-#[derive(Debug, Serialize)]
-pub struct SimpleExecuteResponse {
-    pub results: Vec<SimpleResult>,
-}
+    /// When an appropriate error response can be totally determined by the
+    /// `ExecuteResponse`, generate it if it is non-terminal, i.e. should not be
+    /// returned as an error instead of the value.
+    ///
+    /// # Panics
+    /// - If returns an error with [`ClientSeverity::Error`].
+    pub fn partial_err(&self) -> Option<ExecuteResponsePartialError> {
+        use ExecuteResponse::*;
 
-/// The result of a single query executed with `simple_execute`.
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-pub enum SimpleResult {
-    /// The query returned rows.
-    Rows {
-        /// The result rows.
-        rows: Vec<Vec<serde_json::Value>>,
-        /// The name of the columns in the row.
-        col_names: Vec<String>,
-    },
-    /// The query executed successfully but did not return rows.
-    Ok,
-    /// The query returned an error.
-    Err { error: String },
-}
-
-impl SimpleResult {
-    pub(crate) fn err(msg: impl fmt::Display) -> SimpleResult {
-        SimpleResult::Err {
-            error: msg.to_string(),
+        macro_rules! existed {
+            ($existed:expr, $code:expr, $type:expr) => {{
+                if $existed {
+                    Some(ExecuteResponsePartialError {
+                        severity: ClientSeverity::Notice,
+                        code: $code,
+                        message: format!("{} already exists, skipping", $type),
+                    })
+                } else {
+                    None
+                }
+            }};
         }
+
+        let r = match self {
+            CreatedConnection { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "connection")
+            }
+            CreatedDatabase { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_DATABASE, "database")
+            }
+            CreatedSchema { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_SCHEMA, "schema")
+            }
+            CreatedRole => {
+                existed!(false, SqlState::DUPLICATE_OBJECT, "role")
+            }
+            CreatedComputeInstance { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "cluster")
+            }
+            CreatedComputeInstanceReplica { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "cluster replica")
+            }
+            CreatedTable { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_TABLE, "table")
+            }
+            CreatedIndex { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "index")
+            }
+            CreatedSecret { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "secret")
+            }
+            CreatedSource { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "source")
+            }
+            CreatedSink { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "sink")
+            }
+            CreatedView { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "view")
+            }
+            CreatedViews { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "views")
+            }
+            CreatedMaterializedView { existed } => {
+                existed!(*existed, SqlState::DUPLICATE_OBJECT, "materialized view")
+            }
+
+            Raise { severity } => Some(match severity {
+                NoticeSeverity::Debug => ExecuteResponsePartialError {
+                    severity: ClientSeverity::Debug1,
+                    code: SqlState::WARNING,
+                    message: "raised a test debug".to_string(),
+                },
+                NoticeSeverity::Info => ExecuteResponsePartialError {
+                    severity: ClientSeverity::Info,
+                    code: SqlState::WARNING,
+                    message: "raised a test info".to_string(),
+                },
+                NoticeSeverity::Log => ExecuteResponsePartialError {
+                    severity: ClientSeverity::Log,
+                    code: SqlState::WARNING,
+                    message: "raised a test log".to_string(),
+                },
+                NoticeSeverity::Notice => ExecuteResponsePartialError {
+                    severity: ClientSeverity::Notice,
+                    code: SqlState::WARNING,
+                    message: "raised a test notice".to_string(),
+                },
+                NoticeSeverity::Warning => ExecuteResponsePartialError {
+                    severity: ClientSeverity::Warning,
+                    code: SqlState::WARNING,
+                    message: "raised a test warning".to_string(),
+                },
+            }),
+
+            StartedTransaction { duplicated } => {
+                if *duplicated {
+                    Some(ExecuteResponsePartialError {
+                        severity: ClientSeverity::Warning,
+                        code: SqlState::ACTIVE_SQL_TRANSACTION,
+                        message: "there is already a transaction in progress".to_string(),
+                    })
+                } else {
+                    None
+                }
+            }
+
+            TransactionExited { was_implicit, .. } => {
+                // In Postgres, if a user sends a COMMIT or ROLLBACK in an implicit
+                // transaction, a warning is sent warning them. (The transaction is still closed
+                // and a new implicit transaction started, though.)
+                if *was_implicit {
+                    Some(ExecuteResponsePartialError {
+                        severity: ClientSeverity::Warning,
+                        code: SqlState::NO_ACTIVE_SQL_TRANSACTION,
+                        message: "there is no transaction in progress".to_string(),
+                    })
+                } else {
+                    None
+                }
+            }
+
+            CreatedSources
+            | CreatedType
+            | AlteredObject(..)
+            | AlteredIndexLogicalCompaction
+            | AlteredSystemConfiguraion
+            | Canceled
+            | ClosedCursor
+            | CopyTo { .. }
+            | CopyFrom { .. }
+            | Deallocate { .. }
+            | DeclaredCursor
+            | Deleted(..)
+            | DiscardedTemp
+            | DiscardedAll
+            | DroppedConnection
+            | DroppedComputeInstance
+            | DroppedComputeInstanceReplicas
+            | DroppedDatabase
+            | DroppedRole
+            | DroppedSchema
+            | DroppedSource
+            | DroppedTable
+            | DroppedView
+            | DroppedMaterializedView
+            | DroppedIndex
+            | DroppedSink
+            | DroppedType
+            | DroppedSecret
+            | EmptyQuery
+            | Fetch { .. }
+            | Inserted(..)
+            | Prepare
+            | SendingRows { .. }
+            | SetVariable { .. }
+            | Tailing { .. }
+            | Updated(..) => None,
+        };
+
+        assert!(
+            !matches!(
+                r,
+                Some(ExecuteResponsePartialError {
+                    severity: ClientSeverity::Error,
+                    ..
+                })
+            ),
+            "partial_err cannot generate errors"
+        );
+
+        r
     }
 }
 

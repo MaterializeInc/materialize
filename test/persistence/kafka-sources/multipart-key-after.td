@@ -32,7 +32,7 @@ $ set schema={
 10000 10000 10000
 
 # Delete all rows
-$ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "KEY1", "f2": "${kafka-ingest.iteration}"}
 {"f1": "${kafka-ingest.iteration}", "f2": "KEY2"}
 

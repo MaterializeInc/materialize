@@ -77,6 +77,21 @@ where
     }
 }
 
+/// Remove the elements from `v` at the positions indicated by `indexes`, and return the removed
+/// elements in a new vector.
+///
+/// `indexes` shouldn't have duplicates. (Might panic or behave incorrectly in case of
+/// duplicates.)
+pub fn swap_remove_multiple<T>(v: &mut Vec<T>, mut indexes: Vec<usize>) -> Vec<T> {
+    indexes.sort();
+    indexes.reverse();
+    let mut result = Vec::new();
+    for r in indexes {
+        result.push(v.swap_remove(r));
+    }
+    result
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

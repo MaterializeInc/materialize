@@ -33,6 +33,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::StreamExt;
 use itertools::Itertools;
+use mz_persist_client::PersistClient;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -45,9 +46,10 @@ use tokio_stream::StreamMap;
 use tracing::debug;
 
 use mz_build_info::BuildInfo;
+use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistLocation, ShardId};
+use mz_persist_client::{write::WriteHandle, PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -61,7 +63,7 @@ use crate::protocol::client::{
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use crate::types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
-use crate::types::sources::IngestionDescription;
+use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
 
 mod hosts;
 mod rehydration;
@@ -321,7 +323,7 @@ impl ReadPolicy<mz_repr::Timestamp> {
             } else {
                 // Subtract the lag from the time, and then round down to a multiple thereof to cut chatter.
                 let mut time = upper[0];
-                if lag != 0 {
+                if lag != mz_repr::Timestamp::default() {
                     time = time.saturating_sub(lag);
                     time = time.saturating_sub(time % lag);
                 }
@@ -409,6 +411,159 @@ impl Codec for CollectionMetadata {
     fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoCollectionMetadata::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
+    }
+}
+
+/// A trait that is used to calculate safe _resumption frontiers_ for a source.
+///
+/// Use [`ResumptionFrontierCalculator::initialize_state`] for creating an
+/// opaque state that you should keep around. Then repeatedly call
+/// [`ResumptionFrontierCalculator::calculate_resumption_frontier`] with the
+/// state to efficiently calculate an up-to-date frontier.
+#[async_trait]
+pub trait ResumptionFrontierCalculator<T> {
+    /// Opaque state that a `ResumptionFrontierCalculator` needs to repeatedly
+    /// (and efficiently) calculate a _resumption frontier_.
+    type State;
+
+    /// Creates an opaque state type that can be used to efficiently calculate a
+    /// new _resumption frontier_ when needed.
+    // TODO: This could also take an Arc<Mutex<PersistClientsCache>>. We know
+    // the persist location internally, most likely.
+    async fn initialize_state(&self, persist_clients: &PersistClient) -> Self::State;
+
+    /// Calculates a new, safe _resumption frontier_.
+    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T>;
+}
+
+/// A [`ResumptionFrontierCalculator`] that can calculate the resumption
+/// frontier for a source.
+pub struct SourceResumptionFrontierCalculator {
+    collection_metadata: CollectionMetadata,
+    source_envelope: SourceEnvelope,
+}
+
+impl SourceResumptionFrontierCalculator {
+    pub fn new(collection_metadata: CollectionMetadata, source_envelope: SourceEnvelope) -> Self {
+        Self {
+            collection_metadata,
+            source_envelope,
+        }
+    }
+}
+
+#[async_trait]
+impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
+    for SourceResumptionFrontierCalculator
+{
+    // A `WriteHandle` each for the data shard and remap shard. Once we have
+    // source envelopes that keep additional shards we have to specialize this
+    // some more.
+    type State = (
+        WriteHandle<(), PartitionId, T, MzOffset>,
+        WriteHandle<SourceData, (), T, Diff>,
+    );
+
+    async fn initialize_state(&self, persist_client: &PersistClient) -> Self::State {
+        self.collection_metadata
+            .get_write_handles(persist_client)
+            .await
+    }
+
+    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T> {
+        let (remap_write, data_write) = state;
+
+        // Update to latest upper.
+        remap_write.fetch_recent_upper().await;
+        data_write.fetch_recent_upper().await;
+
+        self.collection_metadata
+            .get_resume_upper_from_handles(remap_write, data_write, &self.source_envelope)
+            .await
+    }
+}
+
+impl CollectionMetadata {
+    /// Calculate the point at which we can resume ingestion computing the greatest
+    /// antichain that is less or equal to all state and output shard uppers,
+    /// using pre-existing `WriteHandle`s
+    pub async fn get_resume_upper_from_handles<T>(
+        &self,
+        remap_write: &mut WriteHandle<(), PartitionId, T, MzOffset>,
+        data_write: &mut WriteHandle<SourceData, (), T, Diff>,
+        source_envelope: &SourceEnvelope,
+    ) -> Antichain<T>
+    where
+        T: timely::progress::Timestamp + Lattice + Codec64,
+    {
+        // Calculate the point at which we can resume ingestion computing the greatest
+        // antichain that is less or equal to all state and output shard uppers.
+        let mut resume_upper: Antichain<T> = Antichain::new();
+        for t in remap_write.upper().elements() {
+            resume_upper.insert(t.clone());
+        }
+        for t in data_write.upper().elements() {
+            resume_upper.insert(t.clone());
+        }
+
+        // Check if this ingestion is using any operators that are stateful AND are not
+        // storing their state in persist shards. This whole section should be eventually
+        // removed as we make each operator durably record its state in persist shards.
+        let resume_upper = match source_envelope {
+            // We can only resume with the None envelope, which is stateless,
+            // or with the [Debezium] Upsert envelope, which is easy
+            //   (re-ingest the last emitted state)
+            SourceEnvelope::None(_) => resume_upper,
+            SourceEnvelope::Upsert(_) => resume_upper,
+            // Otherwise re-ingest everything
+            _ => Antichain::from_elem(T::minimum()),
+        };
+
+        resume_upper
+    }
+
+    /// Returns the `WriteHandle` for the remap shard and the data shard
+    pub async fn get_write_handles<T>(
+        &self,
+        persist: &PersistClient,
+    ) -> (
+        WriteHandle<(), PartitionId, T, MzOffset>,
+        WriteHandle<SourceData, (), T, Diff>,
+    )
+    where
+        T: timely::progress::Timestamp + Lattice + Codec64,
+    {
+        // Calculate the point at which we can resume ingestion computing the greatest
+        // antichain that is less or equal to all state and output shard uppers.
+        let remap_write = persist
+            .open_writer::<(), PartitionId, T, MzOffset>(self.remap_shard)
+            .await
+            .unwrap();
+        let data_write = persist
+            .open_writer::<SourceData, (), T, Diff>(self.data_shard)
+            .await
+            .unwrap();
+
+        (remap_write, data_write)
+    }
+
+    /// Calculate the point at which we can resume ingestion computing the greatest
+    /// antichain that is less or equal to all state and output shard uppers.
+    ///
+    /// This is a convenience method that combines
+    /// [`CollectionMetadata::get_write_handles`] and
+    /// [`CollectionMetadata::get_resume_upper_from_handles`].
+    pub async fn get_resume_upper<T>(
+        &self,
+        persist: &PersistClient,
+        source_envelope: &SourceEnvelope,
+    ) -> Antichain<T>
+    where
+        T: timely::progress::Timestamp + Lattice + Codec64,
+    {
+        let (mut remap_write, mut data_write) = self.get_write_handles(persist).await;
+        self.get_resume_upper_from_handles(&mut remap_write, &mut data_write, source_envelope)
+            .await
     }
 }
 
@@ -773,13 +928,15 @@ where
                 id, metadata.remap_shard, metadata.data_shard, status_shard
             );
 
-            let (write, mut read) = self
+            let persist_client = self
                 .persist
                 .lock()
                 .await
                 .open(self.persist_location.clone())
                 .await
-                .unwrap()
+                .unwrap();
+
+            let (write, mut read) = persist_client
                 .open(metadata.data_shard)
                 .await
                 .expect("invalid persist usage");
@@ -812,7 +969,10 @@ where
                     desc: ingestion.desc,
                     typ: description.desc.typ().clone(),
                 };
-                let resume_upper = desc.get_resume_upper(Arc::clone(&self.persist)).await;
+                let resume_upper = desc
+                    .storage_metadata
+                    .get_resume_upper(&persist_client, &desc.desc.envelope)
+                    .await;
                 let augmented_ingestion = IngestSourceCommand {
                     id,
                     description: desc,
@@ -895,8 +1055,6 @@ where
 
             let from_collection = self.collection(from)?;
             let from_storage_metadata = from_collection.collection_metadata.clone();
-            // We've added the dependency above in `exported_collections` so this guaranteed not to change at least until the sink is started up.
-            let from_since = from_collection.implied_capability.clone();
 
             let initial_as_of = MetadataExportFetcher::get_stash_collection()
                 .insert_without_overwrite(
@@ -909,16 +1067,6 @@ where
                 .await?
                 .initial_as_of;
 
-            let as_of = if PartialOrder::less_equal(&initial_as_of.frontier, &from_since) {
-                SinkAsOf {
-                    frontier: from_since,
-                    // If we're using the since, never read the snapshot
-                    strict: true,
-                }
-            } else {
-                initial_as_of
-            };
-
             let cmd = ExportSinkCommand {
                 id,
                 description: StorageSinkDesc {
@@ -926,7 +1074,7 @@ where
                     from_desc: description.sink.from_desc,
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
-                    as_of,
+                    as_of: initial_as_of,
                     from_storage_metadata,
                 },
             };
@@ -1897,8 +2045,8 @@ mod tests {
 
     #[test]
     fn lag_writes_by_zero() {
-        let policy = ReadPolicy::lag_writes_by(0);
-        let write_frontier = Antichain::from_elem(5);
+        let policy = ReadPolicy::lag_writes_by(mz_repr::Timestamp::default());
+        let write_frontier = Antichain::from_elem(mz_repr::Timestamp::from(5));
         assert_eq!(policy.frontier(write_frontier.borrow()), write_frontier);
     }
 }

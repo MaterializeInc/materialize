@@ -23,13 +23,13 @@ SHOW INDEXES FROM my_view;
 ```
 
 ```nofmt
-     name
--------------
- my_view_idx
+     name    | on  | cluster | key
+-------------+-----+---------+--------------------------------------------
+ my_view_idx | t   | default | {a, b}
 ```
 
 ```sql
-SHOW CREATE INDEX my_view_index;
+SHOW CREATE INDEX my_view_idx;
 ```
 
 ```nofmt

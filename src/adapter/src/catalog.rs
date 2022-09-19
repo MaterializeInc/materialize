@@ -28,14 +28,14 @@ use mz_audit_log::{
 };
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::{
+    ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceReplicaAllocation,
+    ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLocation,
+    ConcreteComputeInstanceReplicaLogging,
+};
 use mz_compute_client::logging::{
     LogVariant, LogView, LoggingConfig as DataflowLoggingConfig, DEFAULT_LOG_VARIANTS,
     DEFAULT_LOG_VIEWS,
-};
-use mz_controller::{
-    ComputeInstanceEvent, ComputeInstanceReplicaAllocation, ConcreteComputeInstanceReplicaConfig,
-    ConcreteComputeInstanceReplicaLocation, ConcreteComputeInstanceReplicaLogging,
 };
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -57,12 +57,13 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
+    AlterSourceItem, ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
     StorageHostConfig as PlanStorageHostConfig,
 };
-use mz_sql::DEFAULT_SCHEMA;
+use mz_sql::{plan, DEFAULT_SCHEMA};
+use mz_sql_parser::ast::{CreateSourceOption, Statement, WithOptionValue};
 use mz_stash::{Append, Postgres, Sqlite};
 use mz_storage::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
@@ -356,7 +357,7 @@ impl CatalogState {
             // CatalogItem::Log. For now  we just use the log variant to lookup the unique CatalogItem
             // in BUILTINS.
             let log = BUILTINS::logs()
-                .find(|log| log.variant == variant)
+                .find(|log| log.variant == *variant)
                 .expect("variant must be included in builtins");
 
             let source_name = QualifiedObjectName {
@@ -366,7 +367,7 @@ impl CatalogState {
                 },
                 item: format!("{}_{}", log.name, replica_id),
             };
-            self.insert_item(source_id, oid, source_name, CatalogItem::Log(log));
+            self.insert_item(*source_id, oid, source_name, CatalogItem::Log(log));
         }
 
         for (logview, id) in persisted_logs.get_views() {
@@ -396,7 +397,7 @@ impl CatalogState {
                         item: name,
                     };
 
-                    self.insert_item(id, oid, view_name, item);
+                    self.insert_item(*id, oid, view_name, item);
                 }
                 Err(e) => {
                     // This error should never happen, but if we add a logging
@@ -1178,7 +1179,7 @@ pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
     pub logging: Option<DataflowLoggingConfig>,
-    /// Indexes, sinks, and materialized views exported by this compute instance.
+    /// Indexes and materialized views exported by this compute instance.
     /// Does not include introspection source indexes.
     pub exports: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
@@ -1678,10 +1679,9 @@ impl CatalogItemRebuilder {
 }
 
 pub struct BuiltinMigrationMetadata {
-    // Used to drop objects on COMPUTE and STORAGE nodes
-    pub previous_index_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    // Used to drop objects on STORAGE nodes
     pub previous_sink_ids: Vec<GlobalId>,
-    pub previous_materialized_view_ids: HashMap<ComputeInstanceId, Vec<GlobalId>>,
+    pub previous_materialized_view_ids: Vec<GlobalId>,
     pub previous_source_ids: Vec<GlobalId>,
     // Used to update in memory catalog state
     pub all_drop_ops: Vec<GlobalId>,
@@ -1696,9 +1696,8 @@ pub struct BuiltinMigrationMetadata {
 impl BuiltinMigrationMetadata {
     fn new() -> BuiltinMigrationMetadata {
         BuiltinMigrationMetadata {
-            previous_index_ids: HashMap::new(),
             previous_sink_ids: Vec::new(),
-            previous_materialized_view_ids: HashMap::new(),
+            previous_materialized_view_ids: Vec::new(),
             previous_source_ids: Vec::new(),
             all_drop_ops: Vec::new(),
             all_create_ops: Vec::new(),
@@ -1769,7 +1768,7 @@ impl<S: Append> Catalog<S> {
                     start_instant: Instant::now(),
                     nonce: rand::random(),
                     unsafe_mode: config.unsafe_mode,
-                    cluster_id: config.storage.cluster_id(),
+                    environment_id: config.environment_id,
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
                     timestamp_interval: Duration::from_secs(1),
@@ -2380,16 +2379,9 @@ impl<S: Append> Catalog<S> {
                     migration_metadata.previous_source_ids.push(id)
                 }
                 CatalogItem::Sink(_) => migration_metadata.previous_sink_ids.push(id),
-                CatalogItem::Index(index) => migration_metadata
-                    .previous_index_ids
-                    .entry(index.compute_instance)
-                    .or_default()
-                    .push(id),
-                CatalogItem::MaterializedView(mview) => migration_metadata
-                    .previous_materialized_view_ids
-                    .entry(mview.compute_instance)
-                    .or_default()
-                    .push(id),
+                CatalogItem::MaterializedView(_) => {
+                    migration_metadata.previous_materialized_view_ids.push(id)
+                }
                 // TODO(jkosh44) Implement log migration
                 CatalogItem::Log(_) => {
                     panic!("Log migration is unimplemented")
@@ -2398,8 +2390,8 @@ impl<S: Append> Catalog<S> {
                 CatalogItem::StorageCollection(_) => {
                     panic!("Storage collection migration is unimplemented")
                 }
-                CatalogItem::View(_) => {
-                    // Views don't have any objects in STORAGE/COMPUTE to drop.
+                CatalogItem::View(_) | CatalogItem::Index(_) => {
+                    // Views and indexes don't have any objects in STORAGE to drop.
                 }
                 CatalogItem::Type(_)
                 | CatalogItem::Func(_)
@@ -2439,9 +2431,6 @@ impl<S: Append> Catalog<S> {
         }
 
         // Reverse drop commands.
-        for (_, index_ids) in &mut migration_metadata.previous_index_ids {
-            index_ids.reverse();
-        }
         migration_metadata.previous_sink_ids.reverse();
         migration_metadata.previous_source_ids.reverse();
         migration_metadata.all_drop_ops.reverse();
@@ -2586,6 +2575,7 @@ impl<S: Append> Catalog<S> {
             storage,
             unsafe_mode: true,
             build_info: &DUMMY_BUILD_INFO,
+            environment_id: Uuid::from_u128(0),
             now,
             skip_migrations: true,
             metrics_registry,
@@ -3299,6 +3289,90 @@ impl<S: Append> Catalog<S> {
 
         for op in ops {
             actions.extend(match op {
+                Op::AlterSource { id, size, remote } => {
+                    use mz_sql::ast::Value;
+                    use mz_sql_parser::ast::CreateSourceOptionName::*;
+                    use AlterSourceItem::*;
+
+                    let entry = self.get_entry(&id);
+                    let name = entry.name().clone();
+                    let old_source = match entry.item() {
+                        CatalogItem::Source(source) => source.clone(),
+                        other => {
+                            coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ())
+                        }
+                    };
+
+                    // Since the catalog serializes the items using only their creation statement
+                    // and context, we need to parse and rewrite the with options in that statement.
+                    // (And then make any other changes to the source definition to match.)
+                    let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
+                        .unwrap()
+                        .into_element();
+
+                    let create_stmt = match &mut stmt {
+                        Statement::CreateSource(s) => s,
+                        _ => coord_bail!(
+                            "source {id} was not created with a CREATE SOURCE statement"
+                        ),
+                    };
+
+                    let new_config = match (&old_source.host_config, size, remote) {
+                        (_, Set(_), Set(_)) => {
+                            coord_bail!("Can't set both SIZE and REMOTE on source")
+                        }
+                        (_, Set(size), _) => Some(plan::StorageHostConfig::Managed { size }),
+                        (_, _, Set(addr)) => Some(plan::StorageHostConfig::Remote { addr }),
+                        (StorageHostConfig::Remote { .. }, _, Reset)
+                        | (StorageHostConfig::Managed { .. }, Reset, _) => {
+                            Some(plan::StorageHostConfig::Undefined)
+                        }
+                        (_, _, _) => None,
+                    };
+
+                    if let Some(config) = new_config {
+                        create_stmt
+                            .with_options
+                            .retain(|x| ![Size, Remote].contains(&x.name));
+
+                        let new_host_option = match &config {
+                            plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
+                            plan::StorageHostConfig::Remote { addr } => {
+                                Some((Remote, addr.clone()))
+                            }
+                            plan::StorageHostConfig::Undefined => None,
+                        };
+
+                        if let Some((name, value)) = new_host_option {
+                            create_stmt.with_options.push(CreateSourceOption {
+                                name,
+                                value: Some(WithOptionValue::Value(Value::String(value))),
+                            });
+                        }
+
+                        let host_config = self.resolve_storage_host_config(config)?;
+                        let create_sql = stmt.to_ast_string_stable();
+                        let source = CatalogItem::Source(Source {
+                            create_sql,
+                            host_config: host_config.clone(),
+                            ..old_source
+                        });
+
+                        let ser = self.serialize_item(&source);
+                        tx.update_item(id, &name.item, &ser)?;
+
+                        // NB: this will be re-incremented by the action below.
+                        builtin_table_updates.extend(self.state.pack_item_update(id, -1));
+
+                        vec![Action::UpdateItem {
+                            id,
+                            to_name: entry.name().clone(),
+                            to_item: source,
+                        }]
+                    } else {
+                        vec![]
+                    }
+                }
                 Op::CreateDatabase {
                     name,
                     oid,
@@ -3893,7 +3967,8 @@ impl<S: Append> Catalog<S> {
                     config,
                 } => {
                     let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
-                    let introspection_ids = config.persisted_logs.get_source_and_view_ids();
+                    let introspection_ids: Vec<_> =
+                        config.persisted_logs.get_source_and_view_ids().collect();
                     state.insert_compute_instance_replica(
                         compute_instance_id,
                         name.clone(),
@@ -4355,6 +4430,20 @@ impl<S: Append> Catalog<S> {
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         self.state.pack_item_update(id, diff)
     }
+
+    pub fn system_config(&self) -> &SystemVars {
+        self.state.system_config()
+    }
+
+    pub async fn most_recent_storage_usage_collection(&self) -> Result<Option<EpochMillis>, Error> {
+        Ok(self
+            .storage()
+            .await
+            .storage_usage()
+            .await?
+            .map(|usage| usage.timestamp())
+            .max())
+    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {
@@ -4365,6 +4454,11 @@ pub fn is_reserved_name(name: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    AlterSource {
+        id: GlobalId,
+        size: AlterSourceItem,
+        remote: AlterSourceItem,
+    },
     CreateDatabase {
         name: String,
         oid: u32,
@@ -4878,8 +4972,8 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
             .replicas_by_id
             .get(self.replica_id_by_name.get(name)?)?;
         Some((
-            replica.config.persisted_logs.get_source_ids(),
-            replica.config.persisted_logs.get_view_ids(),
+            replica.config.persisted_logs.get_source_ids().collect(),
+            replica.config.persisted_logs.get_view_ids().collect(),
         ))
     }
 }

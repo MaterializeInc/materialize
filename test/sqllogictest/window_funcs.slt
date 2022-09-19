@@ -273,7 +273,8 @@ EXPLAIN SELECT f1 FROM t1
 WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 ----
 Source materialize.public.t1 (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
 | Project (#0, #1)

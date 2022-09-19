@@ -7,13 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
-
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::ComputeInstanceId;
-use mz_repr::{RelationDesc, Row, ScalarType, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql::names::FullObjectName;
 use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -147,19 +145,6 @@ pub fn index_sql(
     .to_ast_string_stable()
 }
 
-/// Converts a Duration to a Timestamp representing the number
-/// of milliseconds contained in that Duration
-pub(crate) fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
-    let millis = d.as_millis();
-    if millis > Timestamp::MAX as u128 {
-        Timestamp::MAX
-    } else if millis < Timestamp::MIN as u128 {
-        Timestamp::MIN
-    } else {
-        millis as Timestamp
-    }
-}
-
 /// Creates a description of the statement `stmt`.
 ///
 /// This function is identical to sql::plan::describe except this is also
@@ -196,4 +181,11 @@ pub fn describe<S: Append>(
             )?)
         }
     }
+}
+
+/// Type identifying a sink maintained by a compute instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ComputeSinkId {
+    pub compute_instance: ComputeInstanceId,
+    pub global_id: GlobalId,
 }

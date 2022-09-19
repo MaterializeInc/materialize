@@ -11,8 +11,9 @@ use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::{ProcessId, ReplicaId};
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_controller::{ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation};
+use mz_compute_client::controller::{
+    ComputeInstanceId, ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation,
+};
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -308,7 +309,7 @@ impl CatalogState {
                     }
                     mz_storage::types::connections::Connection::Postgres { .. } => "postgres",
                     mz_storage::types::connections::Connection::Aws(..) => "aws",
-                    mz_storage::types::connections::Connection::Ssh { .. } => "ssh",
+                    mz_storage::types::connections::Connection::Ssh { .. } => "ssh-tunnel",
                 }),
             ]),
             diff,
@@ -437,11 +438,7 @@ impl CatalogState {
                 StorageSinkConnection::Kafka(KafkaSinkConnection {
                     topic, consistency, ..
                 }) => {
-                    let consistency_topic = if let Some(consistency) = consistency {
-                        Datum::String(consistency.topic.as_str())
-                    } else {
-                        Datum::Null
-                    };
+                    let consistency_topic = Datum::String(consistency.topic.as_str());
                     updates.push(BuiltinTableUpdate {
                         id: self.resolve_builtin_table(&MZ_KAFKA_SINKS),
                         row: Row::pack_slice(&[

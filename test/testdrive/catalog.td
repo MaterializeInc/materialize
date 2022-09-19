@@ -29,11 +29,15 @@ Indexes:
 > DROP TABLE tbl CASCADE
 
 # What schemas do we have by default?
-> SHOW SCHEMAS
+> SHOW SCHEMAS FROM materialize
 public
-> SHOW EXTENDED SCHEMAS
+information_schema
+mz_catalog
+mz_internal
+pg_catalog
+> SHOW SCHEMAS
 name
--------
+------------------
 information_schema
 public
 mz_catalog
@@ -63,20 +67,21 @@ $ psql-execute command="\dn mz_*"
 
 # What objects do we have by default?
 > SHOW OBJECTS
-name
-----
-
-> SHOW FULL OBJECTS
-name   type
------------
+name    type
+-------------
 
 # Creating a schema should be reflected in the output of SHOW SCHEMAS.
 > CREATE SCHEMA s
 > SHOW SCHEMAS
 name
-----
+------------------
 public
 s
+information_schema
+mz_catalog
+mz_internal
+pg_catalog
+
 
 # Creating a schema with a name that already exists should fail.
 ! CREATE SCHEMA s
@@ -97,7 +102,7 @@ contains:schema 'materialize.s' cannot be dropped without CASCADE while it conta
 # What databases do we have by default?
 > SHOW DATABASES
 name
-----
+------------
 materialize
 
 > SELECT name FROM mz_databases
@@ -109,7 +114,7 @@ materialize
 > CREATE DATABASE d
 > SHOW DATABASES
 name
-----
+-----------
 d
 materialize
 
@@ -157,16 +162,24 @@ contains:database 'd' already exists
 # The new database should have a default public schema.
 > SHOW SCHEMAS FROM d
 name
-----
+------------------
 public
+information_schema
+mz_catalog
+mz_internal
+pg_catalog
 
 # New schemas in the database should appear in the output of SHOW SCHEMAS FROM.
 > CREATE SCHEMA d.s
 > SHOW SCHEMAS FROM d
 name
-------
+-------------------
 public
 s
+information_schema
+mz_catalog
+mz_internal
+pg_catalog
 
 # SHOW SCHEMAS should filter its output based on the provided LIKE or WHERE
 # clause.
@@ -190,6 +203,10 @@ d
 > SHOW SCHEMAS
 public
 s
+information_schema
+mz_catalog
+mz_internal
+pg_catalog
 > CREATE VIEW v2 AS SELECT 2
 > SHOW VIEWS
 v1
@@ -199,10 +216,10 @@ v2
 2
 
 > SHOW OBJECTS
-name
-----
-v1
-v2
+name    type
+-------------
+v1      view
+v2      view
 
 # Test minimizing name qualification
 
@@ -237,13 +254,13 @@ public.bool
 ! DROP OBJECT v1
 contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or MATERIALIZED or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
 
-> SHOW FULL OBJECTS
-name            type
---------------------------
-bool            user
-int_list        user
-v1              user
-v2              user
+> SHOW OBJECTS
+name        type
+-----------------
+bool        type
+int_list    type
+v1          view
+v2          view
 
 # Create one of every mz_object type
 $ set schema={
@@ -254,7 +271,7 @@ $ set schema={
     ]
   }
 $ kafka-create-topic topic=data
-$ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 1}
 
 > CREATE TABLE tbl (a int, b text);
@@ -271,23 +288,23 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 > CREATE SINK snk FROM source_data
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-catalog-sink-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-catalog-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 
-> SHOW FULL OBJECTS
-name            type
---------------------------
-bool            user
-csr_conn        user
-int_list        user
-v1              user
-v2              user
-tbl             user
-pass_secret     user
-kafka_conn      user
-mv              user
-source_data     user
-snk             user
+> SHOW OBJECTS
+name        type
+----------------
+bool        type
+csr_conn    connection
+int_list    type
+v1          view
+v2          view
+tbl         table
+pass_secret secret
+kafka_conn  connection
+mv          "materialized view"
+source_data source
+snk         sink
 
 > SELECT DISTINCT(TYPE) FROM mz_objects
 type
@@ -302,6 +319,27 @@ connection
 type
 function
 secret
+
+> SELECT * FROM (SHOW OBJECTS) ORDER BY name DESC
+bool        type
+csr_conn    connection
+int_list    type
+kafka_conn  connection
+mv          "materialized view"
+pass_secret secret
+snk         sink
+source_data source
+tbl         table
+v1          view
+v2          view
+
+> SELECT "Create Table" FROM (SHOW CREATE TABLE tbl)
+"CREATE TABLE \"d\".\"public\".\"tbl\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\")"
+
+! SHOW COLUMNS FROM pass_secret
+contains:d.public.pass_secret is a secret and so does not have columns
+! SHOW COLUMNS FROM kafka_conn
+contains:d.public.kafka_conn is a connection and so does not have columns
 
 # DROP DATABASE does not support both RESTRICT and CASCADE.
 ! DROP DATABASE d RESTRICT CASCADE
@@ -319,7 +357,7 @@ contains:database 'd' cannot be dropped with RESTRICT while it contains schemas
 # SHOW DATABASES should work, even if the current database has been dropped.
 > SHOW DATABASES
 name
-----
+-----------
 materialize
 
 > SELECT name FROM mz_databases
@@ -390,7 +428,7 @@ contains:unknown database 'noexist_db'
 > DROP DATABASE d1;
 > SHOW DATABASES
 name
-----
+-----------
 d
 d2
 materialize
@@ -403,100 +441,66 @@ d2
 
 > SHOW VIEWS FROM d2.public;
  name
-------
+-----
 
 # Check default sources, tables, and views in mz_catalog.
 
-> SHOW SOURCES FROM mz_catalog
-mz_arrangement_batches_internal
-mz_arrangement_batches_internal_1
-mz_arrangement_records_internal
-mz_arrangement_records_internal_1
-mz_arrangement_sharing_internal
-mz_arrangement_sharing_internal_1
-mz_dataflow_channels
-mz_dataflow_channels_1
-mz_dataflow_addresses
-mz_dataflow_addresses_1
-mz_dataflow_operator_reachability_internal
-mz_dataflow_operator_reachability_internal_1
-mz_dataflow_operators
-mz_dataflow_operators_1
-mz_materialization_dependencies
-mz_materialization_dependencies_1
-mz_materializations
-mz_materializations_1
-mz_message_counts_received_internal
-mz_message_counts_received_internal_1
-mz_message_counts_sent_internal
-mz_message_counts_sent_internal_1
-mz_peek_active
-mz_peek_active_1
-mz_peek_durations
-mz_peek_durations_1
-mz_scheduling_elapsed_internal
-mz_scheduling_elapsed_internal_1
-mz_scheduling_histogram_internal
-mz_scheduling_histogram_internal_1
-mz_scheduling_parks_internal
-mz_scheduling_parks_internal_1
-mz_worker_materialization_delays
-mz_worker_materialization_delays_1
-mz_worker_materialization_frontiers
-mz_worker_materialization_frontiers_1
-mz_worker_materialization_source_frontiers
-mz_worker_materialization_source_frontiers_1
+# The sources in the catalog depend on the number of replicas and computeds
+$ skip-if
+SELECT ${arg.replicas} > 1 OR ${arg.replica-size} > 1;
 
-> SHOW FULL SOURCES FROM mz_catalog
-name                                          type   type
----------------------------------------------------------
-mz_arrangement_batches_internal               system log
-mz_arrangement_batches_internal_1             system log
-mz_arrangement_records_internal               system log
-mz_arrangement_records_internal_1             system log
-mz_arrangement_sharing_internal               system log
-mz_arrangement_sharing_internal_1             system log
-mz_dataflow_channels                          system log
-mz_dataflow_channels_1                        system log
-mz_dataflow_addresses                         system log
-mz_dataflow_addresses_1                       system log
-mz_dataflow_operator_reachability_internal    system log
-mz_dataflow_operator_reachability_internal_1  system log
-mz_dataflow_operators                         system log
-mz_dataflow_operators_1                       system log
-mz_materialization_dependencies               system log
-mz_materialization_dependencies_1             system log
-mz_materializations                           system log
-mz_materializations_1                         system log
-mz_message_counts_received_internal           system log
-mz_message_counts_received_internal_1         system log
-mz_message_counts_sent_internal               system log
-mz_message_counts_sent_internal_1             system log
-mz_peek_active                                system log
-mz_peek_active_1                              system log
-mz_peek_durations                             system log
-mz_peek_durations_1                           system log
-mz_scheduling_elapsed_internal                system log
-mz_scheduling_elapsed_internal_1              system log
-mz_scheduling_histogram_internal              system log
-mz_scheduling_histogram_internal_1            system log
-mz_scheduling_parks_internal                  system log
-mz_scheduling_parks_internal_1                system log
-mz_worker_materialization_delays              system log
-mz_worker_materialization_delays_1            system log
-mz_worker_materialization_frontiers           system log
-mz_worker_materialization_frontiers_1         system log
-mz_worker_materialization_source_frontiers    system log
-mz_worker_materialization_source_frontiers_1  system log
+> SHOW SOURCES FROM mz_catalog
+name                                          type
+--------------------------------------------------
+mz_arrangement_batches_internal               log
+mz_arrangement_batches_internal_1             log
+mz_arrangement_records_internal               log
+mz_arrangement_records_internal_1             log
+mz_arrangement_sharing_internal               log
+mz_arrangement_sharing_internal_1             log
+mz_dataflow_channels                          log
+mz_dataflow_channels_1                        log
+mz_dataflow_addresses                         log
+mz_dataflow_addresses_1                       log
+mz_dataflow_operator_reachability_internal    log
+mz_dataflow_operator_reachability_internal_1  log
+mz_dataflow_operators                         log
+mz_dataflow_operators_1                       log
+mz_materialization_dependencies               log
+mz_materialization_dependencies_1             log
+mz_materializations                           log
+mz_materializations_1                         log
+mz_message_counts_received_internal           log
+mz_message_counts_received_internal_1         log
+mz_message_counts_sent_internal               log
+mz_message_counts_sent_internal_1             log
+mz_peek_active                                log
+mz_peek_active_1                              log
+mz_peek_durations                             log
+mz_peek_durations_1                           log
+mz_scheduling_elapsed_internal                log
+mz_scheduling_elapsed_internal_1              log
+mz_scheduling_histogram_internal              log
+mz_scheduling_histogram_internal_1            log
+mz_scheduling_parks_internal                  log
+mz_scheduling_parks_internal_1                log
+mz_worker_materialization_delays              log
+mz_worker_materialization_delays_1            log
+mz_worker_materialization_frontiers           log
+mz_worker_materialization_frontiers_1         log
+mz_worker_materialization_source_frontiers    log
+mz_worker_materialization_source_frontiers_1  log
 
 > SHOW TABLES FROM mz_catalog
+name
+-----------------------------
 mz_array_types
 mz_audit_events
 mz_base_types
 mz_clusters
 mz_cluster_replicas_base
-mz_cluster_replica_heartbeats
 mz_cluster_replica_statuses
+mz_cluster_replica_heartbeats
 mz_columns
 mz_connections
 mz_databases
@@ -520,113 +524,14 @@ mz_types
 mz_view_foreign_keys
 mz_view_keys
 mz_views
-
-> SHOW FULL TABLES FROM mz_catalog
-name                        type
-----------------------------------
-mz_array_types                system
-mz_audit_events               system
-mz_base_types                 system
-mz_clusters                   system
-mz_cluster_replicas_base      system
-mz_cluster_replica_statuses   system
-mz_cluster_replica_heartbeats system
-mz_columns                    system
-mz_connections                system
-mz_databases                  system
-mz_functions                  system
-mz_index_columns              system
-mz_indexes                    system
-mz_kafka_sinks                system
-mz_list_types                 system
-mz_map_types                  system
-mz_materialized_views         system
-mz_pseudo_types               system
-mz_roles                      system
-mz_schemas                    system
-mz_secrets                    system
-mz_sinks                      system
-mz_sources                    system
-mz_ssh_tunnel_connections system
-mz_storage_usage              system
-mz_tables                     system
-mz_types                      system
-mz_view_foreign_keys          system
-mz_view_keys                  system
-mz_views                      system
 
 > CREATE SCHEMA tester
 
 > SHOW TABLES FROM tester
 
-> SHOW EXTENDED tables FROM tester
-mz_array_types
-mz_audit_events
-mz_base_types
-mz_clusters
-mz_cluster_replicas_base
-mz_cluster_replica_heartbeats
-mz_cluster_replica_statuses
-mz_columns
-mz_connections
-mz_databases
-mz_functions
-mz_index_columns
-mz_indexes
-mz_kafka_sinks
-mz_list_types
-mz_map_types
-mz_materialized_views
-mz_pseudo_types
-mz_roles
-mz_schemas
-mz_secrets
-mz_sinks
-mz_sources
-mz_ssh_tunnel_connections
-mz_storage_usage
-mz_tables
-mz_types
-mz_view_foreign_keys
-mz_view_keys
-mz_views
-
 > CREATE TABLE tester.test_table (a int)
 
 > SHOW TABLES FROM tester
-test_table
-
-> SHOW EXTENDED tables FROM tester
-mz_array_types
-mz_audit_events
-mz_base_types
-mz_clusters
-mz_cluster_replicas_base
-mz_cluster_replica_heartbeats
-mz_cluster_replica_statuses
-mz_columns
-mz_connections
-mz_databases
-mz_functions
-mz_index_columns
-mz_indexes
-mz_kafka_sinks
-mz_list_types
-mz_map_types
-mz_materialized_views
-mz_pseudo_types
-mz_roles
-mz_schemas
-mz_secrets
-mz_sinks
-mz_sources
-mz_ssh_tunnel_connections
-mz_storage_usage
-mz_tables
-mz_types
-mz_view_foreign_keys
-mz_view_keys
-mz_views
 test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
@@ -638,11 +543,12 @@ test_table
 19
 
 > SHOW VIEWS FROM mz_catalog
+name
+-----------------------------------
 mz_arrangement_sharing
 mz_arrangement_sharing_1
 mz_arrangement_sizes
 mz_arrangement_sizes_1
-mz_catalog_names
 mz_cluster_replicas
 mz_dataflows
 mz_dataflows_1
@@ -670,46 +576,11 @@ mz_scheduling_histogram_1
 mz_scheduling_parks
 mz_scheduling_parks_1
 
-> SHOW FULL VIEWS FROM mz_catalog
-name                                 type
--------------------------------------------
-mz_arrangement_sharing               system
-mz_arrangement_sharing_1             system
-mz_arrangement_sizes                 system
-mz_arrangement_sizes_1               system
-mz_catalog_names                     system
-mz_cluster_replicas                  system
-mz_dataflows                         system
-mz_dataflows_1                       system
-mz_dataflow_operator_dataflows       system
-mz_dataflow_operator_dataflows_1     system
-mz_dataflow_operator_reachability    system
-mz_dataflow_operator_reachability_1  system
-mz_materialization_frontiers         system
-mz_materialization_frontiers_1       system
-mz_materialization_source_frontiers  system
-mz_message_counts                    system
-mz_message_counts_1                  system
-mz_objects                           system
-mz_records_per_dataflow              system
-mz_records_per_dataflow_1            system
-mz_records_per_dataflow_global       system
-mz_records_per_dataflow_global_1     system
-mz_records_per_dataflow_operator     system
-mz_records_per_dataflow_operator_1   system
-mz_relations                         system
-mz_scheduling_elapsed                system
-mz_scheduling_elapsed_1              system
-mz_scheduling_histogram              system
-mz_scheduling_histogram_1            system
-mz_scheduling_parks                  system
-mz_scheduling_parks_1                system
-
 > SHOW SOURCES FROM mz_catalog LIKE '%peek%';
-mz_peek_active
-mz_peek_active_1
-mz_peek_durations
-mz_peek_durations_1
+mz_peek_active      log
+mz_peek_active_1    log
+mz_peek_durations   log
+mz_peek_durations_1 log
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

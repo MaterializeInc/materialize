@@ -150,7 +150,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
           SASL PASSWORD = SECRET msk_password;
 
       CREATE SOURCE <source-name>
-      FROM KAFKA CONNECTION kafka_connection TOPIC '<topic-name>'
+      FROM KAFKA CONNECTION kafka_connection (TOPIC '<topic-name>')
       FORMAT text;
     ```
 

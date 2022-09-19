@@ -147,14 +147,12 @@ given time window. Without explicit progress messages, it is impossible to
 distinguish between a stall in Materialize and a legitimate period of no
 updates.
 
-If the `PROGRESS` option is specified via `WITH (PROGRESS)`, an additional
-`mz_progressed` column appears in the output.
-It is `false` if there may be more rows with the same timestamp.
-It is `true` if no more timestamps will appear that are strictly less than the
-timestamp.
-All further columns after `mz_progressed` will be `NULL` in the `true` case.
+If the `PROGRESS` option is specified via `WITH (PROGRESS)`, an additional `mz_progressed` column appears in the output.
+When the column is `false` the rest of the row is a valid update.
+When the column is `true` the rest of the row is not a valid update and its content should be ignored;
+the row exists only to communicate that timestamps have advanced.
 
-Not all timestamps that appear will have a corresponding `mz_progressed` row.
+Not all timestamps that appear will have a corresponding row with `mz_progressed` set to `true`.
 For example, the following is a valid sequence of updates:
 
 ```nofmt

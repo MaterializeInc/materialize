@@ -205,8 +205,8 @@ pub struct CatalogConfig {
     /// NOTE(benesch): this is only necessary for producing unique Kafka sink
     /// topics. Perhaps we can remove this when #2915 is complete.
     pub nonce: u64,
-    /// A persistent UUID associated with the catalog.
-    pub cluster_id: Uuid,
+    /// A persistent UUID associated with the environment.
+    pub environment_id: Uuid,
     /// A transient UUID associated with this process.
     pub session_id: Uuid,
     /// Whether the server is running in unsafe mode.
@@ -264,8 +264,8 @@ pub trait CatalogComputeInstance<'a> {
     /// Returns a stable ID for the compute instance.
     fn id(&self) -> ComputeInstanceId;
 
-    /// Returns the set of non-transient exports (indexes, sinks, materialized
-    /// views) of this cluster.
+    /// Returns the set of non-transient exports (indexes, materialized views)
+    /// of this cluster.
     fn exports(&self) -> &std::collections::HashSet<GlobalId>;
 
     /// Returns the set of replicas of this cluster.
@@ -603,7 +603,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     start_time: DateTime::<Utc>::MIN_UTC,
     start_instant: Instant::now(),
     nonce: 0,
-    cluster_id: Uuid::from_u128(0),
+    environment_id: Uuid::from_u128(0),
     session_id: Uuid::from_u128(0),
     unsafe_mode: true,
     build_info: &DUMMY_BUILD_INFO,

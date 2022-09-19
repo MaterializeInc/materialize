@@ -30,8 +30,7 @@ def test_secrets(mz: MaterializeApplication) -> None:
             # Our Redpanda instance is not configured for SASL, so we can not
             # really establish a successful connection. Hence the expectation for an SSL error
             ! CREATE SOURCE secrets_source
-              FROM KAFKA CONNECTION secrets_conn
-              TOPIC 'foo_bar';
+              FROM KAFKA CONNECTION secrets_conn (TOPIC 'foo_bar');
             contains: SSL handshake failed
             """
         )

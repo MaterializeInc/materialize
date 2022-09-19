@@ -51,18 +51,17 @@ name
 t
 
 > SHOW SOURCES;
-name
-----
+name    type
+------------
 
 > SHOW INDEXES FROM t;
 
 > CREATE DEFAULT INDEX on t
 
 > SHOW INDEXES FROM t
-cluster on_name  key_name       seq_in_index  column_name  expression  nullable
+name            on          cluster         key
 -----------------------------------------------------------------------------------
-<CLUSTER_NAME> t        t_primary_idx  1             a            <null>      true
-<CLUSTER_NAME> t        t_primary_idx  2             b            <null>      false
+t_primary_idx   t           <CLUSTER_NAME>  {a,b}
 
 > DROP INDEX t_primary_idx
 
@@ -111,6 +110,11 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 # joining a table with a logging source selects some reasonable timestamp,
 # rather than e.g. blocking forever, or producing an error about being
 # unable to select a timestamp.
+
+# log sources require a single replica
+$ skip-if
+SELECT ${arg.replicas} > 1
+
 > SELECT * FROM t CROSS JOIN mz_dataflow_operators LIMIT 0
 
 > DROP SOURCE data
@@ -224,8 +228,8 @@ v
 v
 
 > SHOW SOURCES;
-name
-----
+name    type
+------------
 
 > CREATE TABLE t (a int, b text NOT NULL)
 

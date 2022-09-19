@@ -16,7 +16,7 @@ $ set enum-writer={"type": "record", "name": "schema_enum", "fields": [ {"name":
 
 $ kafka-create-topic topic=resolution-enums
 
-$ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} timestamp=1
 {"f1": "E1" }
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -29,10 +29,10 @@ $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} publish=
   ENVELOPE NONE
 
 # E5 will be recorded as E_DEFAULT
-$ kafka-ingest format=avro topic=resolution-enums schema=${enum-writer} publish=true timestamp=2
+$ kafka-ingest format=avro topic=resolution-enums schema=${enum-writer} timestamp=2
 {"f1": "E5" }
 
-$ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} timestamp=1
 {"f1": "E1" }
 
 > SHOW COLUMNS FROM resolution_enums

@@ -21,11 +21,9 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::error::CodecMismatch;
-use crate::fetch::{LeasedBatch, LeasedBatchMetadata};
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
-use crate::internal::state::proto_leased_batch_metadata;
 use crate::internal::state::{
-    HollowBatch, ProtoHollowBatch, ProtoLeasedBatch, ProtoLeasedBatchMetadata, ProtoReaderState,
+    HollowBatch, HollowBatchPart, ProtoHollowBatch, ProtoHollowBatchPart, ProtoReaderState,
     ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs,
     ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description, ProtoWriterState,
     ReaderState, State, StateCollections, WriterState,
@@ -35,7 +33,7 @@ use crate::internal::state_diff::{
 };
 use crate::internal::trace::Trace;
 use crate::read::ReaderId;
-use crate::{ShardId, WriterId};
+use crate::{PersistConfig, ShardId, WriterId};
 
 pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
     let uuid_encoded = match encoded.strip_prefix(id_prefix) {
@@ -200,27 +198,14 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             &self.readers,
             &mut field_diffs,
             |k| k.into_proto().encode_to_vec(),
-            |v| {
-                ProtoReaderState {
-                    since: Some(v.since.into_proto()),
-                    seqno: v.seqno.into_proto(),
-                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                }
-                .encode_to_vec()
-            },
+            |v| v.into_proto().encode_to_vec(),
         );
         field_diffs_into_proto(
             ProtoStateField::Writers,
             &self.writers,
             &mut field_diffs,
             |k| k.into_proto().encode_to_vec(),
-            |v| {
-                ProtoWriterState {
-                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                    lease_duration_ms: v.lease_duration_ms,
-                }
-                .encode_to_vec()
-            },
+            |v| v.into_proto().encode_to_vec(),
         );
         field_diffs_into_proto(
             ProtoStateField::Since,
@@ -288,13 +273,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                             diff,
                             &mut state_diff.readers,
                             |k| k.into_rust(),
-                            |v| {
-                                Ok(ReaderState {
-                                    since: v.since.into_rust_if_some("since")?,
-                                    seqno: v.seqno.into_rust()?,
-                                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                                })
-                            },
+                            |v| v.into_rust(),
                         )?
                     }
                     ProtoStateField::Writers => {
@@ -302,12 +281,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                             diff,
                             &mut state_diff.writers,
                             |k| k.into_rust(),
-                            |v| {
-                                Ok(WriterState {
-                                    last_heartbeat_timestamp_ms: v.last_heartbeat_timestamp_ms,
-                                    lease_duration_ms: v.lease_duration_ms,
-                                })
-                            },
+                            |v| v.into_rust(),
                         )?
                     }
                     ProtoStateField::Since => {
@@ -613,14 +587,26 @@ impl<T: Timestamp + Codec64> RustType<ProtoReaderState> for ReaderState<T> {
             seqno: self.seqno.into_proto(),
             since: Some(self.since.into_proto()),
             last_heartbeat_timestamp_ms: self.last_heartbeat_timestamp_ms.into_proto(),
+            lease_duration_ms: self.lease_duration_ms.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoReaderState) -> Result<Self, TryFromProtoError> {
+        let mut lease_duration_ms = proto.lease_duration_ms.into_rust()?;
+        // MIGRATION: If the lease_duration_ms is empty, then the proto field
+        // was missing and we need to fill in a default. This would ideally be
+        // based on the actual value in PersistConfig, but it's only here for a
+        // short time and this is way easier.
+        if lease_duration_ms == 0 {
+            lease_duration_ms =
+                u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis())
+                    .expect("lease duration as millis should fit within u64");
+        }
         Ok(ReaderState {
             seqno: proto.seqno.into_rust()?,
             since: proto.since.into_rust_if_some("ProtoReaderState::since")?,
             last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms.into_rust()?,
+            lease_duration_ms,
         })
     }
 }
@@ -645,16 +631,47 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     fn into_proto(&self) -> ProtoHollowBatch {
         ProtoHollowBatch {
             desc: Some(self.desc.into_proto()),
-            keys: self.keys.into_proto(),
+            parts: self.parts.into_proto(),
             len: self.len.into_proto(),
+            runs: self.runs.into_proto(),
+            deprecated_keys: vec![],
         }
     }
 
     fn from_proto(proto: ProtoHollowBatch) -> Result<Self, TryFromProtoError> {
+        let mut parts: Vec<HollowBatchPart> = proto.parts.into_rust()?;
+        // MIGRATION: We used to just have the keys instead of a more structured
+        // part.
+        parts.extend(
+            proto
+                .deprecated_keys
+                .into_iter()
+                .map(|key| HollowBatchPart {
+                    key: PartialBatchKey(key),
+                    encoded_size_bytes: 0,
+                }),
+        );
         Ok(HollowBatch {
             desc: proto.desc.into_rust_if_some("desc")?,
-            keys: proto.keys.into_rust()?,
+            parts,
             len: proto.len.into_rust()?,
+            runs: proto.runs.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        ProtoHollowBatchPart {
+            key: self.key.into_proto(),
+            encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        Ok(HollowBatchPart {
+            key: proto.key.into_rust()?,
+            encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
         })
     }
 }
@@ -698,77 +715,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
     }
 }
 
-impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatchMetadata> for LeasedBatchMetadata<T> {
-    fn into_proto(&self) -> ProtoLeasedBatchMetadata {
-        use proto_leased_batch_metadata::*;
-        ProtoLeasedBatchMetadata {
-            kind: Some(match self {
-                LeasedBatchMetadata::Snapshot { as_of } => {
-                    Kind::Snapshot(ProtoLeasedBatchMetadataSnapshot {
-                        as_of: Some(as_of.into_proto()),
-                    })
-                }
-                LeasedBatchMetadata::Listen { as_of, until } => {
-                    Kind::Listen(ProtoLeasedBatchMetadataListen {
-                        as_of: Some(as_of.into_proto()),
-                        until: Some(until.into_proto()),
-                    })
-                }
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoLeasedBatchMetadata) -> Result<Self, TryFromProtoError> {
-        use proto_leased_batch_metadata::Kind::*;
-        Ok(match proto.kind {
-            Some(Snapshot(snapshot)) => LeasedBatchMetadata::Snapshot {
-                as_of: snapshot
-                    .as_of
-                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Snapshot::as_of")?,
-            },
-            Some(Listen(listen)) => LeasedBatchMetadata::Listen {
-                as_of: listen
-                    .as_of
-                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Listen::as_of")?,
-                until: listen
-                    .until
-                    .into_rust_if_some("ProtoLeasedBatchMetadata::Kind::Listen::until")?,
-            },
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "ProtoLeasedBatchMetadata::Kind",
-                ))
-            }
-        })
-    }
-}
-
-impl<T: Timestamp + Codec64> RustType<ProtoLeasedBatch> for LeasedBatch<T> {
-    /// n.b. this is used with [`crate::fetch::SerdeLeasedBatch`].
-    fn into_proto(&self) -> ProtoLeasedBatch {
-        ProtoLeasedBatch {
-            shard_id: self.shard_id.into_proto(),
-            reader_id: self.reader_id.into_proto(),
-            reader_metadata: Some(self.metadata.into_proto()),
-            batch: Some(self.batch.into_proto()),
-            leased_seqno: self.leased_seqno.into_proto(),
-        }
-    }
-
-    /// n.b. this is used with [`crate::fetch::SerdeLeasedBatch`].
-    fn from_proto(proto: ProtoLeasedBatch) -> Result<Self, TryFromProtoError> {
-        Ok(LeasedBatch {
-            shard_id: proto.shard_id.into_rust()?,
-            reader_id: proto.reader_id.into_rust()?,
-            metadata: proto
-                .reader_metadata
-                .into_rust_if_some("ProtoLeasedBatch::reader_metadata")?,
-            batch: proto.batch.into_rust_if_some("ProtoLeasedBatch::batch")?,
-            leased_seqno: proto.leased_seqno.into_rust()?,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use mz_persist::location::SeqNo;
@@ -778,6 +724,8 @@ mod tests {
     use crate::internal::state::State;
     use crate::internal::state_diff::StateDiff;
     use crate::ShardId;
+
+    use super::*;
 
     #[test]
     fn applier_version_state() {
@@ -826,5 +774,56 @@ mod tests {
         // of code.
         let v1_res = std::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, &buf));
         assert!(v1_res.is_err());
+    }
+
+    #[test]
+    fn hollow_batch_migration_keys() {
+        let x = HollowBatch {
+            desc: Description::new(
+                Antichain::from_elem(1u64),
+                Antichain::from_elem(2u64),
+                Antichain::from_elem(3u64),
+            ),
+            len: 4,
+            parts: vec![HollowBatchPart {
+                key: PartialBatchKey("a".into()),
+                encoded_size_bytes: 5,
+            }],
+            runs: vec![],
+        };
+        let mut old = x.into_proto();
+        // Old ProtoHollowBatch had keys instead of parts.
+        old.deprecated_keys = vec!["b".into()];
+        // We don't expect to see a ProtoHollowBatch with keys _and_ parts, only
+        // one or the other, but we have a defined output, so may as well test
+        // it.
+        let mut expected = x;
+        // We fill in 0 for encoded_size_bytes when we migrate from keys. This
+        // will violate bounded memory usage compaction during the transition
+        // (short-term issue), but that's better than creating unnecessary runs
+        // (longer-term issue).
+        expected.parts.push(HollowBatchPart {
+            key: PartialBatchKey("b".into()),
+            encoded_size_bytes: 0,
+        });
+        assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
+    }
+
+    #[test]
+    fn reader_state_migration_lease_duration() {
+        let x = ReaderState {
+            seqno: SeqNo(1),
+            since: Antichain::from_elem(2u64),
+            last_heartbeat_timestamp_ms: 3,
+            // Old ProtoReaderState had no lease_duration_ms field
+            lease_duration_ms: 0,
+        };
+        let old = x.into_proto();
+        let mut expected = x;
+        // We fill in DEFAULT_READ_LEASE_DURATION for lease_duration_ms when we
+        // migrate from unset.
+        expected.lease_duration_ms =
+            u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis()).unwrap();
+        assert_eq!(<ReaderState<u64>>::from_proto(old).unwrap(), expected);
     }
 }

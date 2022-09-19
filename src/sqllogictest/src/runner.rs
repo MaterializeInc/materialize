@@ -37,6 +37,7 @@ use std::path::Path;
 use std::str;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::{Buf, BytesMut};
@@ -71,7 +72,7 @@ use mz_pgrepr::{oid, Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
-use mz_sql::ast::{Expr, Raw, Statement};
+use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
 use mz_sql_parser::{
     ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
     parser,
@@ -668,6 +669,7 @@ impl Runner {
             unsafe_mode: true,
             metrics_registry,
             now,
+            environment_id: Uuid::from_u128(0),
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             storage_host_sizes: Default::default(),
@@ -677,6 +679,7 @@ impl Runner {
                 (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
             ),
             otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+            storage_usage_collection_interval: Duration::from_secs(3600),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -879,7 +882,7 @@ impl Runner {
         match statement {
             Statement::CreateView { .. }
             | Statement::Select { .. }
-            | Statement::ShowIndexes { .. } => (),
+            | Statement::Show(ShowStatement::ShowIndexes { .. }) => (),
             _ => {
                 if output.is_err() {
                     // We're not interested in testing our hacky handling of INSERT etc

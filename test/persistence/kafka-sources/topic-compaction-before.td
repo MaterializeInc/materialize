@@ -25,7 +25,7 @@ $ set schema={
 
 $ kafka-create-topic topic=topic-compaction compaction=true
 
-$ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=1000
+$ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${keyschema} schema=${schema} repeat=1000
 {"f1": ${kafka-ingest.iteration}} {"f2": "A${kafka-ingest.iteration}"}
 {"f1": ${kafka-ingest.iteration}} {"f2": "B${kafka-ingest.iteration}"}
 {"f1": ${kafka-ingest.iteration}} {"f2": "C${kafka-ingest.iteration}"}

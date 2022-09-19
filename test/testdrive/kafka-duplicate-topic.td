@@ -13,10 +13,10 @@ $ kafka-create-topic topic=topic0
 
 $ kafka-create-topic topic=topic1
 
-$ kafka-ingest format=avro topic=topic0 schema=${schema} publish=true repeat=1
+$ kafka-ingest format=avro topic=topic0 schema=${schema} repeat=1
 {"f2": 1}
 
-$ kafka-ingest format=avro topic=topic1 schema=${schema} publish=true repeat=1
+$ kafka-ingest format=avro topic=topic1 schema=${schema} repeat=1
 {"f2": 7}
 
 > CREATE CONNECTION kafka_conn
@@ -37,17 +37,17 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema} publish=true repeat=1
   ENVELOPE NONE
 
 > CREATE SINK sink0 FROM source0
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-sink-output-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK sink1 FROM source1
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-sink-output-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ kafka-verify format=avro sort-messages=true sink=materialize.public.sink1
-{"f2": 1} {"before": null, "after": {"row": {"f2": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"f2": 7} {"before": null, "after": {"row": {"f2": 7}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"f2": 1} {"before": null, "after": {"row": {"f2": 1}}}
+{"f2": 7} {"before": null, "after": {"row": {"f2": 7}}}

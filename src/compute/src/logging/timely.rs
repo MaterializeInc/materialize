@@ -49,7 +49,7 @@ pub fn construct<A: Allocate>(
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000) as Timestamp;
+    let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000);
     let peers = worker.peers();
 
     // A dataflow for multiple log-derived arrangements.
@@ -114,8 +114,9 @@ pub fn construct<A: Allocate>(
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ns = time.as_nanos();
-                        let time_ms = (((time.as_millis() as Timestamp / interval_ms) + 1)
-                            * interval_ms) as Timestamp;
+                        let time_ms = (((time.as_millis() / interval_ms) + 1) * interval_ms)
+                            .try_into()
+                            .expect("must fit");
 
                         match datum {
                             TimelyEvent::Operates(event) => {

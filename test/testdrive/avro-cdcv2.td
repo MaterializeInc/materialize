@@ -9,6 +9,9 @@
 
 # Test support for Avro sources without using the Confluent Schema Registry.
 
+$ skip-if
+SELECT ${arg.replicas} > 1 OR ${arg.replica-size} > 1;
+
 $ set schema=[
   {
     "type": "array",
@@ -146,11 +149,17 @@ id price
 6 10
 
 # Test that tails report progress messages even without new data
+
+# The ouput of TAIL is dependent on the replica size
+$ skip-if
+SELECT ${arg.replica-size} > 1;
+
 > BEGIN
 
 > DECLARE c CURSOR FOR TAIL data_schema_inline WITH (SNAPSHOT = FALSE, PROGRESS = TRUE);
 
-> FETCH 1 FROM c WITH (timeout = '60s')
+> FETCH 2 FROM c WITH (timeout = '60s')
+14 true <null> <null> <null>
 15 true <null> <null> <null>
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=6

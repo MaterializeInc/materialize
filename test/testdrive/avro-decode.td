@@ -154,10 +154,10 @@ $ set reader-schema={
 
 $ kafka-create-topic topic=avro-data
 
-$ kafka-ingest format=avro topic=avro-data schema=${writer-schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=avro-data schema=${writer-schema} timestamp=1
 { "f5": 1234, "f4": {"variant1": [0]}, "f3": 2345, "f2": "Diamonds", "f1": {"variant4": [0, 1, 2, 3]}, "f6": {"hello": 123, "another": 2144} }
 
-$ kafka-ingest format=avro topic=avro-data schema=${reader-schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=avro-data schema=${reader-schema} timestamp=1
 { "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -184,7 +184,7 @@ f0 f11 f12 f13 f2 f51 f52
 
 $ kafka-create-topic topic=avro-data-no-registry
 
-$ kafka-ingest format=avro topic=avro-data-no-registry schema=${reader-schema} publish=true confluent-wire-format=false timestamp=1
+$ kafka-ingest format=avro topic=avro-data-no-registry schema=${reader-schema} confluent-wire-format=false timestamp=1
 { "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
 
 > CREATE SOURCE avro_data_no_registry

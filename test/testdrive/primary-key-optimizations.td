@@ -34,7 +34,7 @@ $ set schema={
 
 $ kafka-create-topic topic=t1
 
-$ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys} schema=${schema}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -148,7 +148,7 @@ $ set schema={
 
 $ kafka-create-topic topic=t1-pkne
 
-$ kafka-ingest format=avro topic=t1-pkne schema=${schema} publish=true
+$ kafka-ingest format=avro topic=t1-pkne schema=${schema}
 
 > CREATE SOURCE t1_pkne (PRIMARY KEY (key1, key2) NOT ENFORCED)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC

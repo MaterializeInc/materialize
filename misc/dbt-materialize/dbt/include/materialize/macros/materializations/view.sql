@@ -32,7 +32,7 @@
   {{ run_hooks(pre_hooks, inside_transaction=True) }}
 
   {% call statement('main') -%}
-    {{ create_view_as(target_relation, sql) }}
+    {{ materialize__create_view_as(target_relation, sql) }}
   {%- endcall %}
 
   {{ create_indexes(target_relation) }}

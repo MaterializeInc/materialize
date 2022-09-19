@@ -11,7 +11,7 @@
 # Make sure that data that was ingested during the lifetime of a SELECT cursor is *NOT* FETCH-ed
 #
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "type": "int"} ] }
 

@@ -9,10 +9,10 @@ publish = false
 
 [dependencies]
 serde = { version = "1.0.144", features = ["derive"] }
-clap = { version = "3.2.17", features = [ "derive" ] }
+clap = { version = "3.2.20", features = [ "derive" ] }
 tokio = { version = "1.19.2", features = ["full"] }
-open = "3.0.2"
-axum = "0.5.15"
+open = "3.0.3"
+axum = "0.5.16"
 rpassword = "7.0"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 toml = "0.5.9"
@@ -20,5 +20,5 @@ dirs = "4.0.0"
 subprocess = "0.2.9"
 mz-ore = { path = "../ore", features = ["task"] }
 toml_edit = "0.14.4"
-indicatif = "0.17.0"
 anyhow = "1.0.62"
+indicatif = "0.17.1"

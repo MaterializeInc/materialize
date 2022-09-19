@@ -35,10 +35,10 @@ true
 
 # Make sure that ingestion can continue
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "k${kafka-ingest.iteration}"} {"f2": "k${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "l${kafka-ingest.iteration}"} {"f2": "l${kafka-ingest.iteration}"}
 
 > SELECT COUNT(*), COUNT(DISTINCT f1), COUNT(DISTINCT f2) FROM failpoint;
@@ -62,10 +62,10 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 120000 120000 120000
 
 # Delete some values inserted pre-restart
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "a${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "b${kafka-ingest.iteration}"}
 
 # And validate again

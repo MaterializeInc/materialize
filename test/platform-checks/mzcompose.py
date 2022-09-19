@@ -30,6 +30,7 @@ from materialize.checks.insert_select import *  # noqa: F401 F403
 from materialize.checks.join_implementations import *  # noqa: F401 F403
 from materialize.checks.join_types import *  # noqa: F401 F403
 from materialize.checks.jsonb_type import *  # noqa: F401 F403
+from materialize.checks.kafka_formats import *  # noqa: F401 F403
 from materialize.checks.large_tables import *  # noqa: F401 F403
 from materialize.checks.like import *  # noqa: F401 F403
 from materialize.checks.materialized_views import *  # noqa: F401 F403

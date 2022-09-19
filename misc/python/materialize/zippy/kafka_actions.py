@@ -95,7 +95,7 @@ $ kafka-create-topic topic={self.topic.name} partitions={self.topic.partitions}
 
 {SCHEMA}
 
-$ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} publish=true repeat=1
+$ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} repeat=1
 {{"key": 0}} {{"f1": 0}}
 """
             )
@@ -125,7 +125,7 @@ class KafkaInsert(Ingest):
             f"""
 {SCHEMA}
 
-$ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_max + 1} publish=true repeat={self.delta}
+$ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_max + 1} repeat={self.delta}
 {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}}}
 """
         )
@@ -152,7 +152,7 @@ class KafkaDeleteFromHead(Ingest):
                 f"""
 {SCHEMA}
 
-$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.max + 1} publish=true repeat={actual_delta}
+$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.max + 1} repeat={actual_delta}
 {{"key": ${{kafka-ingest.iteration}}}}
 """
             )
@@ -178,7 +178,7 @@ class KafkaDeleteFromTail(Ingest):
                 f"""
 {SCHEMA}
 
-$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_min} publish=true repeat={actual_delta}
+$ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_min} repeat={actual_delta}
 {{"key": ${{kafka-ingest.iteration}}}}
 """
             )

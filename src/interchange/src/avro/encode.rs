@@ -125,19 +125,10 @@ impl AvroSchemaGenerator {
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
         debezium: bool,
-        include_transaction: bool,
     ) -> Self {
         let mut value_columns = column_names_and_types(value_desc);
         if debezium {
             value_columns = envelopes::dbz_envelope(value_columns);
-        }
-        if include_transaction {
-            // TODO(rkhaitan): this schema omits the total_order and data collection_order
-            // fields found in Debezium's transaction metadata struct. We chose to omit
-            // those because the order is not stable across reruns and has no semantic
-            // meaning for records within a timestamp in Materialize. These fields may
-            // be useful in the future for deduplication.
-            envelopes::txn_metadata(&mut value_columns);
         }
         let row_schema = build_row_schema_json(
             &value_columns,

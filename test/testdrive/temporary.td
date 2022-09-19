@@ -113,9 +113,9 @@ contains:catalog item 'temp_t' already exists
 #
 # > SHOW INDEXES FROM temp_t
 #  on_name    key_name            seq_in_index  column_name  expression  nullable
+#  name                 on          cluster         key
 # --------------------------------------------------------------------------------
-#  temp_t     temp_t_primary_idx  1             a            <null>      true
-#  temp_t     temp_t_primary_idx  2             b            <null>      false
+#  temp_t_primary_idx   d           default         {a, b}
 
 > DROP TABLE temp_t
 
@@ -209,7 +209,7 @@ contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE
 
 ##### Temporary sinks.
 ! CREATE TEMPORARY SINK data_sink FROM data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE, found SINK
 

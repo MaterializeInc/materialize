@@ -7,11 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Dict, Type
+from typing import Dict, List, Type
 
+from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumStart
 from materialize.zippy.framework import Action, Scenario
 from materialize.zippy.kafka_actions import CreateTopic, Ingest, KafkaStart
 from materialize.zippy.mz_actions import KillComputed, KillStoraged, MzStart, MzStop
+from materialize.zippy.postgres_actions import (
+    CreatePostgresTable,
+    PostgresDML,
+    PostgresStart,
+)
 from materialize.zippy.sink_actions import CreateSink
 from materialize.zippy.source_actions import CreateSource
 from materialize.zippy.table_actions import DML, CreateTable, ValidateTable
@@ -52,4 +58,22 @@ class UserTables(Scenario):
             ValidateTable: 20,
             ValidateView: 20,
             DML: 30,
+        }
+
+
+class DebeziumPostgres(Scenario):
+    """A Zippy test using Debezium Postgres exclusively."""
+
+    def bootstrap(self) -> List[Type[Action]]:
+        return [KafkaStart, DebeziumStart, PostgresStart, MzStart]
+
+    def config(self) -> Dict[Type[Action], float]:
+        return {
+            CreatePostgresTable: 10,
+            CreateDebeziumSource: 10,
+            KillStoraged: 15,
+            KillComputed: 15,
+            CreateView: 10,
+            ValidateView: 20,
+            PostgresDML: 30,
         }

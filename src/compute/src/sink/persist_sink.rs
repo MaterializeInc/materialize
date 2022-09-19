@@ -23,10 +23,10 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
 
+use mz_compute_client::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_storage::types::sources::SourceData;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -226,7 +226,7 @@ async fn truncate_persist_shard(shard_id: ShardId, persist_client: &PersistClien
             .into_iter()
             .map(|((k, v), _ts, diff)| ((k.unwrap(), v.unwrap()), upper_ts, diff * -1));
 
-        let new_upper = Antichain::from_elem(upper_ts + 1);
+        let new_upper = Antichain::from_elem(upper_ts.step_forward());
         write
             .compare_and_append(retractions, upper, new_upper)
             .await

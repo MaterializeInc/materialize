@@ -23,11 +23,13 @@ query T multiline
 EXPLAIN select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having count(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -88,12 +90,14 @@ query T multiline
 EXPLAIN select t1.f1, sum(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -129,8 +133,9 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -195,8 +200,9 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -262,8 +268,9 @@ Source materialize.public.t1 (u1):
 | Project (#0, #1)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -357,12 +364,14 @@ query T multiline
 EXPLAIN select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -392,12 +401,14 @@ query T multiline
 EXPLAIN select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0 and sum(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -427,7 +438,8 @@ query T multiline
 EXPLAIN select t1.f1, sum(t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
 | Filter (#0) IS NOT NULL
@@ -487,8 +499,9 @@ query T multiline
 EXPLAIN select t1.f1, sum(t2.f1 + t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
 | Filter (#0) IS NOT NULL
@@ -521,12 +534,14 @@ query T multiline
 EXPLAIN select t1.f1, sum(t1.f1 + t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -556,11 +571,13 @@ query T multiline
 EXPLAIN select t1.f1, sum(t1.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Source materialize.public.t1 (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -616,7 +633,8 @@ query T multiline
 EXPLAIN select t1.f1, count(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
 ----
 Source materialize.public.t1 (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
 | Filter (#0) IS NOT NULL
@@ -670,7 +688,8 @@ query T multiline
 EXPLAIN select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
 ----
 Source materialize.public.t1 (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
 | Filter (#0) IS NOT NULL
@@ -725,8 +744,9 @@ query T multiline
 EXPLAIN select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f2) > 0;
 ----
 Source materialize.public.t1 (u1):
+| Map dummy
 | Filter (#0) IS NOT NULL
-| Project (#0)
+| Project (#0, #2)
 
 Source materialize.public.t2 (u2):
 | Filter (#0) IS NOT NULL
@@ -1039,10 +1059,12 @@ JOIN (
 WHERE t1.f2 = derived.agg2;
 ----
 Source materialize.public.t1 (u6):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Source materialize.public.t2 (u7):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Source materialize.public.t3 (u8):
 | Project (#0, #1)

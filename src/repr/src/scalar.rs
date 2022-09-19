@@ -877,6 +877,12 @@ impl<'a> From<i128> for Datum<'a> {
     }
 }
 
+impl<'a> From<u128> for Datum<'a> {
+    fn from(d: u128) -> Datum<'a> {
+        Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
+    }
+}
+
 impl<'a> From<Numeric> for Datum<'a> {
     fn from(n: Numeric) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(n))
@@ -1057,7 +1063,7 @@ impl From<&Datum<'_>> for serde_json::Value {
             Datum::Float64(n) => float_to_json(n.into_inner()),
             Datum::Numeric(d) => {
                 // serde_json requires floats to be finite
-                if d.0.is_infinite() {
+                if !d.0.is_finite() {
                     serde_json::Value::String(d.0.to_string())
                 } else {
                     serde_json::Value::Number(

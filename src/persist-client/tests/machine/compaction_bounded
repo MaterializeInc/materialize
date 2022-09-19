@@ -1,0 +1,284 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Compaction with memory bounds
+
+write-batch output=b0 lower=0 upper=3 target_size=0 parts_size_override=25
+a 0 1
+b 1 1
+c 2 1
+----
+parts=3 len=3
+
+write-batch output=b1 lower=3 upper=6 target_size=0 parts_size_override=25
+a 3 1
+b 4 1
+d 5 1
+----
+parts=3 len=3
+
+# compact b0 and b1 with enough memory and a large enough target size to hold all the keys
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=1000 memory_bound=10000
+----
+parts=1 len=4
+
+fetch-batch input=b0_1
+----
+<part 0>
+a 6 2
+b 6 2
+c 6 1
+d 6 1
+<run 0>
+part 0
+
+# compact b0 and b1 with enough memory for both runs, but a target size that can only hold 2 parts/keys in mem at a time.
+# most importantly, we expect there to be a single run, as each input has a single run of ordered parts
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=50 memory_bound=10000
+----
+parts=3 len=4
+
+fetch-batch input=b0_1
+----
+<part 0>
+a 6 2
+<part 1>
+b 6 2
+<part 2>
+c 6 1
+d 6 1
+<run 0>
+part 0
+part 1
+part 2
+
+# introduce a new batch, that is *gasp* unordered
+write-batch output=b2 lower=6 upper=9 target_size=0 parts_size_override=25
+f 7 1
+e 6 1
+a 8 1
+----
+parts=3 len=3
+
+# compact b0, b1, b2 with enough memory for all runs and all keys. we expect a single part with a single run
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=1000 memory_bound=10000
+----
+parts=1 len=6
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+a 8 3
+b 8 2
+c 8 1
+d 8 1
+e 8 1
+f 8 1
+<run 0>
+part 0
+
+# compact b0, b1, b2 with enough memory for all runs, but a target size that can only hold 2 keys in mem at a time.
+# because b2 is out of order, we expect its entry for `aaaa` to appear in a separate run
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=1000
+----
+parts=5 len=7
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+a 8 2
+<part 1>
+b 8 2
+<part 2>
+c 8 1
+d 8 1
+<part 3>
+e 8 1
+f 8 1
+<part 4>
+a 8 1
+<run 0>
+part 0
+part 1
+part 2
+part 3
+<run 1>
+part 4
+
+# compact b0, b1, b2 with enough memory for all keys, but only 2 runs at a time. this means
+# b0 and b1 will be physically compacted together, but b2 will be compacted in isolation.
+# we expect two part and two runs, one for (b0, b1) and (b2).
+
+# manually fudge the size of our batch parts so compaction only processes at most 2 runs at a time
+set-batch-parts-size input=b0 size=1000
+----
+ok
+
+set-batch-parts-size input=b1 size=1000
+----
+ok
+
+set-batch-parts-size input=b2 size=1000
+----
+ok
+
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=1000 memory_bound=4000
+----
+parts=2 len=7
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+a 8 2
+b 8 2
+c 8 1
+d 8 1
+<part 1>
+a 8 1
+e 8 1
+f 8 1
+<run 0>
+part 0
+<run 1>
+part 1
+
+# compact b0, b1, b2 with enough memory for only 2 runs at a time, and a target size that can only hold 2 keys in mem at a time.
+# this means b0 and b1 will be physically compacted together, and then b2 compacted in isolation. evaluating b2 should
+# produce a new run, and then because of its out-of-order `aaaa` key, a third run should be created
+set-batch-parts-size input=b0 size=50
+----
+ok
+
+set-batch-parts-size input=b1 size=50
+----
+ok
+
+set-batch-parts-size input=b2 size=50
+----
+ok
+
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=200
+----
+parts=5 len=7
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+a 8 2
+<part 1>
+b 8 2
+<part 2>
+c 8 1
+d 8 1
+<part 3>
+e 8 1
+f 8 1
+<part 4>
+a 8 1
+<run 0>
+part 0
+part 1
+part 2
+<run 1>
+part 3
+<run 2>
+part 4
+
+# compact b0, b1, b2 even though our memory isn't enough to hold any 2 runs at a time. this is an edge case
+# where we still force 2 runs to be merged together when possible, even at the expense of our memory requirement.
+# we set the target size so that we can hold 2 keys in memory at a time, so compaction should produce identical
+# output to the test above, where b0 and b1 are compacted together, and b2 is compacted in isolation
+set-batch-parts-size input=b0 size=1000
+----
+ok
+
+set-batch-parts-size input=b1 size=1000
+----
+ok
+
+set-batch-parts-size input=b2 size=1000
+----
+ok
+
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=200
+----
+parts=5 len=7
+
+fetch-batch input=b0_1_2
+----
+<part 0>
+a 8 2
+<part 1>
+b 8 2
+<part 2>
+c 8 1
+d 8 1
+<part 3>
+e 8 1
+f 8 1
+<part 4>
+a 8 1
+<run 0>
+part 0
+part 1
+part 2
+<run 1>
+part 3
+<run 2>
+part 4
+
+# for good measure, repeatedly compacting a single batch of several runs should eventually
+# converge to 1 run even if there isn't enough memory to hold more than 2 runs at a time
+set-batch-parts-size input=b0_1_2 size=1000
+----
+ok
+
+compact output=b0_1_2_iter1 inputs=(b0_1_2) lower=0 upper=9 since=8 target_size=100 memory_bound=1000
+----
+parts=3 len=7
+
+fetch-batch input=b0_1_2_iter1
+----
+<part 0>
+a 8 2
+b 8 2
+c 8 1
+d 8 1
+<part 1>
+e 8 1
+f 8 1
+<part 2>
+a 8 1
+<run 0>
+part 0
+part 1
+<run 1>
+part 2
+
+set-batch-parts-size input=b0_1_2_iter1 size=1000
+----
+ok
+
+compact output=b0_1_2_iter2 inputs=(b0_1_2_iter1) lower=0 upper=9 since=8 target_size=100 memory_bound=1000
+----
+parts=2 len=6
+
+fetch-batch input=b0_1_2_iter2
+----
+<part 0>
+a 8 3
+b 8 2
+c 8 1
+<part 1>
+d 8 1
+e 8 1
+f 8 1
+<run 0>
+part 0
+part 1

@@ -283,25 +283,81 @@ obtained from the [admin API](#admin-api).
 
 The HTTPS server exposes two APIs:
 
-  * `POST /query` executes a batch of SQL statements.
+  * `POST /api/sql` executes a batch of SQL statements.
 
-    The request body specifies the SQL string to execute. The request may contain
-    multiple SQL statements separated by semicolons. The statements are submitted
-    for processing as if they were supplied via the [Simple Query][simple-query]
-    flow of the PostgreSQL protocol (i.e., "the statements are executed as a
-    single transaction unless explicit transaction control commands are included
-    to force a different behavior").
+    ### Input format
 
-    The response is a JSON array containing the results of each query in the
-    request.
+    This API accepts two forms of input.
+
+    #### Simple
+
+    The request body is a JSON object containing a key, `sql`, which specifies the
+    SQL string to execute.
+
+    - Requests may contain multiple SQL statements separated by semicolons.
+    - Statements are processed as if they were supplied via the the [Simple
+    Query][simple-query] flow of the PostgreSQL protocol.
+    - Statements do not support parameters
+
+    ```json
+    {
+      "query": "select * from a; select * from b;"
+    }
+    ```
+
+    #### Extended
+
+    The request body is a JSON object containing a key `queries`, whose value is
+      array of objects, whose structure is:
+
+      Key | Value
+      ----|------
+      `query` | specifying a single SQL  string to execute
+      `params` | an optional array of text values to be used as the parameters to `query`.
+
+    - Each query must contain exactly 1 statement.
+    - Statements are processed as if they were supplied via the [Extended
+    Query][extended-query] flow of the PostgreSQL protocol.
+    - Statements support parameters. Note that all parameter values' elements
+     must be text or _null_; the API will not accept JSON numbers.
+
+    ```json
+    {
+      "queries": [
+        { "query": "select * from a;" },
+        { "query": "select a + $1 from a;", "params": ["100"] }
+        { "query": "select a + $1 from a;", "params": [null] }
+      ]
+    }
+    ```
+
+    ### Output format
+
+    The output format is a JSON object with one key, `results`, whose values is
+    an array of serialized `environmentd::http::SimpleResult` representing all of
+    the executed statements. Notably, this includes the results of statements
+    whose results are ultimately rollback because of an error in a later part of
+    the transaction. Users must parse the results to understand which statements
+    ultimately reflect the resultant state.
+
+    The serialized `environmentd::http::SimpleResult` values are represented in JSON as:
+
+    `SimpleResult` value | JSON value
+    ---------------------|------------
+    `Rows` | `{"rows": <2D array of JSON-ified results>, "col_names": <array of text>}`
+    `Error` | `{"error": <Error string from execution>}`
+    `Ok` | `{ "ok": <tag>}`
+
+    Each committed statement returns exactly one of these values; e.g. in the
+    case of "complex responses", such as `INSERT INTO...RETURNING`, the presence
+    of `Rows` implies `Ok`. In the future we can consider including the tagged
+    `Ok`.
+
+    ### Misc.
 
     In the future, we may expand the feature set of the HTTPS API to allow
     additional control over query execution and result fetching, a la the
     [Snowflake SQL REST API].
-
-    TODO: fully describe the output format.
-
-    TODO: design support for binding parameters.
 
   * `ws://<ENDPOINT>/query?query=QUERY` streams the result of a single query
     over the WebSockets protocol.
@@ -309,7 +365,39 @@ The HTTPS server exposes two APIs:
     This API is particularly useful for listening to the results of `TAIL`
     queries from a browser.
 
-    TODO: fully describe the output format.
+    In the future, we can consider adding parameter parsing for these queries.
+
+    ### Output
+
+    A Websocket request outputs the following:
+      - `{"ok": <tag>}` once the command has completed successfully.
+      - `{"error": <Error string from execution>}` if the command has errored.
+      - `{"col_names": <array of text>}` if the command returns columns of data, providing the returned columns' names.
+      - `{"rows": <2D array of JSON-ified results>}` representing returned columns of data
+
+    For example, an `INSERT...RETURNING` would return something akin to:
+
+    ```
+    { "col_names": ["x"]}
+    { "rows": [[1]]}
+    { "ok": "INSERT 0 1"}
+    ```
+
+    In the case of `TAIL`, users may expect many instances of `"rows"` after the
+    initial `{"col_names"...}`.
+
+    #### Ordering
+
+    Clients can derive a finite-state machine to handle returned values:
+
+    1. `"col_names"` if there will be columns of data returned.
+      1. 0 or more `"rows"`. In the case of e.g. `TAIL`, there may be many such
+       values returned.
+    1. `"ok"` or `"error"` indicating that the statement is done processing.
+       Note that:
+       - `"col_names"` never precedes `"error"`.
+       - Statements such as `TAIL` are capable of non-termination, so may never
+         issue an `"ok"`.
 
 #### SQL dialect
 
@@ -1004,6 +1092,7 @@ was Snowflake's approach.
 [pgwire]: https://www.postgresql.org/docs/current/protocol.html
 [Prometheus]: https://prometheus.io
 [simple-query]: https://www.postgresql.org/docs/current/protocol-flow.html#id-1.10.5.7.4
+[extended-query]: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
 [Snowflake SQL REST API]: https://docs.snowflake.com/en/developer-guide/sql-api/guide.html#checking-the-status-of-the-statement-execution-and-retrieving-the-data
 [snowflake-acl]: https://docs.snowflake.com/en/user-guide/security-access-control-privileges.html#global-privileges
 [snowflake-releases]: https://docs.snowflake.com/en/user-guide/intro-releases.html#snowflake-releases

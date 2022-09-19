@@ -215,12 +215,14 @@ ORDER BY
     s_acctbal DESC, n_name, s_name, p_partkey
 ----
 Source materialize.public.region (u3):
+| Map dummy
 | Filter (#1 = "EUROPE")
-| Project (#0, #1)
+| Project (#0, #1, #3)
 
 Source materialize.public.part (u4):
+| Map dummy, dummy, dummy, dummy, dummy
 | Filter "%BRASS" ~~(varchar_to_text(#4)), (#5 = 15)
-| Project (#0, #2, #4, #5)
+| Project (#0, #9, #2, #10, #4, #5, #11..=#13)
 
 Query:
 %0 = Let l0 =
@@ -418,8 +420,9 @@ ORDER BY
     revenue DESC
 ----
 Source materialize.public.region (u3):
+| Map dummy
 | Filter (#1 = "ASIA")
-| Project (#0, #1)
+| Project (#0, #1, #3)
 
 Query:
 %0 =
@@ -622,12 +625,14 @@ ORDER BY
     o_year
 ----
 Source materialize.public.region (u3):
+| Map dummy
 | Filter (#1 = "AMERICA")
-| Project (#0, #1)
+| Project (#0, #1, #3)
 
 Source materialize.public.part (u4):
+| Map dummy, dummy, dummy, dummy, dummy, dummy, dummy
 | Filter ("ECONOMY ANODIZED STEEL" = varchar_to_text(#4))
-| Project (#0, #4)
+| Project (#0, #9..=#11, #4, #12..=#15)
 
 Query:
 %0 =
@@ -723,8 +728,9 @@ ORDER BY
     o_year DESC
 ----
 Source materialize.public.part (u4):
+| Map dummy, dummy, dummy, dummy, dummy, dummy, dummy
 | Filter "%green%" ~~(varchar_to_text(#1))
-| Project (#0, #1)
+| Project (#0, #1, #9..=#15)
 
 Query:
 %0 =
@@ -1055,7 +1061,8 @@ WHERE
     AND l_shipdate < DATE '1995-09-01' + INTERVAL '1' month
 ----
 Source materialize.public.part (u4):
-| Project (#0, #4)
+| Map dummy, dummy, dummy, dummy, dummy, dummy, dummy
+| Project (#0, #9..=#11, #4, #12..=#15)
 
 Query:
 %0 =
@@ -1202,8 +1209,9 @@ ORDER BY
     p_size
 ----
 Source materialize.public.part (u4):
-| Filter NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#4))), (#3 != "Brand#45"), ((#5 = 3) OR (#5 = 9) OR (#5 = 14) OR (#5 = 19) OR (#5 = 23) OR (#5 = 36) OR (#5 = 45) OR (#5 = 49))
-| Project (#0, #3..=#5)
+| Map dummy, dummy, dummy, dummy, dummy
+| Filter (#3 != "Brand#45"), NOT("MEDIUM POLISHED%" ~~(varchar_to_text(#4))), ((#5 = 3) OR (#5 = 9) OR (#5 = 14) OR (#5 = 19) OR (#5 = 23) OR (#5 = 36) OR (#5 = 45) OR (#5 = 49))
+| Project (#0, #9, #10, #3..=#5, #11..=#13)
 
 Query:
 %0 =
@@ -1283,8 +1291,9 @@ WHERE
   )
 ----
 Source materialize.public.part (u4):
+| Map dummy, dummy, dummy, dummy, dummy, dummy
 | Filter (#3 = "Brand#23"), (#6 = "MED BOX")
-| Project (#0, #3, #6)
+| Project (#0, #9, #10, #3, #11, #12, #6, #13, #14)
 
 Query:
 %0 = Let l0 =
@@ -1471,8 +1480,9 @@ WHERE
     )
 ----
 Source materialize.public.part (u4):
+| Map dummy, dummy, dummy, dummy, dummy
 | Filter (#5 >= 1)
-| Project (#0, #3, #5, #6)
+| Project (#0, #9, #10, #3, #11, #5, #6, #12, #13)
 
 Query:
 %0 =
@@ -1554,8 +1564,9 @@ ORDER BY
     s_name
 ----
 Source materialize.public.part (u4):
+| Map dummy, dummy, dummy, dummy, dummy, dummy, dummy
 | Filter "forest%" ~~(varchar_to_text(#1))
-| Project (#0, #1)
+| Project (#0, #1, #9..=#15)
 
 Query:
 %0 =

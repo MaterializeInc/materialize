@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -71,6 +71,9 @@ pub(crate) mod internal {
     pub mod state_diff;
     pub mod state_versions;
     pub mod trace;
+
+    #[cfg(test)]
+    pub mod datadriven;
 }
 
 // TODO: Remove this in favor of making it possible for all PersistClients to be
@@ -180,6 +183,11 @@ pub struct PersistConfig {
     pub batch_builder_max_outstanding_parts: usize,
     /// Whether to physically and logically compact batches in blob storage.
     pub compaction_enabled: bool,
+    /// The upper bound on compaction's memory consumption. The value must be at
+    /// least 4*`blob_target_size`. Increasing this value beyond the minimum allows
+    /// compaction to merge together more runs at once, providing greater
+    /// consolidation of updates, at the cost of greater memory usage.
+    pub compaction_memory_bound_bytes: usize,
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
     /// if the number of inputs is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
@@ -194,6 +202,9 @@ pub struct PersistConfig {
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
+    /// Length of time after a reader's last operation after which the reader
+    /// may be expired.
+    pub reader_lease_duration: Duration,
 }
 
 // Tuning inputs:
@@ -250,17 +261,22 @@ impl PersistConfig {
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
             compaction_enabled: !compaction_disabled,
+            compaction_memory_bound_bytes: 1024 * MB,
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: Duration::from_secs(60 * 15),
+            reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
         }
     }
 }
 
 impl PersistConfig {
     // Move this to a PersistConfig field when we actually have read leases.
-    pub(crate) const FAKE_READ_LEASE_DURATION: Duration = Duration::from_secs(60);
+    //
+    // MIGRATION: Remove this once we remove the ReaderState <->
+    // ProtoReaderState migration.
+    pub(crate) const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(60 * 15);
 
     // Tuning notes: Picked arbitrarily.
     pub(crate) const NEED_ROLLUP_THRESHOLD: u64 = 128;
@@ -376,7 +392,9 @@ impl PersistClient {
         let gc = GarbageCollector::new(machine.clone());
 
         let reader_id = ReaderId::new();
-        let (_, read_cap) = machine.register_reader(&reader_id, (self.cfg.now)()).await;
+        let (_, read_cap) = machine
+            .register_reader(&reader_id, self.cfg.reader_lease_duration, (self.cfg.now)())
+            .await;
         let reader = ReadHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
@@ -385,7 +403,7 @@ impl PersistClient {
             gc,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
-            last_heartbeat: Instant::now(),
+            last_heartbeat: (self.cfg.now)(),
             explicitly_expired: false,
             leased_seqnos: BTreeMap::new(),
         };
@@ -555,13 +573,13 @@ mod tests {
         blob: &(dyn Blob + Send + Sync),
         key: &BlobKey,
     ) -> (
-        BlobTraceBatchPart,
+        BlobTraceBatchPart<T>,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
     )
     where
         K: Codec,
         V: Codec,
-        T: Codec64,
+        T: Timestamp + Codec64,
         D: Codec64,
     {
         let value = blob
@@ -774,8 +792,8 @@ mod tests {
                 .await;
             let fetcher1 = read1.clone().await.batch_fetcher().await;
             for batch in snap {
-                let (batch, res) = fetcher1.fetch_batch(batch).await;
-                read0.process_returned_leased_batch(batch);
+                let (batch, res) = fetcher1.fetch_leased_part(batch).await;
+                read0.process_returned_leased_part(batch);
                 assert_eq!(
                     res.unwrap_err(),
                     InvalidUsage::BatchNotFromThisShard {

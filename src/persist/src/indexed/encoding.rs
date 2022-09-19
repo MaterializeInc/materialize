@@ -84,12 +84,12 @@ pub struct TraceBatchMeta {
 /// TODO: disallow empty trace batch parts in the future so there is one unique
 /// way to represent an empty trace batch.
 #[derive(Clone, Debug)]
-pub struct BlobTraceBatchPart {
+pub struct BlobTraceBatchPart<T> {
     /// Which updates are included in this batch.
     ///
     /// There may be other parts for the batch that also contain updates within
     /// the specified [lower, upper) range.
-    pub desc: Description<u64>,
+    pub desc: Description<T>,
     /// Index of this part in the list of parts that form the batch.
     pub index: u64,
     /// The updates themselves.
@@ -162,7 +162,7 @@ impl TraceBatchMeta {
     }
 }
 
-impl BlobTraceBatchPart {
+impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
     /// Asserts the documented invariants, returning an error if any are
     /// violated.
     pub fn validate(&self) -> Result<(), Error> {
@@ -175,15 +175,14 @@ impl BlobTraceBatchPart {
 
         for update in self.updates.iter().flat_map(|u| u.iter()) {
             let ((_key, _val), ts, diff) = update;
-            // TODO: Don't assume ts and diff are a u64 and a i64, take T and D
-            // type params instead.
-            let ts: u64 = Codec64::decode(ts);
+            // TODO: Don't assume diff is an i64, take a D type param instead.
+            let ts = T::decode(ts);
             let diff: i64 = Codec64::decode(diff);
 
             // Check ts against desc.
             if !self.desc.lower().less_equal(&ts) {
                 return Err(format!(
-                    "timestamp {} is less than the batch lower: {:?}",
+                    "timestamp {:?} is less than the batch lower: {:?}",
                     ts, self.desc
                 )
                 .into());
@@ -192,14 +191,14 @@ impl BlobTraceBatchPart {
             if PartialOrder::less_than(self.desc.since(), self.desc.upper()) {
                 if self.desc.upper().less_equal(&ts) {
                     return Err(format!(
-                        "timestamp {} is greater than or equal to the batch upper: {:?}",
+                        "timestamp {:?} is greater than or equal to the batch upper: {:?}",
                         ts, self.desc
                     )
                     .into());
                 }
             } else if self.desc.since().less_than(&ts) {
                 return Err(format!(
-                    "timestamp {} is greater than the batch since: {:?}",
+                    "timestamp {:?} is greater than the batch since: {:?}",
                     ts, self.desc,
                 )
                 .into());
@@ -221,7 +220,7 @@ impl BlobTraceBatchPart {
 // BlobTraceBatchPart doesn't really need to implement Codec (it's never stored as a
 // key or value in a persisted record) but it's nice to have a common interface
 // for this.
-impl Codec for BlobTraceBatchPart {
+impl<T: Timestamp + Codec64> Codec for BlobTraceBatchPart<T> {
     fn codec_name() -> String {
         "parquet[TraceBatch]".into()
     }
@@ -273,35 +272,44 @@ where
     }
 }
 
-impl From<ProtoU64Description> for Description<u64> {
+impl<T: Timestamp + Codec64> From<ProtoU64Description> for Description<T> {
     fn from(x: ProtoU64Description) -> Self {
         Description::new(
             x.lower
-                .map_or_else(|| Antichain::from_elem(u64::minimum()), |x| x.into()),
+                .map_or_else(|| Antichain::from_elem(T::minimum()), |x| x.into()),
             x.upper
-                .map_or_else(|| Antichain::from_elem(u64::minimum()), |x| x.into()),
+                .map_or_else(|| Antichain::from_elem(T::minimum()), |x| x.into()),
             x.since
-                .map_or_else(|| Antichain::from_elem(u64::minimum()), |x| x.into()),
+                .map_or_else(|| Antichain::from_elem(T::minimum()), |x| x.into()),
         )
     }
 }
 
-impl From<ProtoU64Antichain> for Antichain<u64> {
+impl<T: Timestamp + Codec64> From<ProtoU64Antichain> for Antichain<T> {
     fn from(x: ProtoU64Antichain) -> Self {
-        Antichain::from(x.elements)
+        Antichain::from(
+            x.elements
+                .into_iter()
+                .map(|x| T::decode(u64::to_le_bytes(x)))
+                .collect::<Vec<_>>(),
+        )
     }
 }
 
-impl From<&Antichain<u64>> for ProtoU64Antichain {
-    fn from(x: &Antichain<u64>) -> Self {
+impl<T: Timestamp + Codec64> From<&Antichain<T>> for ProtoU64Antichain {
+    fn from(x: &Antichain<T>) -> Self {
         ProtoU64Antichain {
-            elements: x.elements().to_vec(),
+            elements: x
+                .elements()
+                .iter()
+                .map(|x| u64::from_le_bytes(T::encode(x)))
+                .collect(),
         }
     }
 }
 
-impl From<&Description<u64>> for ProtoU64Description {
-    fn from(x: &Description<u64>) -> Self {
+impl<T: Timestamp + Codec64> From<&Description<T>> for ProtoU64Description {
+    fn from(x: &Description<T>) -> Self {
         ProtoU64Description {
             lower: Some(x.lower().into()),
             upper: Some(x.upper().into()),
@@ -311,7 +319,10 @@ impl From<&Description<u64>> for ProtoU64Description {
 }
 
 /// Encodes the inline metadata for a trace batch into a base64 string.
-pub fn encode_trace_inline_meta(batch: &BlobTraceBatchPart, format: ProtoBatchFormat) -> String {
+pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(
+    batch: &BlobTraceBatchPart<T>,
+    format: ProtoBatchFormat,
+) -> String {
     let inline = ProtoBatchPartInline {
         format: format.into(),
         desc: Some((&batch.desc).into()),
@@ -392,7 +403,7 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Empty
-        let b: BlobTraceBatchPart = BlobTraceBatchPart {
+        let b = BlobTraceBatchPart {
             desc: u64_desc(0, 2),
             index: 0,
             updates: columnar_records(vec![]),
@@ -400,7 +411,7 @@ mod tests {
         assert_eq!(b.validate(), Ok(()));
 
         // Invalid desc
-        let b: BlobTraceBatchPart = BlobTraceBatchPart {
+        let b = BlobTraceBatchPart {
             desc: u64_desc(2, 0),
             index: 0,
             updates: columnar_records(vec![]),
@@ -413,7 +424,7 @@ mod tests {
         );
 
         // Empty desc
-        let b: BlobTraceBatchPart = BlobTraceBatchPart {
+        let b = BlobTraceBatchPart {
             desc: u64_desc(0, 0),
             index: 0,
             updates: columnar_records(vec![]),
@@ -466,7 +477,7 @@ mod tests {
         assert_eq!(b.validate(), Err(Error::from("timestamp 5 is greater than the batch since: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [4] } }")));
 
         // Invalid update
-        let b: BlobTraceBatchPart = BlobTraceBatchPart {
+        let b = BlobTraceBatchPart {
             desc: u64_desc(0, 1),
             index: 0,
             updates: columnar_records(vec![(("0".into(), "0".into()), 0, 0)]),
@@ -500,10 +511,10 @@ mod tests {
         );
     }
 
-    async fn expect_set_trace_batch(
+    async fn expect_set_trace_batch<T: Timestamp + Codec64>(
         blob: &(dyn Blob + Send + Sync),
         key: &str,
-        batch: &BlobTraceBatchPart,
+        batch: &BlobTraceBatchPart<T>,
     ) -> u64 {
         let mut val = Vec::new();
         batch.encode(&mut val);
@@ -602,9 +613,9 @@ mod tests {
         fn sizes(data: DataGenerator) -> usize {
             let trace = BlobTraceBatchPart {
                 desc: Description::new(
-                    Antichain::from_elem(0),
+                    Antichain::from_elem(0u64),
                     Antichain::new(),
-                    Antichain::from_elem(0),
+                    Antichain::from_elem(0u64),
                 ),
                 index: 0,
                 updates: data.batches().collect(),
