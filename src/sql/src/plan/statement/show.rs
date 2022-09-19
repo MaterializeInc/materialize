@@ -506,6 +506,22 @@ pub fn show_columns<'a>(
     ShowColumnsStatement { table_name, filter }: ShowColumnsStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let entry = scx.get_item_by_resolved_name(&table_name)?;
+    let full_name = scx.catalog.resolve_full_name(entry.name());
+
+    match entry.item_type() {
+        CatalogItemType::Source
+        | CatalogItemType::Table
+        | CatalogItemType::View
+        | CatalogItemType::MaterializedView => (),
+        ty @ CatalogItemType::Connection
+        | ty @ CatalogItemType::Index
+        | ty @ CatalogItemType::Func
+        | ty @ CatalogItemType::Secret
+        | ty @ CatalogItemType::Type
+        | ty @ CatalogItemType::Sink => {
+            sql_bail!("{full_name} is a {ty} and so does not have columns");
+        }
+    }
 
     let query = format!(
         "SELECT
