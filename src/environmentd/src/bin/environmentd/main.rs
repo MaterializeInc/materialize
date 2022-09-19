@@ -34,6 +34,7 @@ use once_cell::sync::Lazy;
 use sysinfo::{CpuExt, SystemExt};
 use tokio::sync::Mutex;
 use tower_http::cors::{self, AllowOrigin};
+
 use url::Url;
 use uuid::Uuid;
 
@@ -328,10 +329,10 @@ pub struct Args {
     #[clap(
         long,
         env = "ENVIRONMENT_ID",
-        value_name = "UUID",
-        default_value = "00000000-0000-0000-0000-000000000000"
+        value_name = "ID",
+        default_value = "environment-00000000-0000-0000-0000-000000000000-0"
     )]
-    environment_id: Uuid,
+    environment_id: String,
     /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>

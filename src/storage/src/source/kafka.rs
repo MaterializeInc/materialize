@@ -22,7 +22,6 @@ use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 use mz_expr::PartitionId;
 use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
@@ -536,7 +535,7 @@ impl KafkaSourceReader {
 async fn create_kafka_config(
     name: &str,
     group_id_prefix: Option<String>,
-    environment_id: Uuid,
+    environment_id: String,
     kafka_connection: &KafkaConnection,
     options: &BTreeMap<String, StringOrSecret>,
     connection_context: &ConnectionContext,

@@ -220,7 +220,7 @@ pub struct Config<S> {
     pub storage: storage::Connection<S>,
     pub unsafe_mode: bool,
     pub build_info: &'static BuildInfo,
-    pub environment_id: Uuid,
+    pub environment_id: String,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Arc<dyn SecretsController>,
