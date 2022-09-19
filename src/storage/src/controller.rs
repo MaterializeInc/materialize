@@ -167,6 +167,8 @@ pub trait StorageController: Debug + Send {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
+    /// Like `create_collections`, but the implementor must also assume
+    /// responsibility for managing/advancing the collection's timestamps.
     async fn create_managed_collections(
         &mut self,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
@@ -738,6 +740,50 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
             .unwrap()
     }
 
+    async fn truncate_managed_collection(&mut self, shard_id: ShardId) {
+        assert!(
+            self.managed_collections.lock().await.contains(&shard_id),
+            "cannot truncate managed collection before it's managed"
+        );
+        let persist = self.open_persist_client().await;
+        let (mut write_handle, mut read_handle) = persist.open(shard_id).await.unwrap();
+
+        // Write values as of now.
+        let now = (self.now)();
+        let as_of = Antichain::from_elem(T::from(now - 1));
+        let lower = T::from(now);
+        let upper = T::from(now + 1);
+
+        // Downgrade write capability to now.
+        let _ = write_handle
+            .append(
+                Vec::<((SourceData, ()), T, Diff)>::new(),
+                Antichain::from_elem(T::minimum()),
+                Antichain::from_elem(lower.clone()),
+            )
+            .await;
+
+        let updates = read_handle.snapshot_and_fetch(as_of).await.unwrap();
+
+        let negated: Vec<_> = updates
+            .into_iter()
+            .map(|((k_res, _), _, d)| ((k_res.unwrap(), ()), lower.clone(), -d))
+            .collect();
+
+        let _ = write_handle
+            .append(
+                negated,
+                Antichain::from_elem(lower.clone()),
+                Antichain::from_elem(upper.clone()),
+            )
+            .await;
+
+        // Permit compaction.
+        read_handle
+            .downgrade_since(&Antichain::from_elem(lower))
+            .await;
+    }
+
     /// Tracks the mapping of `GlobalId` to data shards in the collection at
     /// `self.state.shard_collection_global_id`.
     async fn register_shards(
@@ -981,8 +1027,7 @@ where
 
         self.create_collections(collections).await?;
 
-        let mut managed_shards = self.managed_collections.lock().await;
-        managed_shards.extend(
+        self.managed_collections.lock().await.extend(
             ids.iter()
                 .map(|id| self.state.collections[id].collection_metadata.data_shard),
         );
@@ -1515,7 +1560,7 @@ where
         let persist_location = c.persist_location.clone();
         let persist = Arc::clone(&c.persist);
         let collections = Arc::clone(&c.managed_collections);
-        let mut next_since = T::from(now());
+        let mut since = T::from(now());
 
         mz_ore::task::spawn(|| "ControllerManagedCollectionTimestamper", async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
@@ -1528,7 +1573,7 @@ where
                     .await
                     .unwrap();
 
-                let upper = T::from(now());
+                let upper = T::from(now() + 1);
 
                 for shard in collections.lock().await.iter() {
                     let (mut write, mut read) = persist_client
@@ -1536,18 +1581,23 @@ where
                         .await
                         .expect("invalid persist usage");
 
+                    // The result of this write is immaterial because we only
+                    // need it to advance the collection's upper if there were
+                    // no other writes.
                     let _ = write
                         .append(
                             Vec::<((SourceData, ()), T, Diff)>::new(),
-                            Antichain::from_elem(next_since.clone()),
+                            Antichain::from_elem(since.clone()),
                             Antichain::from_elem(upper.clone()),
                         )
                         .await;
-                    read.downgrade_since(&Antichain::from_elem(next_since.clone()))
+
+                    // Permit compaction.
+                    read.downgrade_since(&Antichain::from_elem(since.clone()))
                         .await;
                 }
 
-                next_since = upper;
+                since = upper;
             }
         });
 
