@@ -73,6 +73,19 @@ impl ReclockFollower {
         }
     }
 
+    /// Ensure the `ReclockFollower` has been initialized with trace
+    /// up to the given upper.
+    pub async fn ensure_initialized_to(&self, upper: Antichain<Timestamp>) {
+        // Careful not to hold a `Ref` over and await point.
+        loop {
+            if PartialOrder::less_equal(&upper, &RefCell::borrow(&self.inner).upper) {
+                return;
+            }
+            // Some short but non-0 amount of time
+            tokio::time::sleep(Duration::from_millis(100)).await
+        }
+    }
+
     pub fn source_upper(&self) -> Ref<OffsetAntichain> {
         // `borrow` overlaps with `std::borrow::Borrow` so we have to do this
         Ref::map(RefCell::borrow(&self.inner), |inner| &inner.source_upper)

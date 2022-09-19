@@ -415,13 +415,13 @@ where
         id,
         worker_id,
         worker_count,
-        timestamp_interval,
+        timestamp_interval: _,
         encoding,
-        storage_metadata,
+        storage_metadata: _,
         resume_upper: initial_resume_upper,
         base_metrics,
-        now,
-        persist_clients,
+        now: _,
+        persist_clients: _,
     } = config;
 
     let resume_upper = initial_resume_upper.clone();
@@ -436,33 +436,16 @@ where
 
             async move {
                 // Setup time!
-                let mut source_upper = {
-                    let upper_ts = resume_upper.as_option().copied().unwrap();
-                    let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-                    // This is a TEMPORARY instance of a `ReclockOperator` used to calculate
-                    // a OFFSET `source_upper` for the SourceReader. It cannot be
-                    // shared with the `remap_operator` because its initialization
-                    // is async, which is not acceptable within dataflow creation.
-                    // It cannot be a `ReclockFollower`, which is empty on
-                    // initialization.
-                    let timestamper = match ReclockOperator::new(
-                        Arc::clone(&persist_clients),
-                        storage_metadata.clone(),
-                        now.clone(),
-                        timestamp_interval.clone(),
-                        as_of,
-                    )
-                    .await
-                    {
-                        Ok(t) => t,
-                        Err(e) => {
-                            panic!("Failed to create source {} timestamper: {:#}", name, e);
-                        }
-                    };
-                    timestamper
-                        .source_upper_at_frontier(resume_upper.borrow())
-                        .expect("source_upper_at_frontier to be used correctly")
-                };
+
+                // required to build the initial source_upper and to ensure the offset committer
+                // operator correctly.
+                reclock_follower
+                    .ensure_initialized_to(initial_resume_upper.clone())
+                    .await;
+
+                let mut source_upper = reclock_follower
+                    .source_upper_at_frontier(resume_upper.borrow())
+                    .expect("source_upper_at_frontier to be used correctly");
 
                 // Save this to pass into the stream creation
                 let initial_source_upper = source_upper.clone();
@@ -908,10 +891,10 @@ where
     let bytes_read_counter = base_metrics.bytes_read.clone();
 
     let operator_name = format!("reclock({})", id);
-    let mut remap_op = OperatorBuilder::new(operator_name, scope.clone());
-    let (mut reclocked_output, reclocked_stream) = remap_op.new_output();
+    let mut reclock_op = OperatorBuilder::new(operator_name, scope.clone());
+    let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
 
-    let mut batch_input = remap_op.new_input_connection(
+    let mut batch_input = reclock_op.new_input_connection(
         &batches,
         Pipeline,
         // We don't want frontier information to flow from the input to the
@@ -921,9 +904,9 @@ where
     );
     // Need to broadcast the remap changes to all workers.
     let remap_trace_updates = remap_trace_updates.broadcast();
-    let mut remap_input = remap_op.new_input(&remap_trace_updates, Pipeline);
+    let mut remap_input = reclock_op.new_input(&remap_trace_updates, Pipeline);
 
-    remap_op.build(move |mut capabilities| {
+    reclock_op.build(move |mut capabilities| {
         capabilities.clear();
 
         let metrics_name = upstream_name.clone().unwrap_or_else(|| name.clone());
