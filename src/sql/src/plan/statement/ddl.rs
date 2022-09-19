@@ -1428,7 +1428,7 @@ pub fn plan_create_views(
                 if_not_exists: if_exists == IfExistsBehavior::Skip,
             }))
         }
-        connection @ _ => sql_bail!("cannot generate views from {} sources", connection.name()),
+        connection => sql_bail!("cannot generate views from {} sources", connection.name()),
     }
 }
 

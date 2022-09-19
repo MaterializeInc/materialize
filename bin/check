@@ -97,6 +97,7 @@ extra_lints=(
     clippy::extra_unused_lifetimes
     clippy::needless_borrow
     clippy::needless_return
+    clippy::redundant_pattern
     clippy::single_component_path_imports
     clippy::unnecessary_cast
     clippy::useless_asref

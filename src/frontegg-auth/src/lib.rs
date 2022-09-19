@@ -90,7 +90,7 @@ impl FronteggAuthentication {
                         warn!("frontegg timeout, attempt {}: {}", state.i, err);
                         Err(FronteggError::from(err))
                     }
-                    v @ _ => Ok(v),
+                    v => Ok(v),
                 }
             })
             .await?

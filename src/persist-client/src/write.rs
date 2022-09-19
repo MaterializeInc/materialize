@@ -280,7 +280,7 @@ where
             .await
         {
             ok @ Ok(Ok(Ok(()))) => ok,
-            err @ _ => {
+            err => {
                 // We cannot delete the batch in compare_and_append_batch()
                 // because the caller owns the batch and might want to retry
                 // with a different `expected_upper`. In this function, we
