@@ -34,7 +34,7 @@ where
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
-        let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
+        let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMap", {
             let mut datums = DatumVec::new();
             let mut row_builder = Row::default();
             move |(input_row, mut time, diff)| {

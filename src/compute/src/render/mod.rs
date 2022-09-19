@@ -432,47 +432,49 @@ where
     ) -> CollectionBundle<G, Row> {
         match plan {
             Plan::Constant { rows } => {
-                // Produce both rows and errs to avoid conditional dataflow construction.
-                let (rows, errs) = match rows {
-                    Ok(rows) => (rows, Vec::new()),
-                    Err(e) => (Vec::new(), vec![e]),
-                };
+                scope.region_named("Constant", |inner| {
+                    // Produce both rows and errs to avoid conditional dataflow construction.
+                    let (rows, errs) = match rows {
+                        Ok(rows) => (rows, Vec::new()),
+                        Err(e) => (Vec::new(), vec![e]),
+                    };
 
-                // We should advance times in constant collections to start from `as_of`.
-                let as_of_frontier = self.as_of_frontier.clone();
-                let until = self.until.clone();
-                let ok_collection = rows
-                    .into_iter()
-                    .filter_map(move |(row, mut time, diff)| {
-                        time.advance_by(as_of_frontier.borrow());
-                        if !until.less_equal(&time) {
-                            Some((
-                                row,
-                                <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(time),
-                                diff,
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .to_stream(scope)
-                    .as_collection();
+                    // We should advance times in constant collections to start from `as_of`.
+                    let as_of_frontier = self.as_of_frontier.clone();
+                    let until = self.until.clone();
+                    let ok_collection = rows
+                        .into_iter()
+                        .filter_map(move |(row, mut time, diff)| {
+                            time.advance_by(as_of_frontier.borrow());
+                            if !until.less_equal(&time) {
+                                Some((
+                                    row,
+                                    <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(time),
+                                    diff,
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                        .to_stream(inner)
+                        .as_collection();
 
-                let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
-                error_time.advance_by(self.as_of_frontier.borrow());
-                let err_collection = errs
-                    .into_iter()
-                    .map(move |e| {
-                        (
-                            DataflowError::from(e),
-                            <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
-                            1,
-                        )
-                    })
-                    .to_stream(scope)
-                    .as_collection();
+                    let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
+                    error_time.advance_by(self.as_of_frontier.borrow());
+                    let err_collection = errs
+                        .into_iter()
+                        .map(move |e| {
+                            (
+                                DataflowError::from(e),
+                                <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
+                                1,
+                            )
+                        })
+                        .to_stream(inner)
+                        .as_collection();
 
-                CollectionBundle::from_collections(ok_collection, err_collection)
+                    CollectionBundle::from_collections(ok_collection, err_collection).leave_region()
+                })
             }
             Plan::Get { id, keys, plan } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
@@ -604,7 +606,12 @@ where
                 input_mfp,
             } => {
                 let input = self.render_plan(*input, scope, worker_index);
-                input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
+                scope.region_named("ArrangeBy", |inner| {
+                    input
+                        .enter_region(inner)
+                        .ensure_collections(keys, input_key, input_mfp, self.until.clone())
+                        .leave_region()
+                })
             }
         }
     }

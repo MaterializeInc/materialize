@@ -186,80 +186,95 @@ where
         reduce_plan: ReducePlan,
         input_key: Option<Vec<MirScalarExpr>>,
     ) -> CollectionBundle<G, Row, T> {
-        let KeyValPlan {
-            mut key_plan,
-            mut val_plan,
-        } = key_val_plan;
-        let key_arity = key_plan.projection.len();
-        let mut row_buf = Row::default();
-        let mut row_mfp = Row::default();
-        let mut datums = DatumVec::new();
-        let mut row_datums = DatumVec::new();
-        let (key_val_input, err_input): (
-            timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
-            _,
-        ) = input.flat_map(input_key.map(|k| (k, None)), || {
-            // Determine the columns we'll need from the row.
-            let mut demand = Vec::new();
-            demand.extend(key_plan.demand());
-            demand.extend(val_plan.demand());
-            demand.sort();
-            demand.dedup();
-            // remap column references to the subset we use.
-            let mut demand_map = std::collections::HashMap::new();
-            for column in demand.iter() {
-                demand_map.insert(*column, demand_map.len());
-            }
-            let demand_map_len = demand_map.len();
-            key_plan.permute(demand_map.clone(), demand_map_len);
-            val_plan.permute(demand_map, demand_map_len);
-            let skips = mz_compute_client::plan::reduce::convert_indexes_to_skips(demand);
-            move |row_parts, time, diff| {
-                let temp_storage = RowArena::new();
-
-                let mut row_datums = row_datums.borrow_with_many(row_parts);
-
-                let mut row_iter = row_datums.drain(..);
-                let mut datums_local = datums.borrow();
-                // Unpack only the demanded columns.
-                for skip in skips.iter() {
-                    datums_local.push(row_iter.nth(*skip).unwrap());
-                }
-
-                // Evaluate the key expressions.
-                let key =
-                    match key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_mfp) {
-                        Err(e) => {
-                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
-                        }
-                        Ok(key) => key.expect("Row expected as no predicate was used"),
-                    };
-                // Evaluate the value expressions.
-                // The prior evaluation may have left additional columns we should delete.
-                datums_local.truncate(skips.len());
-                let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                    Err(e) => {
-                        return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
+        input.scope().region_named("Reduce", |inner| {
+            let KeyValPlan {
+                mut key_plan,
+                mut val_plan,
+            } = key_val_plan;
+            let key_arity = key_plan.projection.len();
+            let mut row_buf = Row::default();
+            let mut row_mfp = Row::default();
+            let mut datums = DatumVec::new();
+            let mut row_datums = DatumVec::new();
+            let (key_val_input, err_input): (
+                timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
+                _,
+            ) = input
+                .enter_region(inner)
+                .flat_map(input_key.map(|k| (k, None)), || {
+                    // Determine the columns we'll need from the row.
+                    let mut demand = Vec::new();
+                    demand.extend(key_plan.demand());
+                    demand.extend(val_plan.demand());
+                    demand.sort();
+                    demand.dedup();
+                    // remap column references to the subset we use.
+                    let mut demand_map = std::collections::HashMap::new();
+                    for column in demand.iter() {
+                        demand_map.insert(*column, demand_map.len());
                     }
-                    Ok(val) => val.expect("Row expected as no predicate was used"),
-                };
-                row_buf.packer().extend(val);
-                let row = row_buf.clone();
-                Some((Ok((key, row)), time.clone(), diff.clone()))
-            }
-        });
+                    let demand_map_len = demand_map.len();
+                    key_plan.permute(demand_map.clone(), demand_map_len);
+                    val_plan.permute(demand_map, demand_map_len);
+                    let skips = mz_compute_client::plan::reduce::convert_indexes_to_skips(demand);
+                    move |row_parts, time, diff| {
+                        let temp_storage = RowArena::new();
 
-        // Demux out the potential errors from key and value selector evaluation.
-        use differential_dataflow::operators::consolidate::ConsolidateStream;
-        let (ok, mut err) = key_val_input
-            .as_collection()
-            .consolidate_stream()
-            .flat_map_fallible("OkErrDemux", Some);
+                        let mut row_datums = row_datums.borrow_with_many(row_parts);
 
-        err = err.concat(&err_input);
+                        let mut row_iter = row_datums.drain(..);
+                        let mut datums_local = datums.borrow();
+                        // Unpack only the demanded columns.
+                        for skip in skips.iter() {
+                            datums_local.push((row_iter).nth(*skip).unwrap());
+                        }
 
-        // Render the reduce plan
-        render_reduce_plan(reduce_plan, ok, err, key_arity)
+                        // Evaluate the key expressions.
+                        let key = match key_plan.evaluate_into(
+                            &mut datums_local,
+                            &temp_storage,
+                            &mut row_mfp,
+                        ) {
+                            Err(e) => {
+                                return Some((
+                                    Err(DataflowError::from(e)),
+                                    time.clone(),
+                                    diff.clone(),
+                                ))
+                            }
+                            Ok(key) => key.expect("Row expected as no predicate was used"),
+                        };
+                        // Evaluate the value expressions.
+                        // The prior evaluation may have left additional columns we should delete.
+                        datums_local.truncate(skips.len());
+                        let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
+                            Err(e) => {
+                                return Some((
+                                    Err(DataflowError::from(e)),
+                                    time.clone(),
+                                    diff.clone(),
+                                ))
+                            }
+                            Ok(val) => val.expect("Row expected as no predicate was used"),
+                        };
+                        row_buf.packer().extend(val);
+                        let row = row_buf.clone();
+                        Some((Ok((key, row)), time.clone(), diff.clone()))
+                    }
+                });
+
+            // Demux out the potential errors from key and value selector evaluation.
+            use differential_dataflow::operators::consolidate::ConsolidateStream;
+            let (ok, mut err) = key_val_input
+                .as_collection()
+                .consolidate_stream()
+                .flat_map_fallible("OkErrDemux", Some);
+
+            err = err.concat(&err_input);
+
+            // Render the reduce plan
+            render_reduce_plan(reduce_plan, ok, err, key_arity).leave_region()
+        })
     }
 }
 

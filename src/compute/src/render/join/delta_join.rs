@@ -48,7 +48,7 @@ where
         let mut err_dedup = HashSet::new();
 
         // We create a new region to contain the dataflow paths for the delta join.
-        let (oks, errs) = scope.clone().region_named("delta query", |inner| {
+        let (oks, errs) = scope.clone().region_named("Join(Delta)", |inner| {
             // Our plan is to iterate through each input relation, and attempt
             // to find a plan that maximally uses existing keys (better: uses
             // existing arrangements, to which we have access).

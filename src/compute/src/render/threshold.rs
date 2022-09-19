@@ -125,16 +125,19 @@ where
         input: CollectionBundle<G, Row, T>,
         threshold_plan: ThresholdPlan,
     ) -> CollectionBundle<G, Row, T> {
-        match threshold_plan {
-            ThresholdPlan::Basic(BasicThresholdPlan { ensure_arrangement }) => {
-                // We do not need to apply the permutation here,
-                // since threshold doesn't inspect the values, but only
-                // their counts.
-                build_threshold_basic(input, ensure_arrangement.0)
+        input.scope().region_named("Threshold", |inner| {
+            match threshold_plan {
+                ThresholdPlan::Basic(BasicThresholdPlan { ensure_arrangement }) => {
+                    // We do not need to apply the permutation here,
+                    // since threshold doesn't inspect the values, but only
+                    // their counts.
+                    build_threshold_basic(input.enter_region(inner), ensure_arrangement.0)
+                }
+                ThresholdPlan::Retractions(RetractionsThresholdPlan { ensure_arrangement }) => {
+                    build_threshold_retractions(input.enter_region(inner), ensure_arrangement.0)
+                }
             }
-            ThresholdPlan::Retractions(RetractionsThresholdPlan { ensure_arrangement }) => {
-                build_threshold_retractions(input, ensure_arrangement.0)
-            }
-        }
+            .leave_region()
+        })
     }
 }

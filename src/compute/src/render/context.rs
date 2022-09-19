@@ -24,7 +24,7 @@ use differential_dataflow::Data;
 use mz_compute_client::plan::AvailableCollections;
 use timely::communication::message::RefOrMut;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::{Scope, ScopeParent};
+use timely::dataflow::{scopes::Child, Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
@@ -262,6 +262,52 @@ where
         }
     }
 }
+impl<S: Scope, V: Data, T> ArrangementFlavor<S, V, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    /// A reference to the scope containing the collection bundle.
+    pub fn scope(&self) -> S {
+        match self {
+            ArrangementFlavor::Local(oks, _errs) => oks.stream.scope(),
+            ArrangementFlavor::Trace(_gid, oks, _errs) => oks.stream.scope(),
+        }
+    }
+
+    /// Brings the arrangement flavor into a region.
+    pub fn enter_region<'a>(
+        &self,
+        region: &Child<'a, S, S::Timestamp>,
+    ) -> ArrangementFlavor<Child<'a, S, S::Timestamp>, V, T> {
+        match self {
+            ArrangementFlavor::Local(oks, errs) => {
+                ArrangementFlavor::Local(oks.enter_region(region), errs.enter_region(region))
+            }
+            ArrangementFlavor::Trace(gid, oks, errs) => {
+                ArrangementFlavor::Trace(*gid, oks.enter_region(region), errs.enter_region(region))
+            }
+        }
+    }
+}
+
+impl<'a, S: Scope, V: Data, T> ArrangementFlavor<Child<'a, S, S::Timestamp>, V, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    /// Extracts the arrangement flavor from a region.
+    pub fn leave_region(&self) -> ArrangementFlavor<S, V, T> {
+        match self {
+            ArrangementFlavor::Local(oks, errs) => {
+                ArrangementFlavor::Local(oks.leave_region(), errs.leave_region())
+            }
+            ArrangementFlavor::Trace(gid, oks, errs) => {
+                ArrangementFlavor::Trace(*gid, oks.leave_region(), errs.leave_region())
+            }
+        }
+    }
+}
 
 /// A bundle of the various ways a collection can be represented.
 ///
@@ -316,6 +362,58 @@ where
             keys.push(MirScalarExpr::Column(column));
         }
         Self::from_expressions(keys, arrangements)
+    }
+
+    /// A reference to the scope containing the collection bundle.
+    pub fn scope(&self) -> S {
+        if let Some((oks, _errs)) = &self.collection {
+            oks.inner.scope()
+        } else {
+            self.arranged
+                .values()
+                .next()
+                .expect("Must contain a valid collection")
+                .scope()
+        }
+    }
+
+    /// Brings the collection bundle into a region.
+    pub fn enter_region<'a>(
+        &self,
+        region: &Child<'a, S, S::Timestamp>,
+    ) -> CollectionBundle<Child<'a, S, S::Timestamp>, V, T> {
+        CollectionBundle {
+            collection: self
+                .collection
+                .as_ref()
+                .map(|(oks, errs)| (oks.enter_region(region), errs.enter_region(region))),
+            arranged: self
+                .arranged
+                .iter()
+                .map(|(key, bundle)| (key.clone(), bundle.enter_region(region)))
+                .collect(),
+        }
+    }
+}
+
+impl<'a, S: Scope, V: Data, T> CollectionBundle<Child<'a, S, S::Timestamp>, V, T>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    /// Extracts the collection bundle from a region.
+    pub fn leave_region(&self) -> CollectionBundle<S, V, T> {
+        CollectionBundle {
+            collection: self
+                .collection
+                .as_ref()
+                .map(|(oks, errs)| (oks.leave_region(), errs.leave_region())),
+            arranged: self
+                .arranged
+                .iter()
+                .map(|(key, bundle)| (key.clone(), bundle.leave_region()))
+                .collect(),
+        }
     }
 }
 
