@@ -528,6 +528,13 @@ where
                                 crate::source::responsible_for(&id, worker_id, worker_count, &pid)
                             });
                             offset_commit_handle.commit_offsets(offset_upper.as_data_offsets());
+
+                            // Compact the in-memory remap trace shared between this
+                            // operator the reclock operator. We do this here for convenience! The
+                            // ordering doesn't really matter.
+                            let upper_ts = resume_upper.as_option().copied().unwrap();
+                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+                            reclock_follower.compact(as_of);
                             continue;
                         }
                         _ => {
