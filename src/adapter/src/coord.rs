@@ -733,9 +733,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.compute.watch_services();
 
-        // Trigger a storage usage metric collection on configured interval.
-        let mut storage_usage_update_interval =
-            tokio::time::interval(self.storage_usage_collection_interval);
+        self.schedule_storage_usage_collection().await;
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -775,7 +773,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::GroupCommitInitiate,
-                _ = storage_usage_update_interval.tick() => Message::StorageUsageFetch,
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
                 // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 Some(collections) = consolidations_rx.recv() => {

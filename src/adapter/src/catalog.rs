@@ -4434,6 +4434,16 @@ impl<S: Append> Catalog<S> {
     pub fn system_config(&self) -> &SystemVars {
         self.state.system_config()
     }
+
+    pub async fn most_recent_storage_usage_collection(&self) -> Result<Option<EpochMillis>, Error> {
+        Ok(self
+            .storage()
+            .await
+            .storage_usage()
+            .await?
+            .map(|usage| usage.timestamp())
+            .max())
+    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {
