@@ -621,14 +621,14 @@ impl Runner {
                 }
             });
             client
-                .batch_execute(&format!(
+                .batch_execute(
                     "DROP SCHEMA IF EXISTS sqllogictest_consensus CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
                      CREATE SCHEMA sqllogictest_consensus;
                      CREATE SCHEMA sqllogictest_adapter;
                      CREATE SCHEMA sqllogictest_storage;",
-                ))
+                )
                 .await?;
             (
                 format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),

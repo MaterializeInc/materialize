@@ -873,10 +873,10 @@ where
         let mut violation = None;
         self.for_values(|for_k, for_v| {
             if &k == for_k {
-                violation = Some(format!("duplicate key"));
+                violation = Some("duplicate key".to_string());
             }
             if (self.uniqueness_violation)(for_v, &v) {
-                violation = Some(format!("uniqueness violation"));
+                violation = Some("uniqueness violation".to_string());
             }
         });
         if let Some(violation) = violation {

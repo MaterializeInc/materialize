@@ -258,8 +258,8 @@ impl<K, V, T: Timestamp + Lattice, D> State<K, V, T, D> {
                     }
                     self.collections.trace.downgrade_since(&to);
                 }
-                Insert(_) => return Err(format!("cannot insert since field")),
-                Delete(_) => return Err(format!("cannot delete since field")),
+                Insert(_) => return Err("cannot insert since field".to_string()),
+                Delete(_) => return Err("cannot delete since field".to_string()),
             }
         }
         apply_diffs_spine(metrics, diff.spine, &mut self.collections.trace)?;

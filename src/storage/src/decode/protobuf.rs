@@ -44,9 +44,9 @@ impl ProtobufDecoderState {
                     Some(Ok(row))
                 } else {
                     self.events_error += 1;
-                    Some(Err(DecodeErrorKind::Text(format!(
-                        "protobuf deserialization returned None"
-                    ))))
+                    Some(Err(DecodeErrorKind::Text(
+                        "protobuf deserialization returned None".to_string(),
+                    )))
                 }
             }
             Err(err) => {

@@ -618,12 +618,9 @@ where
         // `[<val1>, ..]}`, unless it has only one field,
         // in which case the JSON is `<val1>`
         if f_types.len() == 1 {
-            Ok(format!(
-                "{}",
-                f_values
-                    .pop()
-                    .ok_or_else(|| { format!("Cannot use default value for {}", debug_name) })?
-            ))
+            Ok(f_values
+                .pop()
+                .ok_or_else(|| format!("Cannot use default value for {}", debug_name))?)
         } else {
             Ok(format!("[{}]", separated(",", f_values.into_iter())))
         }

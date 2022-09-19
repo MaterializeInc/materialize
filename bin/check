@@ -143,6 +143,7 @@ extra_lints=(
     clippy::mut_mutex_lock
     clippy::print_literal
     clippy::same_item_push
+    clippy::useless_format
     clippy::write_literal
 
     # Extra closures slow down compiles

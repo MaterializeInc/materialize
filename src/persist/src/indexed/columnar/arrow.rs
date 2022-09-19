@@ -203,27 +203,27 @@ pub fn decode_arrow_batch_kvtd(x: &Chunk<Box<dyn Array>>) -> Result<ColumnarReco
     let key_array = key_col
         .as_any()
         .downcast_ref::<BinaryArray<i32>>()
-        .ok_or(format!("column 0 doesn't match schema"))?
+        .ok_or_else(|| "column 0 doesn't match schema".to_string())?
         .clone();
     let key_offsets = key_array.offsets().clone();
     let key_data = key_array.values().clone();
     let val_array = val_col
         .as_any()
         .downcast_ref::<BinaryArray<i32>>()
-        .ok_or(format!("column 1 doesn't match schema"))?
+        .ok_or_else(|| "column 1 doesn't match schema".to_string())?
         .clone();
     let val_offsets = val_array.offsets().clone();
     let val_data = val_array.values().clone();
     let timestamps = ts_col
         .as_any()
         .downcast_ref::<PrimitiveArray<i64>>()
-        .ok_or(format!("column 2 doesn't match schema"))?
+        .ok_or_else(|| "column 2 doesn't match schema".to_string())?
         .values()
         .clone();
     let diffs = diff_col
         .as_any()
         .downcast_ref::<PrimitiveArray<i64>>()
-        .ok_or(format!("column 3 doesn't match schema"))?
+        .ok_or_else(|| "column 3 doesn't match schema".to_string())?
         .values()
         .clone();
 

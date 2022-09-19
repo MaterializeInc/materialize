@@ -407,7 +407,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
     {
         let raw_rows = stream_iter
             .next()
-            .ok_or_else(|| format!("Constant is empty"))?;
+            .ok_or_else(|| "Constant is empty".to_string())?;
         // Deserialize the types of each column first
         // in order to refer to column types when constructing the `Datum`
         // objects in each row.

@@ -2277,7 +2277,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = tracing::span!(Level::INFO, "local").in_scope(
                     || -> Result<_, AdapterError> {
                         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-                        let mut dataflow = DataflowDesc::new(format!("explanation"));
+                        let mut dataflow = DataflowDesc::new("explanation".to_string());
                         self.dataflow_builder(compute_instance)
                             .import_view_into_dataflow(
                                 // TODO: If explaining a view, pipe the actual id of the view.
@@ -2447,7 +2447,7 @@ impl<S: Append + 'static> Coordinator<S> {
              -> Result<DataflowDescription<OptimizedMirRelationExpr>, AdapterError> {
                 let start = Instant::now();
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"));
+                let mut dataflow = DataflowDesc::new("explanation".to_string());
                 coord
                     .dataflow_builder(compute_instance)
                     .import_view_into_dataflow(&view_id, &optimized_plan, &mut dataflow)?;

@@ -1215,7 +1215,7 @@ fn fill_pdt_date(
             }
 
             let unit = i64::try_from(val)
-                .map_err(|_| format!("number should fit in signed 64-bit integer"))?;
+                .map_err(|_| "number should fit in signed 64-bit integer".to_string())?;
             pdt.year = Some(DateTimeFieldValue::new(unit, 0));
             actual.pop_front();
             // Trim remaining optional tokens, but never an immediately

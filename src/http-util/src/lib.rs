@@ -122,7 +122,7 @@ pub async fn handle_modify_filter_target(
 ) -> impl IntoResponse {
     match cfg.targets.parse::<Targets>() {
         Ok(targets) => match callback.call(targets) {
-            Ok(()) => (StatusCode::OK, format!("{}", cfg.targets)),
+            Ok(()) => (StatusCode::OK, cfg.targets.to_string()),
             Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
         },
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),

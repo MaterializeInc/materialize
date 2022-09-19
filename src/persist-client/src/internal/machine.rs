@@ -1046,7 +1046,7 @@ pub mod datadriven {
         for part in batch.parts.iter_mut() {
             part.encoded_size_bytes = size;
         }
-        Ok(format!("ok\n"))
+        Ok("ok\n".to_string())
     }
 
     pub async fn compact(
