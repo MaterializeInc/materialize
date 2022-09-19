@@ -113,9 +113,9 @@ contains:catalog item 'temp_t' already exists
 #
 # > SHOW INDEXES FROM temp_t
 #  on_name    key_name            seq_in_index  column_name  expression  nullable
+#  name                 on          cluster         key
 # --------------------------------------------------------------------------------
-#  temp_t     temp_t_primary_idx  1             a            <null>      true
-#  temp_t     temp_t_primary_idx  2             b            <null>      false
+#  temp_t_primary_idx   d           default         {a, b}
 
 > DROP TABLE temp_t
 

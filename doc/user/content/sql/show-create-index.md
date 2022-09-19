@@ -23,9 +23,9 @@ SHOW INDEXES FROM my_view;
 ```
 
 ```nofmt
- cluster | on_name |  key_name   | seq_in_index | column_name | expression | nullable
----------+---------+-------------+--------------+-------------+------------+----------
- default | t       | my_view_idx | 1            | a           |            | t
+     name    | on  | cluster | key
+-------------+-----+---------+--------------------------------------------
+ my_view_idx | t   | default | {a, b}
 ```
 
 ```sql
