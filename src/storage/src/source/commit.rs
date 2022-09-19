@@ -77,20 +77,7 @@ pub(crate) fn drive_offset_committer<S: OffsetCommitter + Send + Sync + 'static>
                 // for longer that necessary.
                 let new_offsets: HashMap<PartitionId, MzOffset> = {
                     let new_offsets = rx.borrow();
-
-                    // Convert the _frontier_ into actual offsets to be committed
-                    // A _frontier_ offset value of 0 is simply skipped, as it
-                    // represents beginning with nothing.
-                    //
-                    // TODO(guswynn): factor this into its own structure
-                    new_offsets
-                        .iter()
-                        .filter_map(|(pid, offset)| {
-                            offset
-                                .checked_sub(MzOffset::from(1))
-                                .map(|offset| (pid.clone(), offset))
-                        })
-                        .collect()
+                    new_offsets.clone()
                 };
 
                 // TODO(guswynn): avoid committing the same exact frontier multiple times

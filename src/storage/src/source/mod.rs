@@ -37,6 +37,7 @@ use crate::source::types::SourceMessageType;
 use crate::source::types::SourceReaderError;
 use crate::source::types::{NextMessage, SourceMessage, SourceReader};
 
+mod antichain;
 mod commit;
 mod delimited_value_reader;
 pub mod generator;
