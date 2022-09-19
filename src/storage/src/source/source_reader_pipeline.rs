@@ -58,6 +58,7 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_timely_util::operator::StreamExt as _;
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use crate::source::antichain::OffsetAntichain;
 use crate::source::healthcheck::Healthchecker;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::ReclockFollower;
@@ -122,7 +123,7 @@ struct SourceMessageBatch<Key, Value, Diff> {
     non_definite_errors: Vec<SourceError>,
     /// The current upper of the `SourceReader`, at the time this batch was
     /// emitted. Source uppers of emitted batches must never regress.
-    source_upper: HashMap<PartitionId, MzOffset>,
+    source_upper: OffsetAntichain,
 }
 
 /// The source upper at the time of emitting a batch. This contains only the
@@ -131,7 +132,7 @@ struct SourceMessageBatch<Key, Value, Diff> {
 /// to form a full view of the upper.
 #[derive(Clone, Serialize, Deserialize)]
 struct SourceUpperSummary {
-    source_upper: HashMap<PartitionId, MzOffset>,
+    source_upper: OffsetAntichain,
 }
 
 /// Creates a source dataflow operator graph from a connection that has a
@@ -197,8 +198,8 @@ fn build_source_reader_stream<G, S>(
     source_reader: S,
     config: RawSourceCreationConfig,
     source_connection: S::Connection,
-    initial_source_upper: HashMap<PartitionId, MzOffset>,
-    mut source_upper: HashMap<PartitionId, MzOffset>,
+    initial_source_upper: OffsetAntichain,
+    mut source_upper: OffsetAntichain,
 ) -> Pin<
     // TODO(guswynn): determine if this boxing is necessary
     Box<
@@ -217,7 +218,7 @@ fn build_source_reader_stream<G, S>(
                 >,
                 Vec<SourceReaderError>,
                 Vec<PartitionId>,
-                HashMap<PartitionId, MzOffset>,
+                OffsetAntichain,
             )>,
         >,
     >,
@@ -313,7 +314,7 @@ where
                                     let offset = message.offset;
                                     // advance the _offset_ frontier if this the final message for that offset
                                     if is_final {
-                                        *source_upper.entry(pid.clone()).or_default() = offset + 1;
+                                        source_upper.insert_data_up_to(pid.clone(), offset);
                                     }
                                     untimestamped_messages.entry(pid).or_default().push((message, offset));
                                 }
@@ -467,15 +468,10 @@ where
                 let initial_source_upper = source_upper.clone();
 
                 trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
-                source_upper.retain(|pid, _offset| {
+                source_upper.filter_by_partition(|pid| {
                     crate::source::responsible_for(&id, worker_id, worker_count, &pid)
                 });
                 trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
-
-                let mut start_offsets = Vec::with_capacity(source_upper.len());
-                for (pid, offset) in source_upper.iter() {
-                    start_offsets.push((pid.clone(), Some(offset.clone())));
-                }
 
                 let (source_reader, offset_committer) = S::new(
                     name.clone(),
@@ -484,7 +480,7 @@ where
                     worker_count,
                     sync_activator,
                     source_connection.clone(),
-                    start_offsets,
+                    source_upper.as_vec(),
                     encoding,
                     base_metrics,
                     connection_context.clone(),
@@ -545,10 +541,10 @@ where
                             let mut offset_upper = reclock_follower
                                 .source_upper_at_frontier(resume_frontier_update.borrow())
                                 .unwrap();
-                            offset_upper.retain(|pid, _offset| {
+                            offset_upper.filter_by_partition(|pid| {
                                 crate::source::responsible_for(&id, worker_id, worker_count, &pid)
                             });
-                            offset_commit_handle.commit_offsets(offset_upper);
+                            offset_commit_handle.commit_offsets(offset_upper.as_data_offsets());
                             continue;
                         }
                         _ => {
@@ -596,6 +592,8 @@ where
                     // responsible for. That way, the downstream reclock operator
                     // can correctly decide when a reclocked timestamp is closed. We
                     // basically take those partitions "out of the calculation".
+                    //
+                    // TODO(guswynn): factor this into `OffsetAntichain` in a way that makes sense
                     let mut extended_source_upper = source_upper.clone();
                     extended_source_upper.extend(
                         unconsumed_partitions
@@ -817,10 +815,11 @@ where
                     data.swap(&mut buffer);
 
                     for source_upper_summary in buffer.drain(..) {
-                        for (pid, offset) in source_upper_summary.source_upper {
-                            let previous_offset = global_source_upper.insert(pid, offset);
+                        for (pid, offset) in source_upper_summary.source_upper.iter() {
+                            let previous_offset =
+                                global_source_upper.insert(pid.clone(), offset.clone());
                             if let Some(previous_offset) = previous_offset {
-                                assert!(previous_offset <= offset);
+                                assert!(previous_offset <= *offset);
                             }
                         }
                     }
@@ -938,7 +937,7 @@ where
 
         // The global view of the source_upper, which we track by combining
         // summaries from the raw reader operators.
-        let mut global_source_upper = HashMap::new();
+        let mut global_source_upper = OffsetAntichain::new();
         let mut untimestamped_batches = VecDeque::new();
 
         move |frontiers| {
@@ -1081,6 +1080,8 @@ where
             // invocation.
             if let Ok(new_ts_upper) = timestamper.reclock_frontier(&global_source_upper) {
                 let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
+
+                // TODO(aljoscha&guswynn): will these be overwritten with multi-worker
                 for partition_metrics in source_metrics.partition_metrics.values_mut() {
                     partition_metrics.closed_ts.set(ts.into());
                 }
