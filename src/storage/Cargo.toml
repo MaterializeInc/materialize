@@ -66,7 +66,7 @@ serde_json = { version = "1.0.85" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
-tokio-stream = "0.1.9"
+tokio-stream = "0.1.10"
 tokio-util = { version = "0.7.3", features = ["io"] }
 tonic = "0.8.1"
 tracing = "0.1.36"
