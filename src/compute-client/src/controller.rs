@@ -364,10 +364,8 @@ where
             return Err(ComputeError::InstanceExists(id));
         }
 
-        self.instances.insert(
-            id,
-            Instance::new(self.build_info, &logging, max_result_size),
-        );
+        self.instances
+            .insert(id, Instance::new(self.build_info, logging, max_result_size));
 
         if self.initialized {
             self.instances
@@ -602,7 +600,7 @@ where
     pub async fn cancel_peeks(
         &mut self,
         instance_id: ComputeInstanceId,
-        uuids: &BTreeSet<Uuid>,
+        uuids: BTreeSet<Uuid>,
     ) -> Result<(), ComputeError> {
         self.instance(instance_id)?.cancel_peeks(uuids).await
     }
@@ -664,7 +662,7 @@ where
                 Ok(None)
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
-                instance.remove_peeks(std::iter::once(uuid)).await?;
+                instance.remove_peeks(&[uuid].into()).await?;
                 Ok(Some(ComputeControllerResponse::PeekResponse(
                     uuid,
                     peek_response,
@@ -705,7 +703,7 @@ struct Instance<T> {
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
-    peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
+    peeks: BTreeMap<Uuid, (GlobalId, T)>,
 }
 
 impl<T> Instance<T> {
@@ -742,7 +740,7 @@ where
 {
     fn new(
         build_info: &'static BuildInfo,
-        logging: &Option<LoggingConfig>,
+        logging: Option<LoggingConfig>,
         max_result_size: u32,
     ) -> Self {
         let mut collections = BTreeMap::default();
@@ -761,7 +759,7 @@ where
         let mut replicas = ActiveReplication::new(build_info);
         replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
-            logging: logging.clone(),
+            logging,
             max_result_size,
         }));
 
@@ -1051,11 +1049,11 @@ where
     }
 
     /// Cancels existing peek requests.
-    async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
-        self.remove_peeks(uuids.iter().cloned()).await?;
-        self.compute.replicas.send(ComputeCommand::CancelPeeks {
-            uuids: uuids.clone(),
-        });
+    async fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) -> Result<(), ComputeError> {
+        self.remove_peeks(&uuids).await?;
+        self.compute
+            .replicas
+            .send(ComputeCommand::CancelPeeks { uuids });
         Ok(())
     }
 
@@ -1237,10 +1235,7 @@ where
     }
 
     /// Removes a registered peek, unblocking compaction that might have waited on it.
-    async fn remove_peeks(
-        &mut self,
-        peek_ids: impl IntoIterator<Item = uuid::Uuid>,
-    ) -> Result<(), ComputeError> {
+    async fn remove_peeks(&mut self, peek_ids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
         let mut updates = peek_ids
             .into_iter()
             .flat_map(|uuid| {

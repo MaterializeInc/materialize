@@ -604,7 +604,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             for (compute_instance, uuids) in inverse {
                 self.controller
                     .active_compute()
-                    .cancel_peeks(compute_instance, &uuids)
+                    .cancel_peeks(compute_instance, uuids)
                     .await
                     .unwrap();
             }
