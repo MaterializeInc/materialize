@@ -13,7 +13,9 @@ from materialize.cloudtest.k8s import K8sResource
 from materialize.cloudtest.wait import wait
 
 
-def mc_command(r: K8sResource, *cmds: str) -> str:
+# TODO: we should probably start a pod for these commands and keep it around
+# for the session
+def mc_command(r: K8sResource, *cmds: str, output: bool = False) -> str:
     unique_suffix = "".join([random.choice(string.ascii_lowercase) for _ in range(4)])
     pod_name = f"minio-{unique_suffix}"
     res = r.kubectl(
@@ -21,11 +23,12 @@ def mc_command(r: K8sResource, *cmds: str) -> str:
         pod_name,
         "--image=minio/mc",
         "--restart=Never",
+        "--attach" if output else "",
         "--command",
         "/bin/sh",
         "--",
         "-c",
-        ";".join(cmds),
+        " ; ".join(cmds),
     )
     r.kubectl("delete", "pod", pod_name)
     return res
