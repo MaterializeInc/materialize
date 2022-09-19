@@ -152,8 +152,8 @@ impl Value {
                 Some(Value::Array { dims, elements })
             }
             (Datum::Array(array), ScalarType::Int2Vector) => {
-                let dims: Vec<_> = array.dims().into_iter().collect();
-                assert!(dims.len() == 1, "int2vector must be 1 dimensional");
+                let dims = array.dims().into_iter();
+                assert!(dims.count() == 1, "int2vector must be 1 dimensional");
                 let elements = array
                     .elements()
                     .iter()

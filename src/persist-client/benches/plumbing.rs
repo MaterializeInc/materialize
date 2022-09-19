@@ -65,21 +65,19 @@ fn bench_consensus_compare_and_set_all_iters(
         // We need to pick random keys because Criterion likes to run this
         // function many times as part of a warmup, and if we deterministically
         // use the same keys we will overwrite previously set values.
-        let keys = (0..concurrency)
-            .map(|idx| {
-                (
-                    idx,
-                    (0..num_shards)
-                        .map(|shard_idx| (shard_idx, Uuid::new_v4().to_string()))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>();
+        let keys = (0..concurrency).map(|idx| {
+            (
+                idx,
+                (0..num_shards)
+                    .map(|shard_idx| (shard_idx, Uuid::new_v4().to_string()))
+                    .collect::<Vec<_>>(),
+            )
+        });
 
         let start = Instant::now();
 
         let mut handles = Vec::new();
-        for (idx, shard_keys) in keys.into_iter() {
+        for (idx, shard_keys) in keys {
             let consensus = Arc::clone(&consensus);
             let data = Bytes::clone(data);
             let handle = runtime.handle().spawn_named(

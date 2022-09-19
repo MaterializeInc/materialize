@@ -131,8 +131,8 @@ fn read_v2_memory_limit(cgroups: &[CgroupEntry], mounts: &[Mountinfo]) -> Option
     }
     let mount_point = &mount.mount_point;
     let controllers = std::fs::read_to_string(mount_point.join("cgroup.controllers")).ok()?;
-    let controllers: Vec<&str> = controllers.trim().split(' ').collect();
-    if controllers.contains(&"memory") {
+    let mut controllers = controllers.trim().split(' ');
+    if controllers.any(|c| c == "memory") {
         let max = read_file_to_usize(mount_point.join("memory.max"));
         // Unlike v1, this is only the swap, not swap + memory.
         let swap_max = read_file_to_usize(mount_point.join("memory.swap.max"));
