@@ -69,6 +69,7 @@ pub(crate) fn drive_offset_committer<S: OffsetCommitter + Send + Sync + 'static>
     let _ = task::spawn(
         || format!("offset commiter({source_id}) {worker_id}/{worker_count}"),
         async move {
+            let mut last_offsets: HashMap<PartitionId, MzOffset> = HashMap::new();
             // loop waiting on changes. Note we could miss updates,
             // but this is fine: we work on committing of offsets
             // as fast as the `OffsetCommitter` allows us.
@@ -80,9 +81,17 @@ pub(crate) fn drive_offset_committer<S: OffsetCommitter + Send + Sync + 'static>
                     new_offsets.clone()
                 };
 
-                // TODO(guswynn): avoid committing the same exact frontier multiple times
-                if !new_offsets.is_empty() {
+                // If we actually have new offsets, and they aren't exactly the same
+                // as the previous ones we tried (we don't attempt any partial ordering
+                // here), then we commit them, logging errors.
+                //
+                // TODO(guswynn): only push updates.
+                if !new_offsets.is_empty()
+                    && (last_offsets.is_empty() || last_offsets != new_offsets)
+                {
+                    last_offsets = new_offsets.clone();
                     if let Err(e) = sc.commit_offsets(new_offsets).await {
+                        // TODO(guswynn): stats for this error
                         tracing::error!(
                             %e,
                             "Failed to commit offsets for {source_id} ({worker_id}/{worker_count}"
