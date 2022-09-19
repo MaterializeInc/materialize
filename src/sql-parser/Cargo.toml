@@ -17,7 +17,7 @@ uncased = "0.9.7"
 
 [dev-dependencies]
 datadriven = "0.6.0"
-unicode-width = "0.1.9"
+unicode-width = "0.1.10"
 
 [build-dependencies]
 anyhow = "1.0.65"
