@@ -716,6 +716,8 @@ pub fn plan_create_source(
                     UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
                 }
                 DbzMode::Plain { tx_metadata } => {
+                    scx.require_unsafe_mode("ENVELOPE DEBEZIUM")?;
+
                     // TODO(#11668): Probably make this not a WITH option and integrate into the DBZ envelope?
                     let mut tx_metadata_source = None;
                     let mut tx_metadata_collection = None;
