@@ -30,7 +30,7 @@ use timely::progress::Timestamp;
 use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug_span, warn, Instrument, Span};
+use tracing::{debug, debug_span, info, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
@@ -72,7 +72,7 @@ pub struct CompactRes<T> {
 pub struct Compactor<T, D> {
     metrics: Arc<Metrics>,
     sender: UnboundedSender<(CompactReq<T>, oneshot::Sender<bool>)>,
-    _phantom: PhantomData<D>,
+    _phantom: PhantomData<fn() -> D>,
 }
 
 impl<T, D> Compactor<T, D>
@@ -131,15 +131,23 @@ where
                 let start = Instant::now();
 
                 async move {
-                    let res = Compactor::<T, D>::compact(
-                        cfg.clone(),
-                        Arc::clone(&blob),
-                        Arc::clone(&metrics),
-                        Arc::clone(&cpu_heavy_runtime),
-                        req,
-                        writer_id.clone(),
-                    )
-                    .await;
+                    // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
+                    let compact_span = debug_span!("compact::consolidate");
+                    let res = cpu_heavy_runtime
+                        .spawn_named(
+                            || "persist::compact::consolidate",
+                            Self::compact(
+                                cfg.clone(),
+                                Arc::clone(&blob),
+                                Arc::clone(&metrics),
+                                Arc::clone(&cpu_heavy_runtime),
+                                req,
+                                writer_id.clone(),
+                            )
+                            .instrument(compact_span),
+                        )
+                        .await
+                        .map_err(|err| anyhow!(err));
 
                     metrics
                         .compaction
@@ -147,7 +155,7 @@ where
                         .inc_by(start.elapsed().as_secs_f64());
 
                     match res {
-                        Ok(res) => {
+                        Ok(Ok(res)) => {
                             let res = FueledMergeRes { output: res.output };
                             let applied = machine.merge_res(&res).await;
                             if applied {
@@ -164,9 +172,9 @@ where
                                 }
                             }
                         }
-                        Err(err) => {
+                        Ok(Err(err)) | Err(err) => {
                             metrics.compaction.failed.inc();
-                            warn!("compaction for {} failed: {:#}", machine.shard_id(), err);
+                            debug!("compaction for {} failed: {:#}", machine.shard_id(), err);
                         }
                     };
                 }
@@ -201,39 +209,12 @@ where
         if let Err(e) = send {
             // In the steady state we expect this to always succeed, but during
             // shutdown it is possible the destination task has already spun down
-            warn!("compact_and_apply_background failed to send request: {}", e);
+            info!("compact_and_apply_background failed to send request: {}", e);
             return None;
         }
 
         self.metrics.compaction.requested.inc();
         Some(compaction_completed_receiver)
-    }
-
-    pub async fn compact(
-        cfg: PersistConfig,
-        blob: Arc<dyn Blob + Send + Sync>,
-        metrics: Arc<Metrics>,
-        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-        req: CompactReq<T>,
-        writer_id: WriterId,
-    ) -> Result<CompactRes<T>, anyhow::Error> {
-        let parts_cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
-        // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
-        let compact_span = debug_span!("compact::consolidate");
-        parts_cpu_heavy_runtime
-            .spawn_named(
-                || "persist::compact::consolidate",
-                Compactor::<T, D>::compact_bounded(
-                    cfg,
-                    blob,
-                    metrics,
-                    cpu_heavy_runtime,
-                    req,
-                    writer_id,
-                )
-                .instrument(compact_span),
-            )
-            .await?
     }
 
     /// Compacts input batches in bounded memory.
@@ -259,7 +240,7 @@ where
     ///
     /// 3. If there is excess memory after accounting for (1) and (2), we increase the
     ///    number of outstanding parts we can keep in-flight to Blob.
-    async fn compact_bounded(
+    pub async fn compact(
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
@@ -267,7 +248,7 @@ where
         req: CompactReq<T>,
         writer_id: WriterId,
     ) -> Result<CompactRes<T>, anyhow::Error> {
-        let () = Compactor::<T, D>::validate_req(&req)?;
+        let () = Self::validate_req(&req)?;
         // compaction needs memory enough for at least 2 runs and 2 in-progress parts
         assert!(cfg.compaction_memory_bound_bytes >= 4 * cfg.blob_target_size);
         // reserve space for the in-progress part to be held in-mem representation and columnar
