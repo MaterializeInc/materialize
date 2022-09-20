@@ -3621,16 +3621,23 @@ trait LazyUnaryFunc {
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError>;
 
-    /// The output ColumnType of this function
+    /// The output ColumnType of this function.
     fn output_type(&self, input_type: ColumnType) -> ColumnType;
 
-    /// Whether this function will produce NULL on NULL input
+    /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
 
-    /// Whether this function will produce NULL on non-NULL input
+    /// Whether this function will produce NULL on non-NULL input.
     fn introduces_nulls(&self) -> bool;
 
-    /// Whether this function preserves uniqueness
+    /// Whether this function preserves uniqueness.
+    ///
+    /// Uniqueness is preserved when `if f(x) = f(y) then x = y` is true. This
+    /// is used by the optimizer when a guarantee can be made that a collection
+    /// with unique items will stay unique when mapped by this function.
+    ///
+    /// Functions should conservatively return `false` unless they are certain
+    /// the above property is true.
     fn preserves_uniqueness(&self) -> bool;
 }
 
