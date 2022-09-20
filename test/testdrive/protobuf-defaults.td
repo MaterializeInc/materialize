@@ -35,8 +35,11 @@ $ kafka-create-topic topic=defaults partitions=1
 $ kafka-ingest topic=defaults format=protobuf descriptor-file=defaults.pb message=Defaults
 {}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE defaults FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-defaults-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-defaults-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Defaults' USING SCHEMA FILE '${testdrive.temp-dir}/defaults.pb'
 
 > SELECT * FROM defaults

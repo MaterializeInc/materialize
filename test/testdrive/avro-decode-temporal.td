@@ -19,8 +19,11 @@ $ kafka-ingest format=avro topic=avro-decode-date schema=${date} timestamp=1
 {"f1": 1}
 {"f1": 12345678}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE avro_decode_date
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-decode-date-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-date-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${date}'
   ENVELOPE NONE
 
@@ -43,7 +46,7 @@ $ kafka-ingest format=avro topic=avro-decode-time-millis schema=${time-millis} t
 {"f1": 12345678}
 
 > CREATE SOURCE avro_decode_time_millis
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-decode-date-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-date-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${time-millis}'
   ENVELOPE NONE
 
@@ -72,7 +75,7 @@ $ kafka-ingest format=avro topic=avro-decode-timestamp-millis schema=${timestamp
 {"f1": 1234567890}
 
 > CREATE SOURCE avro_decode_timestamp_millis
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-decode-timestamp-millis-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-timestamp-millis-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${timestamp-millis}'
   ENVELOPE NONE
 
@@ -105,7 +108,7 @@ $ kafka-ingest format=avro topic=avro-decode-timestamp-micros schema=${timestamp
 {"f1": 1234567890}
 
 > CREATE SOURCE avro_decode_timestamp_micros
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-decode-timestamp-micros-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-timestamp-micros-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${timestamp-micros}'
   ENVELOPE NONE
 
@@ -137,7 +140,7 @@ $ kafka-ingest format=avro topic=avro-decode-local-timestamp-millis schema=${loc
 {"f1": 1234567890}
 
 > CREATE SOURCE avro_decode_local_timestamp_millis
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-decode-local-timestamp-millis-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-local-timestamp-millis-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${local-timestamp-millis}'
   ENVELOPE NONE
 

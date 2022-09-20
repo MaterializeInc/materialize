@@ -27,9 +27,11 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > INSERT INTO t1 VALUES (234);
 
+            > CREATE CONNECTION kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
             > CREATE SOURCE s1
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-crash-${testdrive.seed}'
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-crash-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
 

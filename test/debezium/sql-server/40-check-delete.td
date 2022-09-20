@@ -13,15 +13,18 @@ $ schema-registry-wait-schema schema=sql-server.dbo.delete_table_pk-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE delete_table_pk
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.delete_table_pk'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.delete_table_pk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 $ schema-registry-wait-schema schema=sql-server.dbo.delete_table_nopk-value
 
 > CREATE SOURCE delete_table_nopk
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.delete_table_nopk'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.delete_table_nopk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

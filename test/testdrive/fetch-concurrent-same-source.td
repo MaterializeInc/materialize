@@ -17,8 +17,11 @@ $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "ty
 
 $ kafka-create-topic topic=fetch-concurrent-same-source
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE fetch_concurrent_same_source
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-same-source-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-same-source-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
   WITH (TIMESTAMP INTERVAL '10ms')

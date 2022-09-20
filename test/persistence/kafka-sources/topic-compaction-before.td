@@ -34,8 +34,11 @@ $ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${k
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE topic_compaction
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-topic-compaction-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic-compaction-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 

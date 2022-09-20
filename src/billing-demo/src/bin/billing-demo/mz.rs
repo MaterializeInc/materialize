@@ -33,11 +33,17 @@ pub async fn create_proto_source(
         ""
     };
 
+    let query =
+        format!("CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '{kafka_url}'");
+
+    debug!("creating kafka connection=> {}", query);
+
+    mz_client::execute(&mz_client, &query).await?;
+
     let query = format!(
-        "CREATE SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
+        "CREATE SOURCE {source} FROM KAFKA CONNECTION kafka_conn (TOPIC '{topic}') \
          {persistence} FORMAT PROTOBUF MESSAGE '{message}' USING SCHEMA '\\x{descriptor}'",
         descriptor = encoded,
-        kafka_url = kafka_url,
         topic = kafka_topic_name,
         persistence = enable_persistence_str,
         source = source_name,
@@ -150,14 +156,18 @@ pub async fn reingest_sink(
     debug!("creating confluent schema registry connection=> {}", query);
     mz_client::execute(&mz_client, &query).await?;
 
+    let query =
+        format!("CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '{kafka_url}'");
+    debug!("creating kafka connection=> {}", query);
+    mz_client::execute(&mz_client, &query).await?;
+
     let query = format!(
         "
         CREATE SOURCE {source_name} \
-        FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic_name}' \
+        FROM KAFKA CONNECTION kafka_conn (TOPIC '{topic_name}') \
         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {source_name}_csr_conn \
         ENVELOPE DEBEZIUM",
         source_name = source_name,
-        kafka_url = kafka_url,
         topic_name = topic_name
     );
 

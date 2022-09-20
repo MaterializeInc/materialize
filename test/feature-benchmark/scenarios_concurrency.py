@@ -51,8 +51,11 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
 FOR CONFLUENT SCHEMA REGISTRY
 URL '${{testdrive.schema-registry-url}}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+
 > CREATE SOURCE s{s}
-  FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-parallel-ingestion-${{testdrive.seed}}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-parallel-ingestion-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn'
 """
                 for s in sources

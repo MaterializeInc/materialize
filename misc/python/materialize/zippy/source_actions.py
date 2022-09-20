@@ -54,9 +54,11 @@ class CreateSource(Action):
                 f"""
 > CREATE CONNECTION IF NOT EXISTS {self.source.name}_csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
 
+> CREATE CONNECTION IF NOT EXISTS {self.source.name}_kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+
 > CREATE SOURCE {self.source.name}
-  FROM KAFKA BROKER '${{testdrive.kafka-addr}}'
-  TOPIC 'testdrive-{self.topic.name}-${{testdrive.seed}}'
+  FROM KAFKA CONNECTION {self.source.name}_kafka_conn
+  (TOPIC 'testdrive-{self.topic.name}-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn
   ENVELOPE {envelope}
 """

@@ -23,15 +23,17 @@ def test_storaged_creation(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
+            > CREATE CONNECTION IF NOT EXISTS kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
             > CREATE SOURCE source1
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-test-${testdrive.seed}'
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
 
             > CREATE SOURCE source2
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-test-${testdrive.seed}'
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
             """
@@ -61,9 +63,11 @@ def test_storaged_resizing(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
+            > CREATE CONNECTION IF NOT EXISTS kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
             > CREATE SOURCE resize_storaged
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-test-${testdrive.seed}'
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
             """
@@ -107,9 +111,11 @@ def test_storaged_shutdown(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
+            > CREATE CONNECTION IF NOT EXISTS kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
             > CREATE SOURCE source1
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-test-${testdrive.seed}'
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
 

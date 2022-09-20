@@ -125,12 +125,20 @@ fn test_no_block() -> Result<(), anyhow::Error> {
                 let _ = result?;
 
                 let result = client
-                    .batch_execute(&format!("
-                        CREATE SOURCE foo \
-                        FROM KAFKA BROKER '{}' TOPIC 'foo' \
-                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                    .batch_execute(&format!(
+                        "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
                         &*KAFKA_ADDRS,
                     ))
+                    .await;
+                info!("test_no_block: in thread; create Kafka conn done");
+                let _ = result?;
+
+                let result = client
+                    .batch_execute(
+                        "CREATE SOURCE foo \
+                        FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
+                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                    )
                     .await;
                 info!("test_no_block: in thread; create source done");
                 result
@@ -188,15 +196,20 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
                 schema_registry_server.addr,
             ))
             .await?;
+        client
+            .batch_execute(&format!(
+                "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+                &*KAFKA_ADDRS,
+            ))
+            .await?;
         let source_task = task::spawn(|| "source_client", async move {
             info!("test_drop_connection_race: in task; creating connection and source");
             let result = client
-                .batch_execute(&format!(
+                .batch_execute(
                     "CREATE SOURCE foo \
-                     FROM KAFKA BROKER '{}' TOPIC 'foo' \
+                     FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn",
-                    &*KAFKA_ADDRS,
-                ))
+                )
                 .await;
             info!(
                 "test_drop_connection_race: in task; create source done: {:?}",
