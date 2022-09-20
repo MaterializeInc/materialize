@@ -438,13 +438,13 @@ impl CatalogState {
                 StorageSinkConnection::Kafka(KafkaSinkConnection {
                     topic, consistency, ..
                 }) => {
-                    let consistency_topic = Datum::String(consistency.topic.as_str());
+                    let progress_topic = Datum::String(consistency.topic.as_str());
                     updates.push(BuiltinTableUpdate {
                         id: self.resolve_builtin_table(&MZ_KAFKA_SINKS),
                         row: Row::pack_slice(&[
                             Datum::String(&id.to_string()),
                             Datum::String(topic.as_str()),
-                            consistency_topic,
+                            progress_topic,
                         ]),
                         diff,
                     });
