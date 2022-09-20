@@ -671,6 +671,10 @@ where
 
         match response {
             ActiveReplicationResponse::FrontierUppers(updates) => {
+                let updates: Vec<_> = updates
+                    .into_iter()
+                    .map(|(id, bounds)| (id, bounds.upper))
+                    .collect();
                 instance.update_write_frontiers(&updates).await?;
                 Ok(None)
             }
