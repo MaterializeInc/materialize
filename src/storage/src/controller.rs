@@ -241,6 +241,11 @@ pub trait StorageController: Debug + Send {
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
+    async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>);
+    async fn truncate_managed_collection(&mut self, global_id: GlobalId);
+    async fn initialize_shard_mapping(&mut self);
+    async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId);
+
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
         &mut self,
@@ -704,7 +709,10 @@ pub struct StorageControllerState<
     pub(super) exported_collections: BTreeMap<GlobalId, Vec<GlobalId>>,
     pub(super) stash: S,
     /// Write handle for persist shards.
-    pub(super) persist_write_handles: persist_write_handles::PersistWorker<T>,
+    ///
+    /// Behind an `Arc` to provide the `Controller`'s automatic timestamper
+    /// access.
+    pub(super) persist_write_handles: Arc<persist_write_handles::PersistWorker<T>>,
     pub(super) shard_collection_global_id: Option<GlobalId>,
     /// Read handles for persist shards.
     ///
@@ -727,7 +735,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64> {
     /// A persist client used to write to storage collections
     persist: Arc<Mutex<PersistClientCache>>,
     now: NowFn,
-    managed_collections: Arc<Mutex<HashSet<ShardId>>>,
+    managed_collections: Arc<Mutex<HashSet<GlobalId>>>,
 }
 
 impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
@@ -741,175 +749,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
     }
 
     async fn register_managed_collection(&mut self, global_id: GlobalId) {
-        let shard_id = dbg!(
-            self.state.collections[&global_id]
-                .collection_metadata
-                .data_shard
-        );
-        self.managed_collections.lock().await.insert(shard_id);
-    }
-
-    /// Effectively truncates the `data_shard` correlated with `global_id`
-    /// effective as of the system time.
-    ///
-    /// # Panics
-    /// - If `global_id` is not correlated to a collection.
-    /// - If `data_shard` of the collection correlated to `global_id` is not
-    ///   managed.
-    /// - If any fetched key or value from the collection is an error.
-    async fn truncate_managed_collection(&mut self, global_id: GlobalId) {
-        let shard_id = self.state.collections[&global_id]
-            .collection_metadata
-            .data_shard;
-
-        assert!(
-            self.managed_collections.lock().await.contains(&shard_id),
-            "cannot truncate collection before it's managed"
-        );
-
-        let persist = self.open_persist_client().await;
-        let (mut write_handle, mut read_handle) = persist
-            .open::<SourceData, (), T, Diff>(shard_id)
-            .await
-            .unwrap();
-
-        // Write values as of now.
-        let now = (self.now)();
-        let as_of = Antichain::from_elem(T::from(now - 1));
-        let lower = T::from(now);
-        let upper = T::from(now + 1);
-
-        // Downgrade write capability to now so we can perform snapshot at
-        // `as_of`.
-        let _ = write_handle
-            .append(
-                Vec::<((SourceData, ()), T, Diff)>::new(),
-                Antichain::from_elem(T::minimum()),
-                Antichain::from_elem(lower.clone()),
-            )
-            .await;
-
-        let updates = read_handle.snapshot_and_fetch(as_of).await.unwrap();
-
-        let negated: Vec<_> = updates
-            .into_iter()
-            .map(|((k_res, v_res), _, d)| ((k_res.unwrap(), v_res.unwrap()), lower.clone(), -d))
-            .collect();
-
-        let _ = write_handle
-            .append(
-                negated,
-                Antichain::from_elem(T::minimum()),
-                Antichain::from_elem(upper.clone()),
-            )
-            .await
-            .unwrap()
-            .unwrap();
-    }
-
-    /// Append `updates` to the `data_shard` correlated with `global_id`
-    /// effective as of the system time.
-    ///
-    /// # Panics
-    /// - If `global_id` is not correlated to a collection.
-    /// - If `data_shard` of the collection correlated to `global_id` is not
-    ///   managed.
-    async fn append_to_managed_collection(
-        &mut self,
-        id: GlobalId,
-        updates: Vec<((SourceData, ()), Diff)>,
-    ) {
-        let shard_id = self.state.collections[&id].collection_metadata.data_shard;
-
-        assert!(
-            self.managed_collections.lock().await.contains(&shard_id),
-            "cannot append collection before it's managed"
-        );
-
-        let persist_client = self.open_persist_client().await;
-
-        let (mut write, _read) = persist_client
-            .open::<SourceData, (), T, Diff>(shard_id)
-            .await
-            .expect("invalid persist usage");
-
-        // Write values as of now.
-        let now = (self.now)();
-        let lower = T::from(now);
-        let upper = T::from(now + 1);
-
-        // Insert `T` into updates.
-        let updates: Vec<_> = updates
-            .into_iter()
-            .map(|(source_data, diff)| (source_data, lower.clone(), diff))
-            .collect();
-
-        // Write data in a way that makes it immediately readable
-        write
-            .append(
-                updates,
-                Antichain::from_elem(T::minimum()),
-                Antichain::from_elem(upper.clone()),
-            )
-            .await
-            .unwrap()
-            .unwrap();
-    }
-
-    async fn initialize_shard_mapping(&mut self) {
-        let id = self.state.shard_collection_global_id.unwrap();
-
-        // Pack updates into rows
-        let mut row_buf = Row::default();
-        let mut updates = Vec::with_capacity(self.state.collections.len());
-        for (
-            global_id,
-            CollectionState {
-                collection_metadata: CollectionMetadata { data_shard, .. },
-                ..
-            },
-        ) in self.state.collections.iter()
-        {
-            let mut packer = row_buf.packer();
-            packer.push(Datum::from(global_id.to_string().as_str()));
-            packer.push(Datum::from(data_shard.to_string().as_str()));
-            updates.push(((SourceData(Ok(row_buf.clone())), ()), 1));
-        }
-
-        self.append_to_managed_collection(id, updates).await;
-    }
-
-    /// Tracks the mapping of `GlobalId` to data shards in the collection at
-    /// `self.state.shard_collection_global_id`.
-    ///
-    /// However, data is written iff the `shard_collection_global_id` correlates
-    /// to a managed collection; in other cases, data is dropped on the floor.
-    /// In these cases, the data is later written by
-    /// [`Self::initialize_shard_mapping`].
-    async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId) {
-        let id = match self.state.shard_collection_global_id {
-            Some(id) if self.state.collections.get(&id).is_some() => id,
-            _ => return,
-        };
-
-        // Do not write values until collection is managed.
-        if !self
-            .managed_collections
-            .lock()
-            .await
-            .contains(&self.state.collections[&id].collection_metadata.data_shard)
-        {
-            return;
-        }
-
-        // Pack updates into rows
-        let mut row_buf = Row::default();
-        let mut packer = row_buf.packer();
-        packer.push(Datum::from(global_id.to_string().as_str()));
-        packer.push(Datum::from(shard_id.to_string().as_str()));
-        let updates = vec![((SourceData(Ok(row_buf.clone())), ()), 1)];
-
-        self.append_to_managed_collection(id, updates).await;
+        self.managed_collections.lock().await.insert(global_id);
     }
 }
 
@@ -1018,7 +858,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
             exports: BTreeMap::default(),
             exported_collections: BTreeMap::default(),
             stash,
-            persist_write_handles: persist_write_handles::PersistWorker::new(tx),
+            persist_write_handles: Arc::new(persist_write_handles::PersistWorker::new(tx)),
             persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
             shard_collection_global_id: None,
@@ -1381,6 +1221,126 @@ where
         Ok(self.state.persist_write_handles.append(commands))
     }
 
+    /// Effectively truncates the `data_shard` correlated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `global_id` is not correlated to a collection.
+    /// - If `data_shard` of the collection correlated to `global_id` is not
+    ///   managed.
+    /// - If any fetched key or value from the collection is an error.
+    async fn truncate_managed_collection(&mut self, global_id: GlobalId) {
+        assert!(
+            self.managed_collections.lock().await.contains(&global_id),
+            "cannot truncate collection before it's managed"
+        );
+
+        let now = (self.now)();
+        let as_of = T::from(now - 1);
+        let lower = T::from(now);
+
+        self.append(vec![(global_id, vec![], lower)])
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mut negate = self.snapshot(global_id, as_of).await.unwrap();
+
+        for (_, diff) in negate.iter_mut() {
+            *diff = -*diff;
+        }
+
+        self.append_to_managed_collection(global_id, negate).await;
+    }
+
+    async fn initialize_shard_mapping(&mut self) {
+        let id = self.state.shard_collection_global_id.unwrap();
+
+        // Pack updates into rows
+        let mut row_buf = Row::default();
+        let mut updates = Vec::with_capacity(self.state.collections.len());
+        for (
+            global_id,
+            CollectionState {
+                collection_metadata: CollectionMetadata { data_shard, .. },
+                ..
+            },
+        ) in self.state.collections.iter()
+        {
+            let mut packer = row_buf.packer();
+            packer.push(Datum::from(global_id.to_string().as_str()));
+            packer.push(Datum::from(data_shard.to_string().as_str()));
+            updates.push((row_buf.clone(), 1));
+        }
+
+        self.append_to_managed_collection(id, updates).await;
+    }
+
+    /// Tracks the mapping of `GlobalId` to data shards in the collection at
+    /// `self.state.shard_collection_global_id`.
+    ///
+    /// However, data is written iff the `shard_collection_global_id` correlates
+    /// to a managed collection; in other cases, data is dropped on the floor.
+    /// In these cases, the data is later written by
+    /// [`Self::initialize_shard_mapping`].
+    async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId) {
+        let id = match self.state.shard_collection_global_id {
+            Some(id) if self.managed_collections.lock().await.contains(&id) => id,
+            _ => return,
+        };
+
+        // Pack updates into rows
+        let mut row_buf = Row::default();
+        let mut packer = row_buf.packer();
+        packer.push(Datum::from(global_id.to_string().as_str()));
+        packer.push(Datum::from(shard_id.to_string().as_str()));
+        let updates = vec![(row_buf.clone(), 1)];
+
+        self.append_to_managed_collection(id, updates).await;
+    }
+
+    /// Append `updates` to the `data_shard` correlated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `global_id` is not correlated to a collection.
+    /// - If `data_shard` of the collection correlated to `global_id` is not
+    ///   managed.
+    async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        assert!(
+            self.managed_collections.lock().await.contains(&id),
+            "cannot append collection before it's managed"
+        );
+
+        // Write values as of now.
+        let now = (self.now)();
+        let lower = T::from(now);
+        let upper = T::from(now + 1);
+
+        // Insert `T` into updates.
+        let commands: Vec<_> = updates
+            .into_iter()
+            .map(|(row, diff)| Update {
+                row,
+                diff,
+                timestamp: lower.clone(),
+            })
+            .collect();
+
+        self.append(vec![(id, vec![], lower)])
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+
+        self.append(vec![(id, commands, upper)])
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
     async fn snapshot(
         &mut self,
         id: GlobalId,
@@ -1603,40 +1563,21 @@ where
 
         // Set up automatic timestamp advancer
         let now = c.now.clone();
-        let persist_location = c.persist_location.clone();
-        let persist = Arc::clone(&c.persist);
         let collections = Arc::clone(&c.managed_collections);
+        let write_handle = Arc::clone(&c.state.persist_write_handles);
 
         mz_ore::task::spawn(|| "ControllerManagedCollectionTimestamper", async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
             loop {
                 interval.tick().await;
-                let persist_client = persist
+                let upper = T::from(now());
+                let updates = collections
                     .lock()
                     .await
-                    .open(persist_location.clone())
-                    .await
-                    .unwrap();
-
-                let upper = T::from(now() + 1);
-
-                for shard in collections.lock().await.iter() {
-                    let (mut write, _read) = persist_client
-                        .open::<SourceData, (), T, Diff>(*shard)
-                        .await
-                        .expect("invalid persist usage");
-
-                    // The result of this write is immaterial because we only
-                    // need it to advance the collection's upper if there were
-                    // no other writes.
-                    let _ = write
-                        .append(
-                            Vec::<((SourceData, ()), T, Diff)>::new(),
-                            Antichain::from_elem(T::minimum()),
-                            Antichain::from_elem(upper.clone()),
-                        )
-                        .await;
-                }
+                    .iter()
+                    .map(|id| (*id, vec![], upper.clone()))
+                    .collect::<Vec<_>>();
+                write_handle.append(updates).await.unwrap().unwrap();
             }
         });
 
