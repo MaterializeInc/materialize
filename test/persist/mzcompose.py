@@ -35,18 +35,40 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--rate", type=int, default=100)
     parser.add_argument("--max-txn-length", type=int, default=4)
     parser.add_argument("--unreliability", type=float, default=None)
+    parser.add_argument(
+        "--consensus",
+        type=str,
+        choices=["mem", "postgres", "maelstrom"],
+        default="maelstrom",
+    )
+    parser.add_argument(
+        "--blob", type=str, choices=["mem", "maelstrom"], default="maelstrom"
+    )
 
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(services=["postgres"])
-    c.wait_for_postgres(service="postgres")
+    if args.consensus == "mem":
+        consensus_uri = "mem://consensus"
+    elif args.consensus == "postgres":
+        consensus_uri = "postgresql://postgres:postgres@postgres:5432?options=--search_path=consensus"
+        c.start_and_wait_for_tcp(services=["postgres"])
+        c.wait_for_postgres(service="postgres")
 
-    c.sql(
-        sql="CREATE SCHEMA IF NOT EXISTS consensus;",
-        service="postgres",
-        user="postgres",
-        password="postgres",
-    )
+        c.sql(
+            sql="CREATE SCHEMA IF NOT EXISTS consensus;",
+            service="postgres",
+            user="postgres",
+            password="postgres",
+        )
+    else:
+        # empty consensus uri defaults to Maelstrom consensus implementation
+        consensus_uri = ""
+
+    if args.blob == "mem":
+        blob_uri = "mem://blob"
+    else:
+        # empty blob uri defaults to Maelstrom blob implementation
+        blob_uri = ""
 
     c.run(
         "maelstrom-persist",
@@ -56,7 +78,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"--rate={args.rate}",
         "--",
         "maelstrom",
-        "--consensus-uri=postgresql://postgres:postgres@postgres:5432?options=--search_path=consensus",
+        *([f"--blob-uri={blob_uri}"] if blob_uri else []),
+        *([f"--consensus-uri={consensus_uri}"] if consensus_uri else []),
         *([f"--unreliability={args.unreliability}"] if args.unreliability else []),
     )
 
