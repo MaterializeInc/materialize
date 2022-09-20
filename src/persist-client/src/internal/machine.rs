@@ -533,22 +533,6 @@ where
                     }
                 };
 
-                // Find out if this command has been selected to perform gc, so
-                // that it will fire off a background request to the
-                // GarbageCollector to delete eligible blobs and truncate the
-                // state history. This is dependant both on `maybe_gc` returning
-                // Some _and_ on this state being successfully compare_and_set.
-                //
-                // NB: Make sure this overwrites `garbage_collection` on every
-                // run though the loop (i.e. no `if let Some` here). When we
-                // lose a CaS race, we might discover that the winner got
-                // assigned the gc.
-                garbage_collection = new_state.maybe_gc(is_write);
-
-                // NB: Make sure this is the very last thing before the
-                // `try_compare_and_set_current` call. (In particular, it needs
-                // to come after anything that might modify new_state, such as
-                // `maybe_gc`.)
                 let diff = StateDiff::from_diff(&self.state, &new_state);
                 // Sanity check that our diff logic roundtrips and adds back up
                 // correctly.
@@ -562,6 +546,18 @@ where
                         panic!("validate_roundtrips failed: {}", err);
                     }
                 }
+
+                // Find out if this command has been selected to perform gc, so
+                // that it will fire off a background request to the
+                // GarbageCollector to delete eligible blobs and truncate the
+                // state history. This is dependant both on `maybe_gc` returning
+                // Some _and_ on this state being successfully compare_and_set.
+                //
+                // NB: Make sure this overwrites `garbage_collection` on every
+                // run though the loop (i.e. no `if let Some` here). When we
+                // lose a CaS race, we might discover that the winner got
+                // assigned the gc.
+                garbage_collection = new_state.maybe_gc(is_write);
 
                 // SUBTLE! Unlike the other consensus and blob uses, we can't
                 // automatically retry indeterminate ExternalErrors here. However,
