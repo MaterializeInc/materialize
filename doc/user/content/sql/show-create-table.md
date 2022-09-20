@@ -26,9 +26,9 @@ CREATE TABLE t (a int, b text NOT NULL);
 SHOW CREATE TABLE t;
 ```
 ```nofmt
-        Table         |                             Create Table
-----------------------+----------------------------------------------------------------------
- materialize.public.t | CREATE TABLE "materialize"."public"."t" ("a" int, "b" text NOT NULL)
+         name         |                                             create_sql
+----------------------+-----------------------------------------------------------------------------------------------------
+ materialize.public.t | CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4", "b" "pg_catalog"."text" NOT NULL)
 ```
 
 ## Related pages

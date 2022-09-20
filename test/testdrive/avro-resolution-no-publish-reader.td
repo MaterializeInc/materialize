@@ -11,12 +11,14 @@
 # Test the case where we fail to publish the schema of the reader
 #
 
-$ set int-schema={"type": "record", "name": "schema_int", "fields": [ {"name": "f1", "type": "int"} ] }
 
 $ kafka-create-topic topic=resolution-no-publish-writer
 
-$ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schema} timestamp=1
-{"f1": 123}
+# The schema is {"type": "record", "name": "schema_int", "fields": [ {"name": "f1", "type": "int"} ] }.
+# and the value is {"f1": 123}
+# We encode it manually to avoid publishing it.
+$ kafka-ingest format=bytes topic=resolution-no-publish-writer timestamp=1
+\\x00\x00\x00\x00\x01\xf6\x01
 
 > DROP SCHEMA IF EXISTS public CASCADE
 > CREATE SCHEMA public

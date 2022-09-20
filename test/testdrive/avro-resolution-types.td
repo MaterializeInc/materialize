@@ -17,7 +17,7 @@ $ set double-col={"type": "record", "name": "schema_int_double", "fields": [ {"n
 
 $ kafka-create-topic topic=resolution-int2double
 
-$ kafka-ingest format=avro topic=resolution-int2double schema=${int-col} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-int2double schema=${int-col} timestamp=1
 {"f1": 123}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -29,7 +29,7 @@ $ kafka-ingest format=avro topic=resolution-int2double schema=${int-col} publish
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=resolution-int2double schema=${double-col} publish=true timestamp=2
+$ kafka-ingest format=avro topic=resolution-int2double schema=${double-col} timestamp=2
 {"f1": 234.456}
 
 ! SELECT * FROM resolution_int2double

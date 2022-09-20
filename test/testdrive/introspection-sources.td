@@ -15,6 +15,10 @@
 # Note that we count on the retry behavior of testdrive in this test
 # since introspection sources may take some time to catch up.
 
+# The contents of the introspection tables depend on the replica size and number of replicas
+$ skip-if
+SELECT ${arg.replica-size} > 1 OR ${arg.replicas} > 1;
+
 > CREATE TABLE t (a int)
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM t

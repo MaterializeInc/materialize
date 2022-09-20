@@ -19,17 +19,14 @@ world
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE SOURCE zstd
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-zstd-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-zstd-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM zstd
 hello
 world
 
 > CREATE SOURCE zstd_fast_forwarded
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[1])
-  TOPIC 'testdrive-zstd-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-zstd-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM zstd_fast_forwarded
 world

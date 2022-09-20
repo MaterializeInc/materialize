@@ -21,13 +21,13 @@ one
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE SOURCE remote1
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-remote1-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote1-${testdrive.seed}')
   FORMAT TEXT
   WITH (
     REMOTE 'storaged:2100'
   )
 > CREATE SOURCE remote2
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-remote2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote2-${testdrive.seed}')
   FORMAT TEXT
   WITH (
     REMOTE 'storaged:2100'

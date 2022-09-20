@@ -10,6 +10,10 @@
 # This test only verifies that the log relations are published, not that they
 # have any specific output.
 
+# log sources require a single replica
+$ skip-if
+SELECT ${arg.replicas} > 1
+
 $ set-regex match=s\d+ replacement=SID
 
 > CREATE VIEW count_operates AS SELECT count(*) FROM mz_dataflow_operators;
@@ -75,8 +79,8 @@ contains:cannot drop item mz_catalog.mz_worker_materialization_delays because it
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   id          1           bigint
-SID   worker_id   2           bigint
+SID   id          1           uint8
+SID   worker_id      2        uint8
 SID   elapsed_ns  3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
@@ -85,9 +89,9 @@ SID   elapsed_ns  3           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   id          1           bigint
-SID   worker_id   2           bigint
-SID   duration_ns 3           bigint
+SID   id          1           uint8
+SID   worker_id   2           uint8
+SID   duration_ns 3           uint8
 SID   count       4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
@@ -96,9 +100,9 @@ SID   count       4           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   worker_id   1           bigint
-SID   slept_for   2           bigint
-SID   requested   3           bigint
+SID   worker_id   1           uint8
+SID   slept_for   2           uint8
+SID   requested   3           uint8
 SID   count       4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
@@ -107,9 +111,9 @@ SID   count       4           bigint
   ORDER BY position
 id      name              position    type
 --------------------------------------------
-SID   channel_id        1           bigint
-SID   from_worker_id    2           bigint
-SID   to_worker_id      3           bigint
+SID   channel_id        1           uint8
+SID   from_worker_id    2           uint8
+SID   to_worker_id      3           uint8
 SID   sent              4           bigint
 SID   received          5           bigint
 
@@ -120,10 +124,10 @@ SID   received          5           bigint
 id      name        position    type
 --------------------------------------
 SID   address     1           list
-SID   port        2           bigint
-SID   worker_id   3           bigint
+SID   port        2           uint8
+SID   worker_id   3           uint8
 SID   update_type 4           text
-SID   timestamp   5           bigint
+SID   timestamp   5           uint8
 SID   count       6           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
@@ -132,8 +136,8 @@ SID   count       6           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   operator_id 1           bigint
-SID   worker_id   2           bigint
+SID   operator_id 1           uint8
+SID   worker_id   2           uint8
 SID   records     3           bigint
 SID   batches     4           bigint
 
@@ -143,8 +147,8 @@ SID   batches     4           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   operator_id 1           bigint
-SID   worker_id   2           bigint
+SID   operator_id 1           uint8
+SID   worker_id   2           uint8
 SID   count       3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
@@ -155,8 +159,8 @@ id      name        position    type
 --------------------------------------
 SID   global_id   1           text
 SID   source_id   2           text
-SID   worker_id   3           bigint
-SID   delay_ns    4           bigint
+SID   worker_id   3           uint8
+SID   delay_ns    4           uint8
 SID   count       5           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
@@ -167,5 +171,5 @@ id      name        position    type
 --------------------------------------
 SID   global_id   1           text
 SID   source_id   2           text
-SID   worker_id   3           bigint
+SID   worker_id   3           uint8
 SID   time        4           bigint

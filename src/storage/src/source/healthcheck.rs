@@ -129,7 +129,7 @@ impl Healthchecker {
         if self.active && self.current_status.can_transition(&status_update.status) {
             loop {
                 let next_ts = (self.now)();
-                let new_upper = Antichain::from_elem(next_ts + 1);
+                let new_upper = Antichain::from_elem(Timestamp::from(next_ts).step_forward());
 
                 let updates = self.prepare_row_update(&status_update, next_ts);
                 match self
@@ -219,7 +219,11 @@ impl Healthchecker {
     /// Currently assumes that the collection only contains assertions (rows with diff = 1)
     fn process_collection_updates(
         &mut self,
-        mut updates: Vec<((Result<SourceData, String>, Result<(), String>), u64, i64)>,
+        mut updates: Vec<(
+            (Result<SourceData, String>, Result<(), String>),
+            Timestamp,
+            i64,
+        )>,
     ) {
         // Sort by timestamp and diff
         updates.sort_by(|(_, t1, d1), (_, t2, d2)| (t1, d1).cmp(&(t2, d2)));
@@ -246,7 +250,7 @@ impl Healthchecker {
         &self,
         status_update: &SourceStatusUpdate,
         ts: u64,
-    ) -> Vec<((SourceData, ()), u64, i64)> {
+    ) -> Vec<((SourceData, ()), Timestamp, i64)> {
         let timestamp = NaiveDateTime::from_timestamp(
             (ts / 1000)
                 .try_into()
@@ -282,7 +286,12 @@ impl Healthchecker {
             metadata,
         ]);
 
-        vec![((SourceData(Ok(row)), ()), ts, 1)]
+        vec![(
+            (SourceData(Ok(row)), ()),
+            ts.try_into()
+                .expect("timestamp does not fit into MzTimestamp"),
+            1,
+        )]
     }
 }
 

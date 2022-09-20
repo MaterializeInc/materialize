@@ -35,13 +35,15 @@ use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
-use mz_repr::GlobalId;
+use mz_repr::{Diff, GlobalId};
 use mz_service::client::GenericClient;
 
 use crate::protocol::client::{
     ExportSinkCommand, IngestSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
+use crate::types::sinks::SinkAsOf;
+use crate::types::sources::SourceData;
 
 /// A storage client that replays the command stream on failure.
 ///
@@ -170,10 +172,50 @@ where
             .expect("retry retries forever");
 
         for ingest in self.ingestions.values_mut() {
+            let mut persist_clients = self.persist.lock().await;
+            let persist_client = persist_clients
+                .open(ingest.description.storage_metadata.persist_location.clone())
+                .await
+                .expect("error creating persist client");
+
             ingest.resume_upper = ingest
                 .description
-                .get_resume_upper::<T>(Arc::clone(&self.persist))
+                .storage_metadata
+                .get_resume_upper::<T>(&persist_client, &ingest.description.desc.envelope)
                 .await;
+        }
+
+        for export in self.exports.values_mut() {
+            let mut persist_clients = self.persist.lock().await;
+            let persist_client = persist_clients
+                .open(
+                    export
+                        .description
+                        .from_storage_metadata
+                        .persist_location
+                        .clone(),
+                )
+                .await
+                .expect("error creating persist client");
+            let from_read_handle = persist_client
+                .open_reader::<SourceData, (), T, Diff>(
+                    export.description.from_storage_metadata.data_shard,
+                )
+                .await
+                .expect("from collection disappeared");
+
+            let cached_as_of = &export.description.as_of.frontier;
+            // The controller has the dependency recorded in it's `exported_collections` so this
+            // should not change at least until the sink is started up (because the storage
+            // controller will not downgrade the source's since).
+            let from_since = from_read_handle.since();
+            if PartialOrder::less_equal(cached_as_of, from_since) {
+                export.description.as_of = SinkAsOf {
+                    frontier: from_since.to_owned(),
+                    // If we're using the since, never read the snapshot
+                    strict: true,
+                };
+            }
         }
 
         // Rehydrate all commands.

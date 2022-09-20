@@ -18,7 +18,7 @@ use timely::progress::Antichain;
 use tracing::Level;
 use tracing::{event, warn};
 
-use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
@@ -36,6 +36,7 @@ use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::vars::SystemVars;
 use crate::session::Session;
+use crate::util::ComputeSinkId;
 use crate::{catalog, AdapterError};
 
 /// State provided to a catalog transaction closure.
@@ -250,11 +251,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for id in &sources {
             self.drop_read_policy(id);
         }
-        self.controller
-            .storage_mut()
-            .drop_sources(sources)
-            .await
-            .unwrap();
+        self.controller.storage.drop_sources(sources).await.unwrap();
     }
 
     pub(crate) async fn drop_compute_sinks(&mut self, sinks: Vec<ComputeSinkId>) {
@@ -267,10 +264,11 @@ impl<S: Append + 'static> Coordinator<S> {
                  }| (compute_instance, global_id),
             )
             .into_group_map();
+        let mut compute = self.controller.active_compute();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
-                compute.drop_sinks(ids).await.unwrap();
+            if let Some(mut instance) = compute.instance(compute_instance) {
+                instance.drop_collections(ids).await.unwrap();
             }
         }
     }
@@ -279,11 +277,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for id in &sinks {
             self.drop_read_policy(id);
         }
-        self.controller
-            .storage_mut()
-            .drop_sinks(sinks)
-            .await
-            .unwrap();
+        self.controller.storage.drop_sinks(sinks).await.unwrap();
     }
 
     pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
@@ -300,9 +294,10 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         for (compute_instance, ids) in by_compute_instance {
             self.controller
-                .compute_mut(compute_instance)
+                .active_compute()
+                .instance(compute_instance)
                 .unwrap()
-                .drop_indexes(ids)
+                .drop_collections(ids)
                 .await
                 .unwrap();
         }
@@ -325,16 +320,17 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Drop compute sinks.
         // TODO(chae): Drop storage sinks when they're moved over
+        let mut compute = self.controller.active_compute();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
-                compute.drop_sinks(ids).await.unwrap();
+            if let Some(mut instance) = compute.instance(compute_instance) {
+                instance.drop_collections(ids).await.unwrap();
             }
         }
 
         // Drop storage sources.
         self.controller
-            .storage_mut()
+            .storage
             .drop_sources(source_ids)
             .await
             .unwrap();
@@ -367,7 +363,7 @@ impl<S: Append + 'static> Coordinator<S> {
         connection: StorageSinkConnection,
     ) -> Result<(), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
-        self.controller.storage().collection(sink.from)?;
+        self.controller.storage.collection(sink.from)?;
 
         // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
@@ -400,7 +396,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         Ok(self
             .controller
-            .storage_mut()
+            .storage
             .create_exports(vec![(
                 id,
                 ExportDescription {
@@ -575,7 +571,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::StorageCollection(_) => {}
                     }
                 }
-                Op::DropTimeline(_)
+                Op::AlterSource { .. }
+                | Op::DropTimeline(_)
                 | Op::RenameItem { .. }
                 | Op::UpdateComputeInstanceStatus { .. }
                 | Op::UpdateStorageUsage { .. }
@@ -682,7 +679,7 @@ impl<S: Append + 'static> Coordinator<S> {
     where
         F: Fn(&SystemVars) -> u32,
     {
-        let limit = resource_limit(self.catalog.state().system_config());
+        let limit = resource_limit(self.catalog.system_config());
         let exceeds_limit = match (u32::try_from(current_amount), u32::try_from(new_instances)) {
             // 0 new instances are always ok.
             (_, Ok(new_instances)) if new_instances == 0 => false,

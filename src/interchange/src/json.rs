@@ -27,18 +27,10 @@ pub struct JsonEncoder {
 }
 
 impl JsonEncoder {
-    pub fn new(
-        key_desc: Option<RelationDesc>,
-        value_desc: RelationDesc,
-        debezium: bool,
-        include_transaction: bool,
-    ) -> Self {
+    pub fn new(key_desc: Option<RelationDesc>, value_desc: RelationDesc, debezium: bool) -> Self {
         let mut value_columns = column_names_and_types(value_desc);
         if debezium {
             value_columns = envelopes::dbz_envelope(value_columns);
-        }
-        if include_transaction {
-            envelopes::txn_metadata(&mut value_columns);
         }
         JsonEncoder {
             key_columns: if let Some(desc) = key_desc {
@@ -140,7 +132,7 @@ impl ToJson for TypedDatum<'_> {
                 }
                 // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
                 ScalarType::Date => {
-                    serde_json::value::Value::String(format!("{:?}", datum.unwrap_date()))
+                    serde_json::value::Value::String(format!("{}", datum.unwrap_date()))
                 }
                 ScalarType::Time => {
                     serde_json::value::Value::String(format!("{:?}", datum.unwrap_time()))

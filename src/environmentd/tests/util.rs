@@ -12,6 +12,7 @@ use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use once_cell::sync::Lazy;
@@ -23,6 +24,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tower_http::cors::AllowOrigin;
+use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
 use mz_environmentd::TlsMode;
@@ -56,6 +58,7 @@ pub struct Config {
     workers: usize,
     now: NowFn,
     seed: u32,
+    storage_usage_collection_interval: Duration,
 }
 
 impl Default for Config {
@@ -68,6 +71,7 @@ impl Default for Config {
             workers: 1,
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
+            storage_usage_collection_interval: Duration::from_secs(3600),
         }
     }
 }
@@ -109,6 +113,14 @@ impl Config {
 
     pub fn with_now(mut self, now: NowFn) -> Self {
         self.now = now;
+        self
+    }
+
+    pub fn with_storage_usage_collection_interval(
+        mut self,
+        storage_usage_collection_interval: Duration,
+    ) -> Self {
+        self.storage_usage_collection_interval = storage_usage_collection_interval;
         self
     }
 }
@@ -192,6 +204,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         unsafe_mode: config.unsafe_mode,
         metrics_registry: metrics_registry.clone(),
         now: config.now,
+        environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
         cors_allowed_origin: AllowOrigin::list([]),
         cluster_replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: "1".into(),
@@ -202,6 +215,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
         ),
         otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+        storage_usage_collection_interval: config.storage_usage_collection_interval,
     }))?;
     let server = Server {
         inner,

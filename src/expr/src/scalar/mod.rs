@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use itertools::Itertools;
+use mz_repr::adt::date::DateError;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
@@ -22,6 +23,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::separated;
+use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::InvalidArrayError;
@@ -324,6 +326,8 @@ impl MirScalarExpr {
         }
     }
 
+    /// For a given `expr`, if `self` is `<expr> = <literal>` or `<literal> = <expr>` then
+    /// return `<literal>`.
     pub fn expr_eq_literal(&self, expr: &MirScalarExpr) -> Option<Datum> {
         if let MirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
@@ -340,6 +344,25 @@ impl MirScalarExpr {
                 if &**expr1 == expr {
                     return Some(datum2);
                 }
+            }
+        }
+        None
+    }
+
+    /// If `self` is `<expr> = <literal>` or `<literal> = <expr>` then
+    /// return `<expr>`.
+    pub fn any_expr_eq_literal(&self) -> Option<MirScalarExpr> {
+        if let MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1,
+            expr2,
+        } = self
+        {
+            if expr1.is_literal() {
+                return Some((**expr2).clone());
+            }
+            if expr2.is_literal() {
+                return Some((**expr1).clone());
             }
         }
         None
@@ -862,7 +885,12 @@ impl MirScalarExpr {
                             }
                         }
                     }
-                    MirScalarExpr::CallVariadic { func, exprs } => {
+                    MirScalarExpr::CallVariadic { .. } => {
+                        e.flatten_associative();
+                        let (func, exprs) = match e {
+                            MirScalarExpr::CallVariadic { func, exprs } => (func, exprs),
+                            _ => unreachable!("`flatten_associative` shouldn't change node type"),
+                        };
                         if *func == VariadicFunc::Coalesce {
                             // If all inputs are null, output is null. This check must
                             // be done before `exprs.retain...` because `e.typ` requires
@@ -935,7 +963,6 @@ impl MirScalarExpr {
                             let top_list_create = exprs.swap_remove(0);
                             *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
                         } else if *func == VariadicFunc::Or || *func == VariadicFunc::And {
-                            e.flatten_and_or();
                             e.undistribute_and_or();
                             e.reduce_and_canonicalize_and_or();
                         }
@@ -1177,32 +1204,34 @@ impl MirScalarExpr {
         None
     }
 
-    /// Flattens a chain of ORs or a chain of ANDs
-    /// todo: We could do this for any associative function
-    pub fn flatten_and_or(&mut self) {
-        if let MirScalarExpr::CallVariadic {
-            exprs: outer_operands,
-            func: outer_func @ (VariadicFunc::Or | VariadicFunc::And),
-        } = self
-        {
-            *outer_operands = outer_operands
-                .into_iter()
-                .flat_map(|o| {
-                    if let MirScalarExpr::CallVariadic {
-                        exprs: inner_operands,
-                        func: inner_func,
-                    } = o
-                    {
-                        if *inner_func == *outer_func {
-                            mem::take(inner_operands)
+    /// Flattens a chain of calls to associative variadic functions
+    /// (For example: ORs or ANDs)
+    pub fn flatten_associative(&mut self) {
+        match self {
+            MirScalarExpr::CallVariadic {
+                exprs: outer_operands,
+                func: outer_func,
+            } if outer_func.is_associative() => {
+                *outer_operands = outer_operands
+                    .into_iter()
+                    .flat_map(|o| {
+                        if let MirScalarExpr::CallVariadic {
+                            exprs: inner_operands,
+                            func: inner_func,
+                        } = o
+                        {
+                            if *inner_func == *outer_func {
+                                mem::take(inner_operands)
+                            } else {
+                                vec![o.take()]
+                            }
                         } else {
                             vec![o.take()]
                         }
-                    } else {
-                        vec![o.take()]
-                    }
-                })
-                .collect();
+                    })
+                    .collect();
+            }
+            _ => {}
         }
     }
 
@@ -1256,7 +1285,7 @@ impl MirScalarExpr {
             func: UnaryFunc::Not(func::Not),
         } = self
         {
-            inner.flatten_and_or();
+            inner.flatten_associative();
             match &mut **inner {
                 MirScalarExpr::CallVariadic {
                     func: inner_func @ (VariadicFunc::And | VariadicFunc::Or),
@@ -1372,12 +1401,17 @@ impl MirScalarExpr {
                     .collect();
                 // Find an inner operand that occurs more than once, and get a vector of its positions
                 all_inner_operands.sort();
-                let indexes_to_undistribute = all_inner_operands
+                let mut indexes_to_undistribute = all_inner_operands
                     .iter()
                     .group_by(|(a, _i)| a)
                     .into_iter()
                     .map(|(_a, g)| g.map(|(_a, i)| *i).collect_vec())
                     .find(|g| g.len() > 1);
+                // `swap_remove_multiple` cannot handle duplicates
+                indexes_to_undistribute.as_mut().map(|vec| {
+                    vec.sort();
+                    vec.dedup();
+                });
 
                 // In any case, undo the 1-arg wrapping that we did at the beginning.
                 outer_operands
@@ -1390,29 +1424,13 @@ impl MirScalarExpr {
                     // then push back the result.
                     let mut undistribute_from = MirScalarExpr::CallVariadic {
                         func: (*outer_func).clone(),
-                        exprs: MirScalarExpr::swap_remove_multiple(
-                            outer_operands,
-                            indexes_to_undistribute,
-                        ),
+                        exprs: swap_remove_multiple(outer_operands, indexes_to_undistribute),
                     };
                     undistribute_from.undistribute_and_or();
                     outer_operands.push(undistribute_from);
                 }
             }
         }
-    }
-
-    fn swap_remove_multiple(
-        v: &mut Vec<MirScalarExpr>,
-        mut indexes: Vec<usize>,
-    ) -> Vec<MirScalarExpr> {
-        indexes.sort();
-        indexes.reverse();
-        let mut result = Vec::new();
-        for r in indexes {
-            result.push(v.swap_remove(r));
-        }
-        result
     }
 
     /* #endregion */
@@ -1533,6 +1551,27 @@ impl MirScalarExpr {
             size += 1;
         })?;
         Ok(size)
+    }
+}
+
+impl MirScalarExpr {
+    /// True iff evaluation could possibly error on non-error input `Datum`.
+    pub fn could_error(&self) -> bool {
+        match self {
+            MirScalarExpr::Column(_col) => false,
+            MirScalarExpr::Literal(row, ..) => row.is_err(),
+            MirScalarExpr::CallUnmaterializable(_) => true,
+            MirScalarExpr::CallUnary { func, expr } => func.could_error() || expr.could_error(),
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                func.could_error() || expr1.could_error() || expr2.could_error()
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                func.could_error() || exprs.iter().any(|e| e.could_error())
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                cond.could_error() || then.could_error() || els.could_error()
+            }
+        }
     }
 }
 
@@ -1759,6 +1798,7 @@ pub enum EvalError {
     OidOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
+    DateOutOfRange,
     CharOutOfRange,
     IndexOutOfRange {
         provided: i32,
@@ -1849,6 +1889,7 @@ impl fmt::Display for EvalError {
             EvalError::OidOutOfRange => f.write_str("OID out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
+            EvalError::DateOutOfRange => f.write_str("date out of range"),
             EvalError::CharOutOfRange => f.write_str("\"char\" out of range"),
             EvalError::IndexOutOfRange {
                 provided,
@@ -2027,6 +2068,14 @@ impl From<TypeFromOidError> for EvalError {
     }
 }
 
+impl From<DateError> for EvalError {
+    fn from(e: DateError) -> EvalError {
+        match e {
+            DateError::OutOfRange => EvalError::DateOutOfRange,
+        }
+    }
+}
+
 impl RustType<ProtoEvalError> for EvalError {
     fn into_proto(&self) -> ProtoEvalError {
         use proto_eval_error::Kind::*;
@@ -2054,6 +2103,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::OidOutOfRange => OidOutOfRange(()),
             EvalError::IntervalOutOfRange => IntervalOutOfRange(()),
             EvalError::TimestampOutOfRange => TimestampOutOfRange(()),
+            EvalError::DateOutOfRange => DateOutOfRange(()),
             EvalError::CharOutOfRange => CharOutOfRange(()),
             EvalError::IndexOutOfRange {
                 provided,
@@ -2159,6 +2209,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 OidOutOfRange(()) => Ok(EvalError::OidOutOfRange),
                 IntervalOutOfRange(()) => Ok(EvalError::IntervalOutOfRange),
                 TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),
+                DateOutOfRange(()) => Ok(EvalError::DateOutOfRange),
                 CharOutOfRange(()) => Ok(EvalError::CharOutOfRange),
                 IndexOutOfRange(v) => Ok(EvalError::IndexOutOfRange {
                     provided: v.provided,

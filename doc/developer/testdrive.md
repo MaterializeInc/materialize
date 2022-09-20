@@ -421,7 +421,7 @@ $ set schema={
 A variable can be referenced in both the arguments and the body of a command.
 
 ```
-$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${schema} publish=true repeat=2
+$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${schema} repeat=2
 {"f1": "${schema}"}
 ```
 
@@ -687,10 +687,6 @@ The schema to use
 
 For data that contains a key, the schema of the key
 
-##### `publish=true`
-
-Publish the schema and key schema provided to the schema registry.
-
 ##### `key-terminator=str`
 
 For data provided as `format=bytes key-format=bytes`, the separator between the key and the data in the test
@@ -709,9 +705,11 @@ Set the starting value of the `${kafka-ingest.iteration}` variable.
 
 Send the data to the specified partition.
 
-#### `kafka-verify format=avro sink=... [sort-messages=true] [consistency=debezium] [partial-search=usize]`
+#### `kafka-verify format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize]`
 
-Obtains the data from the specified `sink` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test. If `partial-search=usize` is specified, up to `partial-search` records will be read from the given topic and compared to the provided records. The recordsdo not have to match starting at the beginning of the sink but once one record matches, the following must all match.  There are permitted to be records remaining in the topic after the matching is complete.  Note that if the topic is not required to have `partial-search` elements in it but there will be an attempt to read up to this number with a blocking read.
+Obtains the data from the specified `sink` or `topic` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test.
+
+If `partial-search=usize` is specified, up to `partial-search` records will be read from the given topic and compared to the provided records. The records do not have to match starting at the beginning of the sink but once one record matches, the following must all match.  There are permitted to be records remaining in the topic after the matching is complete.  Note that if the topic is not required to have `partial-search` elements in it but there will be an attempt to read up to this number with a blocking read.
 
 #### `headers=<list or object>`
 

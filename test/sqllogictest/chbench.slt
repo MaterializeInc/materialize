@@ -302,12 +302,14 @@ AND s_quantity = m_s_quantity
 ORDER BY n_name, su_name, i_id
 ----
 Source materialize.public.item (u17):
+| Map dummy, dummy
 | Filter "%b" ~~(padchar(#4))
-| Project (#0, #2, #4)
+| Project (#0, #5, #2, #6, #4)
 
 Source materialize.public.region (u26):
+| Map dummy
 | Filter "EUROP%" ~~(padchar(#1))
-| Project (#0, #1)
+| Project (#0, #1, #3)
 
 Query:
 %0 = Let l0 =
@@ -506,8 +508,9 @@ GROUP BY n_name
 ORDER BY revenue DESC
 ----
 Source materialize.public.region (u26):
+| Map dummy
 | Filter (#1 = "EUROPE")
-| Project (#0, #1)
+| Project (#0, #1, #3)
 
 Query:
 %0 =
@@ -696,12 +699,14 @@ GROUP BY EXTRACT(year FROM o_entry_d)
 ORDER BY l_year
 ----
 Source materialize.public.item (u17):
-| Filter "%b" ~~(padchar(#4)), (#0 < 1000)
-| Project (#0, #4)
+| Map dummy, dummy, dummy
+| Filter (#0 < 1000), "%b" ~~(padchar(#4))
+| Project (#0, #5..=#7, #4)
 
 Source materialize.public.region (u26):
+| Map dummy
 | Filter (#1 = "EUROPE")
-| Project (#0, #1)
+| Project (#0, #1, #3)
 
 Query:
 %0 =
@@ -789,8 +794,9 @@ GROUP BY n_name, EXTRACT(year FROM o_entry_d)
 ORDER BY n_name, l_year DESC
 ----
 Source materialize.public.item (u17):
+| Map dummy, dummy, dummy
 | Filter "%BB" ~~(padchar(#4))
-| Project (#0, #4)
+| Project (#0, #5..=#7, #4)
 
 Query:
 %0 =
@@ -1062,7 +1068,8 @@ AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
 AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 ----
 Source materialize.public.item (u17):
-| Project (#0, #4)
+| Map dummy, dummy, dummy
+| Project (#0, #5..=#7, #4)
 
 Query:
 %0 =
@@ -1199,8 +1206,9 @@ GROUP BY i_name, substr(i_data, 1, 3), i_price
 ORDER BY supplier_cnt DESC
 ----
 Source materialize.public.item (u17):
+| Map dummy
 | Filter NOT("zz%" ~~(padchar(#4)))
-| Project (#0, #2..=#4)
+| Project (#0, #5, #2..=#4)
 
 Query:
 %0 =
@@ -1275,8 +1283,9 @@ WHERE ol_i_id = t.i_id
 AND ol_quantity < t.a
 ----
 Source materialize.public.item (u17):
+| Map dummy, dummy, dummy
 | Filter "%b" ~~(padchar(#4))
-| Project (#0, #4)
+| Project (#0, #5..=#7, #4)
 
 Query:
 %0 = Let l0 =
@@ -1401,8 +1410,9 @@ WHERE (
 )
 ----
 Source materialize.public.item (u17):
+| Map dummy, dummy
 | Filter (#3 <= 400000), (#3 >= 1)
-| Project (#0, #3, #4)
+| Project (#0, #5, #6, #3, #4)
 
 Query:
 %0 =
@@ -1463,8 +1473,9 @@ AND n_name = 'GERMANY'
 ORDER BY su_name
 ----
 Source materialize.public.item (u17):
+| Map dummy, dummy, dummy
 | Filter "co%" ~~(padchar(#4))
-| Project (#0, #4)
+| Project (#0, #5..=#7, #4)
 
 Query:
 %0 =

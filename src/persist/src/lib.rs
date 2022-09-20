@@ -30,3 +30,6 @@ pub mod retry;
 pub mod s3;
 pub mod unreliable;
 pub mod workload;
+
+#[cfg(any(test, debug_assertions))]
+pub mod intercept;

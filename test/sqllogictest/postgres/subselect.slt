@@ -275,19 +275,20 @@ Correlated␠Field
 
 # Use some existing tables in the regression test
 
-query II colnames,rowsort
-SELECT ss.f1 AS "Correlated Field", ss.f3 AS "Second Field"
-  FROM SUBSELECT_TBL ss
-  WHERE f1 NOT IN (SELECT f1+1 FROM INT4_TBL
-                   WHERE f1 != ss.f1 AND f1 < 2147483647)
-----
-Correlated␠Field  Second␠Field
-2  4
-3  5
-2  2
-3  3
-6  8
-8  NULL
+# Commented out as PostgreSQL is relying on undefined order of evaluation here.
+# query II colnames,rowsort
+# SELECT ss.f1 AS "Correlated Field", ss.f3 AS "Second Field"
+#   FROM SUBSELECT_TBL ss
+#   WHERE f1 NOT IN (SELECT f1+1 FROM INT4_TBL
+#                    WHERE f1 != ss.f1 AND f1 < 2147483647)
+# ----
+# Correlated␠Field  Second␠Field
+# 2  4
+# 3  5
+# 2  2
+# 3  3
+# 6  8
+# 8  NULL
 
 query IR colnames,rowsort
 select q1, count(*)::float8 / (select count(*) from int8_tbl)

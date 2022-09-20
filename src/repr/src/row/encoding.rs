@@ -12,7 +12,7 @@
 //! See row.proto for details.
 
 use bytes::BufMut;
-use chrono::{Datelike, Timelike};
+use chrono::Timelike;
 use dec::Decimal;
 use prost::Message;
 use uuid::Uuid;
@@ -23,7 +23,7 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::numeric::Numeric;
-use crate::chrono::{ProtoNaiveDate, ProtoNaiveTime};
+use crate::chrono::ProtoNaiveTime;
 use crate::row::proto_datum::DatumType;
 use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
@@ -75,10 +75,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::Int64(x) => DatumType::Int64(x),
             Datum::Float32(x) => DatumType::Float32(x.into_inner()),
             Datum::Float64(x) => DatumType::Float64(x.into_inner()),
-            Datum::Date(x) => DatumType::Date(ProtoNaiveDate {
-                year: x.year(),
-                ordinal: x.ordinal(),
-            }),
+            Datum::Date(x) => DatumType::Date(x.into_proto()),
             Datum::Time(x) => DatumType::Time(ProtoNaiveTime {
                 secs: x.num_seconds_from_midnight(),
                 frac: x.nanosecond(),
@@ -316,7 +313,7 @@ mod tests {
             Datum::Int64(3),
             Datum::Float32(4f32.into()),
             Datum::Float64(5f64.into()),
-            Datum::Date(NaiveDate::from_ymd(6, 7, 8)),
+            Datum::Date(NaiveDate::from_ymd(6, 7, 8).try_into().unwrap()),
             Datum::Time(NaiveTime::from_hms(9, 10, 11)),
             Datum::Timestamp(
                 NaiveDate::from_ymd(12, 13 % 12, 14).and_time(NaiveTime::from_hms(15, 16, 17)),

@@ -21,14 +21,14 @@ use mz_persist::location::{Atomicity, Blob, Consensus, Indeterminate, SeqNo, Ver
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
-use tracing::{debug, debug_span, trace, Instrument};
+use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::error::CodecMismatch;
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::State;
-use crate::internal::state_diff::StateDiff;
+use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
 /// A durable, truncatable log of versions of [State].
@@ -146,11 +146,27 @@ impl StateVersions {
                 // We lost a CaS race and someone else initialized the shard,
                 // use the value included in the CaS expectation error.
 
-                // Clean up the rollup blob that we were trying to reference.
-                let (_, rollup_key) = initial_state.latest_rollup();
-                self.delete_rollup(&shard_id, rollup_key).await;
+                let state = self.fetch_current_state(&shard_id, live_diffs).await;
 
-                return self.fetch_current_state(&shard_id, live_diffs).await;
+                // Clean up the rollup blob that we were trying to reference.
+                //
+                // SUBTLE: If we got an Indeterminate error in the CaS above,
+                // but it actually went through, then we'll "contend" with
+                // ourselves and get an expectation mismatch. Use the actual
+                // fetched state to determine if our rollup actually made it in
+                // and decide whether to delete based on that.
+                let (_, rollup_key) = initial_state.latest_rollup();
+                let should_delete_rollup = match state.as_ref() {
+                    Ok(state) => !state.collections.rollups.values().any(|x| x == rollup_key),
+                    // If the codecs don't match, then we definitely didn't
+                    // write the state.
+                    Err(CodecMismatch { .. }) => true,
+                };
+                if should_delete_rollup {
+                    self.delete_rollup(&shard_id, rollup_key).await;
+                }
+
+                return state;
             }
         }
     }
@@ -218,6 +234,7 @@ impl StateVersions {
                 shard_metrics.set_upper(&new_state.upper());
                 shard_metrics.set_batch_count(new_state.batch_count());
                 shard_metrics.set_update_count(new_state.num_updates());
+                shard_metrics.set_encoded_batch_size(new_state.encoded_batch_size());
                 shard_metrics.set_seqnos_held(new_state.seqnos_held());
                 shard_metrics.inc_encoded_diff_size(payload_len);
                 Ok(Ok(()))
@@ -273,10 +290,27 @@ impl StateVersions {
                 Some(x) => x?,
                 None => {
                     // The rollup that this diff referenced is gone, so the diff
-                    // must be out of date. Try again.
-                    all_live_diffs = self.fetch_live_diffs(shard_id).await;
-                    // Intentionally don't sleep on retry.
+                    // must be out of date. Try again. Intentionally don't sleep on retry.
                     retry.retries.inc();
+                    let earliest_before_refetch = all_live_diffs
+                        .first()
+                        .expect("initialized shard should have at least one diff")
+                        .seqno;
+                    all_live_diffs = self.fetch_live_diffs(shard_id).await;
+
+                    // We should only hit the race condition that leads to a
+                    // refetch if the set of live diffs changed out from under
+                    // us.
+                    //
+                    // TODO: Make this an assert once we're 100% sure the above
+                    // is always true.
+                    let earliest_after_refetch = all_live_diffs
+                        .first()
+                        .expect("initialized shard should have at least one diff")
+                        .seqno;
+                    if earliest_before_refetch >= earliest_after_refetch {
+                        warn!("logic error: fetch_current_state refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
+                    }
                     continue;
                 }
             };
@@ -344,14 +378,14 @@ impl StateVersions {
             .retries
             .fetch_live_states
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+        let mut all_live_diffs = self.fetch_live_diffs(&shard_id).await;
         loop {
-            let live_diffs = self.fetch_live_diffs(&shard_id).await;
-            let earliest_live_diff = match live_diffs.first() {
+            let earliest_live_diff = match all_live_diffs.first() {
                 Some(x) => x,
                 None => panic!("fetch_live_states should only be called on an initialized shard"),
             };
             let state = match self
-                .fetch_rollup_at_seqno(shard_id, live_diffs.clone(), earliest_live_diff.seqno)
+                .fetch_rollup_at_seqno(shard_id, all_live_diffs.clone(), earliest_live_diff.seqno)
                 .await
             {
                 Some(x) => x?,
@@ -363,6 +397,22 @@ impl StateVersions {
                     // be rare in practice, so inc a counter and try again.
                     // Intentionally don't sleep on retry.
                     retry.retries.inc();
+                    let earliest_before_refetch = earliest_live_diff.seqno;
+                    all_live_diffs = self.fetch_live_diffs(shard_id).await;
+
+                    // We should only hit the race condition that leads to a
+                    // refetch if the set of live diffs changed out from under
+                    // us.
+                    //
+                    // TODO: Make this an assert once we're 100% sure the above
+                    // is always true.
+                    let earliest_after_refetch = all_live_diffs
+                        .first()
+                        .expect("initialized shard should have at least one diff")
+                        .seqno;
+                    if earliest_before_refetch >= earliest_after_refetch {
+                        warn!("logic error: fetch_current_state refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
+                    }
                     continue;
                 }
             };
@@ -371,7 +421,7 @@ impl StateVersions {
                 self.cfg.clone(),
                 Arc::clone(&self.metrics),
                 state,
-                live_diffs,
+                all_live_diffs,
             ));
         }
     }
@@ -485,6 +535,22 @@ impl StateVersions {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
+        let rollup_key_for_migration = all_live_diffs.iter().find_map(|x| {
+            let diff = self
+                .metrics
+                .codecs
+                .state_diff
+                .decode(|| StateDiff::<T>::decode(&self.cfg.build_version, &x.data));
+            diff.rollups
+                .iter()
+                .find(|x| x.key == seqno)
+                .map(|x| match &x.val {
+                    StateFieldValDiff::Insert(x) => x.clone(),
+                    StateFieldValDiff::Update(_, x) => x.clone(),
+                    StateFieldValDiff::Delete(x) => x.clone(),
+                })
+        });
+
         let state = match self
             .fetch_current_state::<K, V, T, D>(shard_id, all_live_diffs)
             .await
@@ -492,8 +558,47 @@ impl StateVersions {
             Ok(x) => x,
             Err(err) => return Some(Err(err)),
         };
-        let rollup_key = state.collections.rollups.get(&seqno)?;
-        self.fetch_rollup_at_key(shard_id, rollup_key).await
+        if let Some(rollup_key) = state.collections.rollups.get(&seqno) {
+            return self.fetch_rollup_at_key(shard_id, rollup_key).await;
+        }
+
+        // MIGRATION: We maintain an invariant that the _current state_ contains
+        // a rollup for the _earliest live diff_ in consensus (and that the
+        // referenced rollup exists). At one point, we fixed a bug that could
+        // lead to that invariant being violated.
+        //
+        // If the earliest live diff is X and we receive a gc req for X+Y to
+        // X+Y+Z (this can happen e.g. if some cmd ignores an earlier req for X
+        // to X+Y, or if they're processing concurrently and the X to X+Y req
+        // loses the race), then the buggy version of gc would delete any
+        // rollups strictly less than old_seqno_since (X+Y in this example). But
+        // our invariant is that the rollup exists for the earliest live diff,
+        // in this case X. So if the first call to gc was interrupted after this
+        // but before truncate (when all the blob deletes happen), later calls
+        // to gc would attempt to call `fetch_live_states` and end up infinitely
+        // in its loop.
+        //
+        // The fix was to base which rollups are deleteable on the earliest live
+        // diff, not old_seqno_since.
+        //
+        // Sadly, some envs in prod now violate this invariant. So, even with
+        // the fix, existing shards will never successfully run gc. We add a
+        // temporary migration to fix them in `fetch_rollup_at_seqno`. This
+        // method normally looks in the latest version of state for the
+        // specifically requested seqno. In the invariant violation case, some
+        // version of state in the range `[earliest, current]` has a rollup for
+        // earliest, but current doesn't. So, for the migration, if
+        // fetch_rollup_at_seqno doesn't find a rollup in current, then we fall
+        // back to sniffing one out of raw diffs. If this success, we increment
+        // a counter and log, so we can track how often this migration is
+        // bailing us out. After the next deploy, this should initially start at
+        // > 0 and then settle down to 0. After the next prod envs wipe, we can
+        // remove the migration.
+        let rollup_key =
+            rollup_key_for_migration.expect("someone should have a key for this rollup");
+        tracing::info!("only found rollup for {} {} via migration", shard_id, seqno);
+        self.metrics.state.rollup_at_seqno_migration.inc();
+        self.fetch_rollup_at_key(shard_id, &rollup_key).await
     }
 
     /// Fetches the rollup at the given key, if it exists.
@@ -559,6 +664,11 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> StateVersionsIter<K, V, T, D> {
 
     pub fn len(&self) -> usize {
         self.diffs.len()
+    }
+
+    /// Returns the SeqNo of the next state returned by `next`.
+    pub fn peek_seqno(&self) -> Option<SeqNo> {
+        self.diffs.last().map(|x| x.seqno)
     }
 
     pub fn next(&mut self) -> Option<&State<K, V, T, D>> {

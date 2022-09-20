@@ -21,7 +21,10 @@ use timely::PartialOrder;
 use tracing::warn;
 
 use mz_compute_client::command::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_client::controller::{ComputeController, ComputeInstanceId};
+use mz_compute_client::controller::{ComputeInstanceId, Instance as ComputeInstanceController};
+use mz_compute_client::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
+};
 use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
@@ -32,9 +35,6 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
-use mz_storage::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
-};
 
 use crate::catalog::{CatalogItem, CatalogState, MaterializedView, View};
 use crate::coord::ddl::CatalogTxn;
@@ -50,7 +50,7 @@ pub struct DataflowBuilder<'a, T> {
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
-    pub compute: ComputeController<'a, T>,
+    pub compute: &'a ComputeInstanceController<T>,
     recursion_guard: RecursionGuard,
 }
 
@@ -75,7 +75,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.controller.compute(instance).unwrap();
+        let compute = self.controller.compute.instance(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
             compute,
@@ -102,7 +102,8 @@ impl<S: Append + 'static> Coordinator<S> {
             dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
         }
         self.controller
-            .compute_mut(instance)
+            .active_compute()
+            .instance(instance)
             .unwrap()
             .create_dataflows(dataflow_plans)
             .await
@@ -184,7 +185,7 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.dataflow_client.compute(instance).unwrap();
+        let compute = self.dataflow_client.compute.instance(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog,
             compute,
@@ -637,7 +638,7 @@ fn eval_unmaterializable_func(
         }
         UnmaterializableFunc::CurrentTimestamp => pack(Datum::from(session.pcx().wall_time)),
         UnmaterializableFunc::CurrentUser => pack(Datum::from(session.user())),
-        UnmaterializableFunc::MzClusterId => pack(Datum::from(state.config().cluster_id)),
+        UnmaterializableFunc::MzEnvironmentId => pack(Datum::from(&*state.config().environment_id)),
         UnmaterializableFunc::MzLogicalTimestamp => match logical_time {
             None => coord_bail!("cannot call mz_logical_timestamp in this context"),
             Some(logical_time) => pack(Datum::from(Numeric::from(logical_time))),

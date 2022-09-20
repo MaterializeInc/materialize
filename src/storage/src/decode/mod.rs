@@ -50,7 +50,6 @@ use crate::types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
 use crate::types::sources::{IncludedColumnSource, MzOffset};
-use crate::types::transforms::LinearOperator;
 use crate::{
     source::types::{DecodeResult, SourceOutput},
     types::errors::DecodeErrorKind,
@@ -257,7 +256,6 @@ fn get_decoder(
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
-    operators: &mut Option<LinearOperator>,
     is_connection_delimited: bool,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
@@ -317,7 +315,7 @@ fn get_decoder(
             DataDecoder { inner, metrics }
         }
         DataEncodingInner::Csv(enc) => {
-            let state = CsvDecoderState::new(enc, operators);
+            let state = CsvDecoderState::new(enc);
             DataDecoder {
                 inner: DataDecoderInner::Csv(state),
                 metrics,
@@ -370,10 +368,6 @@ pub fn render_decode_delimited<G>(
     value_encoding: DataEncoding,
     debug_name: &str,
     metadata_items: Vec<IncludedColumnSource>,
-    // Information about optional transformations that can be eagerly done.
-    // If the decoding elects to perform them, it should replace this with
-    // `None`.
-    operators: &mut Option<LinearOperator>,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
@@ -392,7 +386,6 @@ where
         get_decoder(
             key_encoding,
             debug_name,
-            operators,
             true,
             metrics.clone(),
             connection_context,
@@ -402,7 +395,6 @@ where
     let mut value_decoder = get_decoder(
         value_encoding,
         debug_name,
-        operators,
         true,
         metrics,
         connection_context,
@@ -497,10 +489,6 @@ pub fn render_decode<G>(
     value_encoding: DataEncoding,
     debug_name: &str,
     metadata_items: Vec<IncludedColumnSource>,
-    // Information about optional transformations that can be eagerly done.
-    // If the decoding elects to perform them, it should replace this with
-    // `None`.
-    operators: &mut Option<LinearOperator>,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
@@ -512,7 +500,6 @@ where
     let mut value_decoder = get_decoder(
         value_encoding,
         debug_name,
-        operators,
         false,
         metrics,
         connection_context,

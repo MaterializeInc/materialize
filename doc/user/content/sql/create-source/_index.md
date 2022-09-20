@@ -27,6 +27,9 @@ Materialize bundles **native connectors** for the following external systems:
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/sql/create-source/postgres)
 {{</ linkbox >}}
+{{< linkbox title="Datagen" >}}
+- [Load generator](/sql/create-source/load-generator)
+{{</ linkbox >}}
 {{</ multilinkbox >}}
 
 For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.

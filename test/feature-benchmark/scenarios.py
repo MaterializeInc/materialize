@@ -657,7 +657,7 @@ class KafkaRaw(ScenarioDisabled):
             + f"""
 $ kafka-create-topic topic=kafka-raw
 
-$ kafka-ingest format=avro topic=kafka-raw schema=${{schema}} publish=true repeat={self.n()}
+$ kafka-ingest format=avro topic=kafka-raw schema=${{schema}} repeat={self.n()}
 {{"f2": 1}}
 """
         )
@@ -682,8 +682,7 @@ FOR CONFLUENT SCHEMA REGISTRY
 URL '${{testdrive.schema-registry-url}}';
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_kafka_conn
-  TOPIC 'testdrive-kafka-raw-${{testdrive.seed}}'
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-raw-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE
   /* A */
@@ -718,8 +717,7 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_kafka_conn
-  TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}'
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}')
   FORMAT BYTES
   ENVELOPE NONE
   /* A */
@@ -739,10 +737,10 @@ class KafkaUpsert(Kafka):
             + f"""
 $ kafka-create-topic topic=kafka-upsert
 
-$ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}} publish=true repeat={self.n()}
+$ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": 1}} {{"f2": ${{kafka-ingest.iteration}} }}
 
-$ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}} publish=true
+$ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}}
 {{"f1": 2}} {{"f2": 2}}
 """
         )
@@ -760,8 +758,7 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_kafka_conn
-  TOPIC 'testdrive-kafka-upsert-${testdrive.seed}'
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-upsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
   /* A */
@@ -782,7 +779,7 @@ class KafkaUpsertUnique(Kafka):
             + f"""
 $ kafka-create-topic topic=upsert-unique partitions=16
 
-$ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{keyschema}} schema=${{schema}} publish=true repeat={self.n()}
+$ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
 """
         )
@@ -802,8 +799,7 @@ URL '${{testdrive.schema-registry-url}}';
 
   /* A */
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_kafka_conn
-  TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}'
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn'
   ENVELOPE UPSERT
 
@@ -824,7 +820,7 @@ class KafkaRestart(ScenarioDisabled):
             + f"""
 $ kafka-create-topic topic=kafka-recovery partitions=8
 
-$ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{keyschema}} schema=${{schema}} publish=true repeat={self.n()}
+$ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
 """
         )
@@ -843,8 +839,7 @@ FOR CONFLUENT SCHEMA REGISTRY
 URL '${{testdrive.schema-registry-url}}';
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_kafka_conn
-  TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}'
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT;
 
@@ -919,8 +914,7 @@ class KafkaRestartBig(ScenarioBig):
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_kafka_conn
-  TOPIC 'testdrive-kafka-recovery-big-${testdrive.seed}'
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${testdrive.seed}')
   FORMAT BYTES
   ENVELOPE UPSERT;
 
@@ -981,8 +975,7 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
   FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_kafka_conn
-  TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}'
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}')
   FORMAT BYTES
   ENVELOPE NONE
   /* A */
@@ -1013,7 +1006,7 @@ class ExactlyOnce(Sink):
             + f"""
 $ kafka-create-topic topic=sink-input partitions=16
 
-$ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keyschema}} schema=${{schema}} publish=true repeat={self.n()}
+$ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
 """
         )
@@ -1032,8 +1025,7 @@ FOR CONFLUENT SCHEMA REGISTRY
 URL '${{testdrive.schema-registry-url}}';
 
 > CREATE SOURCE source1
-  FROM KAFKA CONNECTION s1_kafka_conn
-  TOPIC 'testdrive-sink-input-${{testdrive.seed}}'
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-input-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT;
 
@@ -1052,15 +1044,14 @@ URL '${{testdrive.schema-registry-url}}';
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 > CREATE SINK sink1 FROM source1
-  INTO KAFKA CONNECTION s1_kafka_conn TOPIC 'testdrive-sink-output-${testdrive.seed}'
+  INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 
 > CREATE SOURCE sink1_check
-  FROM KAFKA CONNECTION s1_kafka_conn
-  TOPIC 'testdrive-sink-output-${testdrive.seed}'
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
@@ -1273,7 +1264,7 @@ class StartupLoaded(ScenarioDisabled):
             + f"""
 $ kafka-create-topic topic=startup-time
 
-$ kafka-ingest format=avro topic=startup-time schema=${{schema}} publish=true repeat=1
+$ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
 {{"f2": 1}}
 """
         )
@@ -1296,8 +1287,7 @@ FOR CONFLUENT SCHEMA REGISTRY
 URL '${{testdrive.schema-registry-url}}';
 
 > CREATE SOURCE source{i}
-  FROM KAFKA CONNECTION s1_kafka_conn
-  TOPIC 'testdrive-startup-time-${{testdrive.seed}}'
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-startup-time-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_kafka_conn
   ENVELOPE NONE
 """
@@ -1315,7 +1305,7 @@ URL '${{testdrive.schema-registry-url}}';
         create_sinks = "\n".join(
             f"""
 > CREATE SINK sink{i} FROM source{i}
-  INTO KAFKA CONNECTION s1_kafka_conn TOPIC 'testdrive-sink-output-${{testdrive.seed}}'
+  INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
 """

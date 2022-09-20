@@ -934,34 +934,43 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     client_interactive.execute("COMMIT", &[])?;
     let _ = client_interactive.query("SELECT * FROM T1", &[])?;
 
-    let rows = client_tail.query("FETCH ALL c1", &[])?;
-    client_tail.batch_execute("COMMIT;")?;
     let mut first_write_ts = None;
     let mut second_write_ts = None;
     let mut seen_first = false;
     let mut seen_second = false;
-    for row in rows.iter() {
-        let mz_timestamp = row.get::<_, MzTimestamp>("mz_timestamp");
-        let mz_progressed = row.get::<_, Option<bool>>("mz_progressed").unwrap();
-        let mz_diff = row.get::<_, Option<i64>>("mz_diff");
-        let data = row.get::<_, Option<String>>("data");
 
-        if !mz_progressed {
-            // Actual data
-            let mz_diff = mz_diff.unwrap();
-            let data = data.unwrap();
-            if !seen_first {
-                assert_eq!(data, "first");
-                seen_first = true;
-                first_write_ts = Some(mz_timestamp);
-            } else {
-                assert_eq!(data, "second");
-                seen_second = true;
-                second_write_ts = Some(mz_timestamp);
+    // TODO(aljoscha): We can wrap this with timeout logic, if we want/need to?
+    // We need to do multiple FETCH ALL calls. ALL only guarantees that all
+    // available rows will be returned, but it's up to the system to decide what
+    // is available. This means that we could still get only one row per
+    // request, and we won't know how many rows will come back otherwise.
+    while !seen_second {
+        let rows = client_tail.query("FETCH ALL c1", &[])?;
+        for row in rows.iter() {
+            let mz_timestamp = row.get::<_, MzTimestamp>("mz_timestamp");
+            let mz_progressed = row.get::<_, Option<bool>>("mz_progressed").unwrap();
+            let mz_diff = row.get::<_, Option<i64>>("mz_diff");
+            let data = row.get::<_, Option<String>>("data");
+
+            if !mz_progressed {
+                // Actual data
+                let mz_diff = mz_diff.unwrap();
+                let data = data.unwrap();
+                if !seen_first {
+                    assert_eq!(data, "first");
+                    seen_first = true;
+                    first_write_ts = Some(mz_timestamp);
+                } else {
+                    assert_eq!(data, "second");
+                    seen_second = true;
+                    second_write_ts = Some(mz_timestamp);
+                }
+                assert_eq!(mz_diff, 2);
             }
-            assert_eq!(mz_diff, 2);
         }
     }
+
+    client_tail.batch_execute("COMMIT;")?;
 
     assert!(seen_first);
     assert!(seen_second);
@@ -1499,6 +1508,65 @@ fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
     assert!(res
         .to_string()
         .contains("unrecognized configuration parameter \"invalid_param\""));
+
+    Ok(())
+}
+
+#[test]
+fn test_concurrent_writes() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let num_tables = 10;
+
+    {
+        let mut client = server.connect(postgres::NoTls)?;
+        for i in 0..num_tables {
+            client.batch_execute(&format!("CREATE TABLE t_{i} (a INT, b text, c text)"))?;
+        }
+    }
+
+    let num_threads = 3;
+    let num_loops = 10;
+
+    let mut clients = Vec::new();
+    for _ in 0..num_threads {
+        clients.push(server.connect(postgres::NoTls)?);
+    }
+
+    let handles: Vec<_> = clients
+        .into_iter()
+        .map(|mut client| {
+            std::thread::spawn(move || {
+                for j in 0..num_loops {
+                    for i in 0..num_tables {
+                        let string_a = "A";
+                        let string_b = "B";
+                        client
+                            .batch_execute(&format!(
+                                "INSERT INTO t_{i} VALUES ({j}, '{string_a}', '{string_b}')"
+                            ))
+                            .unwrap();
+                    }
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let mut client = server.connect(postgres::NoTls)?;
+
+    for i in 0..num_tables {
+        let count = client
+            .query_one(&format!("SELECT count(*) FROM t_{i}"), &[])?
+            .get::<_, i64>(0);
+        assert_eq!(num_loops * num_threads, count);
+    }
 
     Ok(())
 }

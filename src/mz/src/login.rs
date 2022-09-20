@@ -25,10 +25,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_
 use reqwest::Client;
 use tokio::time::sleep;
 
-/// ----------------------------
-///  Login code using browser
-/// ----------------------------
-
+/// Request handler for the server waiting the browser API token creation
 async fn request(
     Query(BrowserAPIToken {
         email,
@@ -51,6 +48,7 @@ async fn request(
     }
 
     let _ = task::spawn(|| "sleep", async {
+        println!("Profile created.");
         sleep(Duration::from_millis(200)).await;
         exit(0);
     });
@@ -58,10 +56,9 @@ async fn request(
     (StatusCode::OK, "You can now close the tab.")
 }
 
-pub(crate) async fn login_with_browser(profile_name: String) -> Result<(), std::io::Error> {
-    /*
-     * Open the browser to login user
-     */
+/// Log the user using the browser, generates an API token and saves the new profile data.
+pub(crate) async fn login_with_browser(profile_name: &str) -> Result<(), std::io::Error> {
+    // Open the browser to login user
     let path = format!("{:}?profile_name={:}", WEB_LOGIN_URL, profile_name);
     if let Err(err) = open::that(path.clone()) {
         exit_with_fail_message(ExitMessage::String(format!(
@@ -70,9 +67,7 @@ pub(crate) async fn login_with_browser(profile_name: String) -> Result<(), std::
         )))
     }
 
-    /*
-     * Start the server to handle the request response
-     */
+    // Start the server to handle the request response
     let app = Router::new().route("/", get(request));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 8808));
@@ -84,10 +79,7 @@ pub(crate) async fn login_with_browser(profile_name: String) -> Result<(), std::
     Ok(())
 }
 
-/// ----------------------------
-///  Login code using console
-/// ----------------------------
-
+/// Generates an API token using an access token
 async fn generate_api_token(
     client: &Client,
     access_token_response: FronteggAuthUser,
@@ -114,10 +106,11 @@ async fn generate_api_token(
         .await
 }
 
+/// Generates an access token using an API token
 async fn authenticate_user(
     client: &Client,
-    email: String,
-    password: String,
+    email: &str,
+    password: &str,
 ) -> Result<FronteggAuthUser, reqwest::Error> {
     let mut access_token_request_body = HashMap::new();
     access_token_request_body.insert("email", email);
@@ -137,8 +130,9 @@ async fn authenticate_user(
         .await
 }
 
-pub(crate) async fn login_with_console(profile_name: String) -> Result<(), reqwest::Error> {
-    // Handle user input
+/// Log the user using the console, generates an API token and saves the new profile data.
+pub(crate) async fn login_with_console(profile_name: &String) -> Result<(), reqwest::Error> {
+    // Handle interactive user input
     let mut email = String::new();
 
     print!("Email: ");
@@ -154,12 +148,12 @@ pub(crate) async fn login_with_console(profile_name: String) -> Result<(), reqwe
 
     // Check if there is a secret somewhere.
     // If there is none save the api token someone on the root folder.
-    let auth_user = authenticate_user(&client, email.clone(), password).await?;
+    let auth_user = authenticate_user(&client, &email, &password).await?;
     let api_token = generate_api_token(&client, auth_user).await?;
 
     let profile = Profile {
-        name: profile_name,
-        email: email.to_string(),
+        name: profile_name.to_string(),
+        email,
         secret: api_token.secret,
         client_id: api_token.client_id,
         region: None,

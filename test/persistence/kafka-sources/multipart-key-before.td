@@ -32,7 +32,7 @@ $ set schema={
 $ kafka-create-topic topic=multipart-key
 
 # Ingest data where the first or the second part of the key has high cardinality
-$ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "KEY1", "f2": "${kafka-ingest.iteration}"} {"f3": "KEY1", "f4": "${kafka-ingest.iteration}"}
 {"f1": "${kafka-ingest.iteration}", "f2": "KEY2"} {"f3": "${kafka-ingest.iteration}", "f4": "KEY2"}
 

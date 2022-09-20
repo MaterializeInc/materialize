@@ -28,3 +28,5 @@ fetch-batch input=b0_1
 ----
 <part 0>
 one 10 1
+<run 0>
+part 0

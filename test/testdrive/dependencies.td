@@ -29,16 +29,16 @@ $ set schema={
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE s
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 ! CREATE SOURCE s
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-blah-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 contains:catalog item 's' already exists
 
 > CREATE SOURCE IF NOT EXISTS s
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-blah-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE VIEW test1 AS SELECT 1;
@@ -106,24 +106,24 @@ contains:unknown catalog item 'test2'
 contains:unknown catalog item 'test4'
 
 > CREATE SOURCE s
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE SINK s1 FROM s
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'v'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 ! CREATE SINK s1 FROM s
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'v'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:catalog item 's1' already exists
 
 > CREATE SINK IF NOT EXISTS s1 FROM s
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'v2'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK s2 FROM s
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'v3'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v3-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # Test that sinks cannot be depended upon.
@@ -144,14 +144,14 @@ contains:catalog item 'materialize.public.i1' is an index and so cannot be depen
 > CREATE INDEX i2 ON v2a(x*2);
 
 > SHOW INDEXES FROM v2a;
-cluster        on_name   key_name         seq_in_index column_name expression  nullable
+name    on  cluster         key
 ---------------------------------------------------------------------------------------
-<CLUSTER_NAME> v2a       i2               1            <null>      "x * 2"     false
+i2      v2a <CLUSTER_NAME>  "{x * 2}"
 
 > SHOW INDEXES FROM v2;
-cluster        on_name  key_name        seq_in_index column_name expression nullable
+name    on  cluster         key
 ------------------------------------------------------------------------------------
-<CLUSTER_NAME> v2       i1              1            x           <null>     false
+i1      v2  <CLUSTER_NAME>  {x}
 
 # Test that dependent indexes do not prevent view deletion when restrict is specified
 # but do not cause deletion of dependent views
@@ -161,9 +161,9 @@ cluster        on_name  key_name        seq_in_index column_name expression null
 contains:unknown catalog item 'v2a'
 
 > SHOW INDEXES FROM v2;
-cluster on_name  key_name        seq_in_index   column_name expression nullable
+name    on  cluster         key
 -----------------------------------------------------------------------------------
-<CLUSTER_NAME> v2       i1              1              x           <null>     false
+i1      v2  <CLUSTER_NAME>  {x}
 
 ! DROP INDEX i2;
 contains:unknown catalog item 'i2'
@@ -175,16 +175,16 @@ contains:unknown catalog item 'i2'
 > CREATE INDEX i3 ON v4a(y);
 
 > SHOW INDEXES FROM v4a;
-cluster on_name  key_name         seq_in_index   column_name expression nullable
+name    on  cluster         key
 ------------------------------------------------------------------------------------
-<CLUSTER_NAME> v4a      i3               1              y           <null>     false
+i3      v4a <CLUSTER_NAME>  {y}
 
 > CREATE INDEX i4 ON v4(x);
 
 > SHOW INDEXES FROM v4;
-cluster on_name  key_name        seq_in_index  column_name expression nullable
+name    on  cluster         key
 ----------------------------------------------------------------------------------
-<CLUSTER_NAME> v4       i4              1             x           <null>     false
+i4      v4  <CLUSTER_NAME>  {x}
 
 # Test cascade deletes associated indexes as well
 > DROP VIEW v4a CASCADE;
@@ -196,32 +196,25 @@ contains:unknown catalog item 'v4a'
 contains:unknown catalog item 'i3'
 
 > SHOW INDEXES FROM v4;
-cluster on_name  key_name        seq_in_index  column_name expression nullable
+name    on  cluster         key
 ----------------------------------------------------------------------------------
-<CLUSTER_NAME> v4       i4              1             x           <null>     false
+i4      v4  <CLUSTER_NAME>  {x}
 
 > CREATE VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
 
 > CREATE INDEX i5 ON v5(substr);
 
 > SHOW INDEXES FROM v5;
-cluster on_name   key_name        seq_in_index  column_name expression nullable
+name    on  cluster         key
 ----------------------------------------------------------------------------------
-<CLUSTER_NAME> v5        i5              1             substr      <null>     true
+i5      v5  <CLUSTER_NAME>  {substr}
 
 > CREATE VIEW multicol AS SELECT 'a' AS a, 'b' AS b, 'c' AS c, 'd' AS d
 > CREATE INDEX i6 ON multicol (2, a, 4)
 > SHOW INDEXES FROM multicol
-cluster on_name   key_name  seq_in_index column_name  expression   nullable
+name    on          cluster         key
 -------------------------------------------------------------------------------
-<CLUSTER_NAME> multicol  i6        1            b            <null>       false
-<CLUSTER_NAME> multicol  i6        2            a            <null>       false
-<CLUSTER_NAME> multicol  i6        3            d            <null>       false
-
-> SHOW INDEXES FROM multicol WHERE column_name = 'a'
-cluster on_name   key_name  seq_in_index column_name  expression   nullable
--------------------------------------------------------------------------------
-<CLUSTER_NAME> multicol  i6        2            a            <null>       false
+i6      multicol    <CLUSTER_NAME>  {b,a,d}
 
 # Test cascade deletes all indexes associated with cascaded views
 > DROP VIEW v4 CASCADE;
@@ -247,16 +240,16 @@ contains:unknown catalog item 'i4'
 # Materialized source tests
 
 > CREATE SOURCE s3
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 # Test that dependent indexes do not prevent source deletion when restrict is specified
 > CREATE INDEX j1 on s3(ascii(y))
 
 > SHOW INDEXES FROM s3;
-cluster on_name  key_name        seq_in_index  column_name expression             nullable
+name    on  cluster         key
 ----------------------------------------------------------------------------------------------
-<CLUSTER_NAME> s3       j1              1             <null>      "pg_catalog.ascii(y)"  false
+j1      s3  <CLUSTER_NAME>  "{pg_catalog.ascii(y)}"
 
 > DROP SOURCE s3;
 
@@ -269,7 +262,7 @@ contains:unknown catalog item 'j1'
 # Test cascade deletes all indexes associated with cascaded sources and views
 
 > CREATE SOURCE s4
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE INDEX j2 on s4(x+2);
@@ -279,14 +272,14 @@ contains:unknown catalog item 'j1'
 > CREATE INDEX j3 on w(z);
 
 > SHOW INDEXES FROM s4;
-cluster on_name  key_name        seq_in_index   column_name expression  nullable
+name    on  cluster         key
 ------------------------------------------------------------------------------------
-<CLUSTER_NAME> s4       j2              1               <null>      "x + 2"    false
+j2      s4  <CLUSTER_NAME>  "{x + 2}"
 
 > SHOW INDEXES FROM w;
-cluster on_name  key_name   seq_in_index  column_name expression nullable
+name    on          cluster         key
 -----------------------------------------------------------------------------
-<CLUSTER_NAME> w        j3         1             z           <null>     false
+j3      w           <CLUSTER_NAME>  {z}
 
 > DROP SOURCE s4 CASCADE;
 
@@ -305,7 +298,7 @@ contains:unknown catalog item 'j2'
 # Test that dropping indexes even with cascade does not cause the underlying source to be dropped
 
 > CREATE SOURCE s5
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE DEFAULT INDEX ON s5;

@@ -123,14 +123,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx,
             } => {
                 let now = self.now_datetime();
-                let session = match implicit {
+                let (session, result) = match implicit {
                     None => session.start_transaction(now, None, None),
-                    Some(stmts) => session.start_transaction_implicit(now, stmts),
+                    Some(stmts) => (session.start_transaction_implicit(now, stmts), Ok(())),
                 };
-                let _ = tx.send(Response {
-                    result: Ok(()),
-                    session,
-                });
+                let _ = tx.send(Response { result, session });
             }
 
             Command::Commit {
@@ -322,19 +319,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::Rollback(_)
                     | Statement::Select(_)
                     | Statement::SetTransaction(_)
-                    | Statement::ShowColumns(_)
-                    | Statement::ShowCreateIndex(_)
-                    | Statement::ShowCreateSink(_)
-                    | Statement::ShowCreateSource(_)
-                    | Statement::ShowCreateTable(_)
-                    | Statement::ShowCreateView(_)
-                    | Statement::ShowCreateMaterializedView(_)
-                    | Statement::ShowCreateConnection(_)
-                    | Statement::ShowDatabases(_)
-                    | Statement::ShowSchemas(_)
-                    | Statement::ShowIndexes(_)
-                    | Statement::ShowObjects(_)
-                    | Statement::ShowVariable(_)
+                    | Statement::Show(_)
                     | Statement::SetVariable(_)
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)

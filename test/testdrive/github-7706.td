@@ -10,7 +10,7 @@
 # This test verifies that SELECT with AS OF on unmaterialized sources
 # does not panic.
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ set schema={
     "type": "record",

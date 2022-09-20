@@ -43,6 +43,11 @@ count
 # the delta path for t2 won't see the 2000 rows in t2. 100 is used as an arbitrary
 # threshold since the actual number of messages sent depends on the number of
 # workers.
+
+# log sources require a single replica
+$ skip-if
+SELECT ${arg.replicas} > 1
+
 > SELECT
     sum(sent) as sent
   FROM

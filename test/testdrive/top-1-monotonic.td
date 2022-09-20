@@ -25,7 +25,7 @@ $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "ty
 
 $ kafka-create-topic topic=top1
 
-$ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=1
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -96,7 +96,7 @@ a
 # Over a source with a single record
 #
 
-$ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=1
 {"f1": {"int": 123}, "f2": {"int": -123} }
 
 > SELECT * from limit_only;
@@ -121,7 +121,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=1
 # A second record arrives, causes the ORDER BY DESC view to change output
 #
 
-$ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=2
+$ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=2
 {"f1": {"int": 234}, "f2": {"int" : -234} }
 
 > SELECT * from limit_only;
@@ -148,7 +148,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=2
 # The third record causes all other views to change outputs
 #
 
-$ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=3
+$ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=3
 {"f1": {"int": 0}, "f2": {"int": 0} }
 
 > SELECT * from limit_only;
@@ -177,7 +177,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=3
 # Insert some more rows, mostly for the benefit of the "in_top_1" views
 #
 
-$ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=4
+$ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=4
 {"f1": {"int": 0}, "f2": {"int": 0}}
 {"f1": {"int": 234}, "f2": {"int": 0}}
 {"f1": {"int": 123}, "f2": {"int": -234} }
@@ -214,7 +214,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=4
 # And finally, insert some NULL values
 #
 
-$ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=5
+$ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 {"f1": null, "f2": null}
 {"f1": {"int":0}, "f2": null}
 {"f1": null, "f2": {"int": 0}}

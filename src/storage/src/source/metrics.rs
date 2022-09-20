@@ -82,18 +82,12 @@ impl KinesisMetrics {
 
 #[derive(Clone, Debug)]
 pub(super) struct SourceSpecificMetrics {
-    pub(super) operator_scheduled_counter: IntCounterVec,
     pub(super) capability: UIntGaugeVec,
 }
 
 impl SourceSpecificMetrics {
     fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
-            operator_scheduled_counter: registry.register(metric!(
-                name: "mz_operator_scheduled_total",
-                help: "The number of times the kafka client got invoked for this source",
-                var_labels: ["topic", "source_id", "worker_id"],
-            )),
             capability: registry.register(metric!(
                 name: "mz_capability",
                 help: "The current capability for this dataflow. This corresponds to min(mz_partition_closed_ts)",

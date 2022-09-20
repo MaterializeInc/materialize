@@ -255,7 +255,8 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 Source materialize.public.y (u3):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -271,7 +272,8 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 Source materialize.public.y (u3):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -289,7 +291,8 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 Source materialize.public.y (u3):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -306,7 +309,8 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 Source materialize.public.y (u3):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -323,7 +327,8 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 Source materialize.public.y (u3):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -339,7 +344,8 @@ EXPLAIN PLAN FOR SELECT
 FROM y
 ----
 Source materialize.public.y (u3):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =

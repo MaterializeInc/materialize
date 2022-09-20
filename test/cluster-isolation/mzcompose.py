@@ -174,7 +174,13 @@ t1
 
 # Sources
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+# Explicitly set a progress topic to ensure multiple runs (which the
+# mzcompose.py driver does) do not clash.
+# TODO: remove this once we add some form of nonce to the default progress
+# topic name.
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}',
+  PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}';
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -185,7 +191,7 @@ $ kafka-ingest format=bytes topic=source1
 A
 
 > CREATE SOURCE source1
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-source1-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source1-${testdrive.seed}')
   FORMAT BYTES
 
 > SELECT * FROM source1
@@ -193,11 +199,11 @@ A
 
 # Sinks
 > CREATE SINK sink1 FROM v1mat
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'sink1'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
-{"before": null, "after": {"row":{"c1": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"c1": 3}}}
 """,
     )
 

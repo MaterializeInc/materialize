@@ -35,7 +35,7 @@ $ kafka-create-topic topic=avroavro
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
-$ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "fish", "f2": 1000}
 {"key": "bird1"} {"f1":"goose", "f2": 1}
 {"key": "birdmore"} {"f1":"geese", "f2": 2}
@@ -47,8 +47,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "mammalmore"} {"f1":"moose", "f2": 2}
 
 > CREATE SOURCE avroavro
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-avroavro-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
@@ -61,22 +60,20 @@ mammalmore    moose    2
 
 $ kafka-create-topic topic=textavro
 
-$ kafka-ingest format=avro topic=textavro key-format=bytes key-terminator=: schema=${schema} publish=true
+$ kafka-ingest format=avro topic=textavro key-format=bytes key-terminator=: schema=${schema}
 fish: {"f1": "fish", "f2": 1000}
 bìrd1: {"f1":"goose", "f2": 1}
 birdmore: {"f1":"geese", "f2": 2}
 mammal1: {"f1": "moose", "f2": 1}
 
 > CREATE SOURCE bytesavro
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-textavro-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textavro-${testdrive.seed}')
   KEY FORMAT BYTES
   VALUE FORMAT AVRO USING SCHEMA  '${schema}'
   ENVELOPE UPSERT
 
 > CREATE SOURCE textavro
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-textavro-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textavro-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE UPSERT
@@ -89,7 +86,7 @@ b\xc3\xacrd1  goose    1
 birdmore      geese    2
 mammal1       moose    1
 
-$ kafka-ingest format=avro topic=textavro key-format=bytes key-terminator=: schema=${schema} publish=true
+$ kafka-ingest format=avro topic=textavro key-format=bytes key-terminator=: schema=${schema}
 bìrd1:
 birdmore: {"f1":"geese", "f2": 56}
 mämmalmore: {"f1": "moose", "f2": 42}
@@ -112,28 +109,24 @@ mammal1:moose
 bìrd1:
 
 > CREATE SOURCE texttext
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-textbytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
 > CREATE SOURCE textbytes
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-textbytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
 > CREATE SOURCE bytesbytes
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-textbytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
 > CREATE SOURCE bytestext
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-textbytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT BYTES
   VALUE FORMAT TEXT
   ENVELOPE UPSERT
@@ -193,15 +186,13 @@ $ protobuf-compile-descriptors inputs=test.proto output=test.pb
 $ kafka-create-topic topic=textproto partitions=1
 
 > CREATE SOURCE textproto
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-textproto-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textproto-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA FILE '${testdrive.temp-dir}/test.pb'
   ENVELOPE UPSERT
 
 > CREATE SOURCE bytesproto
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-textproto-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textproto-${testdrive.seed}')
   KEY FORMAT BYTES
   VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA FILE '${testdrive.temp-dir}/test.pb'
   ENVELOPE UPSERT
@@ -261,8 +252,7 @@ mammalmore:moose
 mammal1:
 
 > CREATE SOURCE nullkey
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-nullkey-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nullkey-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   ENVELOPE UPSERT
@@ -285,7 +275,7 @@ $ set keyschema2={
     ]
   }
 
-$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema}
 {"f3": {"string": "fire"}, "f4": {"string": "yang"}} {"f1": "dog", "f2": 42}
 {"f3": null, "f4": {"string": "yin"}} {"f1": "sheep", "f2": 53}
 {"f3": {"string": "water"}, "f4": null} {"f1":"plesiosaur", "f2": 224}
@@ -296,8 +286,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 {"f3": {"string": "earth"}, "f4":{"string": "dao"}}
 
 > CREATE SOURCE realtimeavroavro (f3, f4, f1, f2)
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
@@ -313,9 +302,7 @@ water     <null>  crocodile      7
 
 # Ensure that Upsert sources work with START OFFSET
 > CREATE SOURCE realtimeavroavro_ff
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[1])
-  TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
@@ -327,7 +314,7 @@ f3        f4        f1           f2
 water     <null>    crocodile    7
 
 # ensure that having deletion on a key that never existed does not break anything
-$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
+$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema}
 {"f3": {"string": "fire"}, "f4": {"string": "yin"}}
 {"f3": {"string": "air"}, "f4":{"string": "qi"}} {"f1": "pigeon", "f2": 10}
 {"f3": {"string": "air"}, "f4":{"string": "qi"}} {"f1": "owl", "f2": 15}
@@ -365,7 +352,7 @@ $ set schema2={
     ]
   }
 
-$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": null, "k2": {"long": 2}} {"f1": {"string": "date"}, "f2": {"long": 5}}
 {"k1": {"string": "épicerie"}, "k2": {"long": 10}} {"f1": {"string": "melon"}, "f2": {"long": 2}}
 {"k1": {"string": "boucherie"}, "k2": {"long": 5}} {"f1": {"string": "apple"}, "f2": {"long": 7}}
@@ -376,8 +363,7 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
 {"k1": {"string": "boucherie"}, "k2": {"long": 5}} {"f1": {"string": "apple"}, "f2": {"long": 3}}
 
 > CREATE SOURCE realtimefilteravro
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-realtimefilteravro-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-realtimefilteravro-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
@@ -420,7 +406,7 @@ k1       k2
 
 # add records that match the filter
 # make sure that rows that differ on unneeded key columns are treated as separate
-$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":null, "f2": {"long": 2}}
 {"k1": null, "k2": null} {"f1": {"string": "date"}, "f2": {"long": 5}}
 {"k1": {"string": "épicerie"}, "k2": {"long": 6}} {"f1": {"string": "pear"}, "f2": null}
@@ -451,7 +437,7 @@ k1        k2
 librairie 10
 
 # update records so that they don't match the filter
-$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":null, "f2": {"long": 6}}
 {"k1": null, "k2": null} {"f1": {"string": "grape"}, "f2": {"long": 5}}
 
@@ -471,7 +457,7 @@ k1        k2
 épicerie  10
 
 # update records so that they do match the filter
-$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":{"string": "melon"}, "f2": {"long": 2}}
 {"k1": null, "k2": null} {"f1": {"string": "date"}, "f2": {"long": 12}}
 
@@ -494,7 +480,7 @@ k1        k2
 librairie 10
 
 # delete records
-$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": {"string": "boucherie"}, "k2": {"long": 5}}
 {"k1": {"string": "épicerie"}, "k2": {"long": 10}}
 {"k1": {"string": "boulangerie"}, "k2": null}
@@ -521,9 +507,7 @@ k1        k2
 librairie 10
 
 > CREATE SOURCE include_metadata
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[1])
-  TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET
@@ -537,9 +521,7 @@ air       qi        chicken      47    0         13
 earth     dao       rhinoceros   211   0         12
 
 > CREATE SOURCE include_metadata_ts
-  FROM KAFKA CONNECTION kafka_conn
-  WITH (START OFFSET=[1])
-  TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET, TIMESTAMP as ts

@@ -75,12 +75,12 @@ CREATE MATERIALIZED VIEW error (name, age) AS SELECT 'jon'
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query TTT colnames,rowsort
-SHOW FULL MATERIALIZED VIEWS
+query TT colnames,rowsort
+SHOW MATERIALIZED VIEWS
 ----
-cluster name     type
-default mv       user
-other   other_mv user
+name      cluster
+mv        default
+other_mv  other
 
 statement ok
 DROP MATERIALIZED VIEW other_mv
@@ -232,7 +232,7 @@ CREATE CLUSTER to_drop REPLICAS ()
 statement ok
 CREATE MATERIALIZED VIEW to_drop_mv IN CLUSTER to_drop AS SELECT 1
 
-statement error cannot drop cluster with active indexes, sinks, materialized views, or replicas
+statement error cannot drop cluster with active indexes or materialized views
 DROP CLUSTER to_drop
 
 
@@ -253,7 +253,7 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 query TT colnames
 SHOW CREATE MATERIALIZED VIEW mv
 ----
-Materialized␠View     Create␠Materialized␠View
+name                  create_sql
 materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"default"␠AS␠SELECT␠1
 
 
@@ -262,25 +262,18 @@ materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query T colnames,rowsort
+query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name
-mv
-other_mv
+name      cluster
+mv        default
+other_mv  other
 
-query TTT colnames,rowsort
-SHOW FULL MATERIALIZED VIEWS
+query TT colnames,rowsort
+SHOW MATERIALIZED VIEWS IN CLUSTER other
 ----
-cluster name     type
-default mv       user
-other   other_mv user
-
-query TTT colnames,rowsort
-SHOW FULL MATERIALIZED VIEWS IN CLUSTER other
-----
-cluster name     type
-other   other_mv user
+name      cluster
+other_mv  other
 
 statement ok
 DROP MATERIALIZED VIEW other_mv
@@ -325,24 +318,29 @@ SELECT count(*) FROM mz_materialized_views
 statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT 1
 
-query T colnames,rowsort
+mode standard
+
+query TT colnames,rowsort
 SHOW OBJECTS
 ----
-name
+name type
 mv
+materialized view
 t
+table
 
+mode cockroach
 
 # Test: Indexes on materialized views show in `SHOW INDEXES`.
 
 statement ok
 CREATE DEFAULT INDEX ON mv
 
-query TTTITTT colnames
+query TTTT colnames
 SHOW INDEXES ON mv
 ----
-cluster on_name key_name       seq_in_index column_name expression nullable
-default mv      mv_primary_idx 1            ?column?    NULL       false
+name            on  cluster key
+mv_primary_idx  mv  default {?column?}
 
 
 # Test: Creating materialized views that depend on log sources is forbidden.

@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use mz_persist_types::Codec;
 use mz_proto::RustType;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 
@@ -33,7 +34,7 @@ use crate::error::Error;
 /// Read-only requests are assigned the SeqNo of a write, indicating that all
 /// mutating requests up to and including that one are reflected in the read
 /// state.
-#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SeqNo(pub u64);
 
 impl std::fmt::Display for SeqNo {
@@ -229,7 +230,7 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
             }
         };
         match code {
-            // Feel free to add more things to this whitelist as we encounter
+            // Feel free to add more things to this allowlist as we encounter
             // them as long as you're certain they're determinate.
             &deadpool_postgres::tokio_postgres::error::SqlState::T_R_SERIALIZATION_FAILURE => {
                 ExternalError::Determinate(Determinate {
@@ -278,7 +279,7 @@ pub enum Atomicity {
     AllowNonAtomic,
 }
 
-/// An abstraction for a single arbitrarily-sized binary blob and a associated
+/// An abstraction for a single arbitrarily-sized binary blob and an associated
 /// version number (sequence number).
 #[derive(Debug, Clone, PartialEq)]
 pub struct VersionedData {

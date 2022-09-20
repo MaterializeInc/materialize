@@ -87,7 +87,7 @@ To create a source that uses the standard key-value convention to support insert
 
 ```sql
 CREATE SOURCE current_predictions
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'events'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE UPSERT;
 ```
@@ -112,7 +112,7 @@ Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka 
 
 ```sql
 CREATE SOURCE kafka_repl
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'pg_repl.public.table1'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM;
 ```
@@ -135,7 +135,7 @@ The message key is exposed via the `INCLUDE KEY` option. Composite keys are also
 
 ```sql
 CREATE SOURCE kafka_metadata
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE KEY AS renamed_id;
@@ -155,7 +155,7 @@ Message headers are exposed via the `INCLUDE HEADERS` option, and are included a
 
 ```sql
 CREATE SOURCE kafka_metadata
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE HEADERS
   ENVELOPE NONE;
@@ -207,7 +207,7 @@ These metadata fields are exposed via the `INCLUDE PARTITION`, `INCLUDE OFFSET` 
 
 ```sql
 CREATE SOURCE kafka_metadata
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE PARTITION, OFFSET, TIMESTAMP AS ts
   ENVELOPE NONE;
@@ -233,7 +233,7 @@ To start consuming a Kafka stream from a specific offset, you can use the `start
 
 ```sql
 CREATE SOURCE kafka_offset
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   -- Start reading from the earliest offset in the first partition,
   -- the second partition at 10, and the third partition at 100
   WITH (start_offset=[0,10,100])
@@ -334,7 +334,7 @@ CREATE CONNECTION csr_ssl
 ```sql
 CREATE SOURCE avro_source
   FROM KAFKA
-    CONNECTION kafka_connection TOPIC 'test_topic'
+    CONNECTION kafka_connection (TOPIC 'test_topic')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
@@ -343,7 +343,7 @@ CREATE SOURCE avro_source
 
 ```sql
 CREATE SOURCE json_source
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT BYTES;
 ```
 
@@ -362,7 +362,7 @@ CREATE VIEW jsonified_kafka_source AS
 
 ```sql
 CREATE SOURCE proto_source
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   WITH (cache = true)
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
@@ -372,7 +372,7 @@ CREATE SOURCE proto_source
 
 ```sql
 CREATE SOURCE text_source
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT TEXT
   ENVELOPE UPSERT;
 ```
@@ -382,7 +382,7 @@ CREATE SOURCE text_source
 
 ```sql
 CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT CSV WITH 3 COLUMNS;
 ```
 

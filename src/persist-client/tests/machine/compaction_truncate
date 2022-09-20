@@ -51,6 +51,8 @@ fetch-batch input=b1advanced
 ----
 <part 0>
 two 6 1
+<run 0>
+part 0
 
 compact output=b0_1trunc inputs=(b0trunc,b1advanced) lower=1 upper=3 since=10
 ----
@@ -61,3 +63,5 @@ fetch-batch input=b0_1trunc
 <part 0>
 one 10 1
 two 10 1
+<run 0>
+part 0

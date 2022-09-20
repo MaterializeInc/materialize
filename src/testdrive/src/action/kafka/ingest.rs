@@ -36,13 +36,27 @@ pub struct IngestAction {
     format: Format,
     key_format: Option<Format>,
     timestamp: Option<i64>,
-    publish: bool,
     rows: Vec<String>,
     start_iteration: isize,
     repeat: isize,
     headers: Option<Vec<(String, Option<String>)>>,
     omit_key: bool,
     omit_value: bool,
+}
+
+impl IngestAction {
+    /// Whether the action causes a schema to be published
+    /// to CSR
+    pub fn publish(&self) -> bool {
+        match &self.format {
+            Format::Avro {
+                confluent_wire_format,
+                ..
+            } => *confluent_wire_format,
+            Format::Protobuf { .. } => false,
+            Format::Bytes { .. } => false,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -64,10 +78,12 @@ enum Format {
 }
 
 enum Transcoder {
-    Avro {
+    PlainAvro {
+        schema: Schema,
+    },
+    ConfluentAvro {
         schema: Schema,
         schema_id: i32,
-        confluent_wire_format: bool,
     },
     Protobuf {
         message: MessageDescriptor,
@@ -99,23 +115,27 @@ impl Transcoder {
         R: BufRead,
     {
         match self {
-            Transcoder::Avro {
-                schema,
-                schema_id,
-                confluent_wire_format,
-            } => {
+            Transcoder::ConfluentAvro { schema, schema_id } => {
                 if let Some(val) = Self::decode_json(row)? {
                     let val = avro::from_json(&val, schema.top_node())?;
                     let mut out = vec![];
-                    if *confluent_wire_format {
-                        // The first byte is a magic byte (0) that indicates the Confluent
-                        // serialization format version, and the next four bytes are a
-                        // 32-bit schema ID.
-                        //
-                        // https://docs.confluent.io/3.3.0/schema-registry/docs/serializer-formatter.html#wire-format
-                        out.write_u8(0).unwrap();
-                        out.write_i32::<NetworkEndian>(*schema_id).unwrap();
-                    }
+                    // The first byte is a magic byte (0) that indicates the Confluent
+                    // serialization format version, and the next four bytes are a
+                    // 32-bit schema ID.
+                    //
+                    // https://docs.confluent.io/3.3.0/schema-registry/docs/serializer-formatter.html#wire-format
+                    out.write_u8(0).unwrap();
+                    out.write_i32::<NetworkEndian>(*schema_id).unwrap();
+                    out.extend(avro::to_avro_datum(&schema, val)?);
+                    Ok(Some(out))
+                } else {
+                    Ok(None)
+                }
+            }
+            Transcoder::PlainAvro { schema } => {
+                if let Some(val) = Self::decode_json(row)? {
+                    let val = avro::from_json(&val, schema.top_node())?;
+                    let mut out = vec![];
                     out.extend(avro::to_avro_datum(&schema, val)?);
                     Ok(Some(out))
                 } else {
@@ -177,7 +197,6 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
     let partition = cmd.args.opt_parse::<i32>("partition")?;
     let start_iteration = cmd.args.opt_parse::<isize>("start-iteration")?.unwrap_or(0);
     let repeat = cmd.args.opt_parse::<isize>("repeat")?.unwrap_or(1);
-    let publish = cmd.args.opt_bool("publish")?.unwrap_or(false);
     let omit_key = cmd.args.opt_bool("omit-key")?.unwrap_or(false);
     let omit_value = cmd.args.opt_bool("omit-value")?.unwrap_or(false);
     let format = match cmd.args.string("format")?.as_str() {
@@ -270,11 +289,26 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
 
     cmd.args.done()?;
 
-    if publish
-        && !matches!(format, Format::Avro { .. })
-        && !matches!(key_format, Some(Format::Avro { .. }))
-    {
-        bail!("publish=true is invalid unless format=avro or key-format=avro");
+    if let Some(kf) = &key_format {
+        fn is_confluent_format(fmt: &Format) -> Option<bool> {
+            match fmt {
+                Format::Avro {
+                    confluent_wire_format,
+                    ..
+                } => Some(*confluent_wire_format),
+                Format::Protobuf {
+                    confluent_wire_format,
+                    ..
+                } => Some(*confluent_wire_format),
+                Format::Bytes { .. } => None,
+            }
+        }
+        match (is_confluent_format(kf), is_confluent_format(&format)) {
+            (Some(false), Some(true)) | (Some(true), Some(false)) => {
+                bail!("It does not make sense to have the key be in confluent format and not the value, or vice versa.");
+            }
+            _ => {}
+        }
     }
 
     Ok(IngestAction {
@@ -283,7 +317,6 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
         format,
         key_format,
         timestamp,
-        publish,
         rows: cmd.input,
         start_iteration,
         repeat,
@@ -296,7 +329,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
 #[async_trait]
 impl Action for IngestAction {
     async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
-        if self.publish {
+        if self.publish() {
             let subjects = state
                 .ccsr_client
                 .list_subjects()
@@ -336,22 +369,19 @@ impl Action for IngestAction {
                     schema,
                     confluent_wire_format,
                 } => {
-                    let schema_id = if self.publish {
+                    if confluent_wire_format {
                         let schema_id = ccsr_client
                             .publish_schema(&ccsr_subject, &schema, mz_ccsr::SchemaType::Avro, &[])
                             .await
                             .context("publishing to schema registry")?;
-                        schema_id
+                        let schema = avro::parse_schema(&schema)
+                            .with_context(|| format!("parsing avro schema: {}", schema))?;
+                        Ok::<_, anyhow::Error>(Transcoder::ConfluentAvro { schema, schema_id })
                     } else {
-                        1
-                    };
-                    let schema = avro::parse_schema(&schema)
-                        .with_context(|| format!("parsing avro schema: {}", schema))?;
-                    Ok::<_, anyhow::Error>(Transcoder::Avro {
-                        schema,
-                        schema_id,
-                        confluent_wire_format,
-                    })
+                        let schema = avro::parse_schema(&schema)
+                            .with_context(|| format!("parsing avro schema: {}", schema))?;
+                        Ok(Transcoder::PlainAvro { schema })
+                    }
                 }
                 Format::Protobuf {
                     descriptor_file,

@@ -15,7 +15,7 @@ from packaging import version
 
 from materialize.mzcompose import Service, ServiceConfig
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
 
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
 # minor version in the release series, and minor versions have been known to
@@ -771,5 +771,20 @@ class Metabase(Service):
             config={
                 "image": "metabase/metabase:v0.41.4",
                 "ports": ["3000"],
+            },
+        )
+
+
+class SshBastionHost(Service):
+    def __init__(self, name: str = "ssh-bastion-host") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": "panubo/sshd:1.5.0",
+                "ports": ["22"],
+                "environment": [
+                    "SSH_USERS=mz:1000:1000",
+                    "TCP_FORWARDING=true",
+                ],
             },
         )

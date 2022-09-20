@@ -22,7 +22,6 @@ use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 use mz_expr::PartitionId;
 use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
@@ -34,7 +33,7 @@ use crate::source::{
 };
 use crate::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{KafkaOffset, KafkaSourceConnection, MzOffset, SourceConnection};
+use crate::types::sources::{KafkaOffset, KafkaSourceConnection, MzOffset};
 
 use self::metrics::KafkaPartitionMetrics;
 
@@ -79,6 +78,7 @@ impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Diff = ();
+    type Connection = KafkaSourceConnection;
 
     /// Create a new instance of a Kafka reader.
     fn new(
@@ -87,28 +87,24 @@ impl SourceReader for KafkaSourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        kc: Self::Connection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let kc = match connection {
-            SourceConnection::Kafka(kc) => kc,
-            _ => unreachable!(),
-        };
         let KafkaSourceConnection {
             connection,
             options,
             topic,
             group_id_prefix,
-            cluster_id,
+            environment_id,
             ..
         } = kc;
         let kafka_config = TokioHandle::current().block_on(create_kafka_config(
             &source_name,
             group_id_prefix,
-            cluster_id,
+            environment_id,
             &connection,
             &options,
             &connection_context,
@@ -539,7 +535,7 @@ impl KafkaSourceReader {
 async fn create_kafka_config(
     name: &str,
     group_id_prefix: Option<String>,
-    cluster_id: Uuid,
+    environment_id: String,
     kafka_connection: &KafkaConnection,
     options: &BTreeMap<String, StringOrSecret>,
     connection_context: &ConnectionContext,
@@ -592,7 +588,7 @@ async fn create_kafka_config(
         &format!(
             "{}materialize-{}-{}",
             group_id_prefix.unwrap_or_else(String::new),
-            cluster_id,
+            environment_id,
             name
         ),
     );

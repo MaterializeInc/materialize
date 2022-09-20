@@ -66,7 +66,7 @@ pub enum UnmaterializableFunc {
     CurrentSchemasWithoutSystem,
     CurrentTimestamp,
     CurrentUser,
-    MzClusterId,
+    MzEnvironmentId,
     MzLogicalTimestamp,
     MzSessionId,
     MzUptime,
@@ -90,7 +90,7 @@ impl UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
             UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
-            UnmaterializableFunc::MzClusterId => ScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzEnvironmentId => ScalarType::String.nullable(false),
             UnmaterializableFunc::MzLogicalTimestamp => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             }
@@ -116,7 +116,7 @@ impl fmt::Display for UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => f.write_str("current_timestamp"),
             UnmaterializableFunc::CurrentUser => f.write_str("current_user"),
-            UnmaterializableFunc::MzClusterId => f.write_str("mz_cluster_id"),
+            UnmaterializableFunc::MzEnvironmentId => f.write_str("mz_environment_id"),
             UnmaterializableFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
             UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
             UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
@@ -138,7 +138,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
             UnmaterializableFunc::CurrentTimestamp => CurrentTimestamp(()),
             UnmaterializableFunc::CurrentUser => CurrentUser(()),
-            UnmaterializableFunc::MzClusterId => MzClusterId(()),
+            UnmaterializableFunc::MzEnvironmentId => MzEnvironmentId(()),
             UnmaterializableFunc::MzLogicalTimestamp => MzLogicalTimestamp(()),
             UnmaterializableFunc::MzSessionId => MzSessionId(()),
             UnmaterializableFunc::MzUptime => MzUptime(()),
@@ -162,7 +162,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                 }
                 CurrentTimestamp(()) => Ok(UnmaterializableFunc::CurrentTimestamp),
                 CurrentUser(()) => Ok(UnmaterializableFunc::CurrentUser),
-                MzClusterId(()) => Ok(UnmaterializableFunc::MzClusterId),
+                MzEnvironmentId(()) => Ok(UnmaterializableFunc::MzEnvironmentId),
                 MzLogicalTimestamp(()) => Ok(UnmaterializableFunc::MzLogicalTimestamp),
                 MzSessionId(()) => Ok(UnmaterializableFunc::MzSessionId),
                 MzUptime(()) => Ok(UnmaterializableFunc::MzUptime),
@@ -322,21 +322,19 @@ fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let date = a.unwrap_date();
     let time = b.unwrap_time();
 
-    Datum::Timestamp(
-        NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms_nano(
-            time.hour(),
-            time.minute(),
-            time.second(),
-            time.nanosecond(),
-        ),
-    )
+    Datum::Timestamp(NaiveDate::from(date).and_hms_nano(
+        time.hour(),
+        time.minute(),
+        time.second(),
+        time.nanosecond(),
+    ))
 }
 
 fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, interval.months)?;
     Ok(Datum::Timestamp(
         dt.checked_add_signed(interval.duration_as_chrono())
@@ -773,7 +771,7 @@ fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn sub_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from((a.unwrap_date() - b.unwrap_date()).num_days() as i32)
+    Datum::from(a.unwrap_date() - b.unwrap_date())
 }
 
 fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -792,7 +790,7 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
     let dt = interval
         .months
         .checked_neg()
@@ -1839,7 +1837,7 @@ where
 fn extract_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date())?.into()),
+        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date().into())?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
@@ -2865,6 +2863,19 @@ impl BinaryFunc {
             _ => None,
         }
     }
+
+    /// Returns true if the function could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        match self {
+            BinaryFunc::Eq
+            | BinaryFunc::NotEq
+            | BinaryFunc::Lt
+            | BinaryFunc::Gte
+            | BinaryFunc::Gt
+            | BinaryFunc::Lte => false,
+            _ => true,
+        }
+    }
 }
 
 impl fmt::Display for BinaryFunc {
@@ -3608,16 +3619,23 @@ trait LazyUnaryFunc {
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError>;
 
-    /// The output ColumnType of this function
+    /// The output ColumnType of this function.
     fn output_type(&self, input_type: ColumnType) -> ColumnType;
 
-    /// Whether this function will produce NULL on NULL input
+    /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
 
-    /// Whether this function will produce NULL on non-NULL input
+    /// Whether this function will produce NULL on non-NULL input.
     fn introduces_nulls(&self) -> bool;
 
-    /// Whether this function preserves uniqueness
+    /// Whether this function preserves uniqueness.
+    ///
+    /// Uniqueness is preserved when `if f(x) = f(y) then x = y` is true. This
+    /// is used by the optimizer when a guarantee can be made that a collection
+    /// with unique items will stay unique when mapped by this function.
+    ///
+    /// Functions should conservatively return `false` unless they are certain
+    /// the above property is true.
     fn preserves_uniqueness(&self) -> bool;
 }
 
@@ -3693,6 +3711,9 @@ derive_unary!(
     BitNotInt16,
     BitNotInt32,
     BitNotInt64,
+    BitNotUint16,
+    BitNotUint32,
+    BitNotUint64,
     NegInt16,
     NegInt32,
     NegInt64,
@@ -3963,6 +3984,14 @@ impl UnaryFunc {
             _ => None,
         }
     }
+
+    /// Returns true if the function could introduce an error on non-error input.
+    pub fn could_error(&self) -> bool {
+        match self {
+            UnaryFunc::IsNull(_) | UnaryFunc::CastVarCharToString(_) | UnaryFunc::Not(_) => false,
+            _ => true,
+        }
+    }
 }
 
 /// An explicit [`Arbitrary`] implementation needed here because of a known
@@ -3985,6 +4014,9 @@ impl Arbitrary for UnaryFunc {
             BitNotInt16::arbitrary().prop_map_into(),
             BitNotInt32::arbitrary().prop_map_into(),
             BitNotInt64::arbitrary().prop_map_into(),
+            BitNotUint16::arbitrary().prop_map_into(),
+            BitNotUint32::arbitrary().prop_map_into(),
+            BitNotUint64::arbitrary().prop_map_into(),
             NegInt16::arbitrary().prop_map_into(),
             NegInt32::arbitrary().prop_map_into(),
             NegInt64::arbitrary().prop_map_into(),
@@ -4295,6 +4327,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::BitNotInt16(_) => BitNotInt16(()),
             UnaryFunc::BitNotInt32(_) => BitNotInt32(()),
             UnaryFunc::BitNotInt64(_) => BitNotInt64(()),
+            UnaryFunc::BitNotUint16(_) => BitNotUint16(()),
+            UnaryFunc::BitNotUint32(_) => BitNotUint32(()),
+            UnaryFunc::BitNotUint64(_) => BitNotUint64(()),
             UnaryFunc::NegInt16(_) => NegInt16(()),
             UnaryFunc::NegInt32(_) => NegInt32(()),
             UnaryFunc::NegInt64(_) => NegInt64(()),
@@ -4602,6 +4637,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 BitNotInt16(()) => Ok(impls::BitNotInt16.into()),
                 BitNotInt32(()) => Ok(impls::BitNotInt32.into()),
                 BitNotInt64(()) => Ok(impls::BitNotInt64.into()),
+                BitNotUint16(()) => Ok(impls::BitNotUint16.into()),
+                BitNotUint32(()) => Ok(impls::BitNotUint32.into()),
+                BitNotUint64(()) => Ok(impls::BitNotUint64.into()),
                 NegInt16(()) => Ok(impls::NegInt16.into()),
                 NegInt32(()) => Ok(impls::NegInt32.into()),
                 NegInt64(()) => Ok(impls::NegInt64.into()),
@@ -6232,6 +6270,38 @@ impl VariadicFunc {
         }
     }
 
+    pub fn is_associative(&self) -> bool {
+        match self {
+            VariadicFunc::Coalesce
+            | VariadicFunc::Greatest
+            | VariadicFunc::Least
+            | VariadicFunc::Concat
+            | VariadicFunc::And
+            | VariadicFunc::Or => true,
+
+            VariadicFunc::MakeTimestamp
+            | VariadicFunc::PadLeading
+            | VariadicFunc::Substr
+            | VariadicFunc::Replace
+            | VariadicFunc::JsonbBuildArray
+            | VariadicFunc::JsonbBuildObject
+            | VariadicFunc::ArrayCreate { elem_type: _ }
+            | VariadicFunc::ArrayToString { elem_type: _ }
+            | VariadicFunc::ArrayIndex { offset: _ }
+            | VariadicFunc::ListCreate { elem_type: _ }
+            | VariadicFunc::RecordCreate { field_names: _ }
+            | VariadicFunc::ListIndex
+            | VariadicFunc::ListSliceLinear
+            | VariadicFunc::SplitPart
+            | VariadicFunc::RegexpMatch
+            | VariadicFunc::HmacString
+            | VariadicFunc::HmacBytes
+            | VariadicFunc::ErrorIfNull
+            | VariadicFunc::DateBinTimestamp
+            | VariadicFunc::DateBinTimestampTz => false,
+        }
+    }
+
     pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
         use VariadicFunc::*;
         let in_nullable = input_types.iter().any(|t| t.nullable);
@@ -6365,6 +6435,15 @@ impl VariadicFunc {
             VariadicFunc::And => MirScalarExpr::literal_false(),
             VariadicFunc::Or => MirScalarExpr::literal_true(),
             _ => unreachable!(),
+        }
+    }
+
+    /// Returns true if the function could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        match self {
+            VariadicFunc::And | VariadicFunc::Or => false,
+            // All other cases are unknown
+            _ => true,
         }
     }
 }
@@ -6594,7 +6673,6 @@ mod test {
         let mut rti = mz_lowertest::ReflectedTypeInfo::default();
         UnaryFunc::add_to_reflected_type_info(&mut rti);
         for (variant, (_, f_types)) in rti.enum_dict["UnaryFunc"].iter() {
-            println!("f_types {:?}", f_types);
             if f_types.is_empty() {
                 let unary_unit_variant: UnaryFunc =
                     serde_json::from_str(&format!("\"{}\"", variant)).unwrap();

@@ -15,6 +15,7 @@ fn main() {
     prost_build::Config::new()
         .compile_protos(
             &[
+                "repr/src/antichain.proto",
                 "repr/src/chrono.proto",
                 "repr/src/global_id.proto",
                 "repr/src/row.proto",
@@ -23,6 +24,7 @@ fn main() {
                 "repr/src/url.proto",
                 "repr/src/adt/array.proto",
                 "repr/src/adt/char.proto",
+                "repr/src/adt/date.proto",
                 "repr/src/adt/datetime.proto",
                 "repr/src/adt/interval.proto",
                 "repr/src/adt/numeric.proto",

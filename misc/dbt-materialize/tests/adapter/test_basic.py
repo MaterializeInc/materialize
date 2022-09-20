@@ -33,10 +33,16 @@ from dbt.tests.util import (
     relation_from_name,
     run_dbt,
 )
+from fixtures import expected_base_relation_types
 
 
 class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
+    @pytest.fixture(autouse=True)
+    def _pass_profile_value(self, profile):
+        self._profile = profile
+
     # Custom base test that removes the incremental portion and overrides the expected relations
+
     def test_base(self, project):
 
         # seed command
@@ -49,16 +55,11 @@ class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
         # run result length
         assert len(results) == 3
 
+        expected = expected_base_relation_types[self._profile]
+
         # names exist in result nodes
         check_result_nodes_by_name(results, ["view_model", "table_model", "swappable"])
 
-        # check relation types
-        expected = {
-            "base": "materializedview",
-            "view_model": "view",
-            "table_model": "materializedview",
-            "swappable": "materializedview",
-        }
         check_relation_types(project.adapter, expected)
 
         # base table rowcount
@@ -85,12 +86,7 @@ class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
         assert len(results) == 1
 
         # check relation types, swappable is view
-        expected = {
-            "base": "materializedview",
-            "view_model": "view",
-            "table_model": "materializedview",
-            "swappable": "view",
-        }
+        expected["swappable"] = "view"
         check_relation_types(project.adapter, expected)
 
 
@@ -129,5 +125,21 @@ class TestSnapshotTimestampMaterialize(BaseSnapshotTimestamp):
     pass
 
 
+# This additional model sql was needed to ensure we use the materialize__create_view_as sql.
 class TestBaseAdapterMethodMaterialize(BaseAdapterMethod):
+    models__model_sql = """
+{% set upstream = ref('upstream') %}
+{% if execute %}
+    {# don't ever do any of this #}
+    {%- do adapter.drop_schema(upstream) -%}
+    {% set existing = adapter.get_relation(upstream.database, upstream.schema, upstream.identifier) %}
+    {% if existing is not none %}
+        {% do exceptions.raise_compiler_error('expected ' ~ ' to not exist, but it did') %}
+    {% endif %}
+    {%- do adapter.create_schema(upstream) -%}
+    {% set sql = materialize__create_view_as(upstream, 'select 2 as id') %}
+    {% do run_query(sql) %}
+{% endif %}
+select * from {{ upstream }}
+"""
     pass

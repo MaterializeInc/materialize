@@ -75,13 +75,14 @@ message ProtoMirScalarExpr {
 
 
 message ProtoUnmaterializableFunc {
+    reserved "mz_cluster_id"; // The former name of mz_environment_id.
     oneof kind {
         google.protobuf.Empty current_database = 1;
         google.protobuf.Empty current_schemas_with_system = 2;
         google.protobuf.Empty current_schemas_without_system = 3;
         google.protobuf.Empty current_timestamp = 4;
         google.protobuf.Empty current_user = 5;
-        google.protobuf.Empty mz_cluster_id = 6;
+        google.protobuf.Empty mz_environment_id = 6;
         google.protobuf.Empty mz_logical_timestamp = 7;
         google.protobuf.Empty mz_session_id = 8;
         google.protobuf.Empty mz_uptime = 9;
@@ -382,6 +383,9 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_uint64_to_int64 = 261;
         google.protobuf.Empty cast_uint64_to_string = 262;
         mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_uint64_to_numeric = 263;
+        google.protobuf.Empty bit_not_uint16 = 264;
+        google.protobuf.Empty bit_not_uint32 = 265;
+        google.protobuf.Empty bit_not_uint64 = 266;
     }
 }
 
@@ -699,5 +703,6 @@ message ProtoEvalError {
         google.protobuf.Empty uint16_out_of_range = 55;
         google.protobuf.Empty uint32_out_of_range = 56;
         google.protobuf.Empty uint64_out_of_range = 57;
+        google.protobuf.Empty date_out_of_range = 58;
     }
 }

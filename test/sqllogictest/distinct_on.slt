@@ -40,7 +40,8 @@ query T multiline
 EXPLAIN SELECT DISTINCT ON (c) a FROM abc
 ----
 Source materialize.public.abc (u1):
-| Project (#0, #2)
+| Map dummy
+| Project (#0, #3, #2)
 
 Query:
 %0 =

@@ -35,7 +35,6 @@ use crate::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertValueError,
 };
 use crate::types::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
-use crate::types::transforms::LinearOperator;
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 struct UpsertSourceData {
@@ -59,7 +58,6 @@ struct UpsertSourceData {
 pub(crate) fn upsert<G>(
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
-    operators: &mut Option<LinearOperator>,
     // Full arity, including the key columns
     source_arity: usize,
     upsert_envelope: UpsertEnvelope,
@@ -72,7 +70,7 @@ pub(crate) fn upsert<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    if as_of_frontier != Antichain::from_elem(0) {
+    if as_of_frontier != Antichain::from_elem(timely::progress::Timestamp::minimum()) {
         info!("upsert resuming from time {as_of_frontier:?}");
     }
     // Currently, the upsert-specific transformations run in the
@@ -114,38 +112,9 @@ where
     // as the non-temporal determine if a record is retained at all,
     // and the temporal indicate how we should transform its timestamps
     // when it is transmitted.
-    let mut temporal = Vec::new();
-    let mut predicates = Vec::new();
-    let mut position_or = (0..source_arity).map(Some).collect::<Vec<_>>();
-    if let Some(mut operators) = operators.take() {
-        for predicate in operators.predicates.drain(..) {
-            if predicate.contains_temporal() {
-                temporal.push(predicate);
-            } else {
-                predicates.push(predicate);
-            }
-        }
-        // Temporal predicates will be applied after blanking out column,
-        // so ensure that their support is preserved.
-        // TODO: consider blanking out columns added by this processes in
-        // the temporal filtering operator.
-        for predicate in temporal.iter() {
-            operators.projection.extend(predicate.support());
-        }
-        operators.projection.sort();
-        operators.projection.dedup();
-
-        // Overwrite `position_or` to reflect `operators.projection`.
-        position_or = (0..source_arity)
-            .map(|col| {
-                if operators.projection.contains(&col) {
-                    Some(col)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-    }
+    let temporal = Vec::new();
+    let predicates = Vec::new();
+    let position_or = (0..source_arity).map(Some).collect::<Vec<_>>();
     let temporal_plan = if !temporal.is_empty() {
         let temporal_mfp = mz_expr::MapFilterProject::new(source_arity).filter(temporal);
         Some(temporal_mfp.into_plan().unwrap_or_else(|e| panic!("{}", e)))
@@ -552,7 +521,7 @@ fn process_new_data(
 fn process_pending_values_batch(
     // The time, capability, and map of data at that time we
     // are processing in this call.
-    time: &u64,
+    time: &Timestamp,
     cap: &mut Capability<Timestamp>,
     map: &mut HashMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
     // The current map of values we use to perform the upsert comparision
@@ -581,10 +550,10 @@ fn process_pending_values_batch(
     output: &mut timely::dataflow::operators::generic::OutputHandle<
         '_,
         Timestamp,
-        (Result<Row, DataflowError>, u64, Diff),
+        (Result<Row, DataflowError>, Timestamp, Diff),
         timely::dataflow::channels::pushers::tee::Tee<
             Timestamp,
-            (Result<Row, DataflowError>, u64, Diff),
+            (Result<Row, DataflowError>, Timestamp, Diff),
         >,
     >,
 ) {
