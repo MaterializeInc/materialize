@@ -186,15 +186,19 @@ impl ClusterClient<PartitionedClient> {
     fn build(&mut self, comm_config: CommunicationConfig) -> Result<(), Error> {
         let workers = comm_config.workers;
 
-        // Check if we can reuse the existing timely
-        let timely = self
-            .timely_container
-            .lock()
-            .unwrap()
-            .take()
-            .filter(|existing| existing.comm_config == comm_config);
+        // Check if we can reuse the existing timely instance.
+        // We currently do not support reinstantiating timely, we simply panic
+        // if another communication config is requested. This
+        // code must panic before dropping the worker guards contained in timely_container.
+        // As we don't terminate timely workers, the thread join would hang forever, possibly
+        // creating a fair share of confusion in the orchestrator.
+
+        let timely = self.timely_container.lock().unwrap().take();
         let timely = match timely {
-            Some(existing) => existing,
+            Some(existing) => {
+                assert_eq!(existing.comm_config, comm_config);
+                existing
+            }
             None => self.build_timely(comm_config)?,
         };
 
