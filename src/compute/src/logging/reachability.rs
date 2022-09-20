@@ -23,6 +23,7 @@ use timely::dataflow::operators::capture::EventLink;
 use timely::logging::WorkerIdentifier;
 
 use mz_compute_client::logging::LoggingConfig;
+use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::activator::RcActivator;
@@ -153,12 +154,12 @@ pub fn construct<A: Allocate>(
                         row_buf.packer().push_list(
                             addr.iter()
                                 .chain_one(&source)
-                                .map(|id| Datum::Int64(*id as i64)),
+                                .map(|id| Datum::UInt64(u64::cast_from(*id))),
                         );
                         let datums = &[
                             row_arena.push_unary_row(row_buf.clone()),
-                            Datum::Int64(*port as i64),
-                            Datum::Int64(*worker as i64),
+                            Datum::UInt64(u64::cast_from(*port)),
+                            Datum::UInt64(u64::cast_from(*worker)),
                             Datum::String(&update_type),
                             Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
                         ];
@@ -189,12 +190,12 @@ pub fn construct<A: Allocate>(
                             row_buf.packer().push_list(
                                 addr.iter()
                                     .chain_one(&source)
-                                    .map(|id| Datum::Int64(*id as i64)),
+                                    .map(|id| Datum::UInt64(u64::cast_from(*id))),
                             );
                             let datums = &[
                                 row_arena.push_unary_row(row_buf.clone()),
-                                Datum::Int64(*port as i64),
-                                Datum::Int64(*worker as i64),
+                                Datum::UInt64(u64::cast_from(*port)),
+                                Datum::UInt64(u64::cast_from(*worker)),
                                 Datum::String(&update_type),
                                 Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
                             ];

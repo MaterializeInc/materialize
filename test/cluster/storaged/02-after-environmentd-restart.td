@@ -10,6 +10,9 @@
 # Verify that the data ingested before `environmentd` was killed is still
 # present, then try ingesting more data.
 
+# Increased from the default because of CI flakiness.
+$ set-sql-timeout duration=180s
+
 > SELECT * from remote1
 one
 > SELECT * from remote2

@@ -404,11 +404,15 @@ pub fn plan_create_source(
 
                         // Starting offsets are allowed out unsafe mode, as they are a simple,
                         // useful way to specify where to start reading a topic.
-                        if options.iter().any(|opt| {
+                        if let Some(opt) = options.iter().find(|opt| {
                             opt.name != KafkaConfigOptionName::StartOffset
                                 && opt.name != KafkaConfigOptionName::StartTimestamp
+                                && opt.name != KafkaConfigOptionName::Topic
                         }) {
-                            scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
+                            scx.require_unsafe_mode(&format!(
+                                "KAFKA CONNECTION option {}",
+                                opt.name
+                            ))?;
                         }
 
                         kafka_util::validate_options_for_context(
@@ -484,7 +488,7 @@ pub fn plan_create_source(
                 topic,
                 start_offsets,
                 group_id_prefix,
-                cluster_id: scx.catalog.config().cluster_id,
+                environment_id: scx.catalog.config().environment_id.clone(),
                 include_timestamp: None,
                 include_partition: None,
                 include_topic: None,
@@ -708,8 +712,6 @@ pub fn plan_create_source(
         // TODO: fixup key envelope
         mz_sql_parser::ast::Envelope::None => UnplannedSourceEnvelope::None(key_envelope),
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
-            scx.require_unsafe_mode("ENVELOPE DEBEZIUM")?;
-
             //TODO check that key envelope is not set
             let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
@@ -718,6 +720,8 @@ pub fn plan_create_source(
                     UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
                 }
                 DbzMode::Plain { tx_metadata } => {
+                    scx.require_unsafe_mode("ENVELOPE DEBEZIUM")?;
+
                     // TODO(#11668): Probably make this not a WITH option and integrate into the DBZ envelope?
                     let mut tx_metadata_source = None;
                     let mut tx_metadata_collection = None;
@@ -2151,7 +2155,6 @@ fn kafka_sink_builder(
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
                 matches!(envelope, SinkEnvelope::Debezium),
-                true,
             );
             let value_schema = schema_generator.value_writer_schema().to_string();
             let key_schema = schema_generator
@@ -2169,11 +2172,12 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
+    let environment_id = &scx.catalog.config().environment_id;
     let consistency_config = KafkaConsistencyConfig::Progress {
         topic: connection
             .progress_topic
             .clone()
-            .unwrap_or_else(|| format!("_materialize-progress-{connection_id}")),
+            .unwrap_or_else(|| format!("_materialize-progress-{environment_id}-{connection_id}")),
     };
 
     if partition_count == 0 || partition_count < -1 {

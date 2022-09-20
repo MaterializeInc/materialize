@@ -22,6 +22,7 @@ use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -33,6 +34,7 @@ use once_cell::sync::Lazy;
 use sysinfo::{CpuExt, SystemExt};
 use tokio::sync::Mutex;
 use tower_http::cors::{self, AllowOrigin};
+
 use url::Url;
 use uuid::Uuid;
 
@@ -53,6 +55,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
+use mz_repr::util::parse_duration;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
 
@@ -323,6 +326,13 @@ pub struct Args {
     adapter_stash_url: String,
 
     // === Cloud options. ===
+    #[clap(
+        long,
+        env = "ENVIRONMENT_ID",
+        value_name = "ID",
+        default_value = "environment-00000000-0000-0000-0000-000000000000-0"
+    )]
+    environment_id: String,
     /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
@@ -356,6 +366,14 @@ pub struct Args {
         requires = "storage-host-sizes"
     )]
     default_storage_host_size: Option<String>,
+    /// The interval in seconds at which to collect storage usage information.
+    #[clap(
+        long,
+        env = "STORAGE_USAGE_COLLECTION_INTERVAL",
+        parse(try_from_str = parse_duration),
+        default_value = "3600s"
+    )]
+    storage_usage_collection_interval_sec: Duration,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -674,6 +692,7 @@ max log level: {max_log_level}",
         unsafe_mode: args.unsafe_mode,
         metrics_registry,
         now,
+        environment_id: args.environment_id,
         cluster_replica_sizes,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         storage_host_sizes,
@@ -685,6 +704,7 @@ max log level: {max_log_level}",
             secrets_reader,
         ),
         otel_enable_callback,
+        storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
     }))?;
 
     println!(

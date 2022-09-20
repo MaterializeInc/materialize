@@ -10,6 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
+use mz_repr::adt::date::Date;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -67,7 +68,7 @@ impl<T> DateLike for T where T: chrono::Datelike {}
 sqlfunc!(
     #[sqlname = "date_to_text"]
     #[preserves_uniqueness = true]
-    fn cast_date_to_string(a: NaiveDate) -> String {
+    fn cast_date_to_string(a: Date) -> String {
         let mut buf = String::new();
         strconv::format_date(&mut buf, a);
         buf
@@ -77,16 +78,16 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "date_to_timestamp"]
     #[preserves_uniqueness = true]
-    fn cast_date_to_timestamp(a: NaiveDate) -> NaiveDateTime {
-        a.and_hms(0, 0, 0)
+    fn cast_date_to_timestamp(a: Date) -> NaiveDateTime {
+        NaiveDate::from(a).and_hms(0, 0, 0)
     }
 );
 
 sqlfunc!(
     #[sqlname = "date_to_timestamp_with_timezone"]
     #[preserves_uniqueness = true]
-    fn cast_date_to_timestamp_tz(a: NaiveDate) -> DateTime<Utc> {
-        DateTime::<Utc>::from_utc(a.and_hms(0, 0, 0), Utc)
+    fn cast_date_to_timestamp_tz(a: Date) -> DateTime<Utc> {
+        DateTime::<Utc>::from_utc(NaiveDate::from(a).and_hms(0, 0, 0), Utc)
     }
 );
 
@@ -128,11 +129,11 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
 pub struct ExtractDate(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractDate {
-    type Input = NaiveDate;
+    type Input = Date;
     type Output = Result<Numeric, EvalError>;
 
-    fn call(&self, a: NaiveDate) -> Result<Numeric, EvalError> {
-        extract_date_inner(self.0, a)
+    fn call(&self, a: Date) -> Result<Numeric, EvalError> {
+        extract_date_inner(self.0, a.into())
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {

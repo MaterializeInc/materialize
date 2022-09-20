@@ -25,6 +25,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
+use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
@@ -76,6 +77,14 @@ pub struct HollowBatch<T> {
     pub parts: Vec<HollowBatchPart>,
     /// The number of updates in the batch.
     pub len: usize,
+    /// Runs of sequential sorted batch parts, stored as indices into `parts`.
+    /// ex.
+    /// ```text
+    ///     parts=[p1, p2, p3], runs=[]     --> run  is  [p1, p2, p2]
+    ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
+    ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
+    /// ```
+    pub runs: Vec<usize>,
 }
 
 impl<T: Ord> PartialOrd for HollowBatch<T> {
@@ -92,11 +101,13 @@ impl<T: Ord> Ord for HollowBatch<T> {
             desc: self_desc,
             parts: self_parts,
             len: self_len,
+            runs: self_runs,
         } = self;
         let HollowBatch {
             desc: other_desc,
             parts: other_parts,
             len: other_len,
+            runs: other_runs,
         } = other;
         (
             self_desc.lower().elements(),
@@ -104,6 +115,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             self_desc.since().elements(),
             self_parts,
             self_len,
+            self_runs,
         )
             .cmp(&(
                 other_desc.lower().elements(),
@@ -111,6 +123,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
                 other_desc.since().elements(),
                 other_parts,
                 other_len,
+                other_runs,
             ))
     }
 }
@@ -533,7 +546,7 @@ where
     // them being executed in the order they are given. But it is expected that
     // gc assignments are best-effort respected. In practice, cmds like
     // register_foo or expire_foo, where it would be awkward, ignore gc.
-    pub fn maybe_gc(&mut self, is_write: bool) -> Option<(SeqNo, SeqNo)> {
+    pub fn maybe_gc(&mut self, is_write: bool) -> Option<GcReq> {
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
         // could use a tuning pass at some point.
@@ -541,16 +554,20 @@ where
             1,
             u64::from(self.seqno.0.next_power_of_two().trailing_zeros()),
         );
-        let seqno_since = self.seqno_since();
-        let should_gc =
-            seqno_since.0.saturating_sub(self.collections.last_gc_req.0) >= gc_threshold;
+        let new_seqno_since = self.seqno_since();
+        let should_gc = new_seqno_since
+            .0
+            .saturating_sub(self.collections.last_gc_req.0)
+            >= gc_threshold;
         // Assign GC traffic preferentially to writers, falling back to anyone
         // generating new state versions if there are no writers.
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
         if should_gc {
-            let req = (self.collections.last_gc_req, seqno_since);
-            self.collections.last_gc_req = seqno_since;
-            Some(req)
+            self.collections.last_gc_req = new_seqno_since;
+            Some(GcReq {
+                shard_id: self.shard_id,
+                new_seqno_since,
+            })
         } else {
             None
         }
@@ -710,6 +727,7 @@ mod tests {
                 })
                 .collect(),
             len,
+            runs: vec![],
         }
     }
 
@@ -1151,7 +1169,13 @@ mod tests {
         assert_eq!(state.maybe_gc(false), None);
 
         // A write will gc though.
-        assert_eq!(state.maybe_gc(true), Some((SeqNo::minimum(), SeqNo(100))));
+        assert_eq!(
+            state.maybe_gc(true),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(100)
+            })
+        );
 
         // Artificially advance the seqno (again) so the seqno_since advances
         // past our internal gc_threshold (again).
@@ -1160,6 +1184,12 @@ mod tests {
 
         // If there are no writers, even a non-write will gc.
         let _ = state.collections.expire_writer(&writer_id);
-        assert_eq!(state.maybe_gc(true), Some((SeqNo(100), SeqNo(200))));
+        assert_eq!(
+            state.maybe_gc(true),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(200)
+            })
+        );
     }
 }

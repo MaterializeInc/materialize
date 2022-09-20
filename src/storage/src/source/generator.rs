@@ -18,8 +18,9 @@ use super::metrics::SourceBaseMetrics;
 use super::{SourceMessage, SourceMessageType};
 use crate::source::{NextMessage, SourceReader, SourceReaderError};
 use crate::types::connections::ConnectionContext;
-use crate::types::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
-use crate::types::sources::{Generator, LoadGenerator};
+use crate::types::sources::{
+    encoding::SourceDataEncoding, Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
+};
 
 mod auction;
 mod counter;
@@ -55,6 +56,7 @@ impl SourceReader for LoadGeneratorSourceReader {
     type Value = Row;
     // LoadGenerator can produce deletes that cause retractions
     type Diff = Diff;
+    type Connection = LoadGeneratorSourceConnection;
 
     fn new(
         _source_name: String,
@@ -62,19 +64,12 @@ impl SourceReader for LoadGeneratorSourceReader {
         worker_id: usize,
         worker_count: usize,
         _consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        connection: Self::Connection,
         start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         _metrics: SourceBaseMetrics,
         _connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let connection = match connection {
-            SourceConnection::LoadGenerator(lg) => lg,
-            _ => {
-                panic!("LoadGenerator is the only legitimate SourceConnection for LoadGeneratorSourceReader")
-            }
-        };
-
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 

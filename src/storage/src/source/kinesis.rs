@@ -34,7 +34,7 @@ use crate::types::connections::aws::AwsExternalIdPrefix;
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::SourceErrorDetails;
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{KinesisSourceConnection, MzOffset, SourceConnection};
+use crate::types::sources::{KinesisSourceConnection, MzOffset};
 
 /// To read all data from a Kinesis stream, we need to continually update
 /// our knowledge of the stream's shards by calling the ListShards API.
@@ -133,6 +133,7 @@ impl SourceReader for KinesisSourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
     type Diff = ();
+    type Connection = KinesisSourceConnection;
 
     fn new(
         _source_name: String,
@@ -140,17 +141,12 @@ impl SourceReader for KinesisSourceReader {
         worker_id: usize,
         worker_count: usize,
         _consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        kc: Self::Connection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let kc = match connection {
-            SourceConnection::Kinesis(kc) => kc,
-            _ => unreachable!(),
-        };
-
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 

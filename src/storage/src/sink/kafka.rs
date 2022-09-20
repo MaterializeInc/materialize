@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
 use prometheus::core::AtomicU64;
@@ -26,7 +26,7 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
-use rdkafka::message::{Message, OwnedMessage, ToBytes};
+use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use rdkafka::{Offset, TopicPartitionList};
@@ -35,14 +35,14 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{InputHandle, OutputHandle};
-use timely::dataflow::operators::{Capability, Map};
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::Activator;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
 use mz_interchange::encode::Encode;
@@ -53,7 +53,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -100,21 +100,6 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        // consistent/exactly-once Kafka sinks need the timestamp in the row
-        let sinked_collection = sinked_collection
-            .inner
-            .map(|((k, v), t, diff)| {
-                let v = v.map(|mut v| {
-                    let t = t.to_string();
-                    RowPacker::for_existing_row(&mut v).push_list_with(|rp| {
-                        rp.push(Datum::String(&t));
-                    });
-                    v
-                });
-                ((k, v), t, diff)
-            })
-            .as_collection();
-
         // TODO: this is a brittle way to indicate the worker that will write to the sink
         // because it relies on us continuing to hash on the sink_id, with the same hash
         // function, and for the Exchange pact to continue to distribute by modulo number
@@ -258,11 +243,12 @@ impl ProducerContext for SinkProducerContext {
     fn delivery(&self, result: &DeliveryResult, _: Self::DeliveryOpaque) {
         match result {
             Ok(_) => self.retry_manager.blocking_lock().record_success(),
-            Err((_e, msg)) => {
+            Err((e, msg)) => {
                 self.metrics.message_delivery_errors_counter.inc();
                 // TODO: figure out a good way to back these retries off.  Should be okay without
                 // because we seem to very rarely end up in a constant state where rdkafka::send
                 // works but everything is immediately rejected and hits this branch.
+                warn!("Kafka producer delivery error {:?} for {:?}", e, msg);
                 self.retry_manager
                     .blocking_lock()
                     .record_error(msg.detach());
@@ -580,12 +566,16 @@ impl KafkaSinkState {
                         let should_shutdown = Retry::default()
                             .clamp_backoff(Duration::from_secs(60 * 10))
                             .retry_async(|_| async {
+                                info!("Attempting to abort kafka transaction");
                                 match self_self_producer.abort_transaction().await {
                                     Ok(_) => Ok(false),
                                     Err(KafkaError::Transaction(e)) if e.is_retriable() => {
                                         Err(KafkaError::Transaction(e))
                                     }
-                                    Err(_) => Ok(true),
+                                    Err(e) => {
+                                        error!("Error aborting kafka transaction: {:?}", e);
+                                        Ok(true)
+                                    }
                                 }
                             })
                             .await
@@ -610,7 +600,10 @@ impl KafkaSinkState {
         // Consider a retriable error that's hit our max backoff to be fatal.
         if shutdown.get() {
             self.shutdown_flag.store(true, Ordering::SeqCst);
-            info!("shutting down kafka sink: {}", &self.name);
+            info!(
+                "shutting down kafka sink {} from error {:?}",
+                &self.name, last_error
+            );
         }
         Err(last_error)
     }
@@ -629,7 +622,7 @@ impl KafkaSinkState {
         tokio::pin!(tries);
         while tries.next().await.is_some() {
             match self.producer.send(record) {
-                Ok(_) => {
+                Ok(()) => {
                     self.metrics.messages_sent_counter.inc();
                     self.retry_manager.lock().await.record_send();
                     return Ok(());
@@ -999,7 +992,6 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                true,
             );
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
@@ -1016,7 +1008,6 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                true,
             );
             encode_stream(
                 stream,
@@ -1122,10 +1113,11 @@ where
 
             // Can't use `?` when the return type is a `bool` so use a custom try operator
             macro_rules! bail_err {
-                ($expr:expr) => {
+                ($expr:expr, $msg:tt) => {
                     match $expr {
                         Ok(val) => val,
-                        Err(_) => {
+                        Err(e) => {
+                            warn!("Kafka sink error {:?}: {:?}", e, $msg);
                             s.activator.activate();
                             return true;
                         }
@@ -1136,7 +1128,10 @@ where
             if is_active_worker {
                 if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
                     if s.transactional {
-                        bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
+                        bail_err!(
+                            s.retry_on_txn_error(|p| p.init_transactions()).await,
+                            "init_transactions"
+                        );
                     }
 
                     let latest_ts = match s.determine_latest_progress_record().await {
@@ -1147,6 +1142,7 @@ where
                             return true;
                         }
                     };
+                    info!("Identified latest progress record: {:?}", latest_ts);
                     shared_gate_ts.set(latest_ts);
 
                     let progress_state = init
@@ -1221,7 +1217,15 @@ where
                 assert!(is_active_worker);
 
                 if s.transactional {
-                    bail_err!(s.retry_on_txn_error(|p| p.begin_transaction()).await);
+                    info!(
+                        "Beginning transaction for {:?} with {:?} rows",
+                        ts,
+                        rows.len()
+                    );
+                    bail_err!(
+                        s.retry_on_txn_error(|p| p.begin_transaction()).await,
+                        "begin transaction"
+                    );
                 }
 
                 let mut repeat_counter = 0;
@@ -1236,8 +1240,14 @@ where
                         None => record,
                     };
 
+                    let ts_bytes = ts.to_string().into_bytes();
+                    let record = record.headers(OwnedHeaders::new().insert(Header {
+                        key: "materialize-timestamp",
+                        value: Some(&ts_bytes),
+                    }));
+
                     // Only fatal errors are returned from send
-                    bail_err!(s.send(record).await);
+                    bail_err!(s.send(record).await, "send record");
 
                     // advance to the next repetition of this row, or the next row if all
                     // repetitions are exhausted
@@ -1250,17 +1260,24 @@ where
 
                 // Flush to make sure that errored messages have been properly retried before
                 // sending progress records and commit transactions.
-                bail_err!(s.flush().await);
+                bail_err!(s.flush().await, "post-records flush");
 
                 if let Some(ref progress_state) = s.sink_state.unwrap_running() {
-                    bail_err!(s.send_progress_record(*ts, progress_state).await);
+                    bail_err!(
+                        s.send_progress_record(*ts, progress_state).await,
+                        "send progress record"
+                    );
                 }
 
                 if s.transactional {
-                    bail_err!(s.retry_on_txn_error(|p| p.commit_transaction()).await);
+                    info!("Committing transaction for {:?}", ts,);
+                    bail_err!(
+                        s.retry_on_txn_error(|p| p.commit_transaction()).await,
+                        "commit transaction"
+                    );
                 };
 
-                bail_err!(s.flush().await);
+                bail_err!(s.flush().await, "post-commit flush");
 
                 // sanity check for the continuous updating
                 // of the write frontier below
@@ -1289,7 +1306,7 @@ where
                         if progress_emitted {
                             // Don't flush if we know there were no records emitted.
                             // It has a noticeable negative performance impact.
-                            bail_err!(s.flush().await);
+                            bail_err!(s.flush().await, "progress emitted flush");
                         }
                     }
                     Err(e) => {
@@ -1302,8 +1319,20 @@ where
                 }
             }
 
-            debug_assert_eq!(s.producer.inner.in_flight_count(), 0);
-            debug_assert!(s.retry_manager.lock().await.sends_flushed());
+            // We want debug_assert but also to print out if we would have failed the assertion in release mode
+            let in_flight_count = s.producer.inner.in_flight_count();
+            let sends_flushed = s.retry_manager.lock().await.sends_flushed();
+            if cfg!(debug_assertions) {
+                assert_eq!(in_flight_count, 0);
+                assert!(sends_flushed);
+            } else {
+                if in_flight_count != 0 {
+                    error!("Producer has {:?} messages in flight", in_flight_count);
+                }
+                if !sends_flushed {
+                    error!("Retry manager has not flushed sends");
+                }
+            }
 
             if !s.pending_rows.is_empty() {
                 // We have some more rows that we need to wait for frontiers to advance before we

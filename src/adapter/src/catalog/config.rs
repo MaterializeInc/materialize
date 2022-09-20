@@ -30,6 +30,8 @@ pub struct Config<'a, S> {
     pub unsafe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
+    /// A persistent ID associated with the environment.
+    pub environment_id: String,
     /// Function to generate wall clock now; can be mocked.
     pub now: mz_ore::now::NowFn,
     /// Whether or not to skip catalog migrations.

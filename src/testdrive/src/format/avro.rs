@@ -20,8 +20,8 @@
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 
-use anyhow::{anyhow, bail, Context};
-use regex::Regex;
+use anyhow::{anyhow, bail};
+
 use serde_json::Value as JsonValue;
 
 // Re-export components from the various other Avro libraries, so that other
@@ -46,9 +46,9 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             Ok(Value::Float(n.as_f64().unwrap() as f32))
         }
         (JsonValue::Number(ref n), SchemaPiece::Double) => Ok(Value::Double(n.as_f64().unwrap())),
-        (JsonValue::Number(ref n), SchemaPiece::Date) => Ok(Value::Date(
-            chrono::NaiveDate::from_ymd(1970, 1, 1) + chrono::Duration::days(n.as_i64().unwrap()),
-        )),
+        (JsonValue::Number(ref n), SchemaPiece::Date) => {
+            Ok(Value::Date(i32::try_from(n.as_i64().unwrap())?))
+        }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMilli) => {
             let ts = n.as_i64().unwrap();
             Ok(Value::Timestamp(chrono::NaiveDateTime::from_timestamp(
@@ -221,98 +221,5 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             json,
             schema
         ),
-    }
-}
-
-pub fn validate_sink_with_partial_search<I>(
-    key_schema: Option<&Schema>,
-    value_schema: &Schema,
-    expected: I,
-    actual: &[(Option<Value>, Option<Value>)],
-    regex: &Option<Regex>,
-    regex_replacement: &String,
-    partial_search: bool,
-) -> Result<(), anyhow::Error>
-where
-    I: IntoIterator,
-    I::Item: AsRef<str>,
-{
-    let expected = expected
-        .into_iter()
-        .map(|v| {
-            let mut deserializer = serde_json::Deserializer::from_str(v.as_ref()).into_iter();
-            let key = if let Some(key_schema) = key_schema {
-                let key: serde_json::Value = match deserializer.next() {
-                    None => bail!("key missing in input line"),
-                    Some(r) => r?,
-                };
-                Some(from_json(&key, key_schema.top_node())?)
-            } else {
-                None
-            };
-            let value = match deserializer.next() {
-                None => None,
-                Some(r) => {
-                    let value = r.context("parsing json")?;
-                    Some(from_json(&value, value_schema.top_node())?)
-                }
-            };
-            Ok((key, value))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut expected = expected.iter();
-    let mut actual = actual.iter();
-    let mut index = 0..;
-
-    let mut found_beginning = !partial_search;
-    let mut expected_item = expected.next();
-    let mut actual_item = actual.next();
-    loop {
-        let i = index.next().expect("known to exist");
-        match (expected_item, actual_item) {
-            (Some(e), Some(a)) => {
-                let e_str = format!("{:#?}", e);
-                let a_str = match &regex {
-                    Some(regex) => regex
-                        .replace_all(&format!("{:#?}", a).to_string(), regex_replacement.as_str())
-                        .to_string(),
-                    _ => format!("{:#?}", a),
-                };
-
-                if e_str != a_str {
-                    if found_beginning {
-                        bail!(
-                            "record {} did not match\nexpected:\n{}\n\nactual:\n{}",
-                            i,
-                            e_str,
-                            a_str
-                        );
-                    }
-                    actual_item = actual.next();
-                } else {
-                    found_beginning = true;
-                    expected_item = expected.next();
-                    actual_item = actual.next();
-                }
-            }
-            (Some(e), None) => bail!("missing record {}: {:#?}", i, e),
-            (None, Some(a)) => {
-                if !partial_search {
-                    bail!("extra record {}: {:#?}", i, a);
-                }
-                break;
-            }
-            (None, None) => break,
-        }
-    }
-    let expected: Vec<_> = expected.map(|e| format!("{:#?}", e)).collect();
-    let actual: Vec<_> = actual.map(|a| format!("{:#?}", a)).collect();
-
-    if !expected.is_empty() {
-        bail!("missing records:\n{}", expected.join("\n"))
-    } else if !actual.is_empty() && !partial_search {
-        bail!("extra records:\n{}", actual.join("\n"))
-    } else {
-        Ok(())
     }
 }

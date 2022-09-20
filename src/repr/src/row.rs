@@ -32,6 +32,7 @@ use mz_ore::cast::CastFrom;
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
 };
+use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
@@ -367,7 +368,12 @@ fn read_byte_array<const N: usize>(data: &[u8], offset: &mut usize) -> [u8; N] {
     raw
 }
 
-fn read_date(data: &[u8], offset: &mut usize) -> NaiveDate {
+fn read_date(data: &[u8], offset: &mut usize) -> Date {
+    let days = i32::from_le_bytes(read_byte_array(data, offset));
+    Date::from_pg_epoch(days).expect("unexpected date")
+}
+
+fn read_naive_date(data: &[u8], offset: &mut usize) -> NaiveDate {
     let year = i32::from_le_bytes(read_byte_array(data, offset));
     let ordinal = u32::from_le_bytes(read_byte_array(data, offset));
     NaiveDate::from_yo(year, ordinal)
@@ -432,12 +438,12 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Date => Datum::Date(read_date(data, offset)),
         Tag::Time => Datum::Time(read_time(data, offset)),
         Tag::Timestamp => {
-            let date = read_date(data, offset);
+            let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
             Datum::Timestamp(date.and_time(time))
         }
         Tag::TimestampTz => {
-            let date = read_date(data, offset);
+            let date = read_naive_date(data, offset);
             let time = read_time(data, offset);
             Datum::TimestampTz(DateTime::from_utc(date.and_time(time), Utc))
         }
@@ -545,7 +551,14 @@ where
     data.extend_from_slice(bytes);
 }
 
-fn push_date<D>(data: &mut D, date: NaiveDate)
+fn push_date<D>(data: &mut D, date: Date)
+where
+    D: Vector<u8>,
+{
+    data.extend_from_slice(&i32::to_le_bytes(date.pg_epoch_days()));
+}
+
+fn push_naive_date<D>(data: &mut D, date: NaiveDate)
 where
     D: Vector<u8>,
 {
@@ -615,12 +628,12 @@ where
         }
         Datum::Timestamp(t) => {
             data.push(Tag::Timestamp.into());
-            push_date(data, t.date());
+            push_naive_date(data, t.date());
             push_time(data, t.time());
         }
         Datum::TimestampTz(t) => {
             data.push(Tag::TimestampTz.into());
-            push_date(data, t.date().naive_utc());
+            push_naive_date(data, t.date().naive_utc());
             push_time(data, t.time());
         }
         Datum::Interval(i) => {
@@ -751,7 +764,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::UInt64(_) => 1 + size_of::<u64>(),
         Datum::Float32(_) => 1 + size_of::<f32>(),
         Datum::Float64(_) => 1 + size_of::<f64>(),
-        Datum::Date(_) => 1 + 8,
+        Datum::Date(_) => 1 + size_of::<i32>(),
         Datum::Time(_) => 1 + 8,
         Datum::Timestamp(_) => 1 + 16,
         Datum::TimestampTz(_) => 1 + 16,
@@ -898,7 +911,11 @@ impl Row {
 
     /// Returns the total amount of bytes used by this row.
     pub fn byte_len(&self) -> usize {
-        let heap_size = self.data.len().saturating_sub(self.data.inline_size());
+        let heap_size = if self.data.spilled() {
+            self.data.len()
+        } else {
+            0
+        };
         let inline_size = std::mem::size_of::<Self>();
         inline_size.saturating_add(heap_size)
     }
@@ -1495,7 +1512,7 @@ impl Default for RowArena {
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDateTime;
+    use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
     use super::*;
 
@@ -1561,7 +1578,7 @@ mod tests {
             Datum::Int64(-2_147_483_648 - 42),
             Datum::Float32(OrderedFloat::from(-42.12)),
             Datum::Float64(OrderedFloat::from(-2_147_483_648.0 - 42.12)),
-            Datum::Date(NaiveDate::from_isoywd(2019, 30, chrono::Weekday::Wed)),
+            Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
             Datum::Timestamp(
                 NaiveDate::from_isoywd(2019, 30, chrono::Weekday::Wed).and_hms(14, 32, 11),
             ),
@@ -1779,7 +1796,7 @@ mod tests {
             Datum::from(numeric::Numeric::from(0)),
             Datum::from(numeric::Numeric::from(1000)),
             Datum::from(numeric::Numeric::from(9999)),
-            Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
+            Datum::Date(NaiveDate::from_ymd(1, 1, 1).try_into().unwrap()),
             Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
             Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)),
             Datum::Interval(Interval::default()),

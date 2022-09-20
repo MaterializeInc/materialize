@@ -9,7 +9,8 @@
 
 use std::fmt;
 
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
+use mz_repr::adt::date::Date;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -44,15 +45,15 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "timestamp_to_date"]
-    fn cast_timestamp_to_date(a: NaiveDateTime) -> NaiveDate {
-        a.date()
+    fn cast_timestamp_to_date(a: NaiveDateTime) -> Result<Date, EvalError> {
+        Ok(a.date().try_into()?)
     }
 );
 
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_date"]
-    fn cast_timestamp_tz_to_date(a: DateTime<Utc>) -> NaiveDate {
-        a.naive_utc().date()
+    fn cast_timestamp_tz_to_date(a: DateTime<Utc>) -> Result<Date, EvalError> {
+        Ok(a.naive_utc().date().try_into()?)
     }
 );
 

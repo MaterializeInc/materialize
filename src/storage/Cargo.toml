@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.64"
+anyhow = "1.0.65"
 async-compression = { version = "0.3.14", features = ["tokio", "gzip"] }
 async-stream = "0.3.3"
 async-trait = "0.1.57"
@@ -29,7 +29,7 @@ futures = "0.3.24"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
 http-serde = "1.1.2"
-itertools = { version = "0.10.3" }
+itertools = { version = "0.10.4" }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
@@ -66,12 +66,12 @@ serde_json = { version = "1.0.85" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
-tokio-stream = "0.1.9"
+tokio-stream = "0.1.10"
 tokio-util = { version = "0.7.3", features = ["io"] }
 tonic = "0.8.1"
 tracing = "0.1.36"
 tracing-subscriber = "0.3.15"
-thiserror = { version = "1.0.34" }
+thiserror = { version = "1.0.35" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
@@ -80,7 +80,7 @@ protobuf-src = "1.1.0"
 tonic-build = "0.8.0"
 
 [dev-dependencies]
-itertools = "0.10.3"
+itertools = "0.10.4"
 tokio = { version = "1.19.2", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]

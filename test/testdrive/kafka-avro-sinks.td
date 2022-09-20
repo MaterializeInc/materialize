@@ -25,7 +25,7 @@
 #> CREATE MATERIALIZED VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
 #
 #> CREATE SINK unnamed_cols_sink FROM unnamed_cols
-#  INTO KAFKA CONNECTION kafka_conn (TOPIC 'unnamed-cols-sink')
+#  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-cols-sink-${testdrive.seed}')
 #  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #
 #$ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
@@ -37,7 +37,7 @@
 #> CREATE MATERIALIZED VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
 #
 #> CREATE SINK clashing_cols_sink FROM clashing_cols
-#  INTO KAFKA CONNECTION kafka_conn (TOPIC 'clashing-cols-sink')
+#  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-clashing-cols-sink-${testdrive.seed}')
 #  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #
 #$ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
@@ -45,29 +45,29 @@
 
 # Test date/time types.
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 > CREATE MATERIALIZED VIEW datetime_data (date, ts, ts_tz) AS VALUES
   (DATE '2000-01-01', TIMESTAMP '2000-01-01 10:10:10.111', TIMESTAMPTZ '2000-01-01 10:10:10.111+02'),
   (DATE '2000-02-01', TIMESTAMP '2000-02-01 10:10:10.111', TIMESTAMPTZ '2000-02-01 10:10:10.111+02')
 
 > CREATE SINK datetime_data_sink FROM datetime_data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'datetime-data-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-datetime-data-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.datetime_data_sink sort-messages=true
-{"before": null, "after": {"row": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
+{"before": null, "after": {"row": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}
 
 > CREATE MATERIALIZED VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04')
 
 > CREATE SINK time_data_sink FROM time_data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'time-data-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-time-data-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=true
-{"before": null, "after": {"row": {"time": 3723000000}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"time": 3724000000}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"time": 3723000000}}}
+{"before": null, "after": {"row": {"time": 3724000000}}}
 
 # Test jsonb
 
@@ -75,7 +75,7 @@ $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=
 
 # Sinks with JSON columns should not crash - see https://github.com/MaterializeInc/materialize/issues/4722
 > CREATE SINK json_data_sink FROM json_data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'json-data-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-json-data-sink-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
@@ -84,76 +84,76 @@ $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=
 > CREATE MATERIALIZED VIEW map_data (map) AS SELECT '{a => 1, b => 2}'::map[text=>int];
 
 > CREATE SINK map_sink FROM map_data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'map-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-map-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.map_sink sort-messages=true
-{"before": null, "after": {"row": {"map": {"a": {"int": 1}, "b": {"int": 2}}}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"map": {"a": {"int": 1}, "b": {"int": 2}}}}}
 
 > CREATE MATERIALIZED VIEW list_data (list) AS SELECT LIST[1, 2];
 
 > CREATE SINK list_sink FROM list_data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'list-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-list-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
-{"before": null, "after": {"row": {"list": [{"int": 1}, {"int": 2}]}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"list": [{"int": 1}, {"int": 2}]}}}
 
 # Test optional namespace for auto-generated value schema
 > CREATE MATERIALIZED VIEW namespace_value_data (namespace) AS SELECT 1;
 
 > CREATE SINK namespace_value_sink FROM namespace_value_data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'namespace-value-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-namespace-value-sink-${testdrive.seed}')
   FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'abc.def.ghi')
 
 $ kafka-verify-schema format=avro sink=materialize.public.namespace_value_sink
-{"type":"record","name":"ghi","namespace":"abc.def","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"namespace","type":"int"}]}]},{"name":"after","type":["null","row"]},{"name":"transaction","type":{"type":"record","name":"transaction","fields":[{"name":"id","type":"string"}]}}]}
+{"type":"record","name":"ghi","namespace":"abc.def","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"namespace","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
 
 $ kafka-verify format=avro sink=materialize.public.namespace_value_sink sort-messages=true
-{"before": null, "after": {"row": {"namespace": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"namespace": 1}}}
 
 # Test optional namespaces for autogenerated key and value schemas
 > CREATE MATERIALIZED VIEW namespace_key_value_data (a, b) AS SELECT * FROM (VALUES (1, 2));
 
 > CREATE SINK namespace_key_value_sink FROM namespace_key_value_data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'namespace-key-value-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-namespace-key-value-sink-${testdrive.seed}')
   KEY (b)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.foo', AVRO VALUE FULLNAME = 'some.neat.class.bar')
 
 $ kafka-verify-schema format=avro sink=materialize.public.namespace_key_value_sink
 {"type":"record","name":"foo","namespace":"some.neat.class","fields":[{"name":"b","type":"int"}]}
-{"type":"record","name":"bar","namespace":"some.neat.class","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"a","type":"int"},{"name":"b","type":"int"}]}]},{"name":"after","type":["null","row"]},{"name":"transaction","type":{"type":"record","name":"transaction","fields":[{"name":"id","type":"string"}]}}]}
+{"type":"record","name":"bar","namespace":"some.neat.class","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"a","type":"int"},{"name":"b","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
 
 $ kafka-verify format=avro sink=materialize.public.namespace_key_value_sink sort-messages=true
-{"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"b": 2} {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 
 # Bad Sinks
 
 > CREATE MATERIALIZED VIEW input (a, b) AS SELECT * FROM (VALUES (1, 2))
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink') KEY (a, a)
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-sink-${testdrive.seed}') KEY (a, a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Repeated column name in sink key: a
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'some.neat.class.foo', AVRO KEY FULLNAME = 'some.neat.class.bar')
 contains:Cannot specify AVRO KEY FULLNAME without a corresponding KEY field
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.bar')
 contains:Cannot specify AVRO KEY FULLNAME without a corresponding KEY field
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink') KEY (a)
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.bar')
 contains:Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names
 
 ! CREATE SINK bad_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink') KEY (a)
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'some.neat.class.bar')
 contains:Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names

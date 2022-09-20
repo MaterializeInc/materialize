@@ -9,7 +9,7 @@
 
 //! Logic for executing a planned SQL query.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::{Duration, Instant};
@@ -23,8 +23,7 @@ use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeSinkId, ConcreteComputeInstanceReplicaConfig,
-    ConcreteComputeInstanceReplicaLogging,
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging,
 };
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
@@ -54,8 +53,9 @@ use mz_sql::plan::{
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
-    RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
+    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
+    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom,
+    TailPlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
@@ -81,19 +81,22 @@ use crate::session::{
     WriteOp,
 };
 use crate::tail::PendingTail;
-use crate::util::{send_immediate_rows, ClientTransmitter};
+use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
 use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_plan(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
+        mut tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
+        let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        tx.set_allowed(responses);
+
         match plan {
             Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateConnection(plan) => {
@@ -213,13 +216,13 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::StartTransaction(plan) => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
-                let session = session.start_transaction(
+                let (session, result) = session.start_transaction(
                     self.now_datetime(),
                     plan.access,
                     plan.isolation_level,
                 );
                 tx.send(
-                    Ok(ExecuteResponse::StartedTransaction { duplicated }),
+                    result.map(|_| ExecuteResponse::StartedTransaction { duplicated }),
                     session,
                 )
             }
@@ -805,7 +808,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
 
-        let persisted_source_ids = persisted_logs.get_source_ids();
+        let persisted_source_ids = persisted_logs.get_source_ids().collect();
         let persisted_sources = persisted_logs
             .get_sources()
             .iter()
@@ -1502,7 +1505,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for replica in instance.replicas_by_id.values() {
                 let persisted_logs = replica.config.persisted_logs.clone();
                 let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-                let view_ids = persisted_logs.get_view_ids();
+                let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
                 for log_id in log_and_view_ids {
                     // We consider the dependencies of both views and logs, but remove the
                     // views itself. The views are included as they depend on the source,
@@ -1567,7 +1570,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .clone();
 
             let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-            let view_ids = persisted_logs.get_view_ids();
+            let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
 
             for log_id in log_and_view_ids {
                 // We consider the dependencies of both views and logs, but remove the
@@ -2060,15 +2063,24 @@ impl<S: Append + 'static> Coordinator<S> {
             thinning.len(),
         )?;
 
-        // We only track the peeks in the session if the query doesn't use AS OF, it's a
-        // non-constant or timestamp dependent query.
-        if when == QueryWhen::Immediately
-            && (!matches!(
+        // We only track the peeks in the session if the query doesn't use AS
+        // OF or we're inside an explicit transaction. The latter case is
+        // necessary to support PG's `BEGIN` semantics, whose behavior can
+        // depend on whether or not reads have occurred in the txn.
+        if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
+            || when == QueryWhen::Immediately
+        {
+            let peek_ts = if matches!(
                 peek_plan,
                 peek::PeekPlan::FastPath(peek::FastPathPlan::Constant(_, _))
-            ) || !timestamp_independent)
-        {
-            session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
+            ) && timestamp_independent
+            {
+                None
+            } else {
+                Some(timestamp)
+            };
+
+            session.add_transaction_ops(TransactionOps::Peeks(peek_ts))?;
         }
 
         // Implement the peek, and capture the response.

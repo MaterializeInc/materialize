@@ -29,7 +29,7 @@ testconn   kafka
 testconn    kafka
 
 > SHOW CREATE CONNECTION testconn
-Connection   "Create Connection"
+name   create_sql
 ---------------------------------
 materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER = '${testdrive.kafka-addr}'"
 
@@ -149,7 +149,7 @@ contains:depended upon by catalog item 'materialize.public.csr_source'
 > DROP CONNECTION csr_conn CASCADE
 
 ! CREATE SOURCE should_fail
-  FROM KAFKA CONNECTION does_not_exist (TOPIC 'error_topic')
+  FROM KAFKA CONNECTION does_not_exist (TOPIC 'testdrive-error_topic-${testdrive.seed}')
   FORMAT TEXT
 contains: unknown catalog item 'does_not_exist'
 

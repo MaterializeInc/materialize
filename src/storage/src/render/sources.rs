@@ -131,47 +131,47 @@ where
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let ((ok_source, err_source), capability) = match connection {
-        SourceConnection::Kafka(_) => {
+        SourceConnection::Kafka(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );
             ((SourceType::Delimited(ok), err), cap)
         }
-        SourceConnection::Kinesis(_) => {
+        SourceConnection::Kinesis(connection) => {
             let ((ok, err), cap) =
                 source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
                     base_source_config,
-                    &connection,
+                    connection,
                     storage_state.connection_context.clone(),
                     resumption_calculator,
                 );
             ((SourceType::Delimited(ok), err), cap)
         }
-        SourceConnection::S3(_) => {
+        SourceConnection::S3(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );
             ((SourceType::ByteStream(ok), err), cap)
         }
-        SourceConnection::Postgres(_) => {
+        SourceConnection::Postgres(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );
             ((SourceType::Row(ok), err), cap)
         }
-        SourceConnection::LoadGenerator(_) => {
+        SourceConnection::LoadGenerator(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );

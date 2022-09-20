@@ -11,6 +11,7 @@
 //! reads and persistent storage.
 
 use std::iter::FromIterator;
+use std::mem::size_of;
 use std::{cmp, fmt};
 
 use arrow2::buffer::Buffer;
@@ -496,6 +497,13 @@ impl ColumnarRecordsBuilder {
         };
         debug_assert_eq!(ret.borrow().validate(), Ok(()));
         ret
+    }
+
+    /// Size of an update record as stored in the columnar representation
+    pub fn columnar_record_size(key: &[u8], value: &[u8]) -> usize {
+        (key.len() + BYTES_PER_KEY_VAL_OFFSET)
+            + (value.len() + BYTES_PER_KEY_VAL_OFFSET)
+            + (2 * size_of::<u64>()) // T and D
     }
 }
 

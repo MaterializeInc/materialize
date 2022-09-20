@@ -9,7 +9,7 @@
 
 use crate::utils::exit_with_fail_message;
 use crate::{
-    ExitMessage, FronteggAuthMachine, Profile, DEFAULT_PROFILE_NAME,
+    ExitMessage, FronteggAuthMachine, Profile, ValidProfile, DEFAULT_PROFILE_NAME,
     ERROR_AUTHENTICATING_PROFILE_MESSAGE, ERROR_OPENING_PROFILES_MESSAGE,
     ERROR_PARSING_PROFILES_MESSAGE, MACHINE_AUTH_URL, PROFILES_DIR_NAME, PROFILES_FILE_NAME,
     PROFILES_PREFIX, PROFILE_NOT_FOUND_MESSAGE,
@@ -164,11 +164,14 @@ pub(crate) fn get_profile(profile_name: String) -> Option<Profile> {
 pub(crate) async fn validate_profile(
     profile_name: String,
     client: &Client,
-) -> Option<FronteggAuthMachine> {
+) -> Option<ValidProfile> {
     match get_profile(profile_name) {
         Some(profile) => match authenticate_profile(client, &profile).await {
             Ok(frontegg_auth_machine) => {
-                return Some(frontegg_auth_machine);
+                return Some(ValidProfile {
+                    frontegg_auth_machine,
+                    profile,
+                });
             }
             Err(error) => exit_with_fail_message(ExitMessage::String(format!(
                 "{:}: {:?}",

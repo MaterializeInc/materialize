@@ -19,8 +19,8 @@ bench = false
 # NB: This is meant to be a strong, independent abstraction boundary. Please
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
-anyhow = { version = "1.0.64", features = ["backtrace"] }
-arrow2 = { version = "0.13.1", features = ["io_ipc", "io_parquet"] }
+anyhow = { version = "1.0.65", features = ["backtrace"] }
+arrow2 = { version = "0.14.0", features = ["io_ipc", "io_parquet"] }
 async-trait = "0.1.57"
 aws-config = { version = "0.48.0", default-features = false, features = ["native-tls"] }
 aws-sdk-s3 = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"]  }

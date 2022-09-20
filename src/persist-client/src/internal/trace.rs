@@ -293,6 +293,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
             desc: Description::new(lower, upper, since),
             parts: vec![],
             len: 0,
+            runs: vec![],
         })
     }
 
@@ -1058,142 +1059,142 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
 }
 
 #[cfg(test)]
+pub mod datadriven {
+    use super::*;
+    use crate::internal::datadriven::DirectiveArgs;
+
+    /// Shared state for a single [crate::internal::trace] [datadriven::TestFile].
+    #[derive(Debug, Default)]
+    pub struct TraceState {
+        pub trace: Trace<u64>,
+        pub merge_reqs: Vec<FueledMergeReq<u64>>,
+    }
+
+    pub fn since_upper(
+        datadriven: &mut TraceState,
+        _args: DirectiveArgs,
+    ) -> Result<String, anyhow::Error> {
+        Ok(format!(
+            "{:?}{:?}\n",
+            datadriven.trace.since().elements(),
+            datadriven.trace.upper().elements()
+        ))
+    }
+
+    pub fn batches(
+        datadriven: &mut TraceState,
+        _args: DirectiveArgs,
+    ) -> Result<String, anyhow::Error> {
+        let mut s = String::new();
+        datadriven.trace.spine.map_batches(|b| {
+            let b = match b {
+                SpineBatch::Merged(HollowBatch {
+                    desc,
+                    len,
+                    parts,
+                    runs: _runs,
+                }) => format!(
+                    "{:?}{:?}{:?} {}{}\n",
+                    desc.lower().elements(),
+                    desc.upper().elements(),
+                    desc.since().elements(),
+                    len,
+                    parts
+                        .iter()
+                        .map(|x| format!(" {}", x.key))
+                        .collect::<Vec<_>>()
+                        .join(""),
+                ),
+                SpineBatch::Fueled { desc, parts } => format!(
+                    "{:?}{:?}{:?} {}/{}{}\n",
+                    desc.lower().elements(),
+                    desc.upper().elements(),
+                    desc.since().elements(),
+                    parts.len(),
+                    parts.iter().map(|x| x.len).sum::<usize>(),
+                    parts
+                        .iter()
+                        .flat_map(|x| x.parts.iter())
+                        .map(|x| format!(" {}", x.key))
+                        .collect::<Vec<_>>()
+                        .join("")
+                ),
+            };
+            s.push_str(&b);
+        });
+        Ok(s)
+    }
+
+    pub fn insert(
+        datadriven: &mut TraceState,
+        args: DirectiveArgs,
+    ) -> Result<String, anyhow::Error> {
+        for x in args
+            .input
+            .trim()
+            .split('\n')
+            .map(DirectiveArgs::parse_hollow_batch)
+        {
+            datadriven
+                .merge_reqs
+                .append(&mut datadriven.trace.push_batch(x));
+        }
+        Ok("ok\n".to_owned())
+    }
+
+    pub fn downgrade_since(
+        datadriven: &mut TraceState,
+        args: DirectiveArgs,
+    ) -> Result<String, anyhow::Error> {
+        let since = args.expect("since");
+        datadriven
+            .trace
+            .downgrade_since(&Antichain::from_elem(since));
+        Ok("ok\n".to_owned())
+    }
+
+    pub fn take_merge_req(
+        datadriven: &mut TraceState,
+        _args: DirectiveArgs,
+    ) -> Result<String, anyhow::Error> {
+        let mut s = String::new();
+        for merge_req in std::mem::take(&mut datadriven.merge_reqs) {
+            write!(
+                s,
+                "{:?}{:?}{:?} {}\n",
+                merge_req.desc.lower().elements(),
+                merge_req.desc.upper().elements(),
+                merge_req.desc.since().elements(),
+                merge_req
+                    .inputs
+                    .iter()
+                    .flat_map(|x| x.parts.iter())
+                    .map(|x| x.key.0.clone())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+        Ok(s)
+    }
+
+    pub fn apply_merge_res(
+        datadriven: &mut TraceState,
+        args: DirectiveArgs,
+    ) -> Result<String, anyhow::Error> {
+        let res = FueledMergeRes {
+            output: DirectiveArgs::parse_hollow_batch(&args.input),
+        };
+        if datadriven.trace.apply_merge_res(&res) {
+            Ok("applied\n".into())
+        } else {
+            Ok("no-op\n".into())
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal::paths::PartialBatchKey;
-    use crate::internal::state::HollowBatchPart;
-
-    #[test]
-    fn trace_datadriven() {
-        fn parse_batch(x: &str) -> HollowBatch<u64> {
-            let parts = x.split(' ').collect::<Vec<_>>();
-            assert!(
-                parts.len() >= 4,
-                "usage: insert <lower> <upper> <since> <len> <keys>"
-            );
-            let (lower, upper, since, len, keys) =
-                (parts[0], parts[1], parts[2], parts[3], &parts[4..]);
-            let lower = lower.parse().expect("invalid lower");
-            let upper = upper.parse().expect("invalid upper");
-            let since = since.parse().expect("invalid since");
-            let len = len.parse().expect("invalid len");
-            HollowBatch {
-                desc: Description::new(
-                    Antichain::from_elem(lower),
-                    Antichain::from_elem(upper),
-                    Antichain::from_elem(since),
-                ),
-                len,
-                parts: keys
-                    .iter()
-                    .map(|x| HollowBatchPart {
-                        key: PartialBatchKey((*x).to_owned()),
-                        encoded_size_bytes: 0,
-                    })
-                    .collect(),
-            }
-        }
-
-        datadriven::walk("tests/trace", |f| {
-            let mut trace = Trace::default();
-            let mut merge_reqs = Vec::new();
-
-            f.run(move |tc| -> String {
-                match tc.directive.as_str() {
-                    "since-upper" => {
-                        assert!(tc.input.is_empty());
-                        format!(
-                            "{:?}{:?}\n",
-                            trace.since().elements(),
-                            trace.upper().elements()
-                        )
-                    }
-                    "batches" => {
-                        assert!(tc.input.is_empty());
-                        let mut s = String::new();
-                        trace.spine.map_batches(|b| {
-                            let b = match b {
-                                SpineBatch::Merged(HollowBatch { desc, len, parts }) => format!(
-                                    "{:?}{:?}{:?} {}{}\n",
-                                    desc.lower().elements(),
-                                    desc.upper().elements(),
-                                    desc.since().elements(),
-                                    len,
-                                    parts
-                                        .iter()
-                                        .map(|x| format!(" {}", x.key))
-                                        .collect::<Vec<_>>()
-                                        .join(""),
-                                ),
-                                SpineBatch::Fueled { desc, parts } => format!(
-                                    "{:?}{:?}{:?} {}/{}{}\n",
-                                    desc.lower().elements(),
-                                    desc.upper().elements(),
-                                    desc.since().elements(),
-                                    parts.len(),
-                                    parts.iter().map(|x| x.len).sum::<usize>(),
-                                    parts
-                                        .iter()
-                                        .flat_map(|x| x.parts.iter())
-                                        .map(|x| format!(" {}", x.key))
-                                        .collect::<Vec<_>>()
-                                        .join("")
-                                ),
-                            };
-                            s.push_str(&b);
-                        });
-                        s
-                    }
-                    "insert" => {
-                        for x in tc.input.trim().split('\n') {
-                            merge_reqs.append(&mut trace.push_batch(parse_batch(x)));
-                        }
-                        "ok\n".to_owned()
-                    }
-                    "downgrade-since" => {
-                        let since = tc.input.trim().parse().expect("invalid since");
-                        trace.downgrade_since(&Antichain::from_elem(since));
-                        "ok\n".to_owned()
-                    }
-                    "take-merge-reqs" => {
-                        assert!(tc.input.is_empty());
-                        let mut s = String::new();
-                        for merge_req in std::mem::take(&mut merge_reqs) {
-                            write!(
-                                s,
-                                "{:?}{:?}{:?} {}\n",
-                                merge_req.desc.lower().elements(),
-                                merge_req.desc.upper().elements(),
-                                merge_req.desc.since().elements(),
-                                merge_req
-                                    .inputs
-                                    .iter()
-                                    .flat_map(|x| x.parts.iter())
-                                    .map(|x| x.key.0.clone())
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                            );
-                        }
-                        if s.is_empty() {
-                            s.push_str("<empty>\n");
-                        }
-                        s
-                    }
-                    "apply-merge-res" => {
-                        let res = FueledMergeRes {
-                            output: parse_batch(&tc.input.trim()),
-                        };
-                        if trace.apply_merge_res(&res) {
-                            "applied\n".into()
-                        } else {
-                            "no-op\n".into()
-                        }
-                    }
-                    _ => panic!("unknown directive {:?}", tc),
-                }
-            })
-        });
-    }
 
     #[test]
     fn remove_redundant_merge_reqs() {

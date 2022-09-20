@@ -146,7 +146,8 @@ message ProtoKafkaSourceConnection {
     string topic = 2;
     map<int32, ProtoMzOffset> start_offsets = 3;
     optional string group_id_prefix = 4;
-    mz_proto.ProtoU128 cluster_id = 5;
+    optional mz_proto.ProtoU128 environment_id = 5;
+    optional string environment_name = 12;
     ProtoIncludedColumnPos include_timestamp = 6;
     ProtoIncludedColumnPos include_partition = 7;
     ProtoIncludedColumnPos include_topic = 8;

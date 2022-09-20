@@ -19,13 +19,13 @@ _source&lowbar;name_ | The source you want use. You can find available source na
 ## Examples
 
 ```sql
-SHOW CREATE SOURCE my_source;
+SHOW CREATE SOURCE market_orders_raw;
 ```
 
 ```nofmt
-    Source   |        Create Source
--------------+--------------------------
- my_source   | CREATE SOURCE "materialize"."public"."market_orders_raw" FROM LOAD GENERATOR counter;
+                 name                 |                                      create_sql
+--------------------------------------+--------------------------------------------------------------------------------------
+ materialize.public.market_orders_raw | CREATE SOURCE "materialize"."public"."market_orders_raw" FROM LOAD GENERATOR COUNTER
 ```
 
 ## Related pages

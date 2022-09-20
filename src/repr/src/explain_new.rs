@@ -837,7 +837,10 @@ mod tests {
             (Datum::from(0.1_f32), "0.1"),
             (Datum::from(-1.23), "-1.23"),
             (
-                Datum::Date(chrono::NaiveDate::from_ymd(2022, 8, 3)),
+                Datum::Date(
+                    crate::adt::date::Date::try_from(chrono::NaiveDate::from_ymd(2022, 8, 3))
+                        .unwrap(),
+                ),
                 r#""2022-08-03""#,
             ),
             (

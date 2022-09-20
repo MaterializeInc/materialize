@@ -71,6 +71,9 @@ pub(crate) mod internal {
     pub mod state_diff;
     pub mod state_versions;
     pub mod trace;
+
+    #[cfg(test)]
+    pub mod datadriven;
 }
 
 // TODO: Remove this in favor of making it possible for all PersistClients to be
@@ -180,6 +183,11 @@ pub struct PersistConfig {
     pub batch_builder_max_outstanding_parts: usize,
     /// Whether to physically and logically compact batches in blob storage.
     pub compaction_enabled: bool,
+    /// The upper bound on compaction's memory consumption. The value must be at
+    /// least 4*`blob_target_size`. Increasing this value beyond the minimum allows
+    /// compaction to merge together more runs at once, providing greater
+    /// consolidation of updates, at the cost of greater memory usage.
+    pub compaction_memory_bound_bytes: usize,
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
     /// if the number of inputs is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
@@ -253,6 +261,7 @@ impl PersistConfig {
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
             compaction_enabled: !compaction_disabled,
+            compaction_memory_bound_bytes: 1024 * MB,
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
             consensus_connection_pool_max_size: 50,

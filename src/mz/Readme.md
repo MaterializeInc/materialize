@@ -1,68 +1,84 @@
-# Materialize CLI [WIP]
+# Materialize CLI
 
-Rust implementation of critical features for usage and deployment of Materialize platform instances.
-It provides the following actions:
+```shell
+Command-line interface for Materialize.
 
-* Login
-* Enable/Delete Regions
-* Shell
+USAGE:
+    mz [OPTIONS] <SUBCOMMAND>
+
+OPTIONS:
+    -h, --help                 Print help information
+    -p, --profile <PROFILE>    Specify a particular configuration profile
+
+SUBCOMMANDS:
+    docs       Open the docs
+    help       Print this message or the help of the given subcommand(s)
+    login      Open the web login
+    regions    Show commands for interaction with the region
+    shell      Open a SQL shell over a region
+```
 
 ## Documentation
 
 ### Install
 
-Clone the repository. Once inside, run:
+Clone the repository and install the CLI package:
 
 ```bash
-cargo build --package mz --release
+cargo install --path ./src/mz
 ```
 
-After a successful build:
+**[Required dependencies](#Dependencies)**
 
-```bash
-cd ./target/release
-```
+### Configuration
 
-[Install dependencies](#Dependencies)
+Interaction with regions requires a profile. There are two ways to configure one:
 
-### Help
+- Login command
+- Configuration file
 
-Use command help to understand usage:
-
-```bash
-mz help
-```
-
-### Login
-
-The CLI lets you login into the platform and automatically create all it needs to work.
-
-Using the browser:
+The quickest way to create a default profile is by running the login command:
 
 ```bash
 mz login
 ```
 
-Using email and password:
+If you prefer to type your email and password in the console use the `--interactive` option:
 
 ```bash
 mz login --interactive
 ```
 
-### Profiles
+After login successfully, the CLI will create and populate the configuration file with a default profile.
 
-The CLI needs a default profile. To populate it go through the login command `mz login`. If you want to do it manually add the default profile to the config file:
+### Configuration file
+
+The configuration file stores all the available profiles. You can add your own as follows:
 
 ```TOML
-["profiles.default"]
+["profiles.PROFILE_NAME"]
 email = "your@email.com"
 secret = "YOUR_SECRET"
 client_id = "YOUR_CLIENT_ID"
 ```
 
+##### Paths
 Linux: `.config/mz/profiles.toml`
 macOS (Monterrey): `.config/mz/profiles.toml`
-Windows: (TBC)
+Windows: `%UserProfile%\.config\mz\profiles.toml`
+
+Example:
+```TOML
+["profiles.production"]
+email = "account@example.com"
+secret = "e1620d58-b3f5-454c-bdc8-6ac07da79fd1"
+client_id = "f599e025-11b3-4fd8-876f-293787dca3c9"
+
+["profiles.staging"]
+email = "account@example.com"
+secret = "d0061af2-f4fd-4b31-a5b2-24efac4df25b"
+client_id = "c01b79a5-6152-45a3-a8b8-2482bc728458"
+```
 
 ### Regions
 
@@ -86,18 +102,35 @@ mz regions status aws/us-east-1
 
 ### Shell
 
-Connect to a Materialize instance to run your SQL using the CLI shell:
+Connect to a Materialize region and run your SQL:
 
 ```bash
 mz shell aws/us-east-1
 ```
 
-### Dependencies
+### Help
 
-Install `psql` dependency for the shell:
+Use the help command to understand further usage:
 
 ```bash
+mz help
+```
 
+### Dependencies
+
+Install [`rust` and `cargo`](https://doc.rust-lang.org/cargo/getting-started/installation.html):
+
+```bash
+# Linux & macOS
+curl https://sh.rustup.rs -sSf | sh
+
+# Windows
+https://win.rustup.rs/
+```
+
+Install `psql` dependency for the shell command:
+
+```bash
 # Linux (TBC)
 apt-get install postgresql-client
 
@@ -112,12 +145,3 @@ source ~/.bash_profile
 
 # Windows (TBC)
 ```
-
-
-### Future work
-#### Improvements
-- [ ]  Run requests in parallel
-- [ ]  Reduce `.unwrap` usage
-- [ ]  Add optional `—force` command to delete to avoid manual input
-- [ ]  Handle request errors to frontegg
-- [ ]  Handle port already taken

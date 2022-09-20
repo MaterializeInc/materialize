@@ -333,8 +333,13 @@ tbl         table
 v1          view
 v2          view
 
-> SELECT "Create Table" FROM (SHOW CREATE TABLE tbl)
+> SELECT create_sql FROM (SHOW CREATE TABLE tbl)
 "CREATE TABLE \"d\".\"public\".\"tbl\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\")"
+
+! SHOW COLUMNS FROM pass_secret
+contains:d.public.pass_secret is a secret and so does not have columns
+! SHOW COLUMNS FROM kafka_conn
+contains:d.public.kafka_conn is a connection and so does not have columns
 
 # DROP DATABASE does not support both RESTRICT and CASCADE.
 ! DROP DATABASE d RESTRICT CASCADE
@@ -439,6 +444,10 @@ d2
 -----
 
 # Check default sources, tables, and views in mz_catalog.
+
+# The sources in the catalog depend on the number of replicas and computeds
+$ skip-if
+SELECT ${arg.replicas} > 1 OR ${arg.replica-size} > 1;
 
 > SHOW SOURCES FROM mz_catalog
 name                                          type

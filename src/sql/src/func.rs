@@ -2886,8 +2886,8 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         "map_length" => Scalar {
             params![MapAny] => UnaryFunc::MapLength(func::MapLength) => Int32, oid::FUNC_MAP_LENGTH_OID;
         },
-        "mz_cluster_id" => Scalar {
-            params!() => UnmaterializableFunc::MzClusterId, oid::FUNC_MZ_CLUSTER_ID_OID;
+        "mz_environment_id" => Scalar {
+            params!() => UnmaterializableFunc::MzEnvironmentId, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
         },
         "mz_logical_timestamp" => Scalar {
             params!() => UnmaterializableFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;

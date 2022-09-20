@@ -326,11 +326,11 @@ impl<G: Scope> OperatorBuilder<G> {
                     if operator_waker.task_ready.load(Ordering::SeqCst) {
                         let waker = futures_util::task::waker_ref(&operator_waker);
                         let mut cx = Context::from_waker(&waker);
+                        operator_waker.task_ready.store(false, Ordering::SeqCst);
                         if Pin::new(fut).poll(&mut cx).is_ready() {
                             // We're done with logic so deallocate the task
                             logic_fut = None;
                         }
-                        operator_waker.task_ready.store(false, Ordering::SeqCst);
                     }
                 }
                 // The timely operator needs to be kept alive if the task is pending

@@ -19,12 +19,12 @@ _view&lowbar;name_ | The materialized view you want to use. You can find availab
 ## Examples
 
 ```sql
-SHOW CREATE MATERIALIZED VIEW my_materialized_view;
+SHOW CREATE MATERIALIZED VIEW winning_bids;
 ```
 ```nofmt
-            Materialized View            |        Create Materialized View
------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.winning_bids          | CREATE MATERIALIZED VIEW "materialize"."public"."winning_bids" IN CLUSTER "default" AS SELECT * FROM "materialize"."public"."highest_bid_per_auction" WHERE "pg_catalog"."extract"('epoch', "end_time") * 1000 < "mz_catalog"."mz_logical_timestamp"()
+              name               |                                                                                                                       create_sql
+---------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ materialize.public.winning_bids | CREATE MATERIALIZED VIEW "materialize"."public"."winning_bids" IN CLUSTER "default" AS SELECT * FROM "materialize"."public"."highest_bid_per_auction" WHERE "pg_catalog"."extract"('epoch', "end_time") * 1000 < "mz_catalog"."mz_logical_timestamp"()
 ```
 
 ## Related pages

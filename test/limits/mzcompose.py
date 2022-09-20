@@ -439,7 +439,12 @@ class KafkaSinks(Generator):
 
         for i in cls.all():
             print(
-                f'$ kafka-verify format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": {i}}}}}, "transaction": {{"id": "<TIMESTAMP>"}}}}\n'
+                dedent(
+                    f"""
+                    $ kafka-verify format=avro sink=materialize.public.s{i}
+                    {{"before": null, "after": {{"row": {{"f1": {i}}}}}}}
+                    """
+                )
             )
 
 
@@ -478,7 +483,7 @@ class KafkaSinksSameSource(Generator):
 
         for i in cls.all():
             print(
-                f'$ kafka-verify format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": 123}}}}, "transaction": {{"id": "<TIMESTAMP>"}}}}\n'
+                f'$ kafka-verify format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": 123}}}}}}\n'
             )
 
 

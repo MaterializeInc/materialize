@@ -37,14 +37,16 @@ use std::path::Path;
 use std::str;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::{Buf, BytesMut};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
 use mz_persist_client::cache::PersistClientCache;
+use mz_repr::adt::date::Date;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
@@ -332,7 +334,9 @@ impl<'a> FromSql<'a> for Slt {
             ))),
             PgType::FLOAT4 => Self(Value::Float4(types::float4_from_sql(raw)?)),
             PgType::FLOAT8 => Self(Value::Float8(types::float8_from_sql(raw)?)),
-            PgType::DATE => Self(Value::Date(NaiveDate::from_sql(ty, raw)?)),
+            PgType::DATE => Self(Value::Date(Date::from_pg_epoch(types::int4_from_sql(
+                raw,
+            )?)?)),
             PgType::INT2 => Self(Value::Int2(types::int2_from_sql(raw)?)),
             PgType::INT4 => Self(Value::Int4(types::int4_from_sql(raw)?)),
             PgType::INT8 => Self(Value::Int8(types::int8_from_sql(raw)?)),
@@ -668,6 +672,7 @@ impl Runner {
             unsafe_mode: true,
             metrics_registry,
             now,
+            environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             storage_host_sizes: Default::default(),
@@ -677,6 +682,7 @@ impl Runner {
                 (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
             ),
             otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+            storage_usage_collection_interval: Duration::from_secs(3600),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

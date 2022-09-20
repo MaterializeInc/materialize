@@ -25,6 +25,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, DatumVec, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
@@ -213,7 +214,7 @@ pub fn construct<A: Allocate>(
                                 frontier_session.give((
                                     Row::pack_slice(&[
                                         Datum::String(&name.to_string()),
-                                        Datum::Int64(worker as i64),
+                                        Datum::UInt64(u64::cast_from(worker)),
                                         // TODO: Convert to MzTimestamp.
                                         Datum::Int64(logical.try_into().expect("must fit")),
                                     ]),
@@ -256,7 +257,7 @@ pub fn construct<A: Allocate>(
                                     Row::pack_slice(&[
                                         Datum::String(&dataflow.to_string()),
                                         Datum::String(&source_id.to_string()),
-                                        Datum::Int64(worker as i64),
+                                        Datum::UInt64(u64::cast_from(worker)),
                                         // TODO: Convert to MzTimestamp.
                                         Datum::Int64(u64::from(logical) as i64),
                                     ]),
@@ -323,7 +324,7 @@ pub fn construct<A: Allocate>(
             move |(name, worker)| {
                 Row::pack_slice(&[
                     Datum::String(&name.to_string()),
-                    Datum::Int64(worker as i64),
+                    Datum::UInt64(u64::cast_from(worker)),
                 ])
             }
         });
@@ -333,7 +334,7 @@ pub fn construct<A: Allocate>(
                 Row::pack_slice(&[
                     Datum::String(&dataflow.to_string()),
                     Datum::String(&source.to_string()),
-                    Datum::Int64(worker as i64),
+                    Datum::UInt64(u64::cast_from(worker)),
                 ])
             }
         });
@@ -350,9 +351,9 @@ pub fn construct<A: Allocate>(
                     Row::pack_slice(&[
                         Datum::String(&dataflow.to_string()),
                         Datum::String(&source_id.to_string()),
-                        Datum::Int64(worker as i64),
-                        Datum::Int64(delay_pow as i64),
-                        Datum::Int64(count as i64),
+                        Datum::UInt64(u64::cast_from(worker)),
+                        Datum::UInt64(delay_pow.try_into().expect("pow too big")),
+                        Datum::Int64(count.into()),
                     ])
                 }
             });
@@ -361,7 +362,7 @@ pub fn construct<A: Allocate>(
             move |(peek, worker)| {
                 Row::pack_slice(&[
                     Datum::Uuid(peek.uuid),
-                    Datum::Int64(worker as i64),
+                    Datum::UInt64(u64::cast_from(worker)),
                     Datum::String(&peek.id.to_string()),
                     // TODO: Convert to MzTimestamp.
                     Datum::Int64(u64::from(peek.time) as i64),
@@ -373,9 +374,9 @@ pub fn construct<A: Allocate>(
         let peek_duration = peek_duration.as_collection().count_total_core().map({
             move |((worker, pow), count)| {
                 Row::pack_slice(&[
-                    Datum::Int64(worker as i64),
-                    Datum::Int64(pow as i64),
-                    Datum::Int64(count as i64),
+                    Datum::UInt64(u64::cast_from(worker)),
+                    Datum::UInt64(pow.try_into().expect("pow too big")),
+                    Datum::UInt64(count),
                 ])
             }
         });

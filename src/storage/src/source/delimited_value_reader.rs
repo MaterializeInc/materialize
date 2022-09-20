@@ -20,7 +20,7 @@ use crate::source::types::SourceReaderError;
 use crate::source::types::{NextMessage, SourceMessage, SourceReader};
 use crate::types::connections::ConnectionContext;
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{MzOffset, SourceConnection};
+use crate::types::sources::MzOffset;
 
 /// A wrapper that converts a delimited source reader that only provides
 /// values into a key/value reader whose key is always None
@@ -33,6 +33,7 @@ where
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Diff = D;
+    type Connection = S::Connection;
 
     fn new(
         source_name: String,
@@ -40,7 +41,7 @@ where
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        connection: Self::Connection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,

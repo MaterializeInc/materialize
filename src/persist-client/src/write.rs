@@ -449,6 +449,7 @@ where
                     desc: desc.clone(),
                     parts,
                     len: num_updates,
+                    runs: vec![],
                 },
                 &self.writer_id,
                 heartbeat_timestamp,
