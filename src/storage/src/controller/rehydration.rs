@@ -42,7 +42,6 @@ use crate::protocol::client::{
     ExportSinkCommand, IngestSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
-use crate::types::sinks::SinkAsOf;
 use crate::types::sources::SourceData;
 
 /// A storage client that replays the command stream on failure.
@@ -204,18 +203,12 @@ where
                 .await
                 .expect("from collection disappeared");
 
-            let cached_as_of = &export.description.as_of.frontier;
+            let cached_as_of = &export.description.as_of;
             // The controller has the dependency recorded in it's `exported_collections` so this
             // should not change at least until the sink is started up (because the storage
             // controller will not downgrade the source's since).
             let from_since = from_read_handle.since();
-            if PartialOrder::less_equal(cached_as_of, from_since) {
-                export.description.as_of = SinkAsOf {
-                    frontier: from_since.to_owned(),
-                    // If we're using the since, never read the snapshot
-                    strict: true,
-                };
-            }
+            export.description.as_of = cached_as_of.maybe_fast_forward(from_since);
         }
 
         // Rehydrate all commands.
