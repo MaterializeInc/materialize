@@ -683,30 +683,14 @@ where
                 )))
             }
             ActiveReplicationResponse::SubscribeResponse(global_id, response) => {
-                let new_upper = match &response {
-                    SubscribeResponse::Batch(SubscribeBatch { lower, upper, .. }) => {
-                        // Ensure there are no gaps in the subscribe stream we receive.
-                        assert_eq!(
-                            lower,
-                            &instance.compute.collections[&global_id].write_frontier_upper,
-                        );
-
-                        upper.clone()
-                    }
-                    // The subscribe will not be written to again, but we should not confuse that
-                    // with the source of the SUBSCRIBE being complete through this time.
-                    SubscribeResponse::DroppedAt(_) => Antichain::new(),
+                if let SubscribeResponse::Batch(SubscribeBatch { lower, .. }) = &response {
+                    // Ensure there are no gaps in the subscribe stream we receive.
+                    assert_eq!(
+                        lower,
+                        &instance.compute.collections[&global_id].write_frontier_upper,
+                    );
                 };
-                instance
-                    .update_write_frontiers(&[(
-                        global_id,
-                        FrontierBounds {
-                            // TODO: Report the actual lower bound here.
-                            lower: new_upper.clone(),
-                            upper: new_upper,
-                        },
-                    )])
-                    .await?;
+
                 Ok(Some(ComputeControllerResponse::SubscribeResponse(
                     global_id, response,
                 )))
