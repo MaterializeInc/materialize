@@ -74,8 +74,7 @@ def drop_create_replica(c: Composition) -> None:
             > DROP CLUSTER REPLICA cluster1.replica1
             > CREATE CLUSTER REPLICA cluster1.replica3
               REMOTE ['computed_1_1:2100', 'computed_1_2:2100'],
-              COMPUTE ['computed_1_1:2102', 'computed_1_2:2102'],
-              WORKERS 1
+              COMPUTE ['computed_1_1:2102', 'computed_1_2:2102']
             """
         )
     )
@@ -87,8 +86,7 @@ def create_invalid_replica(c: Composition) -> None:
             """
             > CREATE CLUSTER REPLICA cluster1.replica3
               REMOTE ['no_such_host:2100'],
-              COMPUTE ['no_such_host:2102'],
-              WORKERS 1
+              COMPUTE ['no_such_host:2102']
             """
         )
     )
@@ -204,13 +202,11 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
                     REMOTE ['computed_1_1:2100', 'computed_1_2:2100'],
-                    COMPUTE ['computed_1_1:2102', 'computed_1_2:2102'],
-                    WORKERS 1
+                    COMPUTE ['computed_1_1:2102', 'computed_1_2:2102']
                     ),
                 replica2 (
                     REMOTE ['computed_2_1:2100', 'computed_2_2:2100'],
-                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2102'],
-                    WORKERS 1
+                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2102']
                     )
             )
             """

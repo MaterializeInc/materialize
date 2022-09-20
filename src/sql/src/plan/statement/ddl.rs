@@ -2636,30 +2636,29 @@ fn plan_replica_config(
         scx.require_unsafe_mode("WORKERS cluster replica option")?;
     }
 
-    let remote_addrs = remote
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<BTreeSet<String>>();
-    let compute_addrs = compute
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<BTreeSet<String>>();
-
-    if remote_addrs.len() > 1 && (remote_addrs.len() != compute_addrs.len()) {
-        sql_bail!(
-            "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
-        );
-    }
-    if compute_addrs.len() > remote_addrs.len() {
-        sql_bail!(
-            "must specify as many COMPUTE addresses as REMOTE addresses for multi-process replicas"
-        );
-    }
-
-    match (remote_addrs.len() > 0, size, workers) {
-        (true, None, Some(workers)) => {
+    match (size, remote) {
+        (None, Some(remote)) => {
+            // REMOTE given, no SIZE
             if availability_zone.is_some() {
                 sql_bail!("cannot specify AVAILABILITY ZONE and REMOTE");
+            }
+            // Unwrap REMOTE options
+            let remote_addrs = remote.into_iter().collect::<BTreeSet<String>>();
+            let compute_addrs = compute
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<BTreeSet<String>>();
+            let workers = workers.unwrap_or(1);
+
+            if remote_addrs.len() > 1 && (remote_addrs.len() != compute_addrs.len()) {
+                sql_bail!(
+                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
+                );
+            }
+            if compute_addrs.len() > remote_addrs.len() {
+                sql_bail!(
+                    "must specify as many COMPUTE addresses as REMOTE addresses for multi-process replicas"
+                );
             }
 
             let workers = NonZeroUsize::new(workers.into())
@@ -2670,21 +2669,22 @@ fn plan_replica_config(
                 workers,
             })
         }
-        (true, None, None) => {
-            sql_bail!("REMOTE requires WORKERS to be specified")
+        (Some(size), None) => {
+            // SIZE given, no REMOTE
+            if workers.is_some() {
+                sql_bail!("cannot specify SIZE and WORKERS");
+            }
+            if compute.is_some() {
+                sql_bail!("cannot specify SIZE and COMPUTE");
+            }
+            Ok(ComputeInstanceReplicaConfig::Managed {
+                size,
+                availability_zone,
+            })
         }
-        (false, Some(size), None) => Ok(ComputeInstanceReplicaConfig::Managed {
-            size,
-            availability_zone,
-        }),
-        (false, None, _) => {
+        (_, _) => {
+            // SIZE and REMOTE given, or none of them
             sql_bail!("one of REMOTE or SIZE must be specified")
-        }
-        (true, Some(_), _) => {
-            sql_bail!("only one of REMOTE or SIZE may be specified")
-        }
-        (false, Some(_), Some(_)) => {
-            sql_bail!("cannot specify SIZE and WORKERS");
         }
     }
 }
