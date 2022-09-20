@@ -126,7 +126,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             for (key, val) in items {
                 let field = builder
                     .field_by_name(key)
-                    .ok_or_else(|| anyhow!("No such key in record: {}", key))?;
+                    .ok_or_else(|| anyhow!("No such field in record: {}", key))?;
                 let val = from_json(val, schema.step(&field.schema))?;
                 builder.put(key, val);
             }
