@@ -123,7 +123,11 @@ def main() -> int:
                     _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
                 _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
 
-            os.mkdir(ROOT / "mzdata")
+            try:
+                os.mkdir(ROOT / "mzdata")
+            except FileExistsError:
+                pass
+
             environment_file = ROOT / "mzdata" / "environment-id"
             try:
                 with open(environment_file, "r") as file:
@@ -131,7 +135,7 @@ def main() -> int:
             except FileNotFoundError:
                 import uuid
 
-                environment_id = f"environment-{uuid.uuid4()}-0"
+                environment_id = f"aws-local-{uuid.uuid4()}-0"
                 with open(environment_file, "w+") as file:
                     file.write(environment_id)
 
