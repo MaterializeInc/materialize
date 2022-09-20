@@ -50,6 +50,7 @@ use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
+use crate::adt::date::Date;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
@@ -379,19 +380,20 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, datetime::Ti
     Ok((d, t, offset))
 }
 
-/// Parses a [`NaiveDate`] from `s`.
-pub fn parse_date(s: &str) -> Result<NaiveDate, ParseError> {
+/// Parses a [`Date`] from `s`.
+pub fn parse_date(s: &str) -> Result<Date, ParseError> {
     match parse_timestamp_string(s) {
-        Ok((date, _, _)) => Ok(date),
+        Ok((date, _, _)) => Date::try_from(date).map_err(|_| ParseError::out_of_range("date", s)),
         Err(e) => Err(ParseError::invalid_input_syntax("date", s).with_details(e)),
     }
 }
 
-/// Writes a [`NaiveDate`] to `buf`.
-pub fn format_date<F>(buf: &mut F, d: NaiveDate) -> Nestable
+/// Writes a [`Date`] to `buf`.
+pub fn format_date<F>(buf: &mut F, d: Date) -> Nestable
 where
     F: FormatBuffer,
 {
+    let d: NaiveDate = d.into();
     let (year_ad, year) = d.year_ce();
     write!(buf, "{:04}-{}", year, d.format("%m-%d"));
     if !year_ad {

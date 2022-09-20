@@ -30,6 +30,7 @@ fn is_null(schema: &SchemaPieceOrNamed) -> bool {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+    use mz_repr::adt::date::Date;
     use ordered_float::OrderedFloat;
 
     use mz_avro::types::{DecimalValue, Value};
@@ -82,8 +83,11 @@ mod tests {
     fn test_diff_pair_to_avro_primitive_types() -> anyhow::Result<()> {
         use numeric::Numeric;
         // Data to be used later in assertions.
-        let date = NaiveDate::from_ymd(2020, 1, 8);
-        let date_time = NaiveDateTime::new(date, NaiveTime::from_hms(1, 1, 1));
+        let date = 365 * 50 + 20;
+        let date_time = NaiveDateTime::new(
+            NaiveDate::from_ymd(2020, 1, 8),
+            NaiveTime::from_hms(1, 1, 1),
+        );
         let bytes: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10];
         let string = String::from("test");
 
@@ -104,7 +108,11 @@ mod tests {
                 Datum::Float64(OrderedFloat::from(1f64)),
                 Value::Double(1f64),
             ),
-            (ScalarType::Date, Datum::Date(date), Value::Date(date)),
+            (
+                ScalarType::Date,
+                Datum::Date(Date::from_unix_epoch(date).unwrap()),
+                Value::Date(date),
+            ),
             (
                 ScalarType::Timestamp,
                 Datum::Timestamp(date_time),

@@ -132,7 +132,7 @@ impl ToJson for TypedDatum<'_> {
                 }
                 // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
                 ScalarType::Date => {
-                    serde_json::value::Value::String(format!("{:?}", datum.unwrap_date()))
+                    serde_json::value::Value::String(format!("{}", datum.unwrap_date()))
                 }
                 ScalarType::Time => {
                     serde_json::value::Value::String(format!("{:?}", datum.unwrap_time()))
