@@ -52,16 +52,24 @@ impl CheckedRecursion for Demand {
 }
 
 impl crate::Transform for Demand {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "demand")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(
+        let result = self.action(
             relation,
             (0..relation.arity()).collect(),
             &mut HashMap::new(),
-        )
+        );
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

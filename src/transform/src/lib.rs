@@ -146,6 +146,12 @@ pub struct Fixpoint {
 }
 
 impl Transform for Fixpoint {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "fixpoint")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -161,18 +167,31 @@ impl Transform for Fixpoint {
         loop {
             let mut original_count = 0;
             relation.try_visit_post::<_, TransformError>(&mut |_| Ok(original_count += 1))?;
-            for _ in 0..self.limit {
+            for i in 0..self.limit {
                 let original = relation.clone();
-                for transform in self.transforms.iter() {
-                    transform.transform(
-                        relation,
-                        TransformArgs {
-                            id_gen: args.id_gen,
-                            indexes: args.indexes,
-                        },
-                    )?;
-                }
+
+                let span = tracing::span!(
+                    tracing::Level::TRACE,
+                    "iteration",
+                    target = "optimizer",
+                    path.segment = format!("{:04}", i)
+                );
+                span.in_scope(|| -> Result<(), TransformError> {
+                    for transform in self.transforms.iter() {
+                        transform.transform(
+                            relation,
+                            TransformArgs {
+                                id_gen: args.id_gen,
+                                indexes: args.indexes,
+                            },
+                        )?;
+                    }
+                    mz_repr::explain_new::trace_plan(relation);
+                    Ok(())
+                })?;
+
                 if *relation == original {
+                    mz_repr::explain_new::trace_plan(relation);
                     return Ok(());
                 }
             }
@@ -254,6 +273,12 @@ impl Default for FuseAndCollapse {
 }
 
 impl Transform for FuseAndCollapse {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "fuse_and_collapse")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -268,6 +293,7 @@ impl Transform for FuseAndCollapse {
                 },
             )?;
         }
+        mz_repr::explain_new::trace_plan(&*relation);
         Ok(())
     }
 }
@@ -438,7 +464,7 @@ impl Optimizer {
         let transform_result = self.transform(&mut relation, &EmptyIndexOracle);
         match transform_result {
             Ok(_) => {
-                mz_ore::tracing::trace_plan(&relation);
+                mz_repr::explain_new::trace_plan(&relation);
                 Ok(mz_expr::OptimizedMirRelationExpr(relation))
             }
             Err(e) => {

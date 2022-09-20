@@ -39,12 +39,20 @@ impl CheckedRecursion for ProjectionLifting {
 }
 
 impl crate::Transform for ProjectionLifting {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "projection_lifting")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation, &mut HashMap::new())
+        let result = self.action(relation, &mut HashMap::new());
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

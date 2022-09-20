@@ -27,13 +27,21 @@ use mz_expr::MirRelationExpr;
 pub struct ThresholdElision;
 
 impl crate::Transform for ThresholdElision {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "threshold_elision")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut visitor = ThresholdElisionAction::default();
-        relation.visit_mut(&mut visitor).map_err(From::from)
+        let result = relation.visit_mut(&mut visitor).map_err(From::from);
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

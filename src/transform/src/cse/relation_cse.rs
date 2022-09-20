@@ -27,6 +27,12 @@ use crate::TransformArgs;
 pub struct RelationCSE;
 
 impl crate::Transform for RelationCSE {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "relation_cse")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -35,6 +41,7 @@ impl crate::Transform for RelationCSE {
         let mut bindings = Bindings::default();
         bindings.intern_expression(relation)?;
         bindings.populate_expression(relation);
+        mz_repr::explain_new::trace_plan(&*relation);
         Ok(())
     }
 }

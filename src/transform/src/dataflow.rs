@@ -64,7 +64,7 @@ pub fn optimize_dataflow(
 
     optimize_dataflow_index_imports(dataflow, indexes)?;
 
-    mz_ore::tracing::trace_plan(dataflow);
+    mz_repr::explain_new::trace_plan(dataflow);
 
     Ok(())
 }
@@ -175,7 +175,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     target = "optimizer",
     level = "debug",
     skip_all,
-    fields(path.segment =optimizer.name)
+    fields(path.segment = optimizer.name)
 )]
 fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
@@ -193,7 +193,7 @@ fn optimize_dataflow_relations(
         optimizer.transform(object.plan.as_inner_mut(), indexes)?;
     }
 
-    mz_ore::tracing::trace_plan(dataflow);
+    mz_repr::explain_new::trace_plan(dataflow);
 
     Ok(())
 }
@@ -290,7 +290,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
         }
     }
 
-    mz_ore::tracing::trace_plan(dataflow);
+    mz_repr::explain_new::trace_plan(dataflow);
 
     Ok(())
 }
@@ -377,7 +377,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
         }
     }
 
-    mz_ore::tracing::trace_plan(dataflow);
+    mz_repr::explain_new::trace_plan(dataflow);
 
     Ok(())
 }
