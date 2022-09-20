@@ -145,6 +145,8 @@ fn test_parse_time_errors() {
 
 #[test]
 fn test_parse_timestamp() {
+    use mz_repr::adt::timestamp::CheckedTimestamp;
+
     run_test_parse_timestamp(
         "2001-02-03 04:05:06.789",
         NaiveDate::from_ymd(2001, 2, 3).and_hms_nano(4, 5, 6, 789_000_000),
@@ -167,7 +169,10 @@ fn test_parse_timestamp() {
     );
 
     fn run_test_parse_timestamp(s: &str, ts: NaiveDateTime) {
-        assert_eq!(strconv::parse_timestamp(s).unwrap(), ts);
+        assert_eq!(
+            strconv::parse_timestamp(s).unwrap(),
+            CheckedTimestamp::from_timestamplike(ts).unwrap()
+        );
     }
 }
 
@@ -217,6 +222,8 @@ fn test_parse_timestamp_errors() {
 
 #[test]
 fn test_parse_timestamptz() {
+    use mz_repr::adt::timestamp::CheckedTimestamp;
+
     #[rustfmt::skip]
     let test_cases = [("1999-01-01 01:23:34.555", 1999, 1, 1, 1, 23, 34, 555_000_000, 0),
         ("1999-01-01 01:23:34.555+0:00", 1999, 1, 1, 1, 23, 34, 555_000_000, 0),
@@ -250,7 +257,11 @@ fn test_parse_timestamptz() {
             .and_hms_nano(test.4, test.5, test.6, test.7);
         let offset = FixedOffset::east(test.8);
         let dt_fixed_offset = offset.from_local_datetime(&expected).earliest().unwrap();
-        let expected = DateTime::<Utc>::from_utc(dt_fixed_offset.naive_utc(), Utc);
+        let expected = CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_utc(
+            dt_fixed_offset.naive_utc(),
+            Utc,
+        ))
+        .unwrap();
 
         assert_eq!(actual, expected);
     }
@@ -588,7 +599,7 @@ fn test_format_timestamp() {
 
     fn run_test_format_timestamp(n: NaiveDateTime, e: &str) {
         let mut buf = String::new();
-        strconv::format_timestamp(&mut buf, n);
+        strconv::format_timestamp(&mut buf, &n);
         assert_eq!(buf, e);
     }
 }
@@ -675,7 +686,7 @@ fn test_format_timestamptz() {
 
     fn run_test_format_timestamptz(n: DateTime<Utc>, e: &str) {
         let mut buf = String::new();
-        strconv::format_timestamptz(&mut buf, n);
+        strconv::format_timestamptz(&mut buf, &n);
         assert_eq!(buf, e);
     }
 }

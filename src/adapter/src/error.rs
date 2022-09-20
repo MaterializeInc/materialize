@@ -12,6 +12,7 @@ use std::fmt;
 use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
+use mz_repr::adt::timestamp::TimestampError;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::ComputeError;
@@ -536,6 +537,13 @@ impl From<StorageError> for AdapterError {
 impl From<ComputeError> for AdapterError {
     fn from(e: ComputeError) -> Self {
         AdapterError::Compute(e)
+    }
+}
+
+impl From<TimestampError> for AdapterError {
+    fn from(e: TimestampError) -> Self {
+        let e: EvalError = e.into();
+        e.into()
     }
 }
 

@@ -10,7 +10,10 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 
 use mz_ore::result::ResultExt;
-use mz_repr::{adt::numeric::Numeric, strconv, Timestamp};
+use mz_repr::{
+    adt::{numeric::Numeric, timestamp::CheckedTimestamp},
+    strconv, Timestamp,
+};
 
 use crate::EvalError;
 
@@ -80,7 +83,9 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "timestamp_tz_to_mz_timestamp"]
-    fn cast_timestamp_tz_to_mz_timestamp(a: DateTime<Utc>) -> Result<Timestamp, EvalError> {
+    fn cast_timestamp_tz_to_mz_timestamp(
+        a: CheckedTimestamp<DateTime<Utc>>,
+    ) -> Result<Timestamp, EvalError> {
         a.timestamp_millis()
             .try_into()
             .map_err(|_| EvalError::MzTimestampOutOfRange)
@@ -89,7 +94,9 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "timestamp_to_mz_timestamp"]
-    fn cast_timestamp_to_mz_timestamp(a: NaiveDateTime) -> Result<Timestamp, EvalError> {
+    fn cast_timestamp_to_mz_timestamp(
+        a: CheckedTimestamp<NaiveDateTime>,
+    ) -> Result<Timestamp, EvalError> {
         a.timestamp_millis()
             .try_into()
             .map_err(|_| EvalError::MzTimestampOutOfRange)

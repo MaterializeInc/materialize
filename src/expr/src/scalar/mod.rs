@@ -9,6 +9,7 @@
 
 use itertools::Itertools;
 use mz_repr::adt::date::DateError;
+use mz_repr::adt::timestamp::TimestampError;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
@@ -2137,6 +2138,14 @@ impl From<DateError> for EvalError {
     fn from(e: DateError) -> EvalError {
         match e {
             DateError::OutOfRange => EvalError::DateOutOfRange,
+        }
+    }
+}
+
+impl From<TimestampError> for EvalError {
+    fn from(e: TimestampError) -> EvalError {
+        match e {
+            TimestampError::OutOfRange => EvalError::TimestampOutOfRange,
         }
     }
 }

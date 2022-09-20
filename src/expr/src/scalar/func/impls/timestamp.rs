@@ -10,7 +10,9 @@
 use std::fmt;
 
 use chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
+use mz_ore::result::ResultExt;
 use mz_repr::adt::date::Date;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -26,9 +28,9 @@ use crate::EvalError;
 sqlfunc!(
     #[sqlname = "timestamp_to_text"]
     #[preserves_uniqueness = true]
-    fn cast_timestamp_to_string(a: NaiveDateTime) -> String {
+    fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
         let mut buf = String::new();
-        strconv::format_timestamp(&mut buf, a);
+        strconv::format_timestamp(&mut buf, &a);
         buf
     }
 );
@@ -36,23 +38,23 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_text"]
     #[preserves_uniqueness = true]
-    fn cast_timestamp_tz_to_string(a: DateTime<Utc>) -> String {
+    fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
         let mut buf = String::new();
-        strconv::format_timestamptz(&mut buf, a);
+        strconv::format_timestamptz(&mut buf, &a);
         buf
     }
 );
 
 sqlfunc!(
     #[sqlname = "timestamp_to_date"]
-    fn cast_timestamp_to_date(a: NaiveDateTime) -> Result<Date, EvalError> {
+    fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, EvalError> {
         Ok(a.date().try_into()?)
     }
 );
 
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_date"]
-    fn cast_timestamp_tz_to_date(a: DateTime<Utc>) -> Result<Date, EvalError> {
+    fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date, EvalError> {
         Ok(a.naive_utc().date().try_into()?)
     }
 );
@@ -60,28 +62,34 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "timestamp_to_timestamp_with_time_zone"]
     #[preserves_uniqueness = true]
-    fn cast_timestamp_to_timestamp_tz(a: NaiveDateTime) -> DateTime<Utc> {
-        DateTime::<Utc>::from_utc(a, Utc)
+    fn cast_timestamp_to_timestamp_tz(
+        a: CheckedTimestamp<NaiveDateTime>,
+    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        DateTime::<Utc>::from_utc(a.into(), Utc)
+            .try_into()
+            .err_into()
     }
 );
 
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_timestamp"]
-    fn cast_timestamp_tz_to_timestamp(a: DateTime<Utc>) -> NaiveDateTime {
-        a.naive_utc()
+    fn cast_timestamp_tz_to_timestamp(
+        a: CheckedTimestamp<DateTime<Utc>>,
+    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        a.naive_utc().try_into().err_into()
     }
 );
 
 sqlfunc!(
     #[sqlname = "timestamp_to_time"]
-    fn cast_timestamp_to_time(a: NaiveDateTime) -> NaiveTime {
+    fn cast_timestamp_to_time(a: CheckedTimestamp<NaiveDateTime>) -> NaiveTime {
         a.time()
     }
 );
 
 sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_time"]
-    fn cast_timestamp_tz_to_time(a: DateTime<Utc>) -> NaiveTime {
+    fn cast_timestamp_tz_to_time(a: CheckedTimestamp<DateTime<Utc>>) -> NaiveTime {
         a.naive_utc().time()
     }
 );
@@ -166,13 +174,13 @@ impl fmt::Display for DatePartInterval {
     }
 }
 
-pub fn date_part_timestamp_inner<T, D>(units: DateTimeUnits, ts: T) -> Result<D, EvalError>
+pub fn date_part_timestamp_inner<T, D>(units: DateTimeUnits, ts: &T) -> Result<D, EvalError>
 where
     T: TimestampLike,
     D: DecimalLike,
 {
     match units {
-        DateTimeUnits::Epoch => Ok(TimestampLike::extract_epoch(&ts)),
+        DateTimeUnits::Epoch => Ok(TimestampLike::extract_epoch(ts)),
         DateTimeUnits::Millennium => Ok(D::from(ts.millennium())),
         DateTimeUnits::Century => Ok(D::from(ts.century())),
         DateTimeUnits::Decade => Ok(D::from(ts.decade())),
@@ -205,11 +213,11 @@ where
 pub struct ExtractTimestamp(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractTimestamp {
-    type Input = NaiveDateTime;
+    type Input = CheckedTimestamp<NaiveDateTime>;
     type Output = Result<Numeric, EvalError>;
 
-    fn call(&self, a: NaiveDateTime) -> Result<Numeric, EvalError> {
-        date_part_timestamp_inner(self.0, a)
+    fn call(&self, a: CheckedTimestamp<NaiveDateTime>) -> Result<Numeric, EvalError> {
+        date_part_timestamp_inner(self.0, &*a)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
@@ -229,11 +237,11 @@ impl fmt::Display for ExtractTimestamp {
 pub struct ExtractTimestampTz(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractTimestampTz {
-    type Input = DateTime<Utc>;
+    type Input = CheckedTimestamp<DateTime<Utc>>;
     type Output = Result<Numeric, EvalError>;
 
-    fn call(&self, a: DateTime<Utc>) -> Result<Numeric, EvalError> {
-        date_part_timestamp_inner(self.0, a)
+    fn call(&self, a: CheckedTimestamp<DateTime<Utc>>) -> Result<Numeric, EvalError> {
+        date_part_timestamp_inner(self.0, &*a)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
@@ -253,11 +261,11 @@ impl fmt::Display for ExtractTimestampTz {
 pub struct DatePartTimestamp(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DatePartTimestamp {
-    type Input = NaiveDateTime;
+    type Input = CheckedTimestamp<NaiveDateTime>;
     type Output = Result<f64, EvalError>;
 
-    fn call(&self, a: NaiveDateTime) -> Result<f64, EvalError> {
-        date_part_timestamp_inner(self.0, a)
+    fn call(&self, a: CheckedTimestamp<NaiveDateTime>) -> Result<f64, EvalError> {
+        date_part_timestamp_inner(self.0, &*a)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
@@ -277,11 +285,11 @@ impl fmt::Display for DatePartTimestamp {
 pub struct DatePartTimestampTz(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DatePartTimestampTz {
-    type Input = DateTime<Utc>;
+    type Input = CheckedTimestamp<DateTime<Utc>>;
     type Output = Result<f64, EvalError>;
 
-    fn call(&self, a: DateTime<Utc>) -> Result<f64, EvalError> {
-        date_part_timestamp_inner(self.0, a)
+    fn call(&self, a: CheckedTimestamp<DateTime<Utc>>) -> Result<f64, EvalError> {
+        date_part_timestamp_inner(self.0, &*a)
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
@@ -295,7 +303,7 @@ impl fmt::Display for DatePartTimestampTz {
     }
 }
 
-pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: T) -> Result<T, EvalError> {
+pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: &T) -> Result<T, EvalError> {
     match units {
         DateTimeUnits::Millennium => Ok(ts.truncate_millennium()),
         DateTimeUnits::Century => Ok(ts.truncate_century()),
@@ -330,11 +338,14 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: T) -> Result
 pub struct DateTruncTimestamp(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DateTruncTimestamp {
-    type Input = NaiveDateTime;
-    type Output = Result<NaiveDateTime, EvalError>;
+    type Input = CheckedTimestamp<NaiveDateTime>;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call(&self, a: NaiveDateTime) -> Result<NaiveDateTime, EvalError> {
-        date_trunc_inner(self.0, a)
+    fn call(
+        &self,
+        a: CheckedTimestamp<NaiveDateTime>,
+    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        date_trunc_inner(self.0, &*a)?.try_into().err_into()
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
@@ -354,11 +365,14 @@ impl fmt::Display for DateTruncTimestamp {
 pub struct DateTruncTimestampTz(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DateTruncTimestampTz {
-    type Input = DateTime<Utc>;
-    type Output = Result<DateTime<Utc>, EvalError>;
+    type Input = CheckedTimestamp<DateTime<Utc>>;
+    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call(&self, a: DateTime<Utc>) -> Result<DateTime<Utc>, EvalError> {
-        date_trunc_inner(self.0, a)
+    fn call(
+        &self,
+        a: CheckedTimestamp<DateTime<Utc>>,
+    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        date_trunc_inner(self.0, &*a)?.try_into().err_into()
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
@@ -379,13 +393,18 @@ impl fmt::Display for DateTruncTimestampTz {
 /// `2020-11-11T17:39:14Z`. A DST observing timezone like `America/New_York` would cause the following DST anomalies:
 /// `2020-11-01T00:59:59` -> `2020-11-01T04:59:59Z` and `2020-11-01T01:00:00` -> `2020-11-01T06:00:00Z`
 /// `2020-03-08T02:59:59` -> `2020-03-08T07:59:59Z` and `2020-03-08T03:00:00` -> `2020-03-08T07:00:00Z`
-pub fn timezone_timestamp(tz: Timezone, mut dt: NaiveDateTime) -> Result<DateTime<Utc>, EvalError> {
+pub fn timezone_timestamp(
+    tz: Timezone,
+    dt: NaiveDateTime,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     let offset = match tz {
         Timezone::FixedOffset(offset) => offset,
         Timezone::Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
             Some(offset) => offset.fix(),
             None => {
-                dt += Duration::hours(1);
+                let dt = dt
+                    .checked_add_signed(Duration::hours(1))
+                    .ok_or(EvalError::TimestampOutOfRange)?;
                 tz.offset_from_local_datetime(&dt)
                     .latest()
                     .ok_or(EvalError::InvalidTimezoneConversion)?
@@ -393,7 +412,7 @@ pub fn timezone_timestamp(tz: Timezone, mut dt: NaiveDateTime) -> Result<DateTim
             }
         },
     };
-    Ok(DateTime::from_utc(dt - offset, Utc))
+    DateTime::from_utc(dt - offset, Utc).try_into().err_into()
 }
 
 /// Converts the UTC timestamptz `utc` to the local timestamp of the timezone `tz`.
@@ -412,11 +431,14 @@ pub fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> NaiveDateTime {
 pub struct TimezoneTimestamp(pub Timezone);
 
 impl<'a> EagerUnaryFunc<'a> for TimezoneTimestamp {
-    type Input = NaiveDateTime;
-    type Output = Result<DateTime<Utc>, EvalError>;
+    type Input = CheckedTimestamp<NaiveDateTime>;
+    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call(&self, a: NaiveDateTime) -> Result<DateTime<Utc>, EvalError> {
-        timezone_timestamp(self.0, a)
+    fn call(
+        &self,
+        a: CheckedTimestamp<NaiveDateTime>,
+    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        timezone_timestamp(self.0, a.to_naive())
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
@@ -436,11 +458,14 @@ impl fmt::Display for TimezoneTimestamp {
 pub struct TimezoneTimestampTz(pub Timezone);
 
 impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {
-    type Input = DateTime<Utc>;
-    type Output = NaiveDateTime;
+    type Input = CheckedTimestamp<DateTime<Utc>>;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call(&self, a: DateTime<Utc>) -> NaiveDateTime {
-        timezone_timestamptz(self.0, a)
+    fn call(
+        &self,
+        a: CheckedTimestamp<DateTime<Utc>>,
+    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        timezone_timestamptz(self.0, a.into()).try_into().err_into()
     }
 
     fn output_type(&self, input: ColumnType) -> ColumnType {

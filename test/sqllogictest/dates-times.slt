@@ -1323,25 +1323,32 @@ select '0001-02-24 03:04:05.6789 +00:00'::timestamptz - interval '-2147483648 MO
 query error invalid input syntax for type date
 select 'infinity'::date
 
-# We don't support BC parsing or 6 digit dates, so do some jank.
+# We don't support BC parsing or 6 digit dates, so do some jank. Additionally,
+# we don't yet support the `date - int` operation and have to use `date -
+# interval` instead, which produces a `timestamp`, and thus we aren't able to even
+# express the full range of date values.
+
+# Lowest date we could support, but timestamps don't.
+# select ('0001-01-01'::date - '4713years 1months 7days')::date
 
 query T
-select ('0001-01-01'::date - '4713years 1months 7days')::date
+select ('0001-01-01'::date - '1721389days'::interval)::date
 ----
-4714-11-24 BC
+4714-12-31 BC
 
 query T
-select ('0001-01-01'::date + '262142years 11months 30days')::date
+select ('0001-01-01'::date + '262142years 11months 30days'::interval)::date
 ----
 262143-12-31
 
-query error date out of range
+# Out of range for both dates and timestamps, but timestamp triggers first.
+query error timestamp out of range
 select ('0001-01-01'::date - '4713years 1months 8days')::date
 
 query error timestamp out of range
 select ('0001-01-01'::date + '262142years 11months 30days')::date + '1day'
 
 query II
-select ('0001-01-01'::date - '4713years 1months 7days')::date - ('0001-01-01'::date + '262142years 11months 30days')::date, ('0001-01-01'::date + '262142years 11months 30days')::date - ('0001-01-01'::date - '4713years 1months 7days')::date
+select ('0001-01-01'::date - '1721389days'::interval)::date - ('0001-01-01'::date + '262142years 11months 30days'::interval)::date, ('0001-01-01'::date + '262142years 11months 30days'::interval)::date - ('0001-01-01'::date - '1721389days'::interval)::date
 ----
--97467189 97467189
+-97467152 97467152

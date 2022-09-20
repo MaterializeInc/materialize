@@ -47,7 +47,7 @@ macro_rules! sqlfunc {
     (
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
-        fn $fn_name:ident<$lt:lifetime>(mut $param_name:ident: $input_ty:ty) -> $output_ty:ty
+        fn $fn_name:ident<$lt:lifetime>(mut $param_name:ident: $input_ty:ty $(,)?) -> $output_ty:ty
             $body:block
     ) => {
         sqlfunc!(
@@ -63,7 +63,7 @@ macro_rules! sqlfunc {
     (
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
-        fn $fn_name:ident<$lt:lifetime>($param_name:ident: $input_ty:ty) -> $output_ty:ty
+        fn $fn_name:ident<$lt:lifetime>($param_name:ident: $input_ty:ty $(,)?) -> $output_ty:ty
             $body:block
     ) => {
         paste::paste! {
