@@ -14,6 +14,7 @@ import getpass
 import os
 import shutil
 import sys
+import uuid
 
 import psutil
 
@@ -115,29 +116,26 @@ def main() -> int:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
+            mzdata = ROOT / "mzdata"
             if args.reset:
                 print("Removing mzdata directory...")
-                shutil.rmtree(ROOT / "mzdata", ignore_errors=True)
+                shutil.rmtree(mzdata, ignore_errors=True)
             for schema in ["consensus", "adapter", "storage"]:
                 if args.reset:
                     _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
                 _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
 
-            os.mkdir(ROOT / "mzdata")
-            environment_file = ROOT / "mzdata" / "environment-id"
+            mzdata.mkdir(exist_ok=True)
+            environment_file = mzdata / "environment-id"
             try:
-                with open(environment_file, "r") as file:
-                    environment_id = file.read().rstrip()
+                environment_id = environment_file.read_text().rstrip()
             except FileNotFoundError:
-                import uuid
-
-                environment_id = f"environment-{uuid.uuid4()}-0"
-                with open(environment_file, "w+") as file:
-                    file.write(environment_id)
+                environment_id = f"local-az1-{uuid.uuid4()}-0"
+                environment_file.write_text(environment_id)
 
             command += [
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
-                f"--persist-blob-url=file://{ROOT}/mzdata/persist/blob",
+                f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
