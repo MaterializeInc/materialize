@@ -451,26 +451,30 @@ pub fn show_indexes<'a>(
     scx: &'a StatementContext<'a>,
     ShowIndexesStatement {
         in_cluster,
-        table_name,
+        on_object,
+        from_schema,
         filter,
     }: ShowIndexesStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filter = vec!["idxs.on_id NOT LIKE 's%'".into()];
 
-    if let Some(table_name) = table_name {
-        let from = scx.get_item_by_resolved_name(&table_name)?;
-        if from.item_type() != CatalogItemType::View
-            && from.item_type() != CatalogItemType::MaterializedView
-            && from.item_type() != CatalogItemType::Source
-            && from.item_type() != CatalogItemType::Table
+    let schema_spec = scx.resolve_optional_schema(&from_schema)?;
+    query_filter.push(format!("objs.schema_id = {}", schema_spec));
+
+    if let Some(on_object) = on_object {
+        let on_item = scx.get_item_by_resolved_name(&on_object)?;
+        if on_item.item_type() != CatalogItemType::View
+            && on_item.item_type() != CatalogItemType::MaterializedView
+            && on_item.item_type() != CatalogItemType::Source
+            && on_item.item_type() != CatalogItemType::Table
         {
             sql_bail!(
                 "cannot show indexes on {} because it is a {}",
-                table_name.full_name_str(),
-                from.item_type(),
+                on_object.full_name_str(),
+                on_item.item_type(),
             );
         }
-        query_filter.push(format!("objs.id = '{}'", from.id()));
+        query_filter.push(format!("objs.id = '{}'", on_item.id()));
     }
 
     if let Some(cluster) = in_cluster {
