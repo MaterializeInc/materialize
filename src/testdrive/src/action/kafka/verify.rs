@@ -15,12 +15,15 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, ensure, Context};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
+use chrono::NaiveDate;
 use itertools::Itertools;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::{Headers, Message};
 use regex::Regex;
 use tokio::pin;
 use tokio_stream::StreamExt;
+
+use mz_avro::types::Value;
 
 use crate::action::{Action, ControlFlow, State};
 use crate::format::{avro, json};
@@ -266,11 +269,13 @@ impl Action for VerifyAction {
                             };
                             avro_from_bytes(key_schema, &bytes)
                         })
-                        .transpose()?;
+                        .transpose()?
+                        .map(DebugValue);
                     let value = match record.value {
                         None => None,
                         Some(bytes) => Some(avro_from_bytes(value_schema, &bytes)?),
-                    };
+                    }
+                    .map(DebugValue);
                     actual_messages.push(Record {
                         headers: record.headers,
                         key,
@@ -307,14 +312,16 @@ impl Action for VerifyAction {
                             Some(avro::from_json(&key, key_schema.top_node())?)
                         } else {
                             None
-                        };
+                        }
+                        .map(DebugValue);
                         let value = match deserializer.next() {
                             None => None,
                             Some(r) => {
                                 let value = r.context("parsing json")?;
                                 Some(avro::from_json(&value, value_schema.top_node())?)
                             }
-                        };
+                        }
+                        .map(DebugValue);
                         ensure!(
                             deserializer.next().is_none(),
                             "at most two avro records per expect line"
@@ -467,7 +474,7 @@ pub fn validate_sink_with_partial_search<A: Debug>(
                             "record {} did not match\nexpected:\n{}\n\nactual:\n{}",
                             i,
                             e_str,
-                            a_str
+                            a_str,
                         );
                     }
                     actual_item = actual.next();
@@ -596,5 +603,57 @@ impl Action for VerifySchemaAction {
         }
 
         Ok(ControlFlow::Continue)
+    }
+}
+
+/// A struct to enhance the debug output of various avro types.
+///
+/// Testdrive files, for example, specify timestamps in micros, but debug output
+/// happens in Y-M-D format, which can be very difficult to map back to the
+/// correct input number. Similarly, dates are represented in Avro as i32s, but
+/// we would like to see the Y-M-D format as well.
+struct DebugValue(Value);
+
+impl Debug for DebugValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Value::Timestamp(t) => write!(
+                f,
+                "Timestamp(\"{:?}\", {} micros, {} millis)",
+                t,
+                t.timestamp_micros(),
+                t.timestamp_millis()
+            ),
+            Value::Date(d) => write!(
+                f,
+                "Date({:?}, \"{}\")",
+                d,
+                NaiveDate::from_num_days_from_ce(*d)
+            ),
+
+            // Re-wrap types that contain a Value.
+            Value::Record(r) => f
+                .debug_set()
+                .entries(r.iter().map(|(s, v)| (s, DebugValue(v.clone()))))
+                .finish(),
+            Value::Array(a) => f
+                .debug_set()
+                .entries(a.iter().map(|v| DebugValue(v.clone())))
+                .finish(),
+            Value::Union {
+                index,
+                inner,
+                n_variants,
+                null_variant,
+            } => f
+                .debug_struct("Union")
+                .field("index", index)
+                .field("inner", &DebugValue(*inner.clone()))
+                .field("n_variants", n_variants)
+                .field("null_variant", null_variant)
+                .finish(),
+
+            _ => write!(f, "{:?}", self.0),
+        }
     }
 }
