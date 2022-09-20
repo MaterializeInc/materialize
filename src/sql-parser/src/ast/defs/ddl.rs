@@ -519,25 +519,23 @@ impl_display!(Compression);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DbzMode<T: AstInfo> {
-    /// `ENVELOPE DEBEZIUM [TRANSACTION METADATA (...)]`
+    /// Unused
     Plain {
         tx_metadata: Vec<DbzTxMetadataOption<T>>,
     },
-    /// `ENVELOPE DEBEZIUM UPSERT`
+    /// `ENVELOPE DEBEZIUM`
     Upsert,
 }
 
 impl<T: AstInfo> AstDisplay for DbzMode<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+    fn fmt<W: fmt::Write>(&self, _f: &mut AstFormatter<W>) {
         match self {
-            Self::Plain { tx_metadata } => {
-                if !tx_metadata.is_empty() {
-                    f.write_str(" (TRANSACTION METADATA (");
-                    f.write_node(&display::comma_separated(tx_metadata));
-                    f.write_str("))");
-                }
+            Self::Plain { tx_metadata: _ } => {
+                unreachable!("Plain Debezium envelope is not supported")
             }
-            Self::Upsert => f.write_str(" UPSERT"),
+            // We interpret the bare keyword `DEBEZIUM` as debezium upsert, so don't
+            // display anything here.
+            Self::Upsert => {}
         }
     }
 }
