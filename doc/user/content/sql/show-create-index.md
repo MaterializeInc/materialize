@@ -33,9 +33,9 @@ SHOW CREATE INDEX my_view_idx;
 ```
 
 ```nofmt
-             Index             |                                Create Index
--------------------------------|---------------------------------------------------------------------------
-materialize.public.my_view_idx | CREATE INDEX "my_view_idx" ON "materialize"."public"."my_view" ("a", "b");
+              name              |                                           create_sql
+--------------------------------+------------------------------------------------------------------------------------------------
+ materialize.public.my_view_idx | CREATE INDEX "my_view_idx" IN CLUSTER "default" ON "materialize"."public"."my_view" ("a", "b")
 ```
 
 ## Related pages

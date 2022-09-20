@@ -29,7 +29,7 @@ testconn   kafka
 testconn    kafka
 
 > SHOW CREATE CONNECTION testconn
-Connection   "Create Connection"
+name   create_sql
 ---------------------------------
 materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER = '${testdrive.kafka-addr}'"
 

@@ -18,7 +18,7 @@ contains:unknown catalog item 't'
 > CREATE TABLE t (a int, b text NOT NULL)
 
 > SHOW CREATE TABLE t;
-Table   "Create Table"
+name   create_sql
 ------------------------
 materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\" NOT NULL)"
 

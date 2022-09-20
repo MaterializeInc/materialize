@@ -154,7 +154,7 @@ name                    on          cluster             key
 data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 
 > SHOW CREATE INDEX data_view_primary_idx
-Index                                    "Create Index"
+name                                     create_sql
 --------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\" IN CLUSTER \"<VARIABLE_OUTPUT>\" ON \"materialize\".\"public\".\"data_view\" (\"b\" - \"a\", \"a\")"
 
