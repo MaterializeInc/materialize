@@ -56,7 +56,7 @@ use crate::command::{
     ReplicaId, SourceInstanceDesc,
 };
 use crate::logging::{LogVariant, LogView, LoggingConfig};
-use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
+use crate::response::{PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
@@ -83,9 +83,9 @@ pub struct ComputeInstanceEvent {
 
 /// Responses from the compute controller.
 pub enum ComputeControllerResponse<T> {
-    /// See [`ComputeResponse::PeekResponse`].
+    /// See [`ComputeResponse::PeekResponse`](crate::response::ComputeResponse::PeekResponse).
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// See [`ComputeResponse::SubscribeResponse`].
+    /// See [`ComputeResponse::SubscribeResponse`](crate::response::ComputeResponse::SubscribeResponse).
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// A notification that we heard a response from the given replica at the
     /// given time.
@@ -662,28 +662,19 @@ where
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
-        let (instance_id, ar_response) = match self.compute.stashed_response.take() {
+        let (instance_id, response) = match self.compute.stashed_response.take() {
             Some(resp) => resp,
             None => return Ok(None),
-        };
-
-        let response = match ar_response {
-            ActiveReplicationResponse::ComputeResponse(resp) => resp,
-            ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when) => {
-                return Ok(Some(ComputeControllerResponse::ReplicaHeartbeat(
-                    replica_id, when,
-                )))
-            }
         };
 
         let mut instance = self.instance(instance_id)?;
 
         match response {
-            ComputeResponse::FrontierUppers(updates) => {
+            ActiveReplicationResponse::FrontierUppers(updates) => {
                 instance.update_write_frontiers(&updates).await?;
                 Ok(None)
             }
-            ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+            ActiveReplicationResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 instance.remove_peeks(&[uuid].into()).await?;
                 Ok(Some(ComputeControllerResponse::PeekResponse(
                     uuid,
@@ -691,7 +682,7 @@ where
                     otel_ctx,
                 )))
             }
-            ComputeResponse::SubscribeResponse(global_id, response) => {
+            ActiveReplicationResponse::SubscribeResponse(global_id, response) => {
                 let new_upper = match &response {
                     SubscribeResponse::Batch(SubscribeBatch { lower, upper, .. }) => {
                         // Ensure there are no gaps in the subscribe stream we receive.
@@ -713,6 +704,9 @@ where
                     global_id, response,
                 )))
             }
+            ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when) => Ok(Some(
+                ComputeControllerResponse::ReplicaHeartbeat(replica_id, when),
+            )),
         }
     }
 }

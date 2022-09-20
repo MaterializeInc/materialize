@@ -35,6 +35,7 @@ use timely::PartialOrder;
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
@@ -197,11 +198,7 @@ where
                             tracing::warn!("did not find pending peek for {}", uuid);
                             OpenTelemetryContext::empty()
                         });
-                    ActiveReplicationResponse::ComputeResponse(ComputeResponse::PeekResponse(
-                        *uuid,
-                        PeekResponse::Canceled,
-                        otel_ctx,
-                    ))
+                    ActiveReplicationResponse::PeekResponse(*uuid, PeekResponse::Canceled, otel_ctx)
                 }));
             }
             _ => {}
@@ -248,11 +245,9 @@ where
                 //
                 // Additionally, we just use the `otel_ctx` from the first worker to
                 // respond.
-                self.peeks.remove(&uuid).map(|_| {
-                    ActiveReplicationResponse::ComputeResponse(ComputeResponse::PeekResponse(
-                        uuid, response, otel_ctx,
-                    ))
-                })
+                self.peeks
+                    .remove(&uuid)
+                    .map(|_| ActiveReplicationResponse::PeekResponse(uuid, response, otel_ctx))
             }
             ComputeResponse::FrontierUppers(list) => {
                 let mut new_uppers = Vec::new();
@@ -266,9 +261,7 @@ where
                     }
                 }
                 if !new_uppers.is_empty() {
-                    Some(ActiveReplicationResponse::ComputeResponse(
-                        ComputeResponse::FrontierUppers(new_uppers),
-                    ))
+                    Some(ActiveReplicationResponse::FrontierUppers(new_uppers))
                 } else {
                     None
                 }
@@ -298,15 +291,13 @@ where
                             let new_lower = entry.clone();
                             entry.clone_from(&new_upper);
                             updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
-                            Some(ActiveReplicationResponse::ComputeResponse(
-                                ComputeResponse::SubscribeResponse(
-                                    id,
-                                    SubscribeResponse::Batch(SubscribeBatch {
-                                        lower: new_lower,
-                                        upper: new_upper,
-                                        updates,
-                                    }),
-                                ),
+                            Some(ActiveReplicationResponse::SubscribeResponse(
+                                id,
+                                SubscribeResponse::Batch(SubscribeBatch {
+                                    lower: new_lower,
+                                    upper: new_upper,
+                                    updates,
+                                }),
                             ))
                         } else {
                             None
@@ -318,11 +309,9 @@ where
                         // to observed responses; if we pre-load the entries in response to commands we can
                         // clean up the state here.
                         self.tails.insert(id, Antichain::new());
-                        Some(ActiveReplicationResponse::ComputeResponse(
-                            ComputeResponse::SubscribeResponse(
-                                id,
-                                SubscribeResponse::DroppedAt(frontier),
-                            ),
+                        Some(ActiveReplicationResponse::SubscribeResponse(
+                            id,
+                            SubscribeResponse::DroppedAt(frontier),
                         ))
                     }
                 }
@@ -564,13 +553,15 @@ where
     }
 }
 
-/// A response from the ActiveReplication client:
-/// either a deduplicated compute response, or a notification
-/// that we heard from a given replica and should update its recency status.
+/// A response from the ActiveReplication client.
 #[derive(Debug, Clone)]
 pub(super) enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
-    /// A response from the underlying compute replica.
-    ComputeResponse(ComputeResponse<T>),
+    /// A list of identifiers of traces, with new upper frontiers.
+    FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
+    /// The compute instance's response to the specified peek.
+    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    /// The compute instance's next response to the specified subscribe.
+    SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
