@@ -157,7 +157,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             });
         } else {
-            self.group_commit_initiate().await;
+            self.group_commit_initiate(None).await;
         }
     }
 
@@ -170,8 +170,14 @@ impl<S: Append + 'static> Coordinator<S> {
     /// STORAGE as a single batch. All applicable writes will happen at the same timestamp and all
     /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn group_commit_initiate(&mut self) {
-        let (write_lock_guard, pending_writes): (_, Vec<_>) = if self
+    pub(crate) async fn group_commit_initiate(
+        &mut self,
+        write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    ) {
+        let (write_lock_guard, pending_writes): (_, Vec<_>) = if let Some(guard) = write_lock_guard
+        {
+            (Some(guard), self.pending_writes.drain(..).collect())
+        } else if self
             .pending_writes
             .iter()
             .all(|write| matches!(write, PendingWriteTxn::System { .. }))
@@ -409,7 +415,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 update,
                 source: source.clone(),
             }));
-        self.group_commit_initiate().await;
+        self.group_commit_initiate(None).await;
     }
 
     /// Defers executing `deferred` until the write lock becomes available; waiting
