@@ -35,14 +35,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--rate", type=int, default=100)
     parser.add_argument("--max-txn-length", type=int, default=4)
     parser.add_argument("--unreliability", type=float, default=None)
-    parser.add_argument("--consensus", type=str, choices=["mem", "postgres", "maelstrom"], default=None)
-    parser.add_argument("--blob", type=str, choices=["mem", "maelstrom"], default=None)
+    parser.add_argument(
+        "--consensus",
+        type=str,
+        choices=["mem", "postgres", "maelstrom"],
+        default="maelstrom",
+    )
+    parser.add_argument(
+        "--blob", type=str, choices=["mem", "maelstrom"], default="maelstrom"
+    )
 
     args = parser.parse_args()
 
     if args.consensus == "mem":
         consensus_uri = "mem://consensus"
-    elif args.consensus_uri == "postgres":
+    elif args.consensus == "postgres":
         consensus_uri = "postgresql://postgres:postgres@postgres:5432?options=--search_path=consensus"
         c.start_and_wait_for_tcp(services=["postgres"])
         c.wait_for_postgres(service="postgres")
@@ -72,9 +79,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--",
         "maelstrom",
         *(
-              f"--blob-uri={blob_uri}" if blob_uri else "",
-              f"--consensus-uri={consensus_uri}" if consensus_uri else "",
-              f"--unreliability={args.unreliability}" if args.unreliability else "",
+            f"--blob-uri={blob_uri}" if blob_uri else "",
+            f"--consensus-uri={consensus_uri}" if consensus_uri else "",
+            f"--unreliability={args.unreliability}" if args.unreliability else "",
         ),
     )
 
