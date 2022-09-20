@@ -162,7 +162,7 @@ function Dataflows() {
       // Meant to render the scope identifier by addr, and its children recursively.
       async function render_scope(addr) {
 
-        if (scope_channels.get(addr) != null) {
+        if (scope_channels.get(addr) != null && scope_children.get(addr) != undefined) {
 
           let ids_seen = [];
           const edges = scope_channels.get(addr).map(([source, target, source_port, target_port, sent]) => {
