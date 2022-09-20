@@ -2052,13 +2052,22 @@ impl<'a> Parser<'a> {
 
     fn parse_kafka_connection_reference(&mut self) -> Result<KafkaConnection<Raw>, ParserError> {
         let connection = self.parse_raw_name()?;
-        let options = if self.consume_token(&Token::LParen) {
+        let mut options = if self.consume_token(&Token::LParen) {
             let options = self.parse_comma_separated(Parser::parse_kafka_config_option)?;
             self.expect_token(&Token::RParen)?;
             options
         } else {
             vec![]
         };
+
+        if self.parse_keyword(TOPIC) {
+            options.push(KafkaConfigOption {
+                name: KafkaConfigOptionName::Topic,
+                value: Some(WithOptionValue::Value(Value::String(
+                    self.parse_literal_string()?,
+                ))),
+            });
+        }
 
         Ok(KafkaConnection::Reference {
             connection,
