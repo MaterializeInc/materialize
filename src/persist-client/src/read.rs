@@ -32,6 +32,7 @@ use mz_persist_types::{Codec, Codec64};
 use crate::fetch::{
     fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPartMetadata,
 };
+use crate::internal::encoding::parse_id;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HollowBatch, Since};
