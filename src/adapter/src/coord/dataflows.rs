@@ -638,7 +638,7 @@ fn eval_unmaterializable_func(
         }
         UnmaterializableFunc::CurrentTimestamp => pack(Datum::from(session.pcx().wall_time)),
         UnmaterializableFunc::CurrentUser => pack(Datum::from(session.user())),
-        UnmaterializableFunc::MzEnvironmentId => pack(Datum::from(state.config().environment_id)),
+        UnmaterializableFunc::MzEnvironmentId => pack(Datum::from(&*state.config().environment_id)),
         UnmaterializableFunc::MzLogicalTimestamp => match logical_time {
             None => coord_bail!("cannot call mz_logical_timestamp in this context"),
             Some(logical_time) => pack(Datum::from(Numeric::from(logical_time))),

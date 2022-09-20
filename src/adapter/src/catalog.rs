@@ -2575,7 +2575,7 @@ impl<S: Append> Catalog<S> {
             storage,
             unsafe_mode: true,
             build_info: &DUMMY_BUILD_INFO,
-            environment_id: Uuid::from_u128(0),
+            environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
             now,
             skip_migrations: true,
             metrics_registry,

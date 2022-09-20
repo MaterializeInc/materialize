@@ -484,7 +484,7 @@ pub fn plan_create_source(
                 topic,
                 start_offsets,
                 group_id_prefix,
-                environment_id: scx.catalog.config().environment_id,
+                environment_id: scx.catalog.config().environment_id.clone(),
                 include_timestamp: None,
                 include_partition: None,
                 include_topic: None,
@@ -2168,11 +2168,12 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
+    let environment_id = &scx.catalog.config().environment_id;
     let consistency_config = KafkaConsistencyConfig::Progress {
         topic: connection
             .progress_topic
             .clone()
-            .unwrap_or_else(|| format!("_materialize-progress-{connection_id}")),
+            .unwrap_or_else(|| format!("_materialize-progress-{environment_id}-{connection_id}")),
     };
 
     if partition_count == 0 || partition_count < -1 {

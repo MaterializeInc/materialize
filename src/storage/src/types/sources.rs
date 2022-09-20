@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_persist_types::Codec;
-use mz_proto::{any_uuid, TryFromProtoError};
+use mz_proto::TryFromProtoError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
@@ -991,7 +991,7 @@ pub struct KafkaSourceConnection {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, MzOffset>,
     pub group_id_prefix: Option<String>,
-    pub environment_id: Uuid,
+    pub environment_id: String,
     /// If present, include the timestamp as an output column of the source with the given name
     pub include_timestamp: Option<IncludedColumnPos>,
     /// If present, include the partition as an output column of the source with the given name.
@@ -1020,7 +1020,7 @@ impl Arbitrary for KafkaSourceConnection {
             any::<String>(),
             any::<HashMap<i32, MzOffset>>(),
             any::<Option<String>>(),
-            any_uuid(),
+            any::<String>(),
             any::<Option<IncludedColumnPos>>(),
             any::<Option<IncludedColumnPos>>(),
             any::<Option<IncludedColumnPos>>(),
@@ -1074,7 +1074,8 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
                 .map(|(k, v)| (*k, v.into_proto()))
                 .collect(),
             group_id_prefix: self.group_id_prefix.clone(),
-            environment_id: Some(self.environment_id.into_proto()),
+            environment_id: None,
+            environment_name: Some(self.environment_id.into_proto()),
             include_timestamp: self.include_timestamp.into_proto(),
             include_partition: self.include_partition.into_proto(),
             include_topic: self.include_topic.into_proto(),
@@ -1102,9 +1103,14 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
             topic: proto.topic,
             start_offsets: start_offsets?,
             group_id_prefix: proto.group_id_prefix,
-            environment_id: proto
-                .environment_id
-                .into_rust_if_some("ProtoPostgresSourceConnection::details")?,
+            environment_id: match (proto.environment_id, proto.environment_name) {
+                (_, Some(name)) => name,
+                (u128, _) => {
+                    let uuid: Uuid =
+                        u128.into_rust_if_some("ProtoKafkaSourceConnection::environment_id")?;
+                    uuid.to_string()
+                }
+            },
             include_timestamp: proto.include_timestamp.into_rust()?,
             include_partition: proto.include_partition.into_rust()?,
             include_topic: proto.include_topic.into_rust()?,

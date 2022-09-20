@@ -90,7 +90,7 @@ impl UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
             UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
-            UnmaterializableFunc::MzEnvironmentId => ScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzEnvironmentId => ScalarType::String.nullable(false),
             UnmaterializableFunc::MzLogicalTimestamp => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             }
