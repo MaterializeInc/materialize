@@ -623,7 +623,7 @@ fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
         cancel_token.cancel_query(postgres::NoTls).unwrap();
     });
 
-    match client1.simple_query("SELECT * FROM t AS OF 18446744073709551615") {
+    match client1.simple_query("SELECT * FROM t AS OF 9223372036854775807") {
         Err(e) if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {}
         Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {:?}", e),
         Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
