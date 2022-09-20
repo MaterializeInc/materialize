@@ -78,11 +78,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"--rate={args.rate}",
         "--",
         "maelstrom",
-        *(
-            f"--blob-uri={blob_uri}" if blob_uri else "",
-            f"--consensus-uri={consensus_uri}" if consensus_uri else "",
-            f"--unreliability={args.unreliability}" if args.unreliability else "",
-        ),
+        *([f"--blob-uri={blob_uri}"] if blob_uri else []),
+        *([f"--consensus-uri={consensus_uri}"] if consensus_uri else []),
+        *([f"--unreliability={args.unreliability}"] if args.unreliability else []),
     )
 
     # TODO: Reenable this when we un-break MaelstromConsensus
