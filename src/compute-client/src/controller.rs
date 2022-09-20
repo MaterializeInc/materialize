@@ -61,7 +61,7 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
 use self::orchestrator::ComputeOrchestrator;
-use self::replicated::{ActiveReplication, ActiveReplicationResponse};
+use self::replicated::{ActiveReplication, ActiveReplicationResponse, FrontierBounds};
 
 mod orchestrator;
 mod replicated;
@@ -671,10 +671,6 @@ where
 
         match response {
             ActiveReplicationResponse::FrontierUppers(updates) => {
-                let updates: Vec<_> = updates
-                    .into_iter()
-                    .map(|(id, bounds)| (id, bounds.upper))
-                    .collect();
                 instance.update_write_frontiers(&updates).await?;
                 Ok(None)
             }
@@ -692,7 +688,7 @@ where
                         // Ensure there are no gaps in the subscribe stream we receive.
                         assert_eq!(
                             lower,
-                            &instance.compute.collections[&global_id].write_frontier
+                            &instance.compute.collections[&global_id].write_frontier_upper,
                         );
 
                         upper.clone()
@@ -702,7 +698,14 @@ where
                     SubscribeResponse::DroppedAt(_) => Antichain::new(),
                 };
                 instance
-                    .update_write_frontiers(&[(global_id, new_upper)])
+                    .update_write_frontiers(&[(
+                        global_id,
+                        FrontierBounds {
+                            // TODO: Report the actual lower bound here.
+                            lower: new_upper.clone(),
+                            upper: new_upper,
+                        },
+                    )])
                     .await?;
                 Ok(Some(ComputeControllerResponse::SubscribeResponse(
                     global_id, response,
@@ -1100,7 +1103,8 @@ where
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.compute.collection_mut(id) {
-                let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
+                let mut new_read_capability =
+                    policy.frontier(collection.write_frontier_lower.borrow());
 
                 if timely::order::PartialOrder::less_equal(
                     &collection.implied_capability,
@@ -1146,7 +1150,7 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, Antichain<T>)],
+        updates: &[(GlobalId, FrontierBounds<T>)],
     ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, new_upper) in updates.iter() {
@@ -1155,11 +1159,16 @@ where
                 .collection_mut(*id)
                 .expect("Reference to absent collection");
 
-            collection.write_frontier.join_assign(new_upper);
+            collection
+                .write_frontier_upper
+                .join_assign(&new_upper.upper);
+            collection
+                .write_frontier_lower
+                .join_assign(&new_upper.lower);
 
             let mut new_read_capability = collection
                 .read_policy
-                .frontier(collection.write_frontier.borrow());
+                .frontier(collection.write_frontier_lower.borrow());
             if timely::order::PartialOrder::less_equal(
                 &collection.implied_capability,
                 &new_read_capability,
@@ -1186,7 +1195,7 @@ where
         let storage_updates: Vec<_> = updates
             .iter()
             .filter(|(id, _)| self.storage_controller.collection(*id).is_ok())
-            .cloned()
+            .map(|(id, bounds)| (*id, bounds.upper.clone()))
             .collect();
         self.storage_controller
             .update_write_frontiers(&storage_updates)
@@ -1331,8 +1340,14 @@ pub struct CollectionState<T> {
     /// Compute identifiers on which this collection depends.
     compute_dependencies: Vec<GlobalId>,
 
-    /// Reported write frontier.
-    write_frontier: Antichain<T>,
+    /// Upper bound of write frontiers reported by all replicas.
+    ///
+    /// Used to determine valid times at which the collection can be read.
+    write_frontier_upper: Antichain<T>,
+    /// Lower bound of write frontiers reported by all replicas.
+    ///
+    /// Used to determine times that can be compacted.
+    write_frontier_lower: Antichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -1350,7 +1365,8 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
-            write_frontier: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier_upper: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier_lower: Antichain::from_elem(Timestamp::minimum()),
         }
     }
 
@@ -1366,6 +1382,6 @@ impl<T: Timestamp> CollectionState<T> {
 
     /// Reports the current write frontier.
     pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier.borrow()
+        self.write_frontier_upper.borrow()
     }
 }
