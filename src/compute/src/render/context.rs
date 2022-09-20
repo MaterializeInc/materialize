@@ -267,7 +267,7 @@ where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
-    /// A reference to the scope containing the collection bundle.
+    /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
         match self {
             ArrangementFlavor::Local(oks, _errs) => oks.stream.scope(),
@@ -364,7 +364,7 @@ where
         Self::from_expressions(keys, arrangements)
     }
 
-    /// A reference to the scope containing the collection bundle.
+    /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
         if let Some((oks, _errs)) = &self.collection {
             oks.inner.scope()

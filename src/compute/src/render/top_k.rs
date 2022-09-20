@@ -44,7 +44,7 @@ where
 
         // We create a new region to compartmentalize the topk logic.
         let ok_result = ok_input.scope().region_named("TopK", |inner| {
-            let ok_input = ok_input.enter(inner);
+            let ok_input = ok_input.enter_region(inner);
             let ok_result = match top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                     group_key,

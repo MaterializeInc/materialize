@@ -543,7 +543,7 @@ where
     G::Timestamp: Lattice,
 {
     input.scope().region_named("ReduceHierarchical", |inner| {
-        let input = input.enter(inner);
+        let input = input.enter_region(inner);
 
         // Gather the relevant values into a vec of rows ordered by aggregation_index
         let mut row_buf = Row::default();

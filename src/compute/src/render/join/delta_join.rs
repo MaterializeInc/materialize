@@ -41,14 +41,14 @@ where
         join_plan: DeltaJoinPlan,
         scope: &mut G,
     ) -> CollectionBundle<G, Row> {
-        // Collects error streams for the ambient scope.
-        let mut scope_errs = Vec::new();
-
-        // Deduplicate the error streams of multiply used arrangements.
-        let mut err_dedup = HashSet::new();
-
         // We create a new region to contain the dataflow paths for the delta join.
         let (oks, errs) = scope.clone().region_named("Join(Delta)", |inner| {
+            // Collects error streams for the inner scope. Concats before leaving.
+            let mut inner_errs = Vec::with_capacity(inputs.len());
+
+            // Deduplicate the error streams of multiply used arrangements.
+            let mut err_dedup = HashSet::new();
+
             // Our plan is to iterate through each input relation, and attempt
             // to find a plan that maximally uses existing keys (better: uses
             // existing arrangements, to which we have access).
@@ -76,23 +76,27 @@ where
                                 }) {
                                 ArrangementFlavor::Local(oks, errs) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
-                                        scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                        inner_errs.push(
+                                            errs.enter_region(inner)
+                                                .as_collection(|k, _v| k.clone()),
+                                        );
                                     }
-                                    Ok(oks.enter(inner))
+                                    Ok(oks.enter_region(inner))
                                 }
                                 ArrangementFlavor::Trace(_gid, oks, errs) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
-                                        scope_errs.push(errs.as_collection(|k, _v| k.clone()));
+                                        inner_errs.push(
+                                            errs.enter_region(inner)
+                                                .as_collection(|k, _v| k.clone()),
+                                        );
                                     }
-                                    Err(oks.enter(inner))
+                                    Err(oks.enter_region(inner))
                                 }
                             }
                         });
                 }
             }
 
-            // Collects error streams for the inner scope. Concats before leaving.
-            let mut inner_errs = Vec::with_capacity(inputs.len());
             for path_plan in join_plan.path_plans {
                 // Deconstruct the stages of the path plan.
                 let DeltaPathPlan {
@@ -134,7 +138,7 @@ where
                     let as_of = self.as_of_frontier.clone();
                     let update_stream = match val {
                         Ok(local) => {
-                            let arranged = local.enter(region);
+                            let arranged = local.enter_region(region);
                             let (update_stream, err_stream) = build_update_stream(
                                 arranged,
                                 as_of,
@@ -145,7 +149,7 @@ where
                             update_stream
                         }
                         Err(trace) => {
-                            let arranged = trace.enter(region);
+                            let arranged = trace.enter_region(region);
                             let (update_stream, err_stream) = build_update_stream(
                                 arranged,
                                 as_of,
@@ -269,21 +273,19 @@ where
                     }
 
                     inner_errs.push(
-                        differential_dataflow::collection::concatenate(region, region_errs).leave(),
+                        differential_dataflow::collection::concatenate(region, region_errs)
+                            .leave_region(),
                     );
-                    update_stream.leave()
+                    update_stream.leave_region()
                 });
 
                 join_results.push(path_results);
             }
 
-            scope_errs
-                .push(differential_dataflow::collection::concatenate(inner, inner_errs).leave());
-
             // Concatenate the results of each delta query as the accumulated results.
             (
-                differential_dataflow::collection::concatenate(inner, join_results).leave(),
-                differential_dataflow::collection::concatenate(scope, scope_errs),
+                differential_dataflow::collection::concatenate(inner, join_results).leave_region(),
+                differential_dataflow::collection::concatenate(inner, inner_errs).leave_region(),
             )
         });
         CollectionBundle::from_collections(oks, errs)

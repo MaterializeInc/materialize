@@ -164,52 +164,54 @@ pub fn build_compute_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
-                let mut mfp = source.arguments.operators.clone().map(|ops| {
-                    mz_expr::MfpPlan::create_from(ops)
-                        .expect("Linear operators should always be valid")
-                });
+                region.region_named(&format!("Source({:?})", source_id), |inner| {
+                    let mut mfp = source.arguments.operators.clone().map(|ops| {
+                        mz_expr::MfpPlan::create_from(ops)
+                            .expect("Linear operators should always be valid")
+                    });
 
-                // Note: For correctness, we require that sources only emit times advanced by
-                // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                let (mut ok_stream, err_stream, token) = persist_source::persist_source(
-                    region,
-                    *source_id,
-                    Arc::clone(&compute_state.persist_clients),
-                    source.storage_metadata.clone(),
-                    dataflow.as_of.clone(),
-                    dataflow.until.clone(),
-                    mfp.as_mut(),
-                    // Copy the logic in DeltaJoin/Get/Join to start.
-                    |_timer, count| count > 1_000_000,
-                );
-
-                // If `mfp` is non-identity, we need to apply what remains.
-                // For the moment, assert that it is either trivial or `None`.
-                assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
-
-                // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
-                // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
-                // time of the frontier advancement for each dataflow as early as possible.
-                if let Some(logger) = compute_state.compute_logger.clone() {
-                    let export_ids = dataflow.export_ids().collect();
-                    ok_stream = intercept_source_instantiation_frontiers(
-                        &ok_stream, logger, *source_id, export_ids,
+                    // Note: For correctness, we require that sources only emit times advanced by
+                    // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
+                    let (mut ok_stream, err_stream, token) = persist_source::persist_source(
+                        inner,
+                        *source_id,
+                        Arc::clone(&compute_state.persist_clients),
+                        source.storage_metadata.clone(),
+                        dataflow.as_of.clone(),
+                        dataflow.until.clone(),
+                        mfp.as_mut(),
+                        // Copy the logic in DeltaJoin/Get/Join to start.
+                        |_timer, count| count > 1_000_000,
                     );
-                }
 
-                // TODO(petrosagg): this is just wrapping an Arc<T> into an Rc<Arc<T>> to make the
-                // type checker happy. We should decide what we want our tokens to look like
-                let token = Rc::new(token) as Rc<dyn std::any::Any>;
+                    // If `mfp` is non-identity, we need to apply what remains.
+                    // For the moment, assert that it is either trivial or `None`.
+                    assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
 
-                let (oks, errs) = (ok_stream.as_collection(), err_stream.as_collection());
+                    // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
+                    // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
+                    // time of the frontier advancement for each dataflow as early as possible.
+                    if let Some(logger) = compute_state.compute_logger.clone() {
+                        let export_ids = dataflow.export_ids().collect();
+                        ok_stream = intercept_source_instantiation_frontiers(
+                            &ok_stream, logger, *source_id, export_ids,
+                        );
+                    }
 
-                // Associate collection bundle with the source identifier.
-                context.insert_id(
-                    mz_expr::Id::Global(*source_id),
-                    crate::render::CollectionBundle::from_collections(oks, errs),
-                );
-                // Associate returned tokens with the source identifier.
-                tokens.insert(*source_id, token);
+                    // TODO(petrosagg): this is just wrapping an Arc<T> into an Rc<Arc<T>> to make the
+                    // type checker happy. We should decide what we want our tokens to look like
+                    let token = Rc::new(token) as Rc<dyn std::any::Any>;
+
+                    let (oks, errs) = (ok_stream.as_collection(), err_stream.as_collection());
+
+                    // Associate collection bundle with the source identifier.
+                    context.insert_id(
+                        mz_expr::Id::Global(*source_id),
+                        crate::render::CollectionBundle::from_collections(oks, errs).leave_region(),
+                    );
+                    // Associate returned tokens with the source identifier.
+                    tokens.insert(*source_id, token);
+                });
             }
 
             // Import declared indexes into the rendering context.
@@ -496,18 +498,27 @@ where
                         });
                         collection
                     }
-                    mz_compute_client::plan::GetPlan::Arrangement(key, row, mfp) => {
-                        let (oks, errs) = collection.as_collection_core(
-                            mfp,
-                            Some((key, row)),
-                            self.until.clone(),
-                        );
-                        CollectionBundle::from_collections(oks, errs)
-                    }
+                    mz_compute_client::plan::GetPlan::Arrangement(key, row, mfp) => scope
+                        .region_named("Get(Arrangement)", |inner| {
+                            let (oks, errs) = collection.enter_region(inner).as_collection_core(
+                                mfp,
+                                Some((key, row)),
+                                self.until.clone(),
+                            );
+                            CollectionBundle::from_collections(oks, errs).leave_region()
+                        }),
                     mz_compute_client::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) =
-                            collection.as_collection_core(mfp, None, self.until.clone());
-                        CollectionBundle::from_collections(oks, errs)
+                        if mfp.is_identity() {
+                            collection.arranged.clear();
+                            collection
+                        } else {
+                            scope.region_named("Get(Collection)", |inner| {
+                                let (oks, errs) = collection
+                                    .enter_region(inner)
+                                    .as_collection_core(mfp, None, self.until.clone());
+                                CollectionBundle::from_collections(oks, errs).leave_region()
+                            })
+                        }
                     }
                 }
             }
@@ -531,9 +542,14 @@ where
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) =
-                        input.as_collection_core(mfp, input_key_val, self.until.clone());
-                    CollectionBundle::from_collections(oks, errs)
+                    scope.region_named("LinearMFP", |inner| {
+                        let (oks, errs) = input.enter_region(inner).as_collection_core(
+                            mfp,
+                            input_key_val,
+                            self.until.clone(),
+                        );
+                        CollectionBundle::from_collections(oks, errs).leave_region()
+                    })
                 }
             }
             Plan::FlatMap {
@@ -585,20 +601,21 @@ where
                 let input = self.render_plan(*input, scope, worker_index);
                 self.render_threshold(input, threshold_plan)
             }
-            Plan::Union { inputs } => {
+            Plan::Union { inputs } => scope.clone().region_named("Union", |inner| {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
                     let (os, es) = self
                         .render_plan(input, scope, worker_index)
+                        .enter_region(inner)
                         .as_specific_collection(None);
                     oks.push(os);
                     errs.push(es);
                 }
-                let oks = differential_dataflow::collection::concatenate(scope, oks);
-                let errs = differential_dataflow::collection::concatenate(scope, errs);
-                CollectionBundle::from_collections(oks, errs)
-            }
+                let oks = differential_dataflow::collection::concatenate(inner, oks);
+                let errs = differential_dataflow::collection::concatenate(inner, errs);
+                CollectionBundle::from_collections(oks, errs).leave_region()
+            }),
             Plan::ArrangeBy {
                 input,
                 forms: keys,
