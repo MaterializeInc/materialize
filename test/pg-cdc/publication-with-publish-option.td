@@ -45,9 +45,19 @@ CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
   FROM POSTGRES CONNECTION pg
   PUBLICATION 'mz_source_delete';
 
-# Make sure that the above sources are fully instantiated so that the DML statements below
-# are sent as actual replication events post-snapshot.
-
+# Make sure that the above sources are fully instantiated
+# (that is, we have finished absorbing their snapshots),
+# so that the DML statements below are sent as actual replication
+# events post-snapshot.
+#
+# Currently there is no good way to do this other than sleeping.
+# <https://github.com/MaterializeInc/materialize/issues/14914> tracks
+# making this better
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
+> SELECT COUNT(*) FROM mz_source_insert;
+0
+> SELECT COUNT(*) FROM mz_source_update;
+0
 > SELECT COUNT(*) FROM mz_source_delete;
 0
 
