@@ -161,10 +161,14 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    /// Tries to commit all pending writes transactions at the same timestamp. If the `write_lock`
-    /// is currently locked, then only writes to system tables and table advancements will be
-    /// applied. If the `write_lock` is not currently locked, then group commit will acquire it and
-    /// all writes will be applied.
+    /// Tries to commit all pending writes transactions at the same timestamp.
+    ///
+    /// If the caller of this function has the `write_lock` acquired, then they can optionally pass
+    /// it in to this method. If the caller does not have the `write_lock` acquired and the
+    /// `write_lock` is currently locked by another operation, then only writes to system tables
+    /// and table advancements will be applied. If the caller does not have the `write_lock`
+    /// acquired and the `write_lock` is not currently locked by another operation, then group
+    /// commit will acquire it and all writes will be applied.
     ///
     /// All applicable pending writes will be combined into a single Append command and sent to
     /// STORAGE as a single batch. All applicable writes will happen at the same timestamp and all
@@ -176,6 +180,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) {
         let (write_lock_guard, pending_writes): (_, Vec<_>) = if let Some(guard) = write_lock_guard
         {
+            // If the caller passed in the write lock, then we can execute a group commit.
             (Some(guard), self.pending_writes.drain(..).collect())
         } else if self
             .pending_writes
