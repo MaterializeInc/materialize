@@ -102,6 +102,12 @@ CREATE CONNECTION kafka_connection
     SASL PASSWORD = SECRET kafka_password;
 ```
 
+### Other {#kafka-other}
+
+Field                                   | Value            | Required | Description
+----------------------------------------|------------------|:--------:|-------------------------------
+`PROGRESS TOPIC`                        | `text`           |          | The name of a topic that Kafka sinks can use to track internal consistency metadata. If this is not specified, a default topic name will be selected.
+
 ## Postgres
 
 Field                       | Value            | Required | Description

@@ -238,7 +238,7 @@ Field                | Type     | Meaning
 ---------------------|----------|--------
 `sink_id`            | [`text`] | The ID of the sink.
 `topic`              | [`text`] | The name of the Kafka topic into which the sink is writing.
-`consistency_topic`  | [`text`] | The name of the Kafka topic into which the sink is writing consistency information. This is `NULL` when the sink does not write consistency information.
+`progress_topic`     | [`text`] | The name of the Kafka topic where the sink will track its progress information and other metadata. The contents of this topic are unspecified. If no progress topic name was specified for the given connection, Materialize will use a default based on the environment name and Kafka connection ID.
 
 ### `mz_list_types`
 

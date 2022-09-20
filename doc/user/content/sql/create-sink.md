@@ -53,7 +53,6 @@ _item&lowbar;name_ | The name of the source or view you want to send to the sink
 **KAFKA CONNECTION** _conn_ | The Kafka [connection](../create-connection) where you want to sink data.
 **TOPIC** _topic&lowbar;prefix_ | The prefix used to generate the Kafka topic name to create and write to.
 **KEY (** _key&lowbar;column_ **)** | An optional list of columns to use for the Kafka key. If unspecified, the Kafka key is left unset.
-**TOPIC** _consistency&lowbar;topic_ | Makes the sink emit additional [consistency metadata](#consistency-metadata) to the named topic. Only valid for Kafka sinks. If `reuse_topic` is `true`, a default naming convention will be used when the topic name is not explicitly set. This is formed by appending `-consistency` to the output topic name.
 _sink&lowbar;with&lowbar;options_ | Options affecting sink creation. For more detail, see [`WITH` options](#with-options).
 _with&lowbar;options_ | Options affecting Materialize's connection to Kafka. For more detail, see [Authentication](#authentication).
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope-details) to capture changes in the input view or source. This is the default.
@@ -89,10 +88,8 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 ## Detail
 
 - Materialize currently only supports Avro or JSON-formatted sinks that write to a Kafka topic.
-- For most sinks, Materialize creates new, distinct topics for each sink on restart. A beta feature enables the use of the same topic after restart. For details, see [Exactly-once sinks](#exactly-once-sinks-with-topic-reuse-after-restart).
 - Materialize stores information about actual topic names in the `mz_kafka_sinks` log sources. See the [examples](#examples) below for more details.
 - For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink. If needed, the fullnames for these schemas can be specified with the `avro_key_fullname` and `avro_value_fullname` options.
-- Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction information inline with the data, and adds a separate transaction metadata topic.
 
 ### Debezium envelope details
 
@@ -148,171 +145,19 @@ Note that:
 
 ### Kafka sinks
 
-When creating sinks, Materialize will either reuse the last sink topic (if `reuse_topic` is `true`) or it will generate a new topic name using the format below.
-```nofmt
-{topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}
-```
+When sinking into Kafka,
+Materialize will write all the changes from the specified source, table, or materialized view into the topic you specify.
 If the topic does not exist, Materialize will use the Kafka Admin API to create the topic.
 
 For Avro-encoded sinks, Materialize will publish the sink's Avro schema to the Confluent Schema Registry. Materialize will not publish schemas for JSON-encoded sinks.
 
-You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
+You can find the topic name and other metadata for each Kafka sink by querying `mz_kafka_sinks`.
 
 {{< note >}}
 {{% kafka-sink-drop  %}}
 {{</ note >}}
 
-#### Exactly-once sinks (with topic reuse after restart)
-
-{{< beta />}}
-
-By default, Materialize creates new, distinct topics for sinks on restart. To enable the reuse of an existing topic instead and achieve exactly-once processing guarantees, Materialize must:
-
-* **Determine the point in time where it left off processing**
-
-   Each sink writes an additional [consistency topic](#consistency-metadata) with useful metadata that allows Materialize to keep track of the timestamps it has published data for. Following a crash, this consistency topic is used to determine the latest complete timestamp for a sink and resume processing.
-
-* **Reconstruct the history of the sink and all the objects it depends on**
-
-   For each source, timestamp/offset bindings (i.e. which timestamps were assigned to which offsets) are persisted to the on-disk [system catalog](/sql/system-catalog/). This ensures that Materialize can preserve correctness on restart and avoid publishing duplicate data to the sink.
-
-    {{< note >}}
-For some deployment setups, you may need to persist the system catalog to stable storage across restarts. Without that metadata, new timestamps will be reassigned to existing offsets and data **will be republished** to the sink.
-   {{</ note >}}
-
-In practice, each incoming event affects the final results exactly once, even if the stream is disrupted or Materialize is restarted. Because the implementation effectively relies on source events having replayable timestamps, only **Kafka sources** and materialized views defined on top of Kafka sources can be used in this context.
-
-**Syntax**
-
-```sql
-CREATE CONNECTION kafka_connection
-  FOR KAFKA
-    BROKER 'localhost:9092';
-
-CREATE SINK quotes_sink
-FROM quotes
-INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-eo-sink')
-CONSISTENCY (TOPIC 'quotes-eo-sink-consistency'
-             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081')
-WITH (reuse_topic=true)
-FORMAT JSON;
-```
-
-To create a sink with exactly-once processing guarantees, you need to:
-
-* Set the `reuse_topic` option to `true`;
-* Optionally name the consistency topic. This name must be unique across all sinks in the Materialize instance. If not specified, a default name will be created by appending `-consistency` to the sink topic name.
-* Specify the [format](/sql/create-sink/#consistency_format_spec) of the consistency topic. Only Avro is supported. If you are using a JSON-formatted sink, you must use Avro as well (at least for now!).
-
-Note that:
-
-* The sink consistency topic shouldn't be written to by any other process, including other sinks or Materialize instances;
-* Key-based compaction is supported for the consistency topic and can be useful for controlling the growth of the topic.
-
-This feature is still in beta, so we strongly recommend that you start with test data, rather than with production. Please [let us know](https://github.com/MaterializeInc/materialize/issues/new/choose) if you run into any issues!
-
-#### Consistency metadata
-
-When requested, Materialize will produce consistency metadata that describes timestamps and relates the change data stream to them.
-
-Materialize sends two main pieces of information:
-- A timestamp for each change. This is sent inline with the change itself.
-- A count of how many changes occurred for each timestamp. This is sent as part of a separate consistency topic.
-- A count of how many changes occurred for each collection covered by the topic.
-  In Materialize, this will always correspond to the above count as each topic
-  uniquely maps to a single collection.
-
-Materialize uses a simplified version of the Debezium [transaction metadata](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata) protocol to send this information.
-The generated [diff envelope](#debezium-envelope-details) schema used for data messages is decorated with a `transaction` field which has the following schema:
-
-```
-{
-    "name": "transaction",
-    "type": {
-        "type": "record",
-        "name": "transaction_metadata",
-        "fields": [
-            {
-                "name": "id",
-                "type": "string"
-            }
-        ]
-    }
-}
-```
-Each message sent to Kafka has a `transaction` field and a transaction `id`, in addition to it's regular `before` / `after` data fields. The transaction `id` is equivalent to the Materialize timestamp for this record.
-
-In addition to the inline information, Materialize creates an additional consistency topic that stores counts of how many changes were generated per transaction `id`. The name of the consistency topic uses the following convention:
-
-```nofmt
-{consistency_topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}
-```
-
-{{< note >}}
-If `reuse_topic` is enabled, the naming convention is ignored. Instead, the topic name specified via the `CONSISTENCY` option is used.
-{{</ note >}}
-
-Each message in the consistency topic has the schema below.
-
-```json
-{
-    "type": "record",
-    "name": "envelope",
-    "fields": [
-        {
-            "name": "id",
-            "type": "string"
-        },
-        {
-            "name": "status",
-            "type": "string"
-        },
-        {
-            "name": "event_count",
-            "type": [
-                null,
-                "long"
-            ]
-        },
-        {
-            "name": "data_collections",
-            "type": [
-                "null",
-                {
-                    "type": "array",
-                    "items": {
-                        "type": "record",
-                        "name": "data_collection",
-                        "fields": [
-                            {
-                                "name": "data_collection",
-                                "type": "string"
-                            },
-                            {
-                                "name": "event_count",
-                                "type": "long"
-                            },
-                        ]
-                    }
-                }
-            ],
-            "default": null,
-        }
-    ]
-}
-```
-
-Field | Use
-------|-----
-_id_ | The transaction `id` this record refers to.
-_status_ | Either `BEGIN` or `END`. Materialize sends a record with `BEGIN` the first time it writes a data message for `id`, and an `END` record after it has written all data messages for `id`.
-_event&lowbar;count_ | This field is null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
-_data&lowbar;collections_ | This field is null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id` and collection.
-
-##### Consistency information details
-- Materialize writes consistency output to a different topic per sink.
-- There are no ordering guarantees on transaction `id` in the consistency topic.
-- Multiple transactions can be interleaved in the consistency topic, so it's possible that some `ids` don't have a corresponding `BEGIN` or `END` record.
+To achieve its exactly-once processing guarantees, Materialize needs to store some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular Kafka connection. The name of this progress topic can be specified when [creating a connection](/sql/create-connection); otherwise, a default is chosen based on the Materialize environment id and the connection id. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not specified.
 
 ## Examples
 
