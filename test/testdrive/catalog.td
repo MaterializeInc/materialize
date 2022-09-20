@@ -333,7 +333,7 @@ tbl         table
 v1          view
 v2          view
 
-> SELECT "Create Table" FROM (SHOW CREATE TABLE tbl)
+> SELECT create_sql FROM (SHOW CREATE TABLE tbl)
 "CREATE TABLE \"d\".\"public\".\"tbl\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\")"
 
 ! SHOW COLUMNS FROM pass_secret

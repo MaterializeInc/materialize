@@ -131,7 +131,7 @@ name    type
   ENVELOPE DEBEZIUM
 
 > SHOW CREATE SOURCE data_schema_inline
-Source   "Create Source"
+name   create_sql
 ------------------------
 materialize.public.data_schema_inline "CREATE SOURCE \"materialize\".\"public\".\"data_schema_inline\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM"
 

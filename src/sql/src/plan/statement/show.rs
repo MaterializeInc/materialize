@@ -43,8 +43,8 @@ pub fn describe_show_create_view(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("View", ScalarType::String.nullable(false))
-            .with_column("Create View", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -77,11 +77,8 @@ pub fn describe_show_create_materialized_view(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Materialized View", ScalarType::String.nullable(false))
-            .with_column(
-                "Create Materialized View",
-                ScalarType::String.nullable(false),
-            ),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -111,8 +108,8 @@ pub fn describe_show_create_table(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Table", ScalarType::String.nullable(false))
-            .with_column("Create Table", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -141,8 +138,8 @@ pub fn describe_show_create_source(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Source", ScalarType::String.nullable(false))
-            .with_column("Create Source", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -171,8 +168,8 @@ pub fn describe_show_create_sink(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Sink", ScalarType::String.nullable(false))
-            .with_column("Create Sink", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -201,8 +198,8 @@ pub fn describe_show_create_index(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Index", ScalarType::String.nullable(false))
-            .with_column("Create Index", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -231,8 +228,8 @@ pub fn describe_show_create_connection(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Connection", ScalarType::String.nullable(false))
-            .with_column("Create Connection", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 

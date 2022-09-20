@@ -77,7 +77,7 @@ sum   false   numeric
 data_view
 
 > SHOW CREATE MATERIALIZED VIEW test1
-"Materialized View"       "Create Materialized View"
+name                      create_sql
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"default\" AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
 
