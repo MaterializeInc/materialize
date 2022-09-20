@@ -543,15 +543,19 @@ impl AuthedClient {
                     col_names,
                 }
             }
-            ExecuteResponse::Fetch { .. }
+            res @ (ExecuteResponse::Fetch { .. }
             | ExecuteResponse::SetVariable { .. }
             | ExecuteResponse::Tailing { .. }
             | ExecuteResponse::CopyTo { .. }
             | ExecuteResponse::CopyFrom { .. }
             | ExecuteResponse::Raise { .. }
             | ExecuteResponse::DeclaredCursor
-            | ExecuteResponse::ClosedCursor => {
-                unreachable!("already prohibited statements with these responses")
+            | ExecuteResponse::ClosedCursor) => {
+                SimpleResult::err(
+                    format!("internal error: encountered prohibited ExecuteResponse {:?}.\n\n
+This is a bug. Can you please file an issue letting us know?\n
+https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=C-bug%2CC-triage&template=01-bug.yml",
+                ExecuteResponseKind::from(res)))
             }
         }
     }
