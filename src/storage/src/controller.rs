@@ -241,11 +241,6 @@ pub trait StorageController: Debug + Send {
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
-    async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>);
-    async fn truncate_managed_collection(&mut self, global_id: GlobalId);
-    async fn initialize_shard_mapping(&mut self);
-    async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId);
-
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
         &mut self,
@@ -300,6 +295,33 @@ pub trait StorageController: Debug + Send {
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     async fn process(&mut self) -> Result<(), anyhow::Error>;
+}
+
+#[async_trait(?Send)]
+pub trait CollectionManager: Debug + Send + StorageController {
+    /// Registers the collection correlated with `global_id` as one that the
+    /// implementor manages, namely that they will assume responsibility for
+    /// controlling the collection's timestamps.
+    async fn register_managed_collection(&mut self, global_id: GlobalId);
+
+    /// Appends `updates` to the collection correlated with `global_id` at a
+    /// timestamp decided on by the implementor.
+    async fn append_to_managed_collection(
+        &mut self,
+        global_id: GlobalId,
+        updates: Vec<(Row, Diff)>,
+    );
+
+    /// Truncates the collection correlated with `global_id`.
+    async fn truncate_managed_collection(&mut self, global_id: GlobalId);
+
+    /// Initializes the data expressing which global IDs correlate to which shards.
+    /// ???: Should this be part of a GlobalIdShardIdMapping trait?
+    async fn initialize_shard_mapping(&mut self);
+
+    /// Writes a new global ID, shard ID pair to the appropriate collection.
+    /// ???: Should this be part of a GlobalIdShardIdMapping trait?
+    async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId);
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -746,10 +768,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
             .open(self.persist_location.clone())
             .await
             .unwrap()
-    }
-
-    async fn register_managed_collection(&mut self, global_id: GlobalId) {
-        self.managed_collections.lock().await.insert(global_id);
     }
 }
 
@@ -1221,126 +1239,6 @@ where
         Ok(self.state.persist_write_handles.append(commands))
     }
 
-    /// Effectively truncates the `data_shard` correlated with `global_id`
-    /// effective as of the system time.
-    ///
-    /// # Panics
-    /// - If `global_id` is not correlated to a collection.
-    /// - If `data_shard` of the collection correlated to `global_id` is not
-    ///   managed.
-    /// - If any fetched key or value from the collection is an error.
-    async fn truncate_managed_collection(&mut self, global_id: GlobalId) {
-        assert!(
-            self.managed_collections.lock().await.contains(&global_id),
-            "cannot truncate collection before it's managed"
-        );
-
-        let now = (self.now)();
-        let as_of = T::from(now - 1);
-        let lower = T::from(now);
-
-        self.append(vec![(global_id, vec![], lower)])
-            .unwrap()
-            .await
-            .unwrap()
-            .unwrap();
-
-        let mut negate = self.snapshot(global_id, as_of).await.unwrap();
-
-        for (_, diff) in negate.iter_mut() {
-            *diff = -*diff;
-        }
-
-        self.append_to_managed_collection(global_id, negate).await;
-    }
-
-    async fn initialize_shard_mapping(&mut self) {
-        let id = self.state.shard_collection_global_id.unwrap();
-
-        // Pack updates into rows
-        let mut row_buf = Row::default();
-        let mut updates = Vec::with_capacity(self.state.collections.len());
-        for (
-            global_id,
-            CollectionState {
-                collection_metadata: CollectionMetadata { data_shard, .. },
-                ..
-            },
-        ) in self.state.collections.iter()
-        {
-            let mut packer = row_buf.packer();
-            packer.push(Datum::from(global_id.to_string().as_str()));
-            packer.push(Datum::from(data_shard.to_string().as_str()));
-            updates.push((row_buf.clone(), 1));
-        }
-
-        self.append_to_managed_collection(id, updates).await;
-    }
-
-    /// Tracks the mapping of `GlobalId` to data shards in the collection at
-    /// `self.state.shard_collection_global_id`.
-    ///
-    /// However, data is written iff the `shard_collection_global_id` correlates
-    /// to a managed collection; in other cases, data is dropped on the floor.
-    /// In these cases, the data is later written by
-    /// [`Self::initialize_shard_mapping`].
-    async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId) {
-        let id = match self.state.shard_collection_global_id {
-            Some(id) if self.managed_collections.lock().await.contains(&id) => id,
-            _ => return,
-        };
-
-        // Pack updates into rows
-        let mut row_buf = Row::default();
-        let mut packer = row_buf.packer();
-        packer.push(Datum::from(global_id.to_string().as_str()));
-        packer.push(Datum::from(shard_id.to_string().as_str()));
-        let updates = vec![(row_buf.clone(), 1)];
-
-        self.append_to_managed_collection(id, updates).await;
-    }
-
-    /// Append `updates` to the `data_shard` correlated with `global_id`
-    /// effective as of the system time.
-    ///
-    /// # Panics
-    /// - If `global_id` is not correlated to a collection.
-    /// - If `data_shard` of the collection correlated to `global_id` is not
-    ///   managed.
-    async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        assert!(
-            self.managed_collections.lock().await.contains(&id),
-            "cannot append collection before it's managed"
-        );
-
-        // Write values as of now.
-        let now = (self.now)();
-        let lower = T::from(now);
-        let upper = T::from(now + 1);
-
-        // Insert `T` into updates.
-        let commands: Vec<_> = updates
-            .into_iter()
-            .map(|(row, diff)| Update {
-                row,
-                diff,
-                timestamp: lower.clone(),
-            })
-            .collect();
-
-        self.append(vec![(id, vec![], lower)])
-            .unwrap()
-            .await
-            .unwrap()
-            .unwrap();
-
-        self.append(vec![(id, commands, upper)])
-            .unwrap()
-            .await
-            .unwrap()
-            .unwrap();
-    }
-
     async fn snapshot(
         &mut self,
         id: GlobalId,
@@ -1518,6 +1416,137 @@ where
     }
 }
 
+#[async_trait(?Send)]
+impl<T> CollectionManager for Controller<T>
+where
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis>,
+
+    // Required to setup grpc clients for new storaged instances.
+    StorageCommand<T>: RustType<ProtoStorageCommand>,
+    StorageResponse<T>: RustType<ProtoStorageResponse>,
+
+    MetadataExportFetcher: MetadataExport<T>,
+    DurableExportMetadata<T>: mz_stash::Data,
+{
+    async fn register_managed_collection(&mut self, global_id: GlobalId) {
+        self.managed_collections.lock().await.insert(global_id);
+    }
+
+    /// Effectively truncates the `data_shard` correlated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `global_id` is not correlated to a collection.
+    /// - If `data_shard` of the collection correlated to `global_id` is not
+    ///   managed.
+    /// - If any fetched key or value from the collection is an error.
+    async fn truncate_managed_collection(&mut self, global_id: GlobalId) {
+        assert!(
+            self.managed_collections.lock().await.contains(&global_id),
+            "cannot truncate collection before it's managed"
+        );
+
+        let now = (self.now)();
+        let as_of = T::from(now - 1);
+        let lower = T::from(now);
+
+        self.append(vec![(global_id, vec![], lower)])
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mut negate = self.snapshot(global_id, as_of).await.unwrap();
+
+        for (_, diff) in negate.iter_mut() {
+            *diff = -*diff;
+        }
+
+        self.append_to_managed_collection(global_id, negate).await;
+    }
+
+    async fn initialize_shard_mapping(&mut self) {
+        let id = self.state.shard_collection_global_id.unwrap();
+
+        // Pack updates into rows
+        let mut row_buf = Row::default();
+        let mut updates = Vec::with_capacity(self.state.collections.len());
+        for (
+            global_id,
+            CollectionState {
+                collection_metadata: CollectionMetadata { data_shard, .. },
+                ..
+            },
+        ) in self.state.collections.iter()
+        {
+            let mut packer = row_buf.packer();
+            packer.push(Datum::from(global_id.to_string().as_str()));
+            packer.push(Datum::from(data_shard.to_string().as_str()));
+            updates.push((row_buf.clone(), 1));
+        }
+
+        self.append_to_managed_collection(id, updates).await;
+    }
+
+    /// Tracks the mapping of `GlobalId` to data shards in the collection at
+    /// `self.state.shard_collection_global_id`.
+    ///
+    /// However, data is written iff the `shard_collection_global_id` correlates
+    /// to a managed collection; in other cases, data is dropped on the floor.
+    /// In these cases, the data is later written by
+    /// [`Self::initialize_shard_mapping`].
+    async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId) {
+        let id = match self.state.shard_collection_global_id {
+            Some(id) if self.managed_collections.lock().await.contains(&id) => id,
+            _ => return,
+        };
+
+        // Pack updates into rows
+        let mut row_buf = Row::default();
+        let mut packer = row_buf.packer();
+        packer.push(Datum::from(global_id.to_string().as_str()));
+        packer.push(Datum::from(shard_id.to_string().as_str()));
+        let updates = vec![(row_buf.clone(), 1)];
+
+        self.append_to_managed_collection(id, updates).await;
+    }
+
+    /// Append `updates` to the `data_shard` correlated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `global_id` is not correlated to a collection.
+    /// - If `data_shard` of the collection correlated to `global_id` is not
+    ///   managed.
+    async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        assert!(
+            self.managed_collections.lock().await.contains(&id),
+            "cannot append collection before it's managed"
+        );
+
+        // Write values as of now.
+        let now = (self.now)();
+        let lower = T::from(now);
+        let upper = T::from(now + 1);
+
+        // Insert `T` into updates.
+        let commands: Vec<_> = updates
+            .into_iter()
+            .map(|(row, diff)| Update {
+                row,
+                diff,
+                timestamp: lower.clone(),
+            })
+            .collect();
+
+        self.append(vec![(id, commands, upper)])
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis>,
@@ -1543,7 +1572,6 @@ where
         now: NowFn,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-
         let c = Self {
             state: StorageControllerState::new(postgres_url, tx).await,
             hosts: StorageHosts::new(
@@ -1614,7 +1642,8 @@ where
         Ok(())
     }
 
-    // Should only fail if collection doesn't exist. N.B. We can't just take in the mut ref because then the borrow checker wouldn't let us read state.
+    // Should only fail if collection doesn't exist. N.B. We can't just take in
+    // the mut ref because then the borrow checker wouldn't let us read state.
     fn generate_new_capability_for_collection<F>(
         &mut self,
         id: GlobalId,
@@ -1637,15 +1666,19 @@ where
             .read_policy
             .frontier(collection.write_frontier.borrow());
 
-        // Also consider the write frontier of any exports.  It's worth adding a quick note on write frontiers here.
+        // Also consider the write frontier of any exports.  It's worth adding a
+        // quick note on write frontiers here.
         //
-        // The write frontier that sinks communicate back to the controller indicates that all further writes will
-        // happen at a time `t` such that `!timely::ParitalOrder::less_than(&t, &write_frontier)` is true.  On restart,
-        // the sink will receive an SinkAsOf from this controller indicating that it should ignore everthing at or
-        // before the `since` of the from collection.  This will not miss any records because, if there were records not
-        // yet written out that have an uncompacted time of `since`, the write frontier previously reported from the
-        // sink must be less than `since` so we would not have compacted up to `since`!  This is tested by the kafka
-        // persistence tests.
+        // The write frontier that sinks communicate back to the controller
+        // indicates that all further writes will happen at a time `t` such that
+        // `!timely::ParitalOrder::less_than(&t, &write_frontier)` is true.  On
+        // restart, the sink will receive an SinkAsOf from this controller
+        // indicating that it should ignore everthing at or before the `since`
+        // of the from collection.  This will not miss any records because, if
+        // there were records not yet written out that have an uncompacted time
+        // of `since`, the write frontier previously reported from the sink must
+        // be less than `since` so we would not have compacted up to `since`!
+        // This is tested by the kafka persistence tests.
         for export_id in self
             .state
             .exported_collections
