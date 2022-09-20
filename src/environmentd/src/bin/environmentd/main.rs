@@ -365,12 +365,8 @@ pub struct Args {
     /// A map from size name to resource allocations for storage hosts.
     #[clap(long, env = "STORAGE_HOST_SIZES")]
     storage_host_sizes: Option<String>,
-    /// Default storage host size, should be a key from storage_host_sizes.
-    #[clap(
-        long,
-        env = "DEFAULT_STORAGE_HOST_SIZE",
-        requires = "storage-host-sizes"
-    )]
+    /// Default storage host size
+    #[clap(long, env = "DEFAULT_STORAGE_HOST_SIZE")]
     default_storage_host_size: Option<String>,
     /// The interval in seconds at which to collect storage usage information.
     #[clap(

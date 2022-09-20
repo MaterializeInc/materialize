@@ -44,6 +44,7 @@ class Materialized(Service):
         persist_blob_url: Optional[str] = None,
         data_directory: str = "/mzdata",
         workers: Optional[int] = None,
+        size: Optional[str] = "4",
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
@@ -83,6 +84,17 @@ class Materialized(Service):
                 "AWS_SESSION_TOKEN",
             ]
 
+        if size:
+            environment += [
+                f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={size}",
+                f"MZ_DEFAULT_STORAGE_HOST_SIZE={size}",
+            ]
+
+        if workers:
+            environment += [
+                f"MZ_WORKERS={workers}",
+            ]
+
         if environment_extra:
             environment.extend(environment_extra)
 
@@ -104,9 +116,6 @@ class Materialized(Service):
                 config_ports.pop()
 
         command_list = []
-
-        if workers:
-            command_list.append(f"--workers {workers}")
 
         if options:
             if isinstance(options, str):
@@ -150,6 +159,7 @@ class Computed(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
+        workers: Optional[int] = 4,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
@@ -209,7 +219,7 @@ class Storaged(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = None,
+        workers: Optional[int] = 4,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
