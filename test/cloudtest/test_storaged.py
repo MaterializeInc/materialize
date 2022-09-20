@@ -10,6 +10,7 @@
 from textwrap import dedent
 
 from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.exists import exists, not_exists
 from materialize.cloudtest.wait import wait
 
 
@@ -130,10 +131,13 @@ def test_storaged_shutdown(mz: MaterializeApplication) -> None:
     ][0]
     assert id is not None
 
-    storaged = f"pod/storage-{id}-0"
+    storaged_pod = f"pod/storage-{id}-0"
+    storaged_svc = f"service/storage-{id}"
 
-    wait(condition="condition=Ready", resource=storaged)
+    wait(condition="condition=Ready", resource=storaged_pod)
+    exists(storaged_svc)
 
     mz.environmentd.sql("DROP SOURCE source1")
 
-    wait(condition="delete", resource=storaged)
+    wait(condition="delete", resource=storaged_pod)
+    not_exists(storaged_svc)
