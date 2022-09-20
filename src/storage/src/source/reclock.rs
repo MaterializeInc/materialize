@@ -484,6 +484,12 @@ impl ReclockOperator {
         &mut self,
         target_upper: &Antichain<Timestamp>,
     ) -> Vec<(PartitionId, Vec<(Timestamp, MzOffset)>)> {
+        // **IMPORTANT**: Make sure we heartbeat our read handle when we read
+        // from our listen. The listen will internally downgrade its since, and
+        // if we let our read handle expire that means we don't hold back the
+        // since to what we think it should be.
+        self.read_handle.maybe_downgrade_since(&self.since).await;
+
         let mut pending_batch = vec![];
 
         let mut trace_updates: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> = HashMap::new();
@@ -828,9 +834,17 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
 
+    // 15 minutes
+    static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
+
     static PERSIST_CACHE: Lazy<Arc<Mutex<PersistClientCache>>> = Lazy::new(|| {
+        let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+
+        persistcfg.reader_lease_duration = PERSIST_READER_LEASE_TIMEOUT_MS;
+        persistcfg.now = now_fn();
+
         Arc::new(Mutex::new(PersistClientCache::new(
-            PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+            persistcfg,
             &MetricsRegistry::new(),
         )))
     });
@@ -839,9 +853,6 @@ mod tests {
         shard: ShardId,
         as_of: Antichain<Timestamp>,
     ) -> (ReclockOperator, ReclockFollower) {
-        let start = tokio::time::Instant::now();
-        let now_fn = NowFn::from(move || start.elapsed().as_millis().try_into().unwrap());
-
         let metadata = CollectionMetadata {
             persist_location: PersistLocation {
                 blob_uri: "mem://".to_owned(),
@@ -855,7 +866,7 @@ mod tests {
         let operator = ReclockOperator::new(
             Arc::clone(&*PERSIST_CACHE),
             metadata,
-            now_fn.clone(),
+            now_fn(),
             Duration::from_secs(1),
             as_of.clone(),
         )
@@ -869,6 +880,15 @@ mod tests {
         follower.push_trace_updates(operator.remap_trace().into_iter());
 
         (operator, follower)
+    }
+
+    /// A `NowFn` that uses `tokio::time::Instant::now()`, so that we can
+    /// control time in tests.
+    fn now_fn() -> NowFn {
+        let start = tokio::time::Instant::now();
+        let now_fn = NowFn::from(move || start.elapsed().as_millis().try_into().unwrap());
+
+        now_fn
     }
 
     async fn mint_and_follow(
@@ -1485,5 +1505,68 @@ mod tests {
             .source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow())
             .unwrap_err();
         assert!(err.to_string().contains("is too great"));
+    }
+
+    // Regression test for
+    // https://github.com/MaterializeInc/materialize/issues/14740.
+    #[tokio::test(start_paused = true)]
+    async fn test_since_hold() {
+        let binding_shard = ShardId::new();
+
+        const PART_ID: PartitionId = PartitionId::None;
+        let (mut operator, _follower) =
+            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+
+        let mut source_upper = HashMap::new();
+
+        // We do multiple rounds of minting. This will downgrade the since of
+        // the internal listen. If we didn't make sure to also heartbeat the
+        // internal handle that holds back the overall remap since the checks
+        // below would fail.
+        //
+        // We do two rounds and advance the time by half the lease timeout in
+        // between so that the "listen handle" will not timeout but the internal
+        // handle used for holding back the since will timeout.
+
+        tokio::time::advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1)).await;
+        source_upper.insert(PART_ID, MzOffset::from(3));
+        let _ = operator.mint(&source_upper).await;
+
+        tokio::time::advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1)).await;
+        source_upper.insert(PART_ID, MzOffset::from(5));
+        let _ = operator.mint(&source_upper).await;
+
+        // Allow time for background maintenance work, which does lease
+        // expiration. 1 ms is enough here, we just need to yield to allow the
+        // background task to be "scheduled".
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        // Starting a new operator with an `as_of` of `0`, to verify that
+        // holding back the `since` of the remap shard works as expected.
+        let (_operator, _follower) =
+            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+
+        // Also manually assert the since of the remap shard.
+        let persist_location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        let mut persist_clients = PERSIST_CACHE.lock().await;
+        let persist_client = persist_clients
+            .open(persist_location)
+            .await
+            .expect("error creating persist client");
+        drop(persist_clients);
+
+        let read_handle = persist_client
+            .open_reader::<(), PartitionId, Timestamp, MzOffset>(binding_shard)
+            .await
+            .expect("error opening persist shard");
+
+        assert_eq!(
+            Antichain::from_elem(0.into()),
+            read_handle.since().to_owned()
+        );
     }
 }
