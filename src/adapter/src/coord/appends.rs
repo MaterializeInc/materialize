@@ -157,21 +157,32 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             });
         } else {
-            self.group_commit_initiate().await;
+            self.group_commit_initiate(None).await;
         }
     }
 
-    /// Tries to commit all pending writes transactions at the same timestamp. If the `write_lock`
-    /// is currently locked, then only writes to system tables and table advancements will be
-    /// applied. If the `write_lock` is not currently locked, then group commit will acquire it and
-    /// all writes will be applied.
+    /// Tries to commit all pending writes transactions at the same timestamp.
+    ///
+    /// If the caller of this function has the `write_lock` acquired, then they can optionally pass
+    /// it in to this method. If the caller does not have the `write_lock` acquired and the
+    /// `write_lock` is currently locked by another operation, then only writes to system tables
+    /// and table advancements will be applied. If the caller does not have the `write_lock`
+    /// acquired and the `write_lock` is not currently locked by another operation, then group
+    /// commit will acquire it and all writes will be applied.
     ///
     /// All applicable pending writes will be combined into a single Append command and sent to
     /// STORAGE as a single batch. All applicable writes will happen at the same timestamp and all
     /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn group_commit_initiate(&mut self) {
-        let (write_lock_guard, pending_writes): (_, Vec<_>) = if self
+    pub(crate) async fn group_commit_initiate(
+        &mut self,
+        write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    ) {
+        let (write_lock_guard, pending_writes): (_, Vec<_>) = if let Some(guard) = write_lock_guard
+        {
+            // If the caller passed in the write lock, then we can execute a group commit.
+            (Some(guard), self.pending_writes.drain(..).collect())
+        } else if self
             .pending_writes
             .iter()
             .all(|write| matches!(write, PendingWriteTxn::System { .. }))
@@ -409,7 +420,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 update,
                 source: source.clone(),
             }));
-        self.group_commit_initiate().await;
+        self.group_commit_initiate(None).await;
     }
 
     /// Defers executing `deferred` until the write lock becomes available; waiting

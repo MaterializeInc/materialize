@@ -204,7 +204,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         unsafe_mode: config.unsafe_mode,
         metrics_registry: metrics_registry.clone(),
         now: config.now,
-        environment_id: Uuid::from_u128(0),
+        environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
         cors_allowed_origin: AllowOrigin::list([]),
         cluster_replica_sizes: Default::default(),
         bootstrap_default_cluster_replica_size: "1".into(),

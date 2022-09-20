@@ -63,9 +63,9 @@ The SQL standard defines the Serializable isolation level as preventing the foll
 
 - **P3 (”Phantom”):**
 
-  > "SQL-transaction T1 reads the set of rows N that satisfy some <search condition>. SQL-transaction
-  T2 then executes SQL-statements that generate one or more rows that satisfy the <search condition> used by
-  SQL-transaction T1. If SQL-transaction T1 then repeats the initial read with the same <search condition>, it obtains a
+  > "SQL-transaction T1 reads the set of rows N that satisfy some \<search condition\>. SQL-transaction
+  T2 then executes SQL-statements that generate one or more rows that satisfy the \<search condition\> used by
+  SQL-transaction T1. If SQL-transaction T1 then repeats the initial read with the same \<search condition\>, it obtains a
   different collection of rows."
   (ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions)
 
