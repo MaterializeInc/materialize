@@ -343,7 +343,7 @@ impl LogView {
                     FROM
                         mz_catalog.mz_arrangement_batches_internal_{}
                     GROUP BY
-                    operator_id, worker_id
+                        operator_id, worker_id
                 ),
                 records_cte AS (
                     SELECT

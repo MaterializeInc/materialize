@@ -1814,7 +1814,7 @@ pub const MZ_SCHEDULING_PARKS: BuiltinView = BuiltinView {
 FROM
     mz_catalog.mz_scheduling_parks_internal
 GROUP BY
-worker_id, slept_for, requested",
+    worker_id, slept_for, requested",
 };
 
 pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {

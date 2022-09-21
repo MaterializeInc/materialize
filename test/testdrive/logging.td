@@ -80,7 +80,7 @@ contains:cannot drop item mz_catalog.mz_worker_materialization_delays because it
 id      name        position    type
 --------------------------------------
 SID   id          1           uint8
-SID   worker_id      2        uint8
+SID   worker_id   2           uint8
 SID   elapsed_ns  3           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
