@@ -52,8 +52,8 @@ use mz_repr::{GlobalId, Row};
 use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
 
 use crate::command::{
-    ComputeCommand, DataflowDescription, InstanceConfig, Peek, ProcessId, ReplicaId,
-    SourceInstanceDesc,
+    CommunicationConfig, ComputeCommand, DataflowDescription, InstanceConfig, Peek, ProcessId,
+    ReplicaId, SourceInstanceDesc,
 };
 use crate::logging::{LogVariant, LogView, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
@@ -182,7 +182,12 @@ pub enum ConcreteComputeInstanceReplicaLocation {
     Remote {
         /// The network addresses of the processes in the replica.
         addrs: BTreeSet<String>,
+        /// The network addresses of the Timely endpoints of the processes in the replica.
+        compute_addrs: BTreeSet<String>,
+        /// The workers per process in the replica.
+        workers: NonZeroUsize,
     },
+    /// Out-of-process replica
     /// A remote but managed replica
     Managed {
         /// The resource allocation for the replica.
@@ -486,11 +491,20 @@ where
 
         // Add replicas backing that instance.
         match config.location {
-            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
+            ConcreteComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => {
                 self.instance(instance_id)?.add_replica(
                     replica_id,
                     addrs.into_iter().collect(),
                     persisted_logs,
+                    CommunicationConfig {
+                        workers: workers.get(),
+                        process: 0,
+                        addresses: compute_addrs.into_iter().collect(),
+                    },
                 );
             }
             ConcreteComputeInstanceReplicaLocation::Managed {
@@ -498,14 +512,22 @@ where
                 availability_zone,
                 ..
             } => {
-                let replica_addrs = self
+                let service = self
                     .compute
                     .orchestrator
                     .ensure_replica(instance_id, replica_id, allocation, availability_zone)
                     .await?;
 
-                self.instance(instance_id)?
-                    .add_replica(replica_id, replica_addrs, persisted_logs);
+                self.instance(instance_id)?.add_replica(
+                    replica_id,
+                    service.addresses("controller"),
+                    persisted_logs,
+                    CommunicationConfig {
+                        workers: allocation.workers.get(),
+                        process: 0,
+                        addresses: service.addresses("compute"),
+                    },
+                );
             }
         }
 
@@ -757,6 +779,8 @@ where
             }
         }
         let mut replicas = ActiveReplication::new(build_info);
+        // These commands will be modified by ActiveReplication
+        replicas.send(ComputeCommand::CreateTimely(Default::default()));
         replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
             logging,
@@ -808,6 +832,7 @@ where
         id: ReplicaId,
         addrs: Vec<String>,
         persisted_logs: HashMap<LogVariant, GlobalId>,
+        communication_config: CommunicationConfig,
     ) {
         // Create ComputeState entries in Instance
         for id in persisted_logs.values() {
@@ -832,7 +857,9 @@ where
             .collect();
 
         // Add the replica
-        self.compute.replicas.add_replica(id, addrs, persisted_logs);
+        self.compute
+            .replicas
+            .add_replica(id, addrs, persisted_logs, communication_config);
     }
 
     /// Remove an existing instance replica, by ID.

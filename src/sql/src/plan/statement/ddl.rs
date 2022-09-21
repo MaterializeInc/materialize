@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 
 use aws_arn::ResourceName as AmazonResourceName;
@@ -2607,7 +2608,9 @@ generate_extracted_config!(
     ReplicaOption,
     (AvailabilityZone, String),
     (Size, String),
-    (Remote, Vec<String>)
+    (Remote, Vec<String>),
+    (Compute, Vec<String>),
+    (Workers, u16)
 );
 
 fn plan_replica_config(
@@ -2618,35 +2621,69 @@ fn plan_replica_config(
         availability_zone,
         size,
         remote,
+        workers,
+        compute,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
     if remote.is_some() {
         scx.require_unsafe_mode("REMOTE cluster replica option")?;
     }
+    if compute.is_some() {
+        scx.require_unsafe_mode("COMPUTE cluster replica option")?;
+    }
+    if workers.is_some() {
+        scx.require_unsafe_mode("WORKERS cluster replica option")?;
+    }
 
-    let remote_addrs = remote
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<BTreeSet<String>>();
-
-    match (remote_addrs.len() > 0, size) {
-        (true, None) => {
+    match (size, remote) {
+        (None, Some(remote)) => {
+            // REMOTE given, no SIZE
             if availability_zone.is_some() {
                 sql_bail!("cannot specify AVAILABILITY ZONE and REMOTE");
             }
+            // Unwrap REMOTE options
+            let remote_addrs = remote.into_iter().collect::<BTreeSet<String>>();
+            let compute_addrs = compute
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<BTreeSet<String>>();
+            let workers = workers.unwrap_or(1);
+
+            if remote_addrs.len() > 1 && (remote_addrs.len() != compute_addrs.len()) {
+                sql_bail!(
+                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
+                );
+            }
+            if compute_addrs.len() > remote_addrs.len() {
+                sql_bail!(
+                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
+                );
+            }
+
+            let workers = NonZeroUsize::new(workers.into())
+                .ok_or_else(|| sql_err!("WORKERS must be greater 0"))?;
             Ok(ComputeInstanceReplicaConfig::Remote {
                 addrs: remote_addrs,
+                compute_addrs,
+                workers,
             })
         }
-        (false, Some(size)) => Ok(ComputeInstanceReplicaConfig::Managed {
-            size,
-            availability_zone,
-        }),
-        (false, None) => {
-            sql_bail!("one of REMOTE or SIZE must be specified")
+        (Some(size), None) => {
+            // SIZE given, no REMOTE
+            if workers.is_some() {
+                sql_bail!("cannot specify SIZE and WORKERS");
+            }
+            if compute.is_some() {
+                sql_bail!("cannot specify SIZE and COMPUTE");
+            }
+            Ok(ComputeInstanceReplicaConfig::Managed {
+                size,
+                availability_zone,
+            })
         }
-        (true, Some(_)) => {
+        (_, _) => {
+            // SIZE and REMOTE given, or none of them
             sql_bail!("only one of REMOTE or SIZE may be specified")
         }
     }

@@ -64,6 +64,22 @@ default
 statement error only one of REMOTE or SIZE may be specified
 CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], SIZE 'small'))
 
+statement error must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234', 'localhost:4567'], COMPUTE [], WORKERS 1))
+
+statement error must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE [], COMPUTE ['localhost:1234', 'localhost:4567']))
+
+statement error WORKERS must be greater 0
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 0))
+
+# SIZE + Remote options produce error
+statement error cannot specify SIZE and WORKERS
+CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', WORKERS 1))
+
+statement error cannot specify SIZE and COMPUTE
+CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', COMPUTE ['localhost:1234']))
+
 # Test `cluster` session variable.
 
 query T

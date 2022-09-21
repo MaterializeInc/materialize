@@ -17,8 +17,8 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use mz_orchestrator::{
-    LabelSelectionLogic, LabelSelector, NamespacedOrchestrator, ServiceConfig, ServiceEvent,
-    ServicePort,
+    LabelSelectionLogic, LabelSelector, NamespacedOrchestrator, Service, ServiceConfig,
+    ServiceEvent, ServicePort,
 };
 
 use crate::command::ReplicaId;
@@ -44,7 +44,7 @@ impl ComputeOrchestrator {
         replica_id: ReplicaId,
         allocation: ComputeInstanceReplicaAllocation,
         availability_zone: String,
-    ) -> Result<Vec<String>, anyhow::Error> {
+    ) -> Result<Box<dyn Service>, anyhow::Error> {
         let service_name = generate_replica_service_name(instance_id, replica_id);
 
         let service = self
@@ -63,18 +63,10 @@ impl ComputeOrchestrator {
                                 "--internal-http-listen-addr={}:{}",
                                 assigned.listen_host, assigned.ports["internal-http"]
                             ),
-                            format!("--workers={}", allocation.workers),
                             format!("--opentelemetry-resource=instance_id={}", instance_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
                         ];
-                        compute_opts.extend(
-                            assigned
-                                .peers
-                                .iter()
-                                .map(|(host, ports)| format!("{host}:{}", ports["compute"])),
-                        );
                         if let Some(index) = assigned.index {
-                            compute_opts.push(format!("--process={index}"));
                             compute_opts
                                 .push(format!("--opentelemetry-resource=replica_index={}", index));
                         }
@@ -129,7 +121,7 @@ impl ComputeOrchestrator {
             )
             .await?;
 
-        Ok(service.addresses("controller"))
+        Ok(service)
     }
 
     pub(super) async fn drop_replica(

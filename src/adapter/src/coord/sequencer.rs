@@ -694,9 +694,15 @@ impl<S: Append + 'static> Coordinator<S> {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
             let location = match replica_config {
-                ComputeInstanceReplicaConfig::Remote { addrs } => {
-                    SerializedComputeInstanceReplicaLocation::Remote { addrs }
-                }
+                ComputeInstanceReplicaConfig::Remote {
+                    addrs,
+                    compute_addrs,
+                    workers,
+                } => SerializedComputeInstanceReplicaLocation::Remote {
+                    addrs,
+                    compute_addrs,
+                    workers,
+                },
                 ComputeInstanceReplicaConfig::Managed {
                     size,
                     availability_zone,
@@ -817,9 +823,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Choose default AZ if necessary
         let location = match config {
-            ComputeInstanceReplicaConfig::Remote { addrs } => {
-                SerializedComputeInstanceReplicaLocation::Remote { addrs }
-            }
+            ComputeInstanceReplicaConfig::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => SerializedComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             ComputeInstanceReplicaConfig::Managed {
                 size,
                 availability_zone,

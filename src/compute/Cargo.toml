@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.65"
+async-trait = "0.1.56"
 axum = "0.5.16"
 bytesize = "1.1.0"
 clap = { version = "3.2.20", features = ["derive", "env"] }
@@ -15,6 +16,7 @@ crossbeam-channel = "0.5.6"
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+futures = "0.3.21"
 mz-build-info = { path = "../build-info" }
 mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }

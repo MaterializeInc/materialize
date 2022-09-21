@@ -40,7 +40,10 @@ class UseComputed(Action):
         c.sql(
             """
             DROP CLUSTER REPLICA default.default_replica;
-            CREATE CLUSTER REPLICA default.default_replica REMOTE ['computed_1:2100'];
+            CREATE CLUSTER REPLICA default.default_replica
+                REMOTE ['computed_1:2100'],
+                COMPUTE ['computed_1:2102'],
+                WORKERS 1;
         """
         )
 
@@ -53,11 +56,7 @@ class KillComputed(Action):
 
 class StartComputed(Action):
     def execute(self, c: Composition) -> None:
-        with c.override(
-            Computed(
-                name="computed_1", options="--workers 1 --process 0 computed_1:2102"
-            )
-        ):
+        with c.override(Computed(name="computed_1")):
             c.up("computed_1")
 
 
