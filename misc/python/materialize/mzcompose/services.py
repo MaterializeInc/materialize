@@ -139,7 +139,6 @@ class Computed(Service):
     def __init__(
         self,
         name: str = "computed",
-        peers: Optional[List[str]] = [],
         hostname: Optional[str] = None,
         image: Optional[str] = None,
         ports: List[int] = [2100, 2102],
@@ -147,7 +146,6 @@ class Computed(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = None,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
@@ -178,13 +176,6 @@ class Computed(Service):
                 command_list.append(options)
             else:
                 command_list.extend(options)
-
-        if workers:
-            command_list.append(f"--workers {workers}")
-
-        if peers:
-            command_list.append(f"--process {peers.index(name)}")
-            command_list.append(" ".join(f"{peer}:2102" for peer in peers))
 
         command_list.append(f"--secrets-reader {secrets_reader}")
         command_list.append(

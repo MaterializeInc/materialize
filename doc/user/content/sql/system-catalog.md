@@ -262,9 +262,9 @@ Field           | Type       | Meaning
 `sent`          | [`bigint`] | The number of messages sent.
 `received`      | [`bigint`] | The number of messages received.
 
-### `mz_materialization_dependencies`
+### `mz_worker_materialization_dependencies`
 
-The `mz_materialization_dependencies` source describes the dependency structure between each [dataflow] and
+The `mz_worker_materialization_dependencies` source describes the dependency structure between each [dataflow] and
 the sources of their data. To create a complete dependency structure, the source column includes also
 other dataflows.
 

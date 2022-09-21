@@ -13,19 +13,21 @@
 //! This involves ensuring the intended service state with the orchestrator, as well as maintaining
 //! a dedicated compute instance controller for each active compute instance.
 //!
-//! An instance controller curates the creation of indexes and sinks installed on its instance, the
-//! progress of readers through these collections, and their eventual dropping and resource
-//! reclamation.
+//! For each compute instance, the compute controller curates the creation of indexes and sinks
+//! installed on the instance, the progress of readers through these collections, and their
+//! eventual dropping and resource reclamation.
 //!
-//! An instance controller can be viewed as a partial map from `GlobalId` to collection. It is an error to
-//! use an identifier before it has been "created" with `create_dataflows()`. Once created, the controller holds
-//! a read capability for each output collection of a dataflow, which is manipulated with `allow_compaction()`.
-//! Eventually, a collection is dropped with either `drop_sources()` or by allowing compaction to the empty frontier.
+//! The state maintained for a compute instance can be viewed as a partial map from `GlobalId` to
+//! collection. It is an error to use an identifier before it has been "created" with
+//! `create_dataflows()`. Once created, the controller holds a read capability for each output
+//! collection of a dataflow, which is manipulated with `set_read_policy()`. Eventually, a
+//! collection is dropped with either `drop_collections()` or by allowing compaction to the empty
+//! frontier.
 //!
-//! Created dataflows will prevent the compaction of their inputs, including other compute collections but also
-//! collections managed by the storage layer. Each dataflow input is prevented from compacting beyond the allowed
-//! compaction of each of its outputs, ensuring that we can recover each dataflow to its current state in case of
-//! failure or other reconfiguration.
+//! Created dataflows will prevent the compaction of their inputs, including other compute
+//! collections but also collections managed by the storage layer. Each dataflow input is prevented
+//! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
+//! recover each dataflow to its current state in case of failure or other reconfiguration.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
@@ -50,8 +52,8 @@ use mz_repr::{GlobalId, Row};
 use mz_storage::controller::{ReadPolicy, StorageController, StorageError};
 
 use crate::command::{
-    ComputeCommand, DataflowDescription, InstanceConfig, Peek, ProcessId, ReplicaId,
-    SourceInstanceDesc,
+    CommunicationConfig, ComputeCommand, DataflowDescription, InstanceConfig, Peek, ProcessId,
+    ReplicaId, SourceInstanceDesc,
 };
 use crate::logging::{LogVariant, LogView, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
@@ -180,7 +182,12 @@ pub enum ConcreteComputeInstanceReplicaLocation {
     Remote {
         /// The network addresses of the processes in the replica.
         addrs: BTreeSet<String>,
+        /// The network addresses of the Timely endpoints of the processes in the replica.
+        compute_addrs: BTreeSet<String>,
+        /// The workers per process in the replica.
+        workers: NonZeroUsize,
     },
+    /// Out-of-process replica
     /// A remote but managed replica
     Managed {
         /// The resource allocation for the replica.
@@ -276,6 +283,8 @@ pub struct ComputeController<T> {
     orchestrator: ComputeOrchestrator,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
+    /// A response to handle on the next call to `ActiveComputeController::process`.
+    stashed_response: Option<(ComputeInstanceId, ActiveReplicationResponse<T>)>,
 }
 
 impl<T> ComputeController<T> {
@@ -290,12 +299,46 @@ impl<T> ComputeController<T> {
             build_info,
             orchestrator: ComputeOrchestrator::new(orchestrator, computed_image),
             initialized: false,
+            stashed_response: None,
         }
     }
 
-    /// Return a handle to the indicated compute instance, if it exists.
-    pub fn instance(&self, id: ComputeInstanceId) -> Option<&Instance<T>> {
-        self.instances.get(&id)
+    pub fn instance_exists(&self, id: ComputeInstanceId) -> bool {
+        self.instances.contains_key(&id)
+    }
+
+    /// Return a reference to the indicated compute instance.
+    fn instance(&self, id: ComputeInstanceId) -> Result<&Instance<T>, ComputeError> {
+        self.instances
+            .get(&id)
+            .ok_or(ComputeError::InstanceMissing(id))
+    }
+
+    /// Return a mutable reference to the indicated compute instance.
+    fn instance_mut(&mut self, id: ComputeInstanceId) -> Result<&mut Instance<T>, ComputeError> {
+        self.instances
+            .get_mut(&id)
+            .ok_or(ComputeError::InstanceMissing(id))
+    }
+
+    /// Return a read-only handle to the indicated compute instance.
+    pub fn instance_ref(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<ComputeInstanceRef<T>, ComputeError> {
+        self.instance(id).map(|instance| ComputeInstanceRef {
+            instance_id: id,
+            instance,
+        })
+    }
+
+    /// Return a read-only handle to the indicated collection.
+    pub fn collection(
+        &self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<&CollectionState<T>, ComputeError> {
+        self.instance(instance_id)?.collection(collection_id)
     }
 
     /// Acquire an [`ActiveComputeController`] by supplying a storage connection.
@@ -318,22 +361,20 @@ where
     /// Create a compute instance.
     pub fn create_instance(
         &mut self,
-        instance: ComputeInstanceId,
+        id: ComputeInstanceId,
         logging: Option<LoggingConfig>,
         max_result_size: u32,
     ) -> Result<(), ComputeError> {
-        if self.instances.contains_key(&instance) {
-            return Err(ComputeError::InstanceExists(instance));
+        if self.instances.contains_key(&id) {
+            return Err(ComputeError::InstanceExists(id));
         }
 
-        self.instances.insert(
-            instance,
-            Instance::new(instance, self.build_info, &logging, max_result_size),
-        );
+        self.instances
+            .insert(id, Instance::new(self.build_info, logging, max_result_size));
 
         if self.initialized {
             self.instances
-                .get_mut(&instance)
+                .get_mut(&id)
                 .expect("instance just added")
                 .initialization_complete();
         }
@@ -345,8 +386,8 @@ where
     ///
     /// # Panics
     /// - If the identified `instance` still has active replicas.
-    pub fn drop_instance(&mut self, instance: ComputeInstanceId) {
-        if let Some(compute_state) = self.instances.remove(&instance) {
+    pub fn drop_instance(&mut self, id: ComputeInstanceId) {
+        if let Some(compute_state) = self.instances.remove(&id) {
             compute_state.drop();
         }
     }
@@ -367,11 +408,16 @@ where
     ///
     /// This method may block for an arbitrarily long time.
     ///
-    /// When the method returns, the caller should call [`ActiveComputeController::process`] with
-    /// the returned compute instance ID, to process the ready message.
+    /// When the method returns, the caller should call [`ActiveComputeController::process`] to
+    /// process the ready message.
     ///
     /// This method is cancellation safe.
-    pub async fn ready(&mut self) -> ComputeInstanceId {
+    pub async fn ready(&mut self) {
+        if self.stashed_response.is_some() {
+            // We still have a response stashed, which we are immediately ready to process.
+            return;
+        }
+
         if self.instances.is_empty() {
             // If there are no clients, block forever. This signals that there may be more work to
             // do (e.g., if a compute instance is created). Calling `select_all` with an empty list
@@ -379,15 +425,15 @@ where
             future::pending().await
         }
 
-        // The underlying `ready` methods are cancellation safe, so it is safe to construct this
+        // `ActiveReplication::recv` is cancellation safe, so it is safe to construct this
         // `select_all`.
-        future::select_all(
-            self.instances
-                .iter_mut()
-                .map(|(id, instance)| Box::pin(instance.ready().map(|()| *id))),
-        )
-        .map(|(id, _index, _remaining)| id)
-        .await
+        let receives = self
+            .instances
+            .iter_mut()
+            .map(|(id, instance)| Box::pin(instance.replicas.recv().map(|resp| (*id, resp))));
+        let (resp, _index, _remaining) = future::select_all(receives).await;
+
+        self.stashed_response = Some(resp);
     }
 
     /// Listen for changes to compute services reported by the orchestrator.
@@ -403,11 +449,23 @@ pub struct ActiveComputeController<'a, T> {
 }
 
 impl<T> ActiveComputeController<'_, T> {
-    /// Return a handle to the indicated compute instance, if it exists.
-    pub fn instance(&mut self, id: ComputeInstanceId) -> Option<ActiveInstance<T>> {
+    pub fn instance_exists(&self, id: ComputeInstanceId) -> bool {
+        self.compute.instance_exists(id)
+    }
+
+    /// Return a read-only handle to the indicated collection.
+    pub fn collection(
+        &self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<&CollectionState<T>, ComputeError> {
+        self.compute.collection(instance_id, collection_id)
+    }
+
+    /// Return a handle to the indicated compute instance.
+    fn instance(&mut self, id: ComputeInstanceId) -> Result<ActiveInstance<T>, ComputeError> {
         self.compute
-            .instances
-            .get_mut(&id)
+            .instance_mut(id)
             .map(|c| c.activate(self.storage))
     }
 }
@@ -433,25 +491,43 @@ where
 
         // Add replicas backing that instance.
         match config.location {
-            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => {
-                self.instance(instance_id)
-                    .ok_or(ComputeError::InstanceMissing(instance_id))?
-                    .add_replica(replica_id, addrs.into_iter().collect(), persisted_logs);
+            ConcreteComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => {
+                self.instance(instance_id)?.add_replica(
+                    replica_id,
+                    addrs.into_iter().collect(),
+                    persisted_logs,
+                    CommunicationConfig {
+                        workers: workers.get(),
+                        process: 0,
+                        addresses: compute_addrs.into_iter().collect(),
+                    },
+                );
             }
             ConcreteComputeInstanceReplicaLocation::Managed {
                 allocation,
                 availability_zone,
                 ..
             } => {
-                let replica_addrs = self
+                let service = self
                     .compute
                     .orchestrator
                     .ensure_replica(instance_id, replica_id, allocation, availability_zone)
                     .await?;
 
-                self.instance(instance_id)
-                    .ok_or(ComputeError::InstanceMissing(instance_id))?
-                    .add_replica(replica_id, replica_addrs, persisted_logs);
+                self.instance(instance_id)?.add_replica(
+                    replica_id,
+                    service.addresses("controller"),
+                    persisted_logs,
+                    CommunicationConfig {
+                        workers: allocation.workers.get(),
+                        process: 0,
+                        addresses: service.addresses("compute"),
+                    },
+                );
             }
         }
 
@@ -478,63 +554,197 @@ where
         Ok(())
     }
 
-    /// Process the work queued by [`ComputeController::ready`].
+    /// Create and maintain the described dataflows, and initialize state for their output.
+    ///
+    /// This method creates dataflows whose inputs are still readable at the dataflow `as_of`
+    /// frontier, and initializes the outputs as readable from that frontier onward.
+    /// It installs read dependencies from the outputs to the inputs, so that the input read
+    /// capabilities will be held back to the output read capabilities, ensuring that we are
+    /// always able to return to a state that can serve the output read capabilities.
+    pub async fn create_dataflows(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
+    ) -> Result<(), ComputeError> {
+        self.instance(instance_id)?
+            .create_dataflows(dataflows)
+            .await
+    }
+
+    /// Drop the read capability for the given collections and allow their resources to be
+    /// reclaimed.
+    pub async fn drop_collections(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_ids: Vec<GlobalId>,
+    ) -> Result<(), ComputeError> {
+        self.instance(instance_id)?
+            .drop_collections(collection_ids)
+            .await
+    }
+
+    /// Initiate a peek request for the contents of the given collection at `timestamp`.
+    pub async fn peek(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: T,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        target_replica: Option<ReplicaId>,
+    ) -> Result<(), ComputeError> {
+        self.instance(instance_id)?
+            .peek(
+                collection_id,
+                literal_constraints,
+                uuid,
+                timestamp,
+                finishing,
+                map_filter_project,
+                target_replica,
+            )
+            .await
+    }
+
+    /// Cancel existing peek requests.
+    ///
+    /// Canceling a peek is best effort. The caller may see any of the following
+    /// after canceling a peek request:
+    ///
+    ///   * A `PeekResponse::Rows` indicating that the cancellation request did
+    ///    not take effect in time and the query succeeded.
+    ///
+    ///   * A `PeekResponse::Canceled` affirming that the peek was canceled.
+    ///
+    ///   * No `PeekResponse` at all.
+    pub async fn cancel_peeks(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        uuids: BTreeSet<Uuid>,
+    ) -> Result<(), ComputeError> {
+        self.instance(instance_id)?.cancel_peeks(uuids).await
+    }
+
+    /// Assign a read policy to specific identifiers.
+    ///
+    /// The policies are assigned in the order presented, and repeated identifiers should
+    /// conclude with the last policy. Changing a policy will immediately downgrade the read
+    /// capability if appropriate, but it will not "recover" the read capability if the prior
+    /// capability is already ahead of it.
+    ///
+    /// Identifiers not present in `policies` retain their existing read policies.
+    pub async fn set_read_policy(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        policies: Vec<(GlobalId, ReadPolicy<T>)>,
+    ) -> Result<(), ComputeError> {
+        self.instance(instance_id)?.set_read_policy(policies).await
+    }
+
+    /// Update the max size in bytes of any result.
+    pub fn update_max_result_size(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        max_result_size: u32,
+    ) -> Result<(), ComputeError> {
+        self.instance(instance_id)?
+            .update_max_result_size(max_result_size);
+        Ok(())
+    }
+
+    /// Processes the work queued by [`ComputeController::ready`].
     ///
     /// This method is guaranteed to return "quickly" unless doing so would
     /// compromise the correctness of the system.
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    pub async fn process(
-        &mut self,
-        instance_id: ComputeInstanceId,
-    ) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
-        self.instance(instance_id)
-            .ok_or(ComputeError::InstanceMissing(instance_id))?
-            .process()
-            .await
+    pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
+        let (instance_id, ar_response) = match self.compute.stashed_response.take() {
+            Some(resp) => resp,
+            None => return Ok(None),
+        };
+
+        let response = match ar_response {
+            ActiveReplicationResponse::ComputeResponse(resp) => resp,
+            ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when) => {
+                return Ok(Some(ComputeControllerResponse::ReplicaHeartbeat(
+                    replica_id, when,
+                )))
+            }
+        };
+
+        let mut instance = self.instance(instance_id)?;
+
+        match response {
+            ComputeResponse::FrontierUppers(updates) => {
+                instance.update_write_frontiers(&updates).await?;
+                Ok(None)
+            }
+            ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+                instance.remove_peeks(&[uuid].into()).await?;
+                Ok(Some(ComputeControllerResponse::PeekResponse(
+                    uuid,
+                    peek_response,
+                    otel_ctx,
+                )))
+            }
+            ComputeResponse::TailResponse(global_id, response) => {
+                let new_upper = match &response {
+                    TailResponse::Batch(TailBatch { lower, upper, .. }) => {
+                        // Ensure there are no gaps in the tail stream we receive.
+                        assert_eq!(
+                            lower,
+                            &instance.compute.collections[&global_id].write_frontier
+                        );
+
+                        upper.clone()
+                    }
+                    // The tail will not be written to again, but we should not confuse that
+                    // with the source of the TAIL being complete through this time.
+                    TailResponse::DroppedAt(_) => Antichain::new(),
+                };
+                instance
+                    .update_write_frontiers(&[(global_id, new_upper)])
+                    .await?;
+                Ok(Some(ComputeControllerResponse::TailResponse(
+                    global_id, response,
+                )))
+            }
+        }
     }
 }
 
-/// A controller for a compute instance.
+/// The state we keep for a compute instance.
 #[derive(Debug)]
-pub struct Instance<T> {
-    /// The ID of the compute instance.
-    instance_id: ComputeInstanceId,
+struct Instance<T> {
     /// The replicas of this compute instance.
     replicas: ActiveReplication<T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.
-    peeks: BTreeMap<uuid::Uuid, (GlobalId, T)>,
-    /// A response to handle on the next call to `ActiveInstance::process`.
-    stashed_response: Option<ActiveReplicationResponse<T>>,
+    peeks: BTreeMap<Uuid, (GlobalId, T)>,
 }
-
-/// A wrapper around [`Instance`] with a live storage controller.
-#[derive(Debug)]
-pub struct ActiveInstance<'a, T> {
-    compute: &'a mut Instance<T>,
-    storage_controller: &'a mut dyn StorageController<Timestamp = T>,
-}
-
-// Public interface
 
 impl<T> Instance<T> {
-    /// Returns this controller's compute instance ID.
-    pub fn instance_id(&self) -> ComputeInstanceId {
-        self.instance_id
-    }
-
     /// Acquire a handle to the collection state associated with `id`.
-    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
+    fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
         self.collections
             .get(&id)
             .ok_or(ComputeError::IdentifierMissing(id))
     }
 
+    /// Acquire a mutable handle to the collection state associated with `id`.
+    fn collection_mut(&mut self, id: GlobalId) -> Result<&mut CollectionState<T>, ComputeError> {
+        self.collections
+            .get_mut(&id)
+            .ok_or(ComputeError::IdentifierMissing(id))
+    }
+
     /// Acquire an [`ActiveInstance`] by providing a storage controller.
-    pub fn activate<'a>(
+    fn activate<'a>(
         &'a mut self,
         storage_controller: &'a mut dyn StorageController<Timestamp = T>,
     ) -> ActiveInstance<'a, T> {
@@ -550,10 +760,9 @@ where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    pub fn new(
-        instance_id: ComputeInstanceId,
+    fn new(
         build_info: &'static BuildInfo,
-        logging: &Option<LoggingConfig>,
+        logging: Option<LoggingConfig>,
         max_result_size: u32,
     ) -> Self {
         let mut collections = BTreeMap::default();
@@ -570,47 +779,33 @@ where
             }
         }
         let mut replicas = ActiveReplication::new(build_info);
+        // These commands will be modified by ActiveReplication
+        replicas.send(ComputeCommand::CreateTimely(Default::default()));
         replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
-            logging: logging.clone(),
+            logging,
             max_result_size,
         }));
 
         Self {
-            instance_id,
             replicas,
             collections,
             peeks: Default::default(),
-            stashed_response: None,
         }
     }
 
     /// Marks the end of any initialization commands.
     ///
     /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
-    pub fn initialization_complete(&mut self) {
+    fn initialization_complete(&mut self) {
         self.replicas.send(ComputeCommand::InitializationComplete);
-    }
-
-    /// Waits until the controller is ready to process a response.
-    ///
-    /// This method may block for an arbitrarily long time.
-    ///
-    /// When the method returns, the owner should call
-    /// [`ActiveInstance::process`] to process the ready message.
-    ///
-    /// This method is cancellation safe.
-    pub async fn ready(&mut self) {
-        if self.stashed_response.is_none() {
-            self.stashed_response = Some(self.replicas.recv().await);
-        }
     }
 
     /// Drop this compute instance.
     ///
     /// # Panics
     /// - If the compute instance still has active replicas.
-    pub fn drop(mut self) {
+    fn drop(mut self) {
         assert!(
             self.replicas.get_replica_ids().next().is_none(),
             "cannot drop instances with provisioned replicas"
@@ -619,22 +814,25 @@ where
     }
 }
 
+/// A wrapper around [`Instance`] with a live storage controller.
+#[derive(Debug)]
+struct ActiveInstance<'a, T> {
+    compute: &'a mut Instance<T>,
+    storage_controller: &'a mut dyn StorageController<Timestamp = T>,
+}
+
 impl<'a, T> ActiveInstance<'a, T>
 where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    /// Acquire a handle to the collection state associated with `id`.
-    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
-        self.compute.collection(id)
-    }
-
-    /// Adds a new instance replica, by name.
-    pub fn add_replica(
+    /// Add a new instance replica, by ID.
+    fn add_replica(
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
         persisted_logs: HashMap<LogVariant, GlobalId>,
+        communication_config: CommunicationConfig,
     ) {
         // Create ComputeState entries in Instance
         for id in persisted_logs.values() {
@@ -659,22 +857,18 @@ where
             .collect();
 
         // Add the replica
-        self.compute.replicas.add_replica(id, addrs, persisted_logs);
+        self.compute
+            .replicas
+            .add_replica(id, addrs, persisted_logs, communication_config);
     }
 
-    /// Removes an existing instance replica, by name.
-    pub fn remove_replica(&mut self, id: ReplicaId) {
+    /// Remove an existing instance replica, by ID.
+    fn remove_replica(&mut self, id: ReplicaId) {
         self.compute.replicas.remove_replica(id);
     }
 
-    /// Creates and maintains the described dataflows, and initializes state for their output.
-    ///
-    /// This method creates dataflows whose inputs are still readable at the dataflow `as_of`
-    /// frontier, and initializes the outputs as readable from that frontier onward.
-    /// It installs read dependencies from the outputs to the inputs, so that the input read
-    /// capabilities will be held back to the output read capabilities, ensuring that we are
-    /// always able to return to a state that can serve the output read capabilities.
-    pub async fn create_dataflows(
+    /// Create the described dataflows and initializes state for their output.
+    async fn create_dataflows(
         &mut self,
         dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
     ) -> Result<(), ComputeError> {
@@ -832,7 +1026,7 @@ where
 
     /// Drops the read capability for the given collections and allows their resources to be
     /// reclaimed.
-    pub async fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), ComputeError> {
+    async fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), ComputeError> {
         // Validate that the ids exist.
         self.validate_ids(ids.iter().cloned())?;
 
@@ -843,7 +1037,7 @@ where
 
     /// Initiate a peek request for the contents of `id` at `timestamp`.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn peek(
+    async fn peek(
         &mut self,
         id: GlobalId,
         literal_constraints: Option<Vec<Row>>,
@@ -882,21 +1076,11 @@ where
     }
 
     /// Cancels existing peek requests.
-    ///
-    /// Canceling a peek is best effort. The caller may see any of the following
-    /// after canceling a peek request:
-    ///
-    ///   * A `PeekResponse::Rows` indicating that the cancellation request did
-    ///    not take effect in time and the query succeeded.
-    ///
-    ///   * A `PeekResponse::Canceled` affirming that the peek was canceled.
-    ///
-    ///   * No `PeekResponse` at all.
-    pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
-        self.remove_peeks(uuids.iter().cloned()).await?;
-        self.compute.replicas.send(ComputeCommand::CancelPeeks {
-            uuids: uuids.clone(),
-        });
+    async fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) -> Result<(), ComputeError> {
+        self.remove_peeks(&uuids).await?;
+        self.compute
+            .replicas
+            .send(ComputeCommand::CancelPeeks { uuids });
         Ok(())
     }
 
@@ -909,7 +1093,7 @@ where
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn set_read_policy(
+    async fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), ComputeError> {
@@ -944,77 +1128,12 @@ where
     }
 
     /// Update the max size in bytes of any result.
-    pub async fn update_max_result_size(&mut self, max_result_size: u32) {
+    fn update_max_result_size(&mut self, max_result_size: u32) {
         self.compute
             .replicas
             .send(ComputeCommand::UpdateMaxResultSize(max_result_size))
     }
 
-    /// Processes the work queued by [`ComputeController::ready`].
-    ///
-    /// This method is guaranteed to return "quickly" unless doing so would
-    /// compromise the correctness of the system.
-    ///
-    /// This method is **not** guaranteed to be cancellation safe. It **must**
-    /// be awaited to completion.
-    pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
-        match self.compute.stashed_response.take() {
-            None => Ok(None),
-            Some(ActiveReplicationResponse::ComputeResponse(response)) => match response {
-                ComputeResponse::FrontierUppers(updates) => {
-                    self.update_write_frontiers(&updates).await?;
-                    Ok(None)
-                }
-                ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
-                    self.remove_peeks(std::iter::once(uuid)).await?;
-                    Ok(Some(ComputeControllerResponse::PeekResponse(
-                        uuid,
-                        peek_response,
-                        otel_ctx,
-                    )))
-                }
-                ComputeResponse::TailResponse(global_id, response) => {
-                    let new_upper = match &response {
-                        TailResponse::Batch(TailBatch { lower, upper, .. }) => {
-                            // Ensure there are no gaps in the tail stream we receive.
-                            assert_eq!(lower, &self.compute.collections[&global_id].write_frontier);
-
-                            upper.clone()
-                        }
-                        // The tail will not be written to again, but we should not confuse that
-                        // with the source of the TAIL being complete through this time.
-                        TailResponse::DroppedAt(_) => Antichain::new(),
-                    };
-                    self.update_write_frontiers(&[(global_id, new_upper)])
-                        .await?;
-                    Ok(Some(ComputeControllerResponse::TailResponse(
-                        global_id, response,
-                    )))
-                }
-            },
-            Some(ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when)) => Ok(Some(
-                ComputeControllerResponse::ReplicaHeartbeat(replica_id, when),
-            )),
-        }
-    }
-}
-
-// Internal interface
-
-impl<T> Instance<T> {
-    /// Acquire a mutable handle to the collection state associated with `id`.
-    fn collection_mut(&mut self, id: GlobalId) -> Result<&mut CollectionState<T>, ComputeError> {
-        self.collections
-            .get_mut(&id)
-            .ok_or(ComputeError::IdentifierMissing(id))
-    }
-}
-
-impl<'a, T> ActiveInstance<'a, T>
-where
-    T: Timestamp + Lattice,
-    ComputeGrpcClient: ComputeClient<T>,
-{
     /// Validate that a collection exists for all identifiers, and error if any do not.
     fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), ComputeError> {
         for id in ids {
@@ -1143,10 +1262,7 @@ where
     }
 
     /// Removes a registered peek, unblocking compaction that might have waited on it.
-    async fn remove_peeks(
-        &mut self,
-        peek_ids: impl IntoIterator<Item = uuid::Uuid>,
-    ) -> Result<(), ComputeError> {
+    async fn remove_peeks(&mut self, peek_ids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
         let mut updates = peek_ids
             .into_iter()
             .flat_map(|uuid| {
@@ -1198,6 +1314,25 @@ where
             .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
         self.set_read_policy(policies.collect()).await?;
         Ok(())
+    }
+}
+
+/// A read-only handle to a compute instance.
+#[derive(Debug, Clone, Copy)]
+pub struct ComputeInstanceRef<'a, T> {
+    instance_id: ComputeInstanceId,
+    instance: &'a Instance<T>,
+}
+
+impl<T> ComputeInstanceRef<'_, T> {
+    /// Return the ID of this compute instance.
+    pub fn instance_id(&self) -> ComputeInstanceId {
+        self.instance_id
+    }
+
+    /// Return a read-only handle to the indicated collection.
+    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, ComputeError> {
+        self.instance.collection(id)
     }
 }
 

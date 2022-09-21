@@ -55,10 +55,9 @@ product_detail_id  true      text
 code               true      text
 
 # verify metadata column renaming
-> CREATE SOURCE regex_source_renamed_cols (ip, ts, path, search_kw, product_detail_id, code, lineno)
+> CREATE SOURCE regex_source_renamed_cols (ip, ts, path, search_kw, product_detail_id, code)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-request-log-${testdrive.seed}'
   FORMAT REGEX '(?P<foo1>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<foo2>[^]]+)\] "(?P<foo3>(?:GET /search/\?kw=(?P<foo4>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<foo5>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<foo6>\d{3}) -'
-  INCLUDE OFFSET
 
 > SHOW COLUMNS FROM regex_source_renamed_cols
 name               nullable  type
@@ -69,7 +68,6 @@ path               true      text
 search_kw          true      text
 product_detail_id  true      text
 code               true      text
-lineno             false     bigint
 
 > SELECT * FROM regex_source_named_cols
 ip            ts                      path                                           search_kw           product_detail_id  code

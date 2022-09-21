@@ -73,6 +73,7 @@ Commit
 Committed
 Compaction
 Compression
+Compute
 Confluent
 Connection
 Connections
@@ -367,6 +368,7 @@ Wire
 With
 Without
 Work
+Workers
 Write
 Year
 Years

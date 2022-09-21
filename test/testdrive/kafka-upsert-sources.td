@@ -516,9 +516,9 @@ librairie 10
 > SELECT * FROM include_metadata
 f3        f4        f1           f2   partition  offset
 -------------------------------------------------------
-<null>    yin       dog          243   0         15
-air       qi        chicken      47    0         13
-earth     dao       rhinoceros   211   0         12
+<null>    yin       dog          243   0         14
+air       qi        chicken      47    0         12
+earth     dao       rhinoceros   211   0         11
 
 > CREATE SOURCE include_metadata_ts
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
@@ -530,9 +530,9 @@ earth     dao       rhinoceros   211   0         12
 > SELECT "offset" FROM include_metadata_ts WHERE ts > '2021-01-01'
 offset
 ------
-15
-13
+14
 12
+11
 
 > SELECT "offset" FROM include_metadata_ts WHERE ts < '2021-01-01'
 offset

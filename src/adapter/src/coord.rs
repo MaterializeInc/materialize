@@ -524,9 +524,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
                         self.controller
                             .active_compute()
-                            .instance(idx.compute_instance)
-                            .unwrap()
-                            .create_dataflows(dataflow_plan)
+                            .create_dataflows(idx.compute_instance, dataflow_plan)
                             .await
                             .unwrap();
                     }

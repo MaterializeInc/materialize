@@ -26,20 +26,20 @@ use timely::communication::allocator::zero_copy::initialize::initialize_networki
 use timely::communication::allocator::GenericBuilder;
 use tracing::{info, trace, warn};
 
-use crate::server::CommunicationConfig;
+use mz_compute_client::command::CommunicationConfig;
 
 /// Creates communication mesh from cluster config
 pub fn initialize_networking(
-    config: CommunicationConfig,
+    config: &CommunicationConfig,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), String> {
     let CommunicationConfig {
-        threads,
+        workers,
         process,
         addresses,
     } = config;
-    let sockets_result = create_sockets(addresses, process);
+    let sockets_result = create_sockets(addresses.clone(), *process);
     match sockets_result.and_then(|sockets| {
-        initialize_networking_from_sockets(sockets, process, threads, Box::new(|_| None))
+        initialize_networking_from_sockets(sockets, *process, *workers, Box::new(|_| None))
     }) {
         Ok((stuff, guard)) => Ok((
             stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),

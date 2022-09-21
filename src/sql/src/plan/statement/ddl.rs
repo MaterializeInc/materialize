@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 
 use aws_arn::ResourceName as AmazonResourceName;
@@ -56,7 +57,7 @@ use mz_storage::types::sources::encoding::{
 use mz_storage::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
-    KinesisSourceConnection, LoadGeneratorSourceConnection, MzOffset, PostgresSourceConnection,
+    KinesisSourceConnection, LoadGeneratorSourceConnection, PostgresSourceConnection,
     PostgresSourceDetails, ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection,
     SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
@@ -444,39 +445,23 @@ pub fn plan_create_source(
                     }
                 };
 
-            let parse_offset = |s: i64| {
-                // we parse an i64 here, because we don't yet support u64's in
-                // sql, but put it into an internal MzOffset that holds a u64
-                // TODO: make this an native u64 when
-                // https://github.com/MaterializeInc/materialize/issues/7629 is
-                // resolved.
-                if s >= 0 {
-                    Ok(MzOffset {
-                        offset: s.try_into().unwrap(),
-                    })
-                } else {
-                    sql_bail!("START OFFSET must be a nonnegative integer")
-                }
-            };
-
             let mut start_offsets = HashMap::new();
-            let has_nontrivial_start_offsets = match optional_start_offset {
-                None => {
-                    start_offsets.insert(0, MzOffset::from(0));
-                    false
-                }
-                Some(KafkaStartOffsetType::StartOffset(vs)) => {
-                    for (i, v) in vs.iter().enumerate() {
-                        start_offsets.insert(i32::try_from(i)?, parse_offset(*v)?);
+            match optional_start_offset {
+                None => (),
+                Some(KafkaStartOffsetType::StartOffset(offsets)) => {
+                    for (part, offset) in offsets.iter().enumerate() {
+                        if *offset < 0 {
+                            sql_bail!("START OFFSET must be a nonnegative integer");
+                        }
+                        start_offsets.insert(i32::try_from(part)?, *offset);
                     }
-                    true
                 }
                 Some(KafkaStartOffsetType::StartTimestamp(_)) => {
                     unreachable!("time offsets should be converted in purification")
                 }
-            };
+            }
 
-            if has_nontrivial_start_offsets && envelope.requires_all_input() {
+            if !start_offsets.is_empty() && envelope.requires_all_input() {
                 sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
             }
 
@@ -2623,7 +2608,9 @@ generate_extracted_config!(
     ReplicaOption,
     (AvailabilityZone, String),
     (Size, String),
-    (Remote, Vec<String>)
+    (Remote, Vec<String>),
+    (Compute, Vec<String>),
+    (Workers, u16)
 );
 
 fn plan_replica_config(
@@ -2634,35 +2621,69 @@ fn plan_replica_config(
         availability_zone,
         size,
         remote,
+        workers,
+        compute,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
     if remote.is_some() {
         scx.require_unsafe_mode("REMOTE cluster replica option")?;
     }
+    if compute.is_some() {
+        scx.require_unsafe_mode("COMPUTE cluster replica option")?;
+    }
+    if workers.is_some() {
+        scx.require_unsafe_mode("WORKERS cluster replica option")?;
+    }
 
-    let remote_addrs = remote
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<BTreeSet<String>>();
-
-    match (remote_addrs.len() > 0, size) {
-        (true, None) => {
+    match (size, remote) {
+        (None, Some(remote)) => {
+            // REMOTE given, no SIZE
             if availability_zone.is_some() {
                 sql_bail!("cannot specify AVAILABILITY ZONE and REMOTE");
             }
+            // Unwrap REMOTE options
+            let remote_addrs = remote.into_iter().collect::<BTreeSet<String>>();
+            let compute_addrs = compute
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<BTreeSet<String>>();
+            let workers = workers.unwrap_or(1);
+
+            if remote_addrs.len() > 1 && (remote_addrs.len() != compute_addrs.len()) {
+                sql_bail!(
+                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
+                );
+            }
+            if compute_addrs.len() > remote_addrs.len() {
+                sql_bail!(
+                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
+                );
+            }
+
+            let workers = NonZeroUsize::new(workers.into())
+                .ok_or_else(|| sql_err!("WORKERS must be greater 0"))?;
             Ok(ComputeInstanceReplicaConfig::Remote {
                 addrs: remote_addrs,
+                compute_addrs,
+                workers,
             })
         }
-        (false, Some(size)) => Ok(ComputeInstanceReplicaConfig::Managed {
-            size,
-            availability_zone,
-        }),
-        (false, None) => {
-            sql_bail!("one of REMOTE or SIZE must be specified")
+        (Some(size), None) => {
+            // SIZE given, no REMOTE
+            if workers.is_some() {
+                sql_bail!("cannot specify SIZE and WORKERS");
+            }
+            if compute.is_some() {
+                sql_bail!("cannot specify SIZE and COMPUTE");
+            }
+            Ok(ComputeInstanceReplicaConfig::Managed {
+                size,
+                availability_zone,
+            })
         }
-        (true, Some(_)) => {
+        (_, _) => {
+            // SIZE and REMOTE given, or none of them
             sql_bail!("only one of REMOTE or SIZE may be specified")
         }
     }

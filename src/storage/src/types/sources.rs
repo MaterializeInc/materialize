@@ -10,7 +10,6 @@
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
 use std::collections::{BTreeMap, HashMap};
-use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
 use std::time::Duration;
@@ -238,24 +237,6 @@ impl AddAssign<u64> for MzOffset {
 impl AddAssign<Self> for MzOffset {
     fn add_assign(&mut self, x: Self) {
         self.offset += x.offset;
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct KafkaOffset {
-    pub offset: i64,
-}
-
-/// Convert from KafkaOffset to MzOffset (1-indexed), failing if the offset
-/// is negative.
-impl TryFrom<KafkaOffset> for MzOffset {
-    type Error = TryFromIntError;
-    fn try_from(kafka_offset: KafkaOffset) -> Result<Self, Self::Error> {
-        Ok(MzOffset {
-            // If the offset is negative, or +1 overflows, then this
-            // fails
-            offset: (kafka_offset.offset + 1).try_into()?,
-        })
     }
 }
 
@@ -989,7 +970,7 @@ pub struct KafkaSourceConnection {
     pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     // Map from partition -> starting offset
-    pub start_offsets: HashMap<i32, MzOffset>,
+    pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
     pub environment_id: String,
     /// If present, include the timestamp as an output column of the source with the given name
@@ -1018,7 +999,7 @@ impl Arbitrary for KafkaSourceConnection {
             any::<KafkaConnection>(),
             any::<BTreeMap<String, StringOrSecret>>(),
             any::<String>(),
-            any::<HashMap<i32, MzOffset>>(),
+            any::<HashMap<i32, i64>>(),
             any::<Option<String>>(),
             any::<String>(),
             any::<Option<IncludedColumnPos>>(),
@@ -1068,11 +1049,7 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
                 .map(|(k, v)| (k.clone(), v.into_proto()))
                 .collect(),
             topic: self.topic.clone(),
-            start_offsets: self
-                .start_offsets
-                .iter()
-                .map(|(k, v)| (*k, v.into_proto()))
-                .collect(),
+            start_offsets: self.start_offsets.clone(),
             group_id_prefix: self.group_id_prefix.clone(),
             environment_id: None,
             environment_name: Some(self.environment_id.into_proto()),
@@ -1085,11 +1062,6 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
     }
 
     fn from_proto(proto: ProtoKafkaSourceConnection) -> Result<Self, TryFromProtoError> {
-        let start_offsets: Result<_, TryFromProtoError> = proto
-            .start_offsets
-            .into_iter()
-            .map(|(k, v)| MzOffset::from_proto(v).map(|v| (k, v)))
-            .collect();
         let options: Result<_, TryFromProtoError> = proto
             .options
             .into_iter()
@@ -1101,7 +1073,7 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
                 .into_rust_if_some("ProtoKafkaSourceConnection::connection")?,
             options: options?,
             topic: proto.topic,
-            start_offsets: start_offsets?,
+            start_offsets: proto.start_offsets,
             group_id_prefix: proto.group_id_prefix,
             environment_id: match (proto.environment_id, proto.environment_name) {
                 (_, Some(name)) => name,
