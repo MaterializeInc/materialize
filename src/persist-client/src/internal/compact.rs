@@ -126,7 +126,7 @@ where
                                 Arc::clone(&metrics),
                                 Arc::clone(&cpu_heavy_runtime),
                                 req,
-                                writer_id.clone(),
+                                writer_id,
                             )
                             .instrument(compact_span),
                         )
@@ -192,11 +192,9 @@ where
         // were just written, but it does result in non-trivial blob traffic
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
-        let should_compact = req.inputs.len()
-            >= self.cfg.compaction_heuristic_min_inputs
+        let should_compact = req.inputs.len() >= self.cfg.compaction_heuristic_min_inputs
             || req.inputs.iter().map(|x| x.len).sum::<usize>()
-            >= self.cfg.compaction_heuristic_min_updates;
-
+                >= self.cfg.compaction_heuristic_min_updates;
         if !should_compact {
             self.metrics.compaction.skipped.inc();
             return None;
