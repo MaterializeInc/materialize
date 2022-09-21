@@ -264,9 +264,9 @@ Field             | Type       | Meaning
 
 ### `mz_worker_materialization_dependencies`
 
-The `mz_worker_materialization_dependencies` source describes the dependency structure between each [dataflow] and
-the sources of their data. To create a complete dependency structure, the `import_id` column includes alsos
-other dataflows.
+The `mz_worker_materialization_dependencies` source describes the dependency structure
+between each [dataflow] and the sources of their data. To create a complete dependency
+structure, the `import_id` column includes other dataflows.
 
 Field      | Type       | Meaning
 -----------|------------|--------
