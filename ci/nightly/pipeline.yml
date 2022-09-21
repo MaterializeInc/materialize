@@ -374,7 +374,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persist
-          args: [--node-count=1, --consensus=mem, --blob-uri=mem, --time-limit=600, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
+          args: [--node-count=1, --consensus=mem, --blob=mem, --time-limit=600, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
   - id: persist-maelstrom-multi-node
     label: Long multi-node Maelstrom coverage of persist with postgres consensus
