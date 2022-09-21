@@ -4697,11 +4697,23 @@ impl<'a> Parser<'a> {
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if self.parse_keyword(INDEXES) {
-            let table_name = if self.parse_one_of_keywords(&[FROM, ON]).is_some() {
+            let from_schema = if self.parse_keywords(&[FROM, SCHEMA]) {
+                Some(self.parse_schema_name()?)
+            } else {
+                None
+            };
+            let on_object = if self.parse_one_of_keywords(&[FROM, ON]).is_some() {
                 Some(self.parse_raw_name()?)
             } else {
                 None
             };
+            if from_schema.is_some() && on_object.is_some() {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "Cannot specify both FROM SCHEMA and FROM or ON"
+                );
+            }
             let in_cluster = self.parse_optional_in_cluster()?;
 
             let filter = if self.parse_keyword(WHERE) {
@@ -4710,7 +4722,8 @@ impl<'a> Parser<'a> {
                 None
             };
             Ok(ShowStatement::ShowIndexes(ShowIndexesStatement {
-                table_name,
+                on_object,
+                from_schema,
                 in_cluster,
                 filter,
             }))

@@ -184,35 +184,56 @@ SHOW INDEXES FROM foo
 ----
 SHOW INDEXES FROM foo
 =>
-Show(ShowIndexes(ShowIndexesStatement { table_name: Some(Name(UnresolvedObjectName([Ident("foo")]))), in_cluster: None, filter: None }))
+Show(ShowIndexes(ShowIndexesStatement { on_object: Some(Name(UnresolvedObjectName([Ident("foo")]))), from_schema: None, in_cluster: None, filter: None }))
 
 parse-statement
 SHOW INDEXES ON foo
 ----
 SHOW INDEXES FROM foo
 =>
-Show(ShowIndexes(ShowIndexesStatement { table_name: Some(Name(UnresolvedObjectName([Ident("foo")]))), in_cluster: None, filter: None }))
+Show(ShowIndexes(ShowIndexesStatement { on_object: Some(Name(UnresolvedObjectName([Ident("foo")]))), from_schema: None, in_cluster: None, filter: None }))
 
 parse-statement
 SHOW INDEXES
 ----
 SHOW INDEXES
 =>
-Show(ShowIndexes(ShowIndexesStatement { table_name: None, in_cluster: None, filter: None }))
+Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: None, in_cluster: None, filter: None }))
 
 parse-statement
 SHOW INDEXES IN CLUSTER c
 ----
 SHOW INDEXES IN CLUSTER c
 =>
-Show(ShowIndexes(ShowIndexesStatement { table_name: None, in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
+Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: None, in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
 
 parse-statement
-SHOW INDEXES FROM c IN CLUSTER c
+SHOW INDEXES FROM t IN CLUSTER c
 ----
-SHOW INDEXES FROM c IN CLUSTER c
+SHOW INDEXES FROM t IN CLUSTER c
 =>
-Show(ShowIndexes(ShowIndexesStatement { table_name: Some(Name(UnresolvedObjectName([Ident("c")]))), in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
+Show(ShowIndexes(ShowIndexesStatement { on_object: Some(Name(UnresolvedObjectName([Ident("t")]))), from_schema: None, in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
+
+parse-statement
+SHOW INDEXES FROM SCHEMA s
+----
+SHOW INDEXES FROM SCHEMA s
+=>
+Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: Some(UnresolvedSchemaName([Ident("s")])), in_cluster: None, filter: None }))
+
+parse-statement
+SHOW INDEXES FROM SCHEMA s IN CLUSTER c
+----
+SHOW INDEXES FROM SCHEMA s IN CLUSTER c
+=>
+Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: Some(UnresolvedSchemaName([Ident("s")])), in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
+
+parse-statement
+SHOW INDEXES FROM SCHEMA s ON t
+----
+error: Cannot specify both FROM SCHEMA and FROM or ON
+SHOW INDEXES FROM SCHEMA s ON t
+                              ^
 
 parse-statement
 SHOW CREATE VIEW foo
