@@ -289,7 +289,7 @@ where
 
                             super::debezium::render_tx(dbz_envelope, &results, tx_source_ok)
                         }
-                        None => super::debezium::render(id.clone(), dbz_envelope, &results),
+                        None => super::debezium::render(dbz_envelope, &results),
                     };
                     (stream.as_collection(), Some(errors.as_collection()))
                 }

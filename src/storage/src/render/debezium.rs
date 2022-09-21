@@ -12,12 +12,12 @@ use std::collections::{HashMap, VecDeque};
 use std::str::FromStr;
 
 use differential_dataflow::{Collection, Hashable};
-use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Capability, OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 
 use mz_expr::EvalError;
-use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, Diff, Row, Timestamp};
 
 use crate::source::types::DecodeResult;
 use crate::types::errors::{DataflowError, EnvelopeError};
@@ -27,7 +27,6 @@ use crate::types::sources::{
 };
 
 pub(crate) fn render<G: Scope>(
-    source_id: GlobalId,
     envelope: &DebeziumEnvelope,
     input: &Stream<G, DecodeResult>,
 ) -> (
@@ -40,75 +39,69 @@ where
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
     // TODO(guswynn): !!! Correctly deduplicate even in the upsert case
     input
-        .unary(
-            Exchange::new(|_decode_result: &DecodeResult| source_id.hashed()),
-            "envelope-debezium",
-            move |_, _| {
-                let mut dedup_state = HashMap::new();
-                let envelope = envelope.clone();
-                let mut data = vec![];
-                move |input, output| {
-                    while let Some((cap, refmut_data)) = input.next() {
-                        let mut session = output.session(&cap);
-                        refmut_data.swap(&mut data);
-                        for result in data.drain(..) {
-                            let value = match result.value {
-                                Some(Ok((value, 1))) => value,
-                                Some(Ok(_)) => unreachable!(
+        .unary(Pipeline, "envelope-debezium", move |_, _| {
+            let mut dedup_state = HashMap::new();
+            let envelope = envelope.clone();
+            let mut data = vec![];
+            move |input, output| {
+                while let Some((cap, refmut_data)) = input.next() {
+                    let mut session = output.session(&cap);
+                    refmut_data.swap(&mut data);
+                    for result in data.drain(..) {
+                        let value = match result.value {
+                            Some(Ok((value, 1))) => value,
+                            Some(Ok(_)) => unreachable!(
                                 "Debezium should only be used with sources with no explicit diff"
                             ),
-                                Some(Err(err)) => {
-                                    session.give((Err(err.into()), cap.time().clone(), 1));
-                                    continue;
-                                }
-                                None => continue,
-                            };
+                            Some(Err(err)) => {
+                                session.give((Err(err.into()), cap.time().clone(), 1));
+                                continue;
+                            }
+                            None => continue,
+                        };
 
-                            // TODO(#11664): Dedup and process the data before combining / merging data with tx metadata
-                            let partition_dedup = dedup_state
-                                .entry(result.partition.clone())
-                                .or_insert_with(|| {
-                                    DebeziumDeduplicationState::new(envelope.clone())
-                                });
-                            let should_use = match partition_dedup {
-                                Some(ref mut s) => {
-                                    let res = s.should_use_record(&value);
-                                    match res {
-                                        Ok(b) => b,
-                                        Err(err) => {
-                                            session.give((
-                                                Err(DataflowError::EnvelopeError(err)),
-                                                cap.time().clone(),
-                                                1,
-                                            ));
-                                            continue;
-                                        }
+                        // TODO(#11664): Dedup and process the data before combining / merging data with tx metadata
+                        let partition_dedup = dedup_state
+                            .entry(result.partition.clone())
+                            .or_insert_with(|| DebeziumDeduplicationState::new(envelope.clone()));
+                        let should_use = match partition_dedup {
+                            Some(ref mut s) => {
+                                let res = s.should_use_record(&value);
+                                match res {
+                                    Ok(b) => b,
+                                    Err(err) => {
+                                        session.give((
+                                            Err(DataflowError::EnvelopeError(err)),
+                                            cap.time().clone(),
+                                            1,
+                                        ));
+                                        continue;
                                     }
                                 }
-                                None => true,
-                            };
+                            }
+                            None => true,
+                        };
 
-                            if should_use {
-                                match value.iter().nth(before_idx).unwrap() {
-                                    Datum::List(l) => {
-                                        session.give((Ok(Row::pack(&l)), cap.time().clone(), -1))
-                                    }
-                                    Datum::Null => {}
-                                    d => panic!("type error: expected record, found {:?}", d),
+                        if should_use {
+                            match value.iter().nth(before_idx).unwrap() {
+                                Datum::List(l) => {
+                                    session.give((Ok(Row::pack(&l)), cap.time().clone(), -1))
                                 }
-                                match value.iter().nth(after_idx).unwrap() {
-                                    Datum::List(l) => {
-                                        session.give((Ok(Row::pack(&l)), cap.time().clone(), 1))
-                                    }
-                                    Datum::Null => {}
-                                    d => panic!("type error: expected record, found {:?}", d),
+                                Datum::Null => {}
+                                d => panic!("type error: expected record, found {:?}", d),
+                            }
+                            match value.iter().nth(after_idx).unwrap() {
+                                Datum::List(l) => {
+                                    session.give((Ok(Row::pack(&l)), cap.time().clone(), 1))
                                 }
+                                Datum::Null => {}
+                                d => panic!("type error: expected record, found {:?}", d),
                             }
                         }
                     }
                 }
-            },
-        )
+            }
+        })
         .ok_err(|(res, time, diff)| match res {
             Ok(v) => Ok((v, time, diff)),
             Err(e) => Err((e, time, diff)),
