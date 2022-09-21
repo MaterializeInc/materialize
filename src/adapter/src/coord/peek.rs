@@ -478,9 +478,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
                     .active_compute()
-                    .instance(compute_instance)
-                    .unwrap()
-                    .create_dataflows(vec![dataflow])
+                    .create_dataflows(compute_instance, vec![dataflow])
                     .await
                     .unwrap();
                 self.initialize_compute_read_policies(
@@ -547,9 +545,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
         self.controller
             .active_compute()
-            .instance(compute_instance)
-            .unwrap()
             .peek(
+                compute_instance,
                 id,
                 literal_constraints,
                 uuid,
@@ -600,9 +597,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             for (compute_instance, uuids) in inverse {
                 self.controller
                     .active_compute()
-                    .instance(compute_instance)
-                    .unwrap()
-                    .cancel_peeks(&uuids)
+                    .cancel_peeks(compute_instance, uuids)
                     .await
                     .unwrap();
             }

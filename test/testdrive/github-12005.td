@@ -17,7 +17,6 @@ goofus,gallant
   FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-test-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS
-  INCLUDE OFFSET
 
 > CREATE MATERIALIZED VIEW v AS
   SELECT column1 || column2 AS c FROM src

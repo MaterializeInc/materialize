@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,8 +7,22 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -euo pipefail
+from enum import Enum
 
-args=(--controller-listen-addr=0.0.0.0:2100 --internal-http-listen-addr=0.0.0.0:6878)
+from materialize.zippy.framework import Capability
 
-exec computed "${args[@]}" "$@"
+
+class ReplicaSizeType(Enum):
+    Nodes = 1
+    Workers = 2
+
+
+class ReplicaExists(Capability):
+    """A replica exists in the Mz instance."""
+
+    name: str
+    size_type: ReplicaSizeType
+    size: str
+
+    def __init__(self, name: str) -> None:
+        self.name = name

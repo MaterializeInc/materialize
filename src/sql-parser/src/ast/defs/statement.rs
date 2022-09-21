@@ -1071,6 +1071,10 @@ pub enum ReplicaOptionName {
     Size,
     /// The `AVAILABILITY ZONE [[=] <size>]` option.
     AvailabilityZone,
+    /// The `WORKERS [[=] <workers>]` option
+    Workers,
+    /// The `COMPUTE [<host> [, <host> ...]]` option.
+    Compute,
 }
 
 impl AstDisplay for ReplicaOptionName {
@@ -1079,6 +1083,8 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::Remote => f.write_str("REMOTE"),
             ReplicaOptionName::Size => f.write_str("SIZE"),
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
+            ReplicaOptionName::Workers => f.write_str("WORKERS"),
+            ReplicaOptionName::Compute => f.write_str("COMPUTE"),
         }
     }
 }
@@ -1603,7 +1609,8 @@ impl_display_t!(ShowObjectsStatement);
 /// `SHOW INDEX|INDEXES|KEYS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowIndexesStatement<T: AstInfo> {
-    pub table_name: Option<T::ObjectName>,
+    pub on_object: Option<T::ObjectName>,
+    pub from_schema: Option<T::SchemaName>,
     pub in_cluster: Option<T::ClusterName>,
     pub filter: Option<ShowStatementFilter<T>>,
 }
@@ -1612,9 +1619,13 @@ impl<T: AstInfo> AstDisplay for ShowIndexesStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW ");
         f.write_str("INDEXES");
-        if let Some(table_name) = &self.table_name {
+        if let Some(on_object) = &self.on_object {
             f.write_str(" FROM ");
-            f.write_node(table_name);
+            f.write_node(on_object);
+        }
+        if let Some(from_schema) = &self.from_schema {
+            f.write_str(" FROM SCHEMA ");
+            f.write_node(from_schema);
         }
         if let Some(in_cluster) = &self.in_cluster {
             f.write_str(" IN CLUSTER ");

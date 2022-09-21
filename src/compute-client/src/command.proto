@@ -45,6 +45,7 @@ message ProtoComputeCommand {
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;
         ProtoUpdateMaxResultSize update_max_result_size = 8;
+        ProtoCommunicationConfig create_timely = 9;
     }
 }
 
@@ -52,6 +53,12 @@ message ProtoInstanceConfig {
     mz_compute_client.logging.ProtoLoggingConfig logging = 1;
     uint64 replica_id = 2;
     uint32 max_result_size = 3;
+}
+
+message ProtoCommunicationConfig {
+    uint64 workers = 1;
+    uint64 process = 2;
+    repeated string addresses = 3;
 }
 
 message ProtoDataflowDescription {

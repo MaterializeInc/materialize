@@ -36,7 +36,7 @@ class MzStop(Action):
     def run(self, c: Composition) -> None:
         c.kill("materialized")
 
-    def removes(self) -> Set[Type[Capability]]:
+    def withholds(self) -> Set[Type[Capability]]:
         return {MzIsRunning}
 
 

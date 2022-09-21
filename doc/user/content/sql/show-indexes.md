@@ -15,6 +15,7 @@ menu:
 Field | Use
 ------|-----
 _on&lowbar;name_ | The name of the object whose indexes you want to show. If omitted, all indexes in the cluster are shown.
+_schema&lowbar;name_ | The schema to show objects from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 _cluster&lowbar;name_ | The cluster to show indexes from. If omitted, indexes from all clusters are shown.
 
 ## Details

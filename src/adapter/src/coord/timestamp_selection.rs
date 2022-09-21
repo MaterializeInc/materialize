@@ -130,9 +130,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             let since = self
                                 .controller
                                 .compute
-                                .instance(compute_instance)
-                                .unwrap()
-                                .collection(*id)
+                                .collection(compute_instance, *id)
                                 .unwrap()
                                 .read_frontier()
                                 .to_owned();
@@ -187,9 +185,9 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
-                let compute = self.controller.compute.instance(*instance).unwrap();
                 for id in compute_ids.iter() {
-                    since.join_assign(&compute.collection(*id).unwrap().read_capability())
+                    let collection = self.controller.compute.collection(*instance, *id).unwrap();
+                    since.join_assign(&collection.read_capability())
                 }
             }
         }
@@ -220,16 +218,9 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
-                let compute = self.controller.compute.instance(*instance).unwrap();
                 for id in compute_ids.iter() {
-                    since.extend(
-                        compute
-                            .collection(*id)
-                            .unwrap()
-                            .write_frontier()
-                            .iter()
-                            .cloned(),
-                    );
+                    let collection = self.controller.compute.collection(*instance, *id).unwrap();
+                    since.extend(collection.write_frontier().iter().cloned());
                 }
             }
         }

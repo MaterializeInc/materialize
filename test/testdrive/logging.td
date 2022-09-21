@@ -52,6 +52,10 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM count_frontier_delays;
 1
 
+> CREATE VIEW count_dependencies AS SELECT count(*) FROM mz_worker_materialization_dependencies;
+> SELECT count(*) FROM count_dependencies;
+1
+
 > CREATE VIEW count_peeks AS SELECT count(*) FROM mz_peek_active;
 > SELECT count(*) FROM count_peeks;
 1
@@ -157,7 +161,7 @@ SID   count       3           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   global_id   1           text
+SID   object_id   1           text
 SID   source_id   2           text
 SID   worker_id   3           uint8
 SID   delay_ns    4           uint8
@@ -169,7 +173,7 @@ SID   count       5           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   global_id   1           text
+SID   object_id   1           text
 SID   source_id   2           text
 SID   worker_id   3           uint8
 SID   time        4           bigint

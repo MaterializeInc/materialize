@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -3087,9 +3088,15 @@ impl<S: Append> Catalog<S> {
     ) -> Result<ConcreteComputeInstanceReplicaLocation, AdapterError> {
         let cluster_replica_sizes = &self.state.cluster_replica_sizes;
         let location = match location {
-            SerializedComputeInstanceReplicaLocation::Remote { addrs } => {
-                ConcreteComputeInstanceReplicaLocation::Remote { addrs }
-            }
+            SerializedComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => ConcreteComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             SerializedComputeInstanceReplicaLocation::Managed {
                 size,
                 availability_zone,
@@ -4595,6 +4602,8 @@ impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceRep
 pub enum SerializedComputeInstanceReplicaLocation {
     Remote {
         addrs: BTreeSet<String>,
+        compute_addrs: BTreeSet<String>,
+        workers: NonZeroUsize,
     },
     Managed {
         size: String,
@@ -4608,7 +4617,15 @@ pub enum SerializedComputeInstanceReplicaLocation {
 impl From<ConcreteComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
     fn from(loc: ConcreteComputeInstanceReplicaLocation) -> Self {
         match loc {
-            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => Self::Remote { addrs },
+            ConcreteComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => Self::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             ConcreteComputeInstanceReplicaLocation::Managed {
                 allocation: _,
                 size,

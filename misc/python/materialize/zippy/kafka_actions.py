@@ -51,7 +51,7 @@ class KafkaStop(Action):
     def requires(self) -> Set[Type[Capability]]:
         return {KafkaRunning}
 
-    def removes(self) -> Set[Type[Capability]]:
+    def withholds(self) -> Set[Type[Capability]]:
         return {KafkaRunning}
 
     def run(self, c: Composition) -> None:
