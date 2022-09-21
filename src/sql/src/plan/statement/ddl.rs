@@ -2657,7 +2657,7 @@ fn plan_replica_config(
             }
             if compute_addrs.len() > remote_addrs.len() {
                 sql_bail!(
-                    "must specify as many COMPUTE addresses as REMOTE addresses for multi-process replicas"
+                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
                 );
             }
 
@@ -2684,7 +2684,7 @@ fn plan_replica_config(
         }
         (_, _) => {
             // SIZE and REMOTE given, or none of them
-            sql_bail!("one of REMOTE or SIZE must be specified")
+            sql_bail!("only one of REMOTE or SIZE may be specified")
         }
     }
 }

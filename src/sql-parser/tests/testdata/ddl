@@ -1152,6 +1152,13 @@ CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1'], SIZE = '1'))
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])] })
 
 parse-statement
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1:2400', 'host2:2400'], COMPUTE ['host1:2401', 'host2:2401'], WORKERS '1'))
+----
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1:2400', 'host2:2400'], COMPUTE = ['host1:2401', 'host2:2401'], WORKERS = '1'))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1:2400"), String("host2:2400")]))) }, ReplicaOption { name: Compute, value: Some(Value(Array([String("host1:2401"), String("host2:2401")]))) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])] })
+
+parse-statement
 CREATE CLUSTER REPLICA replica REMOTE ['host1']
 ----
 error: Expected dot, found REMOTE
