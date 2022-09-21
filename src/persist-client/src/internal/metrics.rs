@@ -1107,7 +1107,9 @@ impl Blob for MetricsBlob {
     ) -> Result<(), ExternalError> {
         let mut byte_total = 0;
         let mut instrumented = |blob_metadata: BlobMetadata| {
-            byte_total += blob_metadata.size_in_bytes;
+            // Track the size of the _keys_, not the blobs, so that we get a
+            // sense for how much network bandwidth these calls are using.
+            byte_total += blob_metadata.key.len();
             f(blob_metadata)
         };
 
@@ -1124,7 +1126,11 @@ impl Blob for MetricsBlob {
             )
             .await;
 
-        self.metrics.blob.list_keys.bytes.inc_by(byte_total);
+        self.metrics
+            .blob
+            .list_keys
+            .bytes
+            .inc_by(u64::cast_from(byte_total));
 
         res
     }
