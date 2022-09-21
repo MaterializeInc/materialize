@@ -10,6 +10,7 @@
 use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
+use std::convert::Infallible;
 use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
@@ -294,23 +295,10 @@ where
         key_indices_sorted.clone(),
         &upsert_envelope.key_indices,
     );
-
-    // It's very important to hash the right thing. We have nested `Option` and
-    // `Result` here. And, for example, `Some(key).hashed()` is not the same as
-    // `key.hashed()`.
-    //
-    // We make sure  to hash the same thing for both pervious updates and new
-    // updates.
-    //
-    // Also: this problem was only showing up when trying to use upsert-style
-    // sources with multiple storaged workers.
     let result_stream = stream.binary_frontier(
         &previous_ok.inner,
-        Exchange::new(move |DecodeResult { key, .. }| match key {
-            None => 0,
-            Some(key) => key.hashed(),
-        }),
-        Exchange::new(|((key, _v), _t, _r)| Hashable::hashed(key)),
+        Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
+        Exchange::new(|((key, _v), _t, _r)| Ok::<_, Infallible>(key).hashed()),
         "Upsert",
         move |_cap, _info| {
             // This is a map of (time) -> (capability, ((key) -> (value with max offset)))
