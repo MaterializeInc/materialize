@@ -414,9 +414,9 @@ impl LogView {
 
             LogView::MzMaterializationFrontiers => (
                 "SELECT
-                    global_id, pg_catalog.min(time) AS time
+                    object_id, pg_catalog.min(time) AS time
                 FROM mz_catalog.mz_worker_materialization_frontiers_{}
-                GROUP BY global_id",
+                GROUP BY object_id",
                 "mz_materialization_frontiers_{}",
             ),
 
@@ -635,7 +635,7 @@ impl LogVariant {
                 .with_column("worker", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::empty()
-                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("object_id", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1]),
 
@@ -645,18 +645,18 @@ impl LogVariant {
                 .with_column("worker", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
-                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("object_id", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::SourceFrontierCurrent) => RelationDesc::empty()
-                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("object_id", ScalarType::String.nullable(false))
                 .with_column("source", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierDelay) => RelationDesc::empty()
-                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("object_id", ScalarType::String.nullable(false))
                 .with_column("source", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::UInt64.nullable(false))
                 .with_column("delay_ns", ScalarType::UInt64.nullable(false))

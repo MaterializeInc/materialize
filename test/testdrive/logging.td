@@ -161,7 +161,7 @@ SID   count       3           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   global_id   1           text
+SID   object_id   1           text
 SID   source      2           text
 SID   worker      3           uint8
 SID   delay_ns    4           uint8
@@ -173,7 +173,7 @@ SID   count       5           bigint
   ORDER BY position
 id      name        position    type
 --------------------------------------
-SID   global_id   1           text
+SID   object_id   1           text
 SID   source      2           text
 SID   worker      3           uint8
 SID   time        4           bigint
