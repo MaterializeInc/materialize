@@ -1088,7 +1088,8 @@ where
                 let accum = if nans > 0 || pos_infs > 0 || neg_infs > 0 {
                     0
                 } else {
-                    (n * float_scale) as i128
+                    i128::try_from(n * float_scale)
+                        .unwrap_or_else(|_| panic!("Invalid accumulated result"))
                 };
 
                 AccumInner::Float {
@@ -1287,7 +1288,7 @@ where
                             // If any non-nulls, just report the aggregate.
                             (AggregateFunc::SumInt16, AccumInner::SimpleNumber { accum, .. })
                             | (AggregateFunc::SumInt32, AccumInner::SimpleNumber { accum, .. }) => {
-                                Datum::Int64(*accum as i64)
+                                Datum::Int64(i64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for signed function"))
                             }
                             (AggregateFunc::SumInt64, AccumInner::SimpleNumber { accum, .. }) => {
                                 Datum::from(*accum)
