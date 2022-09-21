@@ -785,8 +785,8 @@ impl Semigroup for AccumInner {
                     falses: other_falses,
                 },
             ) => {
-                *trues += other_trues;
-                *falses += other_falses;
+                *trues = trues.checked_add(*other_trues).unwrap();
+                *falses = falses.checked_add(*other_falses).unwrap();
             }
             (
                 AccumInner::SimpleNumber { accum, non_nulls },
@@ -795,8 +795,8 @@ impl Semigroup for AccumInner {
                     non_nulls: other_non_nulls,
                 },
             ) => {
-                *accum += other_accum;
-                *non_nulls += other_non_nulls;
+                *accum = accum.checked_add(*other_accum).unwrap();
+                *non_nulls = non_nulls.checked_add(*other_non_nulls).unwrap();
             }
             (
                 AccumInner::Float {
@@ -814,11 +814,11 @@ impl Semigroup for AccumInner {
                     non_nulls: other_non_nulls,
                 },
             ) => {
-                *accum += other_accum;
-                *pos_infs += other_pos_infs;
-                *neg_infs += other_neg_infs;
-                *nans += other_nans;
-                *non_nulls += other_non_nulls;
+                *accum = accum.checked_add(other_accum).unwrap();
+                *pos_infs = pos_infs.checked_add(other_pos_infs).unwrap();
+                *neg_infs = neg_infs.checked_add(other_neg_infs).unwrap();
+                *nans = nans.checked_add(other_nans).unwrap();
+                *non_nulls = non_nulls.checked_add(other_non_nulls).unwrap();
             }
             (
                 AccumInner::Numeric {
@@ -863,10 +863,10 @@ impl Semigroup for AccumInner {
                 // precision. By doing the reduction, we can "reclaim" the 39
                 // digits of precision.
                 cx_agg.reduce(&mut accum.0);
-                *pos_infs += other_pos_infs;
-                *neg_infs += other_neg_infs;
-                *nans += other_nans;
-                *non_nulls += other_non_nulls;
+                *pos_infs = pos_infs.checked_add(*other_pos_infs).unwrap();
+                *neg_infs = neg_infs.checked_add(*other_neg_infs).unwrap();
+                *nans = nans.checked_add(*other_nans).unwrap();
+                *non_nulls = non_nulls.checked_add(*other_non_nulls).unwrap();
             }
             (l, r) => unreachable!(
                 "Accumulator::plus_equals called with non-matching variants: {:?} vs {:?}",
@@ -883,12 +883,12 @@ impl Multiply<Diff> for AccumInner {
         let factor = *factor;
         match self {
             AccumInner::Bool { trues, falses } => AccumInner::Bool {
-                trues: trues * factor,
-                falses: falses * factor,
+                trues: trues.checked_mul(factor).unwrap(),
+                falses: falses.checked_mul(factor).unwrap(),
             },
             AccumInner::SimpleNumber { accum, non_nulls } => AccumInner::SimpleNumber {
-                accum: accum * i128::from(factor),
-                non_nulls: non_nulls * factor,
+                accum: accum.checked_mul(i128::from(factor)).unwrap(),
+                non_nulls: non_nulls.checked_mul(factor).unwrap(),
             },
             AccumInner::Float {
                 accum,
@@ -897,11 +897,11 @@ impl Multiply<Diff> for AccumInner {
                 nans,
                 non_nulls,
             } => AccumInner::Float {
-                accum: accum * i128::from(factor),
-                pos_infs: pos_infs * factor,
-                neg_infs: neg_infs * factor,
-                nans: nans * factor,
-                non_nulls: non_nulls * factor,
+                accum: accum.checked_mul(i128::from(factor)).unwrap(),
+                pos_infs: pos_infs.checked_mul(factor).unwrap(),
+                neg_infs: neg_infs.checked_mul(factor).unwrap(),
+                nans: nans.checked_mul(factor).unwrap(),
+                non_nulls: non_nulls.checked_mul(factor).unwrap(),
             },
             AccumInner::Numeric {
                 accum,
@@ -927,10 +927,10 @@ impl Multiply<Diff> for AccumInner {
                 );
                 AccumInner::Numeric {
                     accum: OrderedDecimal(f),
-                    pos_infs: pos_infs * factor,
-                    neg_infs: neg_infs * factor,
-                    nans: nans * factor,
-                    non_nulls: non_nulls * factor,
+                    pos_infs: pos_infs.checked_mul(factor).unwrap(),
+                    neg_infs: neg_infs.checked_mul(factor).unwrap(),
+                    nans: nans.checked_mul(factor).unwrap(),
+                    non_nulls: non_nulls.checked_mul(factor).unwrap(),
                 }
             }
         }
@@ -957,7 +957,7 @@ impl Semigroup for Accum {
 
     fn plus_equals(&mut self, other: &Accum) {
         self.inner.plus_equals(&other.inner);
-        self.total += other.total;
+        self.total = self.total.checked_add(other.total).unwrap();
     }
 }
 
@@ -967,7 +967,7 @@ impl Multiply<Diff> for Accum {
     fn multiply(self, factor: &Diff) -> Accum {
         Accum {
             inner: self.inner.multiply(factor),
-            total: self.total * *factor,
+            total: self.total.checked_mul(*factor).unwrap(),
         }
     }
 }
