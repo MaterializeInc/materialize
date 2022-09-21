@@ -1037,7 +1037,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn remove_compute_instance(&mut self, name: &str) -> Result<Vec<GlobalId>, Error> {
+    pub fn remove_compute_instance(&mut self, name: &str) -> Result<(u64, Vec<GlobalId>), Error> {
         let deleted = self.compute_instances.delete(|_k, v| v.name == name);
         if deleted.is_empty() {
             Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
@@ -1050,10 +1050,13 @@ impl<'a, S: Append> Transaction<'a, S> {
             let introspection_source_indexes = self
                 .introspection_sources
                 .delete(|k, _v| k.compute_id == id);
-            Ok(introspection_source_indexes
-                .into_iter()
-                .map(|(_, v)| GlobalId::System(v.index_id))
-                .collect())
+            Ok((
+                id,
+                introspection_source_indexes
+                    .into_iter()
+                    .map(|(_, v)| GlobalId::System(v.index_id))
+                    .collect(),
+            ))
         }
     }
 
