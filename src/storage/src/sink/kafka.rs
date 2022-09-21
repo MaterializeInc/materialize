@@ -1306,7 +1306,9 @@ where
                 s.ready_rows.pop_front();
             }
 
-            // update our state based on any END records we might have sent
+            // Update our state based on any progress we may have sent.  This
+            // call is required for us to periodically write progress updates
+            // even without new data coming in.
             if let Some(ts) = progress_update.take() {
                 s.maybe_update_progress(&ts);
             }
@@ -1317,9 +1319,16 @@ where
             // frontier at the previous time.
             //
             // Only ever emit progress records if this operator/worker received
-            // updates. Only on worker receives all the updates and we don't want
-            // the other workers to also emit END records.
-            if is_active_worker {
+            // updates. Only one worker receives all the updates and we don't want
+            // the other workers to also emit progress.
+            if is_active_worker
+                && (
+                    // A previous run of this sink produced data
+                    s.sink_state.gate_ts().is_some()
+                    // This run has produced data
+                    || s.latest_progress_ts > Timestamp::minimum()
+                )
+            {
                 match s.maybe_emit_progress(frontier.borrow()).await {
                     Ok(progress_emitted) => {
                         if progress_emitted {
