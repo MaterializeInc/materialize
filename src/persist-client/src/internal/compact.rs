@@ -70,8 +70,9 @@ pub struct CompactRes<T> {
 /// new since and consolidating the resulting updates.
 #[derive(Debug, Clone)]
 pub struct Compactor<T, D> {
+    cfg: PersistConfig,
     metrics: Arc<Metrics>,
-    sender: UnboundedSender<(CompactReq<T>, oneshot::Sender<bool>)>,
+    sender: UnboundedSender<(CompactReq<T>, oneshot::Sender<()>)>,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -90,31 +91,15 @@ where
         V: Debug + Codec,
     {
         let (compact_req_sender, mut compact_req_receiver) =
-            mpsc::unbounded_channel::<(CompactReq<T>, oneshot::Sender<bool>)>();
+            mpsc::unbounded_channel::<(CompactReq<T>, oneshot::Sender<()>)>();
         let metrics = Arc::clone(&machine.metrics);
+        let cfg = machine.cfg.clone();
 
         // spin off a single task responsible for executing compaction requests.
         // work is enqueued into the task through a channel
         let _worker_handle = mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
             while let Some((req, completer)) = compact_req_receiver.recv().await {
                 assert_eq!(req.shard_id, machine.shard_id());
-
-                // Run some initial heuristics to ignore some requests for compaction.
-                // We don't gain much from e.g. compacting two very small batches that
-                // were just written, but it does result in non-trivial blob traffic
-                // (especially in aggregate). This heuristic is something we'll need to
-                // tune over time.
-                let should_compact = req.inputs.len()
-                    >= machine.cfg.compaction_heuristic_min_inputs
-                    || req.inputs.iter().map(|x| x.len).sum::<usize>()
-                        >= machine.cfg.compaction_heuristic_min_updates;
-                if !should_compact {
-                    machine.metrics.compaction.skipped.inc();
-                    // we can safely ignore errors here, it's possible the caller
-                    // wasn't interested in waiting and dropped their receiver
-                    let _ = completer.send(false);
-                    continue;
-                }
 
                 let cfg = machine.cfg.clone();
                 let blob = Arc::clone(&machine.state_versions.blob);
@@ -126,11 +111,10 @@ where
                 let compact_span =
                     debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
                 compact_span.follows_from(&Span::current());
-
-                metrics.compaction.started.inc();
-                let start = Instant::now();
-
                 async move {
+                    metrics.compaction.started.inc();
+                    let start = Instant::now();
+
                     // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
                     let compact_span = debug_span!("compact::consolidate");
                     let res = cpu_heavy_runtime
@@ -183,11 +167,12 @@ where
 
                 // we can safely ignore errors here, it's possible the caller
                 // wasn't interested in waiting and dropped their receiver
-                let _ = completer.send(true);
+                let _ = completer.send(());
             }
         });
 
         Compactor {
+            cfg,
             metrics,
             sender: compact_req_sender,
             _phantom: PhantomData,
@@ -201,11 +186,27 @@ where
     pub fn compact_and_apply_background(
         &self,
         req: CompactReq<T>,
-    ) -> Option<oneshot::Receiver<bool>> {
+    ) -> Option<oneshot::Receiver<()>> {
+        // Run some initial heuristics to ignore some requests for compaction.
+        // We don't gain much from e.g. compacting two very small batches that
+        // were just written, but it does result in non-trivial blob traffic
+        // (especially in aggregate). This heuristic is something we'll need to
+        // tune over time.
+        let should_compact = req.inputs.len()
+            >= self.cfg.compaction_heuristic_min_inputs
+            || req.inputs.iter().map(|x| x.len).sum::<usize>()
+            >= self.cfg.compaction_heuristic_min_updates;
+
+        if !should_compact {
+            self.metrics.compaction.skipped.inc();
+            return None;
+        }
+
         let (compaction_completed_sender, compaction_completed_receiver) = oneshot::channel();
         let new_compaction_sender = self.sender.clone();
-        let send = new_compaction_sender.send((req, compaction_completed_sender));
 
+        self.metrics.compaction.requested.inc();
+        let send = new_compaction_sender.send((req, compaction_completed_sender));
         if let Err(e) = send {
             // In the steady state we expect this to always succeed, but during
             // shutdown it is possible the destination task has already spun down
@@ -213,7 +214,6 @@ where
             return None;
         }
 
-        self.metrics.compaction.requested.inc();
         Some(compaction_completed_receiver)
     }
 

@@ -530,7 +530,7 @@ impl CompactionMetrics {
         CompactionMetrics {
             requested: registry.register(metric!(
                 name: "mz_persist_compaction_requested",
-                help: "count of total compactions requests",
+                help: "count of total compaction requests",
             )),
             skipped: registry.register(metric!(
                 name: "mz_persist_compaction_skipped",
