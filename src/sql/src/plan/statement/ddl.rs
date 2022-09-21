@@ -2765,7 +2765,8 @@ impl KafkaConnectionOptionExtracted {
                 .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
                 .to_string();
             if broker.contains(',') {
-                sql_bail!("invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string");
+                sql_bail!("invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string.\n\n
+Instead, specify BROKERS using an array of strings, e.g. BROKERS ['kafka:9092', 'kafka:9093']");
             }
         }
 
