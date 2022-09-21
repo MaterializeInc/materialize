@@ -138,7 +138,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/testdrive]
-    parallelism: 4
+    parallelism: 8
     artifact_paths: test/testdrive/junit_testdrive_*.xml
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
