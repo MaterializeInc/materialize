@@ -7,30 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::utils::exit_with_fail_message;
-use crate::{
-    CloudProvider, CloudProviderAndRegion, CloudProviderRegion, ExitMessage, FronteggAuthMachine,
-    Region, CLOUD_PROVIDERS_URL,
-};
-
 use std::collections::HashMap;
+
+use crate::utils::CloudProviderRegion;
+use crate::{
+    CloudProvider, CloudProviderAndRegion, Environment, Region, ValidProfile, CLOUD_PROVIDERS_URL,
+};
+use anyhow::{ensure, Context, Result};
 
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, Error};
-
-/// ----------------------------
-///  Regions commands
-/// ----------------------------
-
-/// Format cloud provider region url to interact with.
-///
-/// TODO: ec.0 is dynamic.
-fn format_region_url(cloud_provider_region: CloudProviderRegion) -> String {
-    format!(
-        "https://ec.0.{}.aws.cloud.materialize.com/api/environment",
-        cloud_provider_region.region_name()
-    )
-}
 
 /// Build the headers for reqwest request with the frontegg authorization.
 fn build_region_request_headers(authorization: &str) -> HeaderMap {
@@ -43,20 +29,27 @@ fn build_region_request_headers(authorization: &str) -> HeaderMap {
 }
 
 /// Enables a particular cloud provider's region
-pub(crate) async fn enable_region(
-    client: Client,
-    cloud_provider_region: CloudProviderRegion,
-    frontegg_auth_machine: FronteggAuthMachine,
+pub(crate) async fn enable_region_environment(
+    client: &Client,
+    cloud_provider: &CloudProvider,
+    valid_profile: &ValidProfile,
 ) -> Result<Region, reqwest::Error> {
-    let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
-    let region_url: String = format_region_url(cloud_provider_region);
+    let authorization: String = format!(
+        "Bearer {}",
+        valid_profile.frontegg_auth_machine.access_token
+    );
 
     let headers = build_region_request_headers(&authorization);
-    let mut body = HashMap::new();
-    body.insert("environmentd_image_ref", &"materialize/environmentd:latest");
+    let body: HashMap<char, char> = HashMap::new();
 
     client
-        .post(region_url)
+        .post(
+            format!(
+                "{:}/api/environmentassignment",
+                cloud_provider.region_controller_url
+            )
+            .as_str(),
+        )
         .headers(headers)
         .json(&body)
         .send()
@@ -66,22 +59,45 @@ pub(crate) async fn enable_region(
 }
 
 //// Get a cloud provider's regions
-pub(crate) async fn cloud_provider_region_details(
+pub(crate) async fn get_cloud_provider_region_details(
     client: &Client,
     cloud_provider_region: &CloudProvider,
-    frontegg_auth_machine: &FronteggAuthMachine,
-) -> Result<Option<Vec<Region>>, Error> {
-    let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
+    valid_profile: &ValidProfile,
+) -> Result<Vec<Region>, anyhow::Error> {
+    let authorization: String = format!(
+        "Bearer {}",
+        valid_profile.frontegg_auth_machine.access_token
+    );
     let headers = build_region_request_headers(&authorization);
-    let mut region_api_url = cloud_provider_region.environment_controller_url.clone();
+    let mut region_api_url = cloud_provider_region.region_controller_url.clone();
+    region_api_url.push_str("/api/environmentassignment");
+
+    let response = client.get(region_api_url).headers(headers).send().await?;
+    ensure!(response.status().is_success());
+    Ok(response.json::<Vec<Region>>().await?)
+}
+
+//// Get a cloud provider's region's environment
+pub(crate) async fn region_environment_details(
+    client: &Client,
+    region: &Region,
+    valid_profile: &ValidProfile,
+) -> Result<Option<Vec<Environment>>, Error> {
+    let authorization: String = format!(
+        "Bearer {}",
+        valid_profile.frontegg_auth_machine.access_token
+    );
+    let headers = build_region_request_headers(authorization.as_str());
+    let mut region_api_url = region.environment_controller_url
+        [0..region.environment_controller_url.len() - 4]
+        .to_string();
     region_api_url.push_str("/api/environment");
 
     let response = client.get(region_api_url).headers(headers).send().await?;
-
     match response.content_length() {
         Some(length) => {
             if length > 0 {
-                Ok(Some(response.json::<Vec<Region>>().await?))
+                Ok(Some(response.json::<Vec<Environment>>().await?))
             } else {
                 Ok(None)
             }
@@ -94,34 +110,29 @@ pub(crate) async fn cloud_provider_region_details(
 pub(crate) async fn list_regions(
     cloud_providers: &Vec<CloudProvider>,
     client: &Client,
-    frontegg_auth_machine: &FronteggAuthMachine,
-) -> Vec<CloudProviderAndRegion> {
+    valid_profile: &ValidProfile,
+) -> Result<Vec<CloudProviderAndRegion>> {
     // TODO: Run requests in parallel
     let mut cloud_providers_and_regions: Vec<CloudProviderAndRegion> = Vec::new();
 
     for cloud_provider in cloud_providers {
-        match cloud_provider_region_details(client, cloud_provider, frontegg_auth_machine).await {
-            Ok(Some(mut region)) => match region.pop() {
-                Some(region) => cloud_providers_and_regions.push(CloudProviderAndRegion {
-                    cloud_provider: cloud_provider.clone(),
-                    region: Some(region),
-                }),
-                None => cloud_providers_and_regions.push(CloudProviderAndRegion {
-                    cloud_provider: cloud_provider.clone(),
-                    region: None,
-                }),
-            },
-            Err(error) => {
-                exit_with_fail_message(ExitMessage::String(format!(
-                    "Error retrieving region details: {:?}",
-                    error
-                )));
-            }
-            _ => {}
+        let cloud_provider_region_details =
+            get_cloud_provider_region_details(client, &cloud_provider, valid_profile)
+                .await
+                .with_context(|| "Retrieving region details.")?;
+        match cloud_provider_region_details.get(0) {
+            Some(region) => cloud_providers_and_regions.push(CloudProviderAndRegion {
+                cloud_provider: cloud_provider.clone(),
+                region: Some(region.to_owned()),
+            }),
+            None => cloud_providers_and_regions.push(CloudProviderAndRegion {
+                cloud_provider: cloud_provider.clone(),
+                region: None,
+            }),
         }
     }
 
-    cloud_providers_and_regions
+    Ok(cloud_providers_and_regions)
 }
 
 /// List all the available cloud providers.
@@ -129,9 +140,12 @@ pub(crate) async fn list_regions(
 /// E.g.: [us-east-1, eu-west-1]
 pub(crate) async fn list_cloud_providers(
     client: &Client,
-    frontegg_auth_machine: &FronteggAuthMachine,
+    valid_profile: &ValidProfile,
 ) -> Result<Vec<CloudProvider>, Error> {
-    let authorization: String = format!("Bearer {}", frontegg_auth_machine.access_token);
+    let authorization: String = format!(
+        "Bearer {}",
+        valid_profile.frontegg_auth_machine.access_token
+    );
 
     let headers = build_region_request_headers(&authorization);
 
@@ -164,21 +178,98 @@ pub(crate) fn print_region_enabled(cloud_provider_and_region: &CloudProviderAndR
 }
 
 ///
-/// Prints a region's status and addresses
+/// Prints an environment's status and addresses
 ///
 /// Healthy:         {yes/no}
 /// SQL address:     foo.materialize.cloud:6875
 /// HTTPS address:   <https://foo.materialize.cloud>
-pub(crate) fn print_region_status(region: Region, health: bool) {
+pub(crate) fn print_environment_status(environment: Environment, health: bool) {
     if health {
         println!("Healthy:\tyes");
     } else {
         println!("Healthy:\tno");
     }
-    println!("SQL address: \t{}", region.environmentd_pgwire_address);
+    println!(
+        "SQL address: \t{}",
+        &environment.environmentd_pgwire_address
+            [0..environment.environmentd_pgwire_address.len() - 5]
+    );
     // Remove port from url
     println!(
         "HTTPS address: \thttps://{}",
-        &region.environmentd_https_address[0..region.environmentd_https_address.len() - 4]
+        &environment.environmentd_https_address
+            [0..environment.environmentd_https_address.len() - 4]
     );
+}
+
+pub(crate) async fn get_provider_by_region_name(
+    client: &Client,
+    valid_profile: &ValidProfile,
+    cloud_provider_region: &CloudProviderRegion,
+) -> Result<CloudProvider> {
+    let cloud_providers = list_cloud_providers(&client, &valid_profile)
+        .await
+        .with_context(|| "Retrieving cloud providers.")?;
+
+    // Create a vec with only one region
+    let cloud_provider: CloudProvider = cloud_providers
+        .into_iter()
+        .find(|provider| provider.region == cloud_provider_region.region_name())
+        .with_context(|| "Retriving cloud provider from list.")?;
+
+    Ok(cloud_provider)
+}
+
+pub(crate) async fn get_provider_region(
+    client: &Client,
+    valid_profile: &ValidProfile,
+    cloud_provider_region: &CloudProviderRegion,
+) -> Result<Region> {
+    let cloud_provider =
+        get_provider_by_region_name(&client, &valid_profile, &cloud_provider_region)
+            .await
+            .with_context(|| "Retrieving cloud provider.")?;
+
+    let cloud_provider_region_details =
+        get_cloud_provider_region_details(client, &cloud_provider, valid_profile)
+            .await
+            .with_context(|| "Retrieving region details.")?;
+
+    let region = cloud_provider_region_details
+        .get(0)
+        .with_context(|| "Region unavailable")?;
+
+    Ok(region.to_owned())
+}
+
+pub(crate) async fn get_region_environment(
+    client: &Client,
+    valid_profile: &ValidProfile,
+    region: &Region,
+) -> Result<Environment> {
+    let environment_details = region_environment_details(&client, &region, &valid_profile)
+        .await
+        .with_context(|| "Environment unavailable")?;
+    let environment_list = environment_details.with_context(|| "Environment unlisted")?;
+    let environment = environment_list
+        .get(0)
+        .with_context(|| "Missing environment")?;
+
+    Ok(environment.to_owned())
+}
+
+pub(crate) async fn get_provider_region_environment(
+    client: &Client,
+    valid_profile: &ValidProfile,
+    cloud_provider_region: &CloudProviderRegion,
+) -> Result<Environment> {
+    let region = get_provider_region(client, valid_profile, cloud_provider_region)
+        .await
+        .with_context(|| "Retrieving region data.")?;
+
+    let environment = get_region_environment(client, valid_profile, &region)
+        .await
+        .with_context(|| "Retrieving environment data")?;
+
+    Ok(environment)
 }

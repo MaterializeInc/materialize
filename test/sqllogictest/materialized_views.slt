@@ -253,7 +253,7 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 query TT colnames
 SHOW CREATE MATERIALIZED VIEW mv
 ----
-Materialized␠View     Create␠Materialized␠View
+name                  create_sql
 materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"default"␠AS␠SELECT␠1
 
 

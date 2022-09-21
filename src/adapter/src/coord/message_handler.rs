@@ -343,7 +343,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
                         .await;
                 }
-                Deferred::GroupCommit => self.group_commit_initiate().await,
+                Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
             }
         }
         // N.B. if no deferred plans, write lock is released by drop

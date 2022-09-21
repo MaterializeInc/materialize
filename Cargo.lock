@@ -3016,6 +3016,7 @@ dependencies = [
 name = "mz"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "axum",
  "clap",
  "dirs",
@@ -3044,6 +3045,7 @@ dependencies = [
  "dec",
  "derivative",
  "differential-dataflow",
+ "enum-kinds",
  "fail",
  "futures",
  "itertools",
@@ -3186,6 +3188,7 @@ name = "mz-compute"
 version = "0.27.0-dev"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "bytesize",
  "clap",
@@ -3193,6 +3196,7 @@ dependencies = [
  "dec",
  "differential-dataflow",
  "dogsdogsdogs",
+ "futures",
  "mz-build-info",
  "mz-compute-client",
  "mz-expr",
@@ -3972,6 +3976,7 @@ dependencies = [
  "serde_json",
  "serde_regex",
  "smallvec",
+ "thiserror",
  "timely",
  "url",
  "uuid",
@@ -4050,6 +4055,7 @@ dependencies = [
  "aws-sdk-sts",
  "chrono",
  "datadriven",
+ "enum-kinds",
  "globset",
  "hex",
  "itertools",
@@ -4093,6 +4099,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "datadriven",
+ "enum-kinds",
  "itertools",
  "mz-ore",
  "mz-walkabout",

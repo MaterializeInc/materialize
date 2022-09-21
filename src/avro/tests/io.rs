@@ -464,8 +464,8 @@ fn test_datetime_resolutions() {
             Value::Timestamp(NaiveDateTime::from_timestamp(34567, 0)),
         ),
         ("f5".into(), Value::Int(365 * 2)),
-        ("f6".into(), Value::Date(NaiveDate::from_ymd(1973, 1, 1))),
-        ("f7".into(), Value::Date(NaiveDate::from_ymd(1974, 1, 1))),
+        ("f6".into(), Value::Date(365 * 3 + 1)),
+        ("f7".into(), Value::Date(365 * 4 + 1)),
     ]);
     let datum_to_read = Value::Record(vec![
         (
@@ -481,7 +481,7 @@ fn test_datetime_resolutions() {
             Value::Timestamp(NaiveDateTime::from_timestamp(23456, 0)),
         ),
         ("f4".into(), Value::Long(34567000000)),
-        ("f5".into(), Value::Date(NaiveDate::from_ymd(1972, 1, 1))),
+        ("f5".into(), Value::Date(365 * 2)),
         ("f6".into(), Value::Int(365 * 3 + 1)), // +1 because 1972 was a leap year
         (
             "f7".into(),

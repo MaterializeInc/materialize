@@ -64,6 +64,22 @@ default
 statement error only one of REMOTE or SIZE may be specified
 CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], SIZE 'small'))
 
+statement error must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234', 'localhost:4567'], COMPUTE [], WORKERS 1))
+
+statement error must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE [], COMPUTE ['localhost:1234', 'localhost:4567']))
+
+statement error WORKERS must be greater 0
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 0))
+
+# SIZE + Remote options produce error
+statement error cannot specify SIZE and WORKERS
+CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', WORKERS 1))
+
+statement error cannot specify SIZE and COMPUTE
+CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', COMPUTE ['localhost:1234']))
+
 # Test `cluster` session variable.
 
 query T
@@ -142,10 +158,7 @@ bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachabili
 bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  5  timestamp  NULL  true
 bar  mz_dataflow_operators  mz_dataflow_operators_4_primary_idx  1  id  NULL  false
 bar  mz_dataflow_operators  mz_dataflow_operators_4_primary_idx  2  worker  NULL  false
-bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  1  dataflow  NULL  false
-bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  2  source  NULL  false
-bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  3  worker  NULL  false
-bar  mz_materializations  mz_materializations_4_primary_idx  1  global_id  NULL  false
+bar  mz_materializations  mz_materializations_4_primary_idx  1  object_id  NULL  false
 bar  mz_materializations  mz_materializations_4_primary_idx  2  worker  NULL  false
 bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  1  channel  NULL  false
 bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  2  source_worker  NULL  false
@@ -165,14 +178,17 @@ bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_4_primar
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  1  worker  NULL  false
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  2  slept_for  NULL  false
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  3  requested  NULL  false
-bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  1  global_id  NULL  false
+bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  1  object_id  NULL  false
 bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  2  source  NULL  false
 bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  3  worker  NULL  false
 bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  4  delay_ns  NULL  false
-bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  1  global_id  NULL  false
+bar  mz_worker_materialization_dependencies  mz_worker_materialization_dependencies_4_primary_idx  1  dataflow  NULL  false
+bar  mz_worker_materialization_dependencies  mz_worker_materialization_dependencies_4_primary_idx  2  source  NULL  false
+bar  mz_worker_materialization_dependencies  mz_worker_materialization_dependencies_4_primary_idx  3  worker  NULL  false
+bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  1  object_id  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  2  worker  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  3  time  NULL  false
-bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  1  global_id  NULL  false
+bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  1  object_id  NULL  false
 bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  2  source  NULL  false
 bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  3  worker  NULL  false
 bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  4  time  NULL  false

@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -3087,9 +3088,15 @@ impl<S: Append> Catalog<S> {
     ) -> Result<ConcreteComputeInstanceReplicaLocation, AdapterError> {
         let cluster_replica_sizes = &self.state.cluster_replica_sizes;
         let location = match location {
-            SerializedComputeInstanceReplicaLocation::Remote { addrs } => {
-                ConcreteComputeInstanceReplicaLocation::Remote { addrs }
-            }
+            SerializedComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => ConcreteComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             SerializedComputeInstanceReplicaLocation::Managed {
                 size,
                 availability_zone,
@@ -3451,7 +3458,10 @@ impl<S: Append> Catalog<S> {
                         &mut builtin_table_updates,
                         EventType::Create,
                         ObjectType::Cluster,
-                        EventDetails::NameV1(mz_audit_log::NameV1 { name: name.clone() }),
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id,
+                            name: name.clone(),
+                        }),
                     )?;
                     vec![Action::CreateComputeInstance {
                         id,
@@ -3470,11 +3480,17 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
+                    let id = tx.insert_compute_instance_replica(
+                        &on_cluster_name,
+                        &name,
+                        &config.clone().into(),
+                    )?;
                     if let ConcreteComputeInstanceReplicaLocation::Managed { size, .. } =
                         &config.location
                     {
                         let details = EventDetails::CreateComputeInstanceReplicaV1(
                             mz_audit_log::CreateComputeInstanceReplicaV1 {
+                                cluster_id: id,
                                 cluster_name: on_cluster_name.clone(),
                                 replica_name: name.clone(),
                                 logical_size: size.clone(),
@@ -3490,11 +3506,7 @@ impl<S: Append> Catalog<S> {
                         )?;
                     }
                     vec![Action::CreateComputeInstanceReplica {
-                        id: tx.insert_compute_instance_replica(
-                            &on_cluster_name,
-                            &name,
-                            &config.clone().into(),
-                        )?,
+                        id,
                         name,
                         on_cluster_name,
                         config,
@@ -3587,7 +3599,8 @@ impl<S: Append> Catalog<S> {
                     vec![Action::DropRole { name }]
                 }
                 Op::DropComputeInstance { name } => {
-                    let introspection_source_index_ids = tx.remove_compute_instance(&name)?;
+                    let (instance_id, introspection_source_index_ids) =
+                        tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
                     for id in &introspection_source_index_ids {
                         builtin_table_updates.extend(self.state.pack_item_update(*id, -1));
@@ -3598,7 +3611,10 @@ impl<S: Append> Catalog<S> {
                         &mut builtin_table_updates,
                         EventType::Drop,
                         ObjectType::Cluster,
-                        EventDetails::NameV1(mz_audit_log::NameV1 { name: name.clone() }),
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: instance_id,
+                            name: name.clone(),
+                        }),
                     )?;
                     vec![Action::DropComputeInstance {
                         name,
@@ -3629,6 +3645,7 @@ impl<S: Append> Catalog<S> {
 
                     let details = EventDetails::DropComputeInstanceReplicaV1(
                         mz_audit_log::DropComputeInstanceReplicaV1 {
+                            cluster_id: instance.id,
                             cluster_name: instance.name.clone(),
                             replica_name: name.clone(),
                         },
@@ -4595,6 +4612,8 @@ impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceRep
 pub enum SerializedComputeInstanceReplicaLocation {
     Remote {
         addrs: BTreeSet<String>,
+        compute_addrs: BTreeSet<String>,
+        workers: NonZeroUsize,
     },
     Managed {
         size: String,
@@ -4608,7 +4627,15 @@ pub enum SerializedComputeInstanceReplicaLocation {
 impl From<ConcreteComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
     fn from(loc: ConcreteComputeInstanceReplicaLocation) -> Self {
         match loc {
-            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => Self::Remote { addrs },
+            ConcreteComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => Self::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             ConcreteComputeInstanceReplicaLocation::Managed {
                 allocation: _,
                 size,

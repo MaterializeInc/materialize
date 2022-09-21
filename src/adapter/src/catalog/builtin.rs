@@ -957,8 +957,8 @@ pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
 };
 
-pub const MZ_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
-    name: "mz_materialization_dependencies",
+pub const MZ_WORKER_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
+    name: "mz_worker_materialization_dependencies",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::DataflowDependency),
 };
@@ -1021,9 +1021,9 @@ pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_view_keys",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("global_id", ScalarType::String.nullable(false))
-        .with_column("column", ScalarType::Int64.nullable(false))
-        .with_column("key_group", ScalarType::Int64.nullable(false)),
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("column", ScalarType::UInt64.nullable(false))
+        .with_column("key_group", ScalarType::UInt64.nullable(false)),
 });
 pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
     BuiltinTable {
@@ -1031,10 +1031,10 @@ pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("child_id", ScalarType::String.nullable(false))
-            .with_column("child_column", ScalarType::Int64.nullable(false))
+            .with_column("child_column", ScalarType::UInt64.nullable(false))
             .with_column("parent_id", ScalarType::String.nullable(false))
-            .with_column("parent_column", ScalarType::Int64.nullable(false))
-            .with_column("key_group", ScalarType::Int64.nullable(false))
+            .with_column("parent_column", ScalarType::UInt64.nullable(false))
+            .with_column("key_group", ScalarType::UInt64.nullable(false))
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
     }
 });
@@ -1044,7 +1044,7 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("sink_id", ScalarType::String.nullable(false))
         .with_column("topic", ScalarType::String.nullable(false))
-        .with_column("consistency_topic", ScalarType::String.nullable(true))
+        .with_column("progress_topic", ScalarType::String.nullable(true))
         .with_key(vec![0]),
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1415,18 +1415,18 @@ pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_materialization_frontiers",
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_materialization_frontiers AS SELECT
-    global_id, pg_catalog.min(time) AS time
+    object_id, pg_catalog.min(time) AS time
 FROM mz_catalog.mz_worker_materialization_frontiers
-GROUP BY global_id",
+GROUP BY object_id",
 };
 
 pub const MZ_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_materialization_source_frontiers",
     schema: MZ_CATALOG_SCHEMA,
     sql: "CREATE VIEW mz_catalog.mz_materialization_source_frontiers AS SELECT
-    global_id, source, pg_catalog.min(time) AS time
+    object_id, source, pg_catalog.min(time) AS time
 FROM mz_catalog.mz_worker_materialization_source_frontiers
-GROUP BY global_id, source",
+GROUP BY object_id, source",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
@@ -2233,7 +2233,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
         Builtin::Log(&MZ_MATERIALIZATIONS),
-        Builtin::Log(&MZ_MATERIALIZATION_DEPENDENCIES),
+        Builtin::Log(&MZ_WORKER_MATERIALIZATION_DEPENDENCIES),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
         Builtin::Log(&MZ_PEEK_ACTIVE),

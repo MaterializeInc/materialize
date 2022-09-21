@@ -322,21 +322,19 @@ fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let date = a.unwrap_date();
     let time = b.unwrap_time();
 
-    Datum::Timestamp(
-        NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms_nano(
-            time.hour(),
-            time.minute(),
-            time.second(),
-            time.nanosecond(),
-        ),
-    )
+    Datum::Timestamp(NaiveDate::from(date).and_hms_nano(
+        time.hour(),
+        time.minute(),
+        time.second(),
+        time.nanosecond(),
+    ))
 }
 
 fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, interval.months)?;
     Ok(Datum::Timestamp(
         dt.checked_add_signed(interval.duration_as_chrono())
@@ -773,7 +771,7 @@ fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn sub_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from((a.unwrap_date() - b.unwrap_date()).num_days() as i32)
+    Datum::from(a.unwrap_date() - b.unwrap_date())
 }
 
 fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -792,7 +790,7 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
     let dt = interval
         .months
         .checked_neg()
@@ -1839,7 +1837,7 @@ where
 fn extract_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date())?.into()),
+        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date().into())?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
@@ -3621,16 +3619,23 @@ trait LazyUnaryFunc {
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError>;
 
-    /// The output ColumnType of this function
+    /// The output ColumnType of this function.
     fn output_type(&self, input_type: ColumnType) -> ColumnType;
 
-    /// Whether this function will produce NULL on NULL input
+    /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
 
-    /// Whether this function will produce NULL on non-NULL input
+    /// Whether this function will produce NULL on non-NULL input.
     fn introduces_nulls(&self) -> bool;
 
-    /// Whether this function preserves uniqueness
+    /// Whether this function preserves uniqueness.
+    ///
+    /// Uniqueness is preserved when `if f(x) = f(y) then x = y` is true. This
+    /// is used by the optimizer when a guarantee can be made that a collection
+    /// with unique items will stay unique when mapped by this function.
+    ///
+    /// Functions should conservatively return `false` unless they are certain
+    /// the above property is true.
     fn preserves_uniqueness(&self) -> bool;
 }
 

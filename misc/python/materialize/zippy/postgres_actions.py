@@ -34,7 +34,7 @@ class PostgresStop(Action):
     def requires(self) -> Set[Type[Capability]]:
         return {PostgresRunning}
 
-    def removes(self) -> Set[Type[Capability]]:
+    def withholds(self) -> Set[Type[Capability]]:
         return {PostgresRunning}
 
     def run(self, c: Composition) -> None:

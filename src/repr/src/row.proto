@@ -10,6 +10,7 @@
 syntax = "proto3";
 
 import "repr/src/chrono.proto";
+import "repr/src/adt/date.proto";
 import "repr/src/adt/interval.proto";
 
 package mz_repr.row;
@@ -46,7 +47,7 @@ message ProtoDatum {
         //
         // Of these, I'd guess Timestamp and UUID are probably the first ones
         // we'd bless followed by Date and Time.
-        mz_repr.chrono.ProtoNaiveDate date = 16;
+        mz_repr.adt.date.ProtoDate date = 16;
         mz_repr.chrono.ProtoNaiveTime time = 17;
         mz_repr.chrono.ProtoNaiveDateTime timestamp = 18;
         mz_repr.chrono.ProtoNaiveDateTime timestamp_tz = 19;

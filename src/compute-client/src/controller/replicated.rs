@@ -44,7 +44,7 @@ use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 use mz_storage::controller::CollectionMetadata;
 
-use crate::command::{ComputeCommand, ComputeCommandHistory, Peek, ReplicaId};
+use crate::command::{CommunicationConfig, ComputeCommand, ComputeCommandHistory, Peek, ReplicaId};
 use crate::logging::LogVariant;
 use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -374,6 +374,8 @@ struct ReplicaState<T> {
     addrs: Vec<String>,
     /// Where to persist introspection sources
     persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+    /// The communication config specific to this replica.
+    communication_config: CommunicationConfig,
 }
 
 impl<T> ReplicaState<T> {
@@ -397,6 +399,10 @@ impl<T> ReplicaState<T> {
             // Set replica id
             config.replica_id = replica_id;
         }
+
+        if let ComputeCommand::CreateTimely(comm_config) = command {
+            *comm_config = self.communication_config.clone();
+        }
     }
 }
 
@@ -413,6 +419,7 @@ where
         id: ReplicaId,
         addrs: Vec<String>,
         persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+        communication_config: CommunicationConfig,
     ) {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -440,6 +447,7 @@ where
             _task: task.abort_on_drop(),
             addrs,
             persisted_logs,
+            communication_config,
         };
 
         // Replay the commands at the client, creating new dataflow identifiers.
@@ -482,8 +490,9 @@ where
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let addrs = self.replicas[&id].addrs.clone();
         let persisted_logs = self.replicas[&id].persisted_logs.clone();
+        let communication_config = self.replicas[&id].communication_config.clone();
         self.remove_replica(id);
-        self.add_replica(id, addrs, persisted_logs);
+        self.add_replica(id, addrs, persisted_logs, communication_config);
     }
 
     // We avoid implementing `GenericClient` here, because the protocol between
@@ -512,6 +521,8 @@ where
     }
 
     /// Receives the next response from any replica.
+    ///
+    /// This method is cancellation safe.
     pub(super) async fn recv(&mut self) -> ActiveReplicationResponse<T> {
         // If we have a pending response, we should send it immediately.
         if let Some(response) = self.state.pending_response.pop_front() {

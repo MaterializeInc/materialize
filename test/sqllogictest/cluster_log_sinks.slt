@@ -17,7 +17,7 @@
 ###   "mz_dataflow_addresses",
 ###   "mz_dataflow_operator_reachability_internal",
 ###   "mz_dataflow_operators",
-###   "mz_materialization_dependencies",
+###   "mz_worker_materialization_dependencies",
 ###   "mz_materializations",
 ###   "mz_message_counts_received_internal",
 ###   "mz_message_counts_sent_internal",
@@ -182,11 +182,11 @@ SELECT * FROM ((SELECT * FROM mz_dataflow_operators_1) EXCEPT (SELECT * FROM mz_
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_materialization_dependencies) EXCEPT (SELECT * FROM mz_materialization_dependencies_1));
+SELECT * FROM ((SELECT * FROM mz_worker_materialization_dependencies) EXCEPT (SELECT * FROM mz_worker_materialization_dependencies_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_materialization_dependencies_1) EXCEPT (SELECT * FROM mz_materialization_dependencies));
+SELECT * FROM ((SELECT * FROM mz_worker_materialization_dependencies_1) EXCEPT (SELECT * FROM mz_worker_materialization_dependencies));
 ----
 
 query T
@@ -423,11 +423,11 @@ SELECT * FROM ((SELECT * FROM mz_dataflow_operators_2) EXCEPT (SELECT * FROM mz_
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_materialization_dependencies) EXCEPT (SELECT * FROM mz_materialization_dependencies_2));
+SELECT * FROM ((SELECT * FROM mz_worker_materialization_dependencies) EXCEPT (SELECT * FROM mz_worker_materialization_dependencies_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_materialization_dependencies_2) EXCEPT (SELECT * FROM mz_materialization_dependencies));
+SELECT * FROM ((SELECT * FROM mz_worker_materialization_dependencies_2) EXCEPT (SELECT * FROM mz_worker_materialization_dependencies));
 ----
 
 query T
@@ -674,11 +674,11 @@ SELECT * FROM ((SELECT * FROM mz_dataflow_operators_3) EXCEPT (SELECT * FROM mz_
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_materialization_dependencies) EXCEPT (SELECT * FROM mz_materialization_dependencies_3));
+SELECT * FROM ((SELECT * FROM mz_worker_materialization_dependencies) EXCEPT (SELECT * FROM mz_worker_materialization_dependencies_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_materialization_dependencies_3) EXCEPT (SELECT * FROM mz_materialization_dependencies));
+SELECT * FROM ((SELECT * FROM mz_worker_materialization_dependencies_3) EXCEPT (SELECT * FROM mz_worker_materialization_dependencies));
 ----
 
 query T

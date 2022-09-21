@@ -53,8 +53,9 @@ use mz_sql::plan::{
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
-    RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
+    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
+    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom,
+    TailPlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
@@ -87,12 +88,15 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_plan(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
+        mut tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
+        let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        tx.set_allowed(responses);
+
         match plan {
             Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateConnection(plan) => {
@@ -690,9 +694,15 @@ impl<S: Append + 'static> Coordinator<S> {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
             let location = match replica_config {
-                ComputeInstanceReplicaConfig::Remote { addrs } => {
-                    SerializedComputeInstanceReplicaLocation::Remote { addrs }
-                }
+                ComputeInstanceReplicaConfig::Remote {
+                    addrs,
+                    compute_addrs,
+                    workers,
+                } => SerializedComputeInstanceReplicaLocation::Remote {
+                    addrs,
+                    compute_addrs,
+                    workers,
+                },
                 ComputeInstanceReplicaConfig::Managed {
                     size,
                     availability_zone,
@@ -813,9 +823,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Choose default AZ if necessary
         let location = match config {
-            ComputeInstanceReplicaConfig::Remote { addrs } => {
-                SerializedComputeInstanceReplicaLocation::Remote { addrs }
-            }
+            ComputeInstanceReplicaConfig::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => SerializedComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             ComputeInstanceReplicaConfig::Managed {
                 size,
                 availability_zone,
@@ -2575,9 +2591,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 {
                     if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-                        let compute = self.controller.compute.instance(compute_instance).unwrap();
                         for id in compute_ids {
-                            let state = compute.collection(*id).unwrap();
+                            let state = self
+                                .controller
+                                .compute
+                                .collection(compute_instance, *id)
+                                .unwrap();
                             let name = self
                                 .catalog
                                 .try_get_entry(id)
@@ -3329,10 +3348,12 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn update_max_result_size(&mut self) {
         let mut compute = self.controller.active_compute();
         for compute_instance in self.catalog.compute_instances() {
-            let mut instance = compute.instance(compute_instance.id).unwrap();
-            instance
-                .update_max_result_size(self.catalog.system_config().max_result_size())
-                .await;
+            compute
+                .update_max_result_size(
+                    compute_instance.id,
+                    self.catalog.system_config().max_result_size(),
+                )
+                .unwrap();
         }
     }
 

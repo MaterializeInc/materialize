@@ -46,9 +46,9 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             Ok(Value::Float(n.as_f64().unwrap() as f32))
         }
         (JsonValue::Number(ref n), SchemaPiece::Double) => Ok(Value::Double(n.as_f64().unwrap())),
-        (JsonValue::Number(ref n), SchemaPiece::Date) => Ok(Value::Date(
-            chrono::NaiveDate::from_ymd(1970, 1, 1) + chrono::Duration::days(n.as_i64().unwrap()),
-        )),
+        (JsonValue::Number(ref n), SchemaPiece::Date) => {
+            Ok(Value::Date(i32::try_from(n.as_i64().unwrap())?))
+        }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMilli) => {
             let ts = n.as_i64().unwrap();
             Ok(Value::Timestamp(chrono::NaiveDateTime::from_timestamp(

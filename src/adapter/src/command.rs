@@ -7,12 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
+// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
+#![allow(clippy::extra_unused_lifetimes)]
+
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use derivative::Derivative;
+use enum_kinds::EnumKind;
+use mz_sql::plan::PlanKind;
 use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -29,6 +35,7 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::ClientSeverity;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
+use crate::util::Transmittable;
 
 #[derive(Debug)]
 pub enum Command {
@@ -120,6 +127,15 @@ pub struct StartupResponse {
     pub messages: Vec<StartupMessage>,
 }
 
+// Facile implementation for `StartupResponse`, which does not use the `allowed`
+// feature of `ClientTransmitter`.
+impl Transmittable for StartupResponse {
+    type Allowed = bool;
+    fn to_allowed(&self) -> Self::Allowed {
+        true
+    }
+}
+
 /// Messages in a [`StartupResponse`].
 #[derive(Debug)]
 pub enum StartupMessage {
@@ -165,8 +181,9 @@ pub struct ExecuteResponsePartialError {
 }
 
 /// The response to [`SessionClient::execute`](crate::SessionClient::execute).
-#[derive(Derivative)]
+#[derive(EnumKind, Derivative)]
 #[derivative(Debug)]
+#[enum_kind(ExecuteResponseKind)]
 pub enum ExecuteResponse {
     /// The active transaction was exited.
     TransactionExited {
@@ -591,6 +608,85 @@ impl ExecuteResponse {
         );
 
         r
+    }
+
+    /// Expresses which [`PlanKind`] generate which set of
+    /// [`ExecuteResponseKind`].
+    pub fn generated_from(plan: PlanKind) -> Vec<ExecuteResponseKind> {
+        use ExecuteResponseKind::*;
+        use PlanKind::*;
+
+        match plan {
+            AbortTransaction | CommitTransaction => vec![TransactionExited],
+            AlterItemRename | AlterNoop | AlterSecret | AlterSource | RotateKeys => {
+                vec![AlteredObject]
+            }
+            AlterIndexSetOptions | AlterIndexResetOptions => {
+                vec![AlteredObject, AlteredIndexLogicalCompaction]
+            }
+            AlterSystemSet | AlterSystemReset | AlterSystemResetAll => {
+                vec![AlteredSystemConfiguraion]
+            }
+            Close => vec![ClosedCursor],
+            PlanKind::CopyFrom => vec![ExecuteResponseKind::CopyFrom],
+            CreateConnection => vec![CreatedConnection],
+            CreateDatabase => vec![CreatedDatabase],
+            CreateSchema => vec![CreatedSchema],
+            CreateRole => vec![CreatedRole],
+            CreateComputeInstance => vec![CreatedComputeInstance],
+            CreateComputeInstanceReplica => vec![CreatedComputeInstanceReplica],
+            CreateSource => vec![CreatedSource, CreatedSources],
+            CreateSecret => vec![CreatedSecret],
+            CreateSink => vec![CreatedSink],
+            CreateTable => vec![CreatedTable],
+            CreateView => vec![CreatedView],
+            CreateViews => vec![CreatedViews],
+            CreateMaterializedView => vec![CreatedMaterializedView],
+            CreateIndex => vec![CreatedIndex],
+            CreateType => vec![CreatedType],
+            PlanKind::Deallocate => vec![ExecuteResponseKind::Deallocate],
+            Declare => vec![DeclaredCursor],
+            DiscardTemp => vec![DiscardedTemp],
+            DiscardAll => vec![DiscardedAll],
+            DropDatabase => vec![DroppedDatabase],
+            DropSchema => vec![DroppedSchema],
+            DropRoles => vec![DroppedRole],
+            DropComputeInstances => vec![DroppedComputeInstance],
+            DropComputeInstanceReplica => vec![DroppedComputeInstanceReplicas],
+            DropItems => vec![
+                DroppedConnection,
+                DroppedSource,
+                DroppedTable,
+                DroppedView,
+                DroppedMaterializedView,
+                DroppedIndex,
+                DroppedSink,
+                DroppedType,
+                DroppedSecret,
+            ],
+            PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
+            Explain | Peek | SendRows | ShowAllVariables | ShowVariable => {
+                vec![CopyTo, SendingRows]
+            }
+            Execute | ReadThenWrite | SendDiffs => vec![Deleted, Inserted, SendingRows, Updated],
+            PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
+            Insert => vec![Inserted, SendingRows],
+            PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
+            PlanKind::Raise => vec![ExecuteResponseKind::Raise],
+            PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
+            Tail => vec![Tailing, CopyTo],
+            StartTransaction => vec![StartedTransaction],
+        }
+    }
+}
+
+/// This implementation is meant to ensure that we maintain updated information
+/// about which types of `ExecuteResponse`s are permitted to be sent, which will
+/// be a function of which plan we're executing.
+impl Transmittable for ExecuteResponse {
+    type Allowed = ExecuteResponseKind;
+    fn to_allowed(&self) -> Self::Allowed {
+        ExecuteResponseKind::from(self)
     }
 }
 

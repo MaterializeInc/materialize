@@ -1239,35 +1239,27 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.wait_for_materialized()
 
     nodes = [
-        Computed(
-            name="computed_1_1",
-            workers=args.workers,
-            peers=["computed_1_1", "computed_1_2"],
-        ),
-        Computed(
-            name="computed_1_2",
-            workers=args.workers,
-            peers=["computed_1_1", "computed_1_2"],
-        ),
-        Computed(
-            name="computed_2_1",
-            workers=args.workers,
-            peers=["computed_2_1", "computed_2_2"],
-        ),
-        Computed(
-            name="computed_2_2",
-            workers=args.workers,
-            peers=["computed_2_1", "computed_2_2"],
-        ),
+        Computed(name="computed_1_1"),
+        Computed(name="computed_1_2"),
+        Computed(name="computed_2_1"),
+        Computed(name="computed_2_2"),
     ]
     with c.override(*nodes):
         c.up(*[n.name for n in nodes])
 
         c.sql(
-            """
+            f"""
             CREATE CLUSTER cluster1 REPLICAS (
-                replica1 (REMOTE ['computed_1_1:2100', 'computed_1_2:2100']),
-                replica2 (REMOTE ['computed_2_1:2100', 'computed_2_2:2100'])
+                replica1 (
+                    REMOTE ['computed_1_1:2100', 'computed_1_2:2100'],
+                    COMPUTE ['computed_1_1:2102', 'computed_1_2:2102'],
+                    WORKERS {args.workers}
+                ),
+                replica2 (
+                    REMOTE ['computed_2_1:2100', 'computed_2_2:2100'],
+                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2100'],
+                    WORKERS {args.workers}
+                )
             )
         """
         )
@@ -1324,9 +1316,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 nodes.append(node_name)
 
             for node_id in range(0, args.nodes):
-                computeds.append(
-                    Computed(name=nodes[node_id], peers=nodes, workers=args.workers)
-                )
+                computeds.append(Computed(name=nodes[node_id]))
 
     with c.override(*computeds):
         with c.override(Testdrive(seed=1, no_reset=True)):
@@ -1385,7 +1375,9 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     replica_definitions.append(
                         f"{replica_name} (REMOTE ["
                         + ", ".join(f"'{n}:2100'" for n in nodes)
-                        + "])"
+                        + "] COMPUTE ["
+                        + ", ".join(f"'{n}:2100'" for n in nodes)
+                        + f"] WORKERS {args.workers})"
                     )
 
                 c.sql(

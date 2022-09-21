@@ -89,6 +89,7 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::stack;
@@ -523,9 +524,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
                         self.controller
                             .active_compute()
-                            .instance(idx.compute_instance)
-                            .unwrap()
-                            .create_dataflows(dataflow_plan)
+                            .create_dataflows(idx.compute_instance, dataflow_plan)
                             .await
                             .unwrap();
                     }
@@ -624,8 +623,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         key.iter().map(move |k| {
                             let row = Row::pack_slice(&[
                                 Datum::String(log_id),
-                                Datum::Int64(*k as i64),
-                                Datum::Int64(index as i64),
+                                Datum::UInt64(u64::cast_from(*k)),
+                                Datum::UInt64(u64::cast_from(index)),
                             ]);
                             BuiltinTableUpdate {
                                 id: mz_view_keys,
@@ -646,10 +645,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         pairs.into_iter().map(move |(c, p)| {
                             let row = Row::pack_slice(&[
                                 Datum::String(&log_id),
-                                Datum::Int64(c as i64),
+                                Datum::UInt64(u64::cast_from(c)),
                                 Datum::String(&parent_id),
-                                Datum::Int64(p as i64),
-                                Datum::Int64(index as i64),
+                                Datum::UInt64(u64::cast_from(p)),
+                                Datum::UInt64(u64::cast_from(index)),
                             ]);
                             BuiltinTableUpdate {
                                 id: mz_foreign_keys,

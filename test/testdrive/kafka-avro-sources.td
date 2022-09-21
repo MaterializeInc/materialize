@@ -131,7 +131,7 @@ name    type
   ENVELOPE DEBEZIUM
 
 > SHOW CREATE SOURCE data_schema_inline
-Source   "Create Source"
+name   create_sql
 ------------------------
 materialize.public.data_schema_inline "CREATE SOURCE \"materialize\".\"public\".\"data_schema_inline\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM"
 
@@ -207,8 +207,8 @@ contains:INCLUDE TOPIC not yet supported
 > SELECT * FROM non_dbz_data_metadata
 a b partition offset
 --------------------
-1 2 0         1
-2 3 0         2
+1 2 0         0
+2 3 0         1
 
 > CREATE SOURCE non_dbz_data_metadata_named
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
@@ -219,8 +219,8 @@ a b partition offset
 > SELECT * FROM non_dbz_data_metadata_named
 a b  part  mzo
 --------------
-1 2  0     1
-2 3  0     2
+1 2  0     0
+2 3  0     1
 
 # Test an Avro source without a Debezium envelope starting at specified partition offsets.
 

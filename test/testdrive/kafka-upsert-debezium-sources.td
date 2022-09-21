@@ -164,7 +164,7 @@ contains:INCLUDE OFFSET with Debezium requires UPSERT semantics
 > SELECT * FROM doin_upsert_metadata WHERE id = 4
 id creature partition test_kafka_offset
 ---------------------------------------
-4  moros    0         9
+4  moros    0         8
 
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=6
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": null, "op": "d", "source": {"file": "binlog10", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
@@ -216,10 +216,10 @@ contains:unexpected parameters for CREATE SOURCE: deduplication
 > SELECT * FROM upsert_metadata
 id   creature      offset  partition
 ------------------------------------
-1    dino          4       0
-2    velociraptor  6       0
-3    triceratops   8       0
-4    chicken       11      0
+1    dino          3       0
+2    velociraptor  5       0
+3    triceratops   7       0
+4    chicken       10      0
 
 # test include metadata respects metadata order
 > CREATE SOURCE upsert_metadata_reordered
@@ -231,7 +231,7 @@ id   creature      offset  partition
 > SELECT * FROM upsert_metadata_reordered
 id   creature      partition  offset
 ------------------------------------
-1    dino          0          4
-2    velociraptor  0          6
-3    triceratops   0          8
-4    chicken       0          11
+1    dino          0          3
+2    velociraptor  0          5
+3    triceratops   0          7
+4    chicken       0          10
