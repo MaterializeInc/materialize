@@ -267,8 +267,11 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut compute = self.controller.active_compute();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut instance) = compute.instance(compute_instance) {
-                instance.drop_collections(ids).await.unwrap();
+            if compute.instance_exists(compute_instance) {
+                compute
+                    .drop_collections(compute_instance, ids)
+                    .await
+                    .unwrap();
             }
         }
     }
@@ -295,9 +298,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for (compute_instance, ids) in by_compute_instance {
             self.controller
                 .active_compute()
-                .instance(compute_instance)
-                .unwrap()
-                .drop_collections(ids)
+                .drop_collections(compute_instance, ids)
                 .await
                 .unwrap();
         }
@@ -323,8 +324,11 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut compute = self.controller.active_compute();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut instance) = compute.instance(compute_instance) {
-                instance.drop_collections(ids).await.unwrap();
+            if compute.instance_exists(compute_instance) {
+                compute
+                    .drop_collections(compute_instance, ids)
+                    .await
+                    .unwrap();
             }
         }
 

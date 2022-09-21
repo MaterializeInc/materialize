@@ -2579,9 +2579,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 {
                     if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-                        let compute = self.controller.compute.instance(compute_instance).unwrap();
                         for id in compute_ids {
-                            let state = compute.collection(*id).unwrap();
+                            let state = self
+                                .controller
+                                .compute
+                                .collection(compute_instance, *id)
+                                .unwrap();
                             let name = self
                                 .catalog
                                 .try_get_entry(id)
@@ -3333,10 +3336,12 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn update_max_result_size(&mut self) {
         let mut compute = self.controller.active_compute();
         for compute_instance in self.catalog.compute_instances() {
-            let mut instance = compute.instance(compute_instance.id).unwrap();
-            instance
-                .update_max_result_size(self.catalog.system_config().max_result_size())
-                .await;
+            compute
+                .update_max_result_size(
+                    compute_instance.id,
+                    self.catalog.system_config().max_result_size(),
+                )
+                .unwrap();
         }
     }
 
