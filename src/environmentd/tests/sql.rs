@@ -1512,6 +1512,65 @@ fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn test_concurrent_writes() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let num_tables = 10;
+
+    {
+        let mut client = server.connect(postgres::NoTls)?;
+        for i in 0..num_tables {
+            client.batch_execute(&format!("CREATE TABLE t_{i} (a INT, b text, c text)"))?;
+        }
+    }
+
+    let num_threads = 3;
+    let num_loops = 10;
+
+    let mut clients = Vec::new();
+    for _ in 0..num_threads {
+        clients.push(server.connect(postgres::NoTls)?);
+    }
+
+    let handles: Vec<_> = clients
+        .into_iter()
+        .map(|mut client| {
+            std::thread::spawn(move || {
+                for j in 0..num_loops {
+                    for i in 0..num_tables {
+                        let string_a = "A";
+                        let string_b = "B";
+                        client
+                            .batch_execute(&format!(
+                                "INSERT INTO t_{i} VALUES ({j}, '{string_a}', '{string_b}')"
+                            ))
+                            .unwrap();
+                    }
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let mut client = server.connect(postgres::NoTls)?;
+
+    for i in 0..num_tables {
+        let count = client
+            .query_one(&format!("SELECT count(*) FROM t_{i}"), &[])?
+            .get::<_, i64>(0);
+        assert_eq!(num_loops * num_threads, count);
+    }
+
+    Ok(())
+}
+
 /// Group commit will block writes until the current time has advanced. This can make
 /// performing inserts while using deterministic time difficult. This is a helper
 /// method to perform writes and advance the current time.

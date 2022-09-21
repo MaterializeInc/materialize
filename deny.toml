@@ -85,6 +85,7 @@ wrappers = [
   "mysql_common",
   "native-tls",
   "opentelemetry",
+  "parse_duration",
   "procfs",
   "prometheus",
   "proptest",

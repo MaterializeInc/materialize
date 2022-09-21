@@ -1022,8 +1022,8 @@ pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("column", ScalarType::Int64.nullable(false))
-        .with_column("key_group", ScalarType::Int64.nullable(false)),
+        .with_column("column", ScalarType::UInt64.nullable(false))
+        .with_column("key_group", ScalarType::UInt64.nullable(false)),
 });
 pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
     BuiltinTable {
@@ -1031,10 +1031,10 @@ pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("child_id", ScalarType::String.nullable(false))
-            .with_column("child_column", ScalarType::Int64.nullable(false))
+            .with_column("child_column", ScalarType::UInt64.nullable(false))
             .with_column("parent_id", ScalarType::String.nullable(false))
-            .with_column("parent_column", ScalarType::Int64.nullable(false))
-            .with_column("key_group", ScalarType::Int64.nullable(false))
+            .with_column("parent_column", ScalarType::UInt64.nullable(false))
+            .with_column("key_group", ScalarType::UInt64.nullable(false))
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
     }
 });
@@ -1044,7 +1044,7 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("sink_id", ScalarType::String.nullable(false))
         .with_column("topic", ScalarType::String.nullable(false))
-        .with_column("consistency_topic", ScalarType::String.nullable(true))
+        .with_column("progress_topic", ScalarType::String.nullable(true))
         .with_key(vec![0]),
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1345,27 +1345,6 @@ UNION ALL
     SELECT id, oid, schema_id, name, 'function' FROM mz_catalog.mz_functions
 UNION ALL
     SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret' FROM mz_catalog.mz_secrets",
-};
-
-// For historical reasons, this view does not properly escape identifiers. For
-// example, a table named 'cAp.S' in the default database and schema will be
-// rendered as `materialize.public.cAp.S`. This is *not* a valid SQL identifier,
-// as it has an extra dot, and the capitals will be folded to lowercase. This
-// view is thus only fit for use in debugging queries where the names are for
-// human consumption. Applications should instead pull the names of individual
-// components out of mz_objects, mz_schemas, and mz_databases to avoid these
-// escaping issues.
-//
-// TODO(benesch): deprecate this view.
-pub const MZ_CATALOG_NAMES: BuiltinView = BuiltinView {
-    name: "mz_catalog_names",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_catalog_names AS SELECT
-    o.id AS object_id,
-    coalesce(d.name || '.', '') || s.name || '.' || o.name AS name
-FROM mz_catalog.mz_objects o
-JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
-LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id",
 };
 
 pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
@@ -2297,7 +2276,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_STORAGE_USAGE),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
-        Builtin::View(&MZ_CATALOG_NAMES),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES),
         Builtin::View(&MZ_DATAFLOWS),

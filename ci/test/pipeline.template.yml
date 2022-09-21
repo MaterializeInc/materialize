@@ -462,6 +462,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persist
+          args: [--consensus=mem, --blob=mem]
     agents:
       queue: linux-x86_64
 
@@ -548,7 +549,6 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_cloudtest_*.xml
     inputs: [test/cloudtest]
-    soft_fail: true
     plugins:
       - ./ci/plugins/cloudtest:
           args: [test/cloudtest/]

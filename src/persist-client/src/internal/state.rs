@@ -25,6 +25,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
+use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
@@ -42,6 +43,9 @@ pub struct ReaderState<T> {
     pub since: Antichain<T>,
     /// UNIX_EPOCH timestamp (in millis) of this reader's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
+    /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
+    /// after which this reader may be expired
+    pub lease_duration_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +77,14 @@ pub struct HollowBatch<T> {
     pub parts: Vec<HollowBatchPart>,
     /// The number of updates in the batch.
     pub len: usize,
+    /// Runs of sequential sorted batch parts, stored as indices into `parts`.
+    /// ex.
+    /// ```text
+    ///     parts=[p1, p2, p3], runs=[]     --> run  is  [p1, p2, p2]
+    ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
+    ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
+    /// ```
+    pub runs: Vec<usize>,
 }
 
 impl<T: Ord> PartialOrd for HollowBatch<T> {
@@ -89,11 +101,13 @@ impl<T: Ord> Ord for HollowBatch<T> {
             desc: self_desc,
             parts: self_parts,
             len: self_len,
+            runs: self_runs,
         } = self;
         let HollowBatch {
             desc: other_desc,
             parts: other_parts,
             len: other_len,
+            runs: other_runs,
         } = other;
         (
             self_desc.lower().elements(),
@@ -101,6 +115,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             self_desc.since().elements(),
             self_parts,
             self_len,
+            self_runs,
         )
             .cmp(&(
                 other_desc.lower().elements(),
@@ -108,6 +123,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
                 other_desc.since().elements(),
                 other_parts,
                 other_len,
+                other_runs,
             ))
     }
 }
@@ -166,6 +182,7 @@ where
         &mut self,
         reader_id: &ReaderId,
         seqno: SeqNo,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, (Upper<T>, ReaderState<T>)> {
         // TODO: Handle if the reader or writer already exist (probably with a
@@ -174,6 +191,8 @@ where
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+            lease_duration_ms: u64::try_from(lease_duration.as_millis())
+                .expect("lease duration as millis should fit within u64"),
         };
         self.readers.insert(reader_id.clone(), read_cap.clone());
         Continue((Upper(self.trace.upper().clone()), read_cap))
@@ -198,6 +217,7 @@ where
         &mut self,
         new_reader_id: &ReaderId,
         seqno: SeqNo,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, ReaderState<T>> {
         // TODO: Handle if the reader already exists (probably with a retry).
@@ -205,6 +225,8 @@ where
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+            lease_duration_ms: u64::try_from(lease_duration.as_millis())
+                .expect("lease duration as millis should fit within u64"),
         };
         self.readers.insert(new_reader_id.clone(), read_cap.clone());
         Continue(read_cap)
@@ -524,7 +546,7 @@ where
     // them being executed in the order they are given. But it is expected that
     // gc assignments are best-effort respected. In practice, cmds like
     // register_foo or expire_foo, where it would be awkward, ignore gc.
-    pub fn maybe_gc(&mut self, is_write: bool) -> Option<(SeqNo, SeqNo)> {
+    pub fn maybe_gc(&mut self, is_write: bool) -> Option<GcReq> {
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
         // could use a tuning pass at some point.
@@ -532,16 +554,20 @@ where
             1,
             u64::from(self.seqno.0.next_power_of_two().trailing_zeros()),
         );
-        let seqno_since = self.seqno_since();
-        let should_gc =
-            seqno_since.0.saturating_sub(self.collections.last_gc_req.0) >= gc_threshold;
+        let new_seqno_since = self.seqno_since();
+        let should_gc = new_seqno_since
+            .0
+            .saturating_sub(self.collections.last_gc_req.0)
+            >= gc_threshold;
         // Assign GC traffic preferentially to writers, falling back to anyone
         // generating new state versions if there are no writers.
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
         if should_gc {
-            let req = (self.collections.last_gc_req, seqno_since);
-            self.collections.last_gc_req = seqno_since;
-            Some(req)
+            self.collections.last_gc_req = new_seqno_since;
+            Some(GcReq {
+                shard_id: self.shard_id,
+                new_seqno_since,
+            })
         } else {
             None
         }
@@ -629,18 +655,11 @@ where
         &self,
         now_ms: EpochMillis,
     ) -> (Vec<ReaderId>, Vec<WriterId>) {
-        // TODO: Give lots of extra leeway in this temporary hack version of
-        // automatic expiry.
-        let read_lease_duration = PersistConfig::FAKE_READ_LEASE_DURATION * 15;
-
         let mut readers = Vec::new();
         for (reader, state) in self.collections.readers.iter() {
-            // TODO: We likely want to store the lease duration in state, so the
-            // answer to which readers are considered expired doesn't depend on
-            // the version of the code running.
             let time_since_last_heartbeat_ms =
                 now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
-            if Duration::from_millis(time_since_last_heartbeat_ms) > read_lease_duration {
+            if time_since_last_heartbeat_ms > state.lease_duration_ms {
                 readers.push(reader.clone());
             }
         }
@@ -708,6 +727,7 @@ mod tests {
                 })
                 .collect(),
             len,
+            runs: vec![],
         }
     }
 
@@ -718,7 +738,9 @@ mod tests {
         let reader = ReaderId::new();
         let seqno = SeqNo::minimum();
         let now = SYSTEM_TIME.clone();
-        let _ = state.collections.register_reader(&reader, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader, seqno, Duration::from_secs(10), now());
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
@@ -762,7 +784,9 @@ mod tests {
 
         // Create a second reader.
         let reader2 = ReaderId::new();
-        let _ = state.collections.register_reader(&reader2, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader2, seqno, Duration::from_secs(10), now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
@@ -795,7 +819,9 @@ mod tests {
 
         // Create a third reader.
         let reader3 = ReaderId::new();
-        let _ = state.collections.register_reader(&reader3, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader3, seqno, Duration::from_secs(10), now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
@@ -929,9 +955,12 @@ mod tests {
 
         let reader = ReaderId::new();
         // Advance the since to 2.
-        let _ = state
-            .collections
-            .register_reader(&reader, SeqNo::minimum(), now());
+        let _ = state.collections.register_reader(
+            &reader,
+            SeqNo::minimum(),
+            Duration::from_secs(10),
+            now(),
+        );
         assert_eq!(
             state.collections.downgrade_since(
                 &reader,
@@ -1140,7 +1169,13 @@ mod tests {
         assert_eq!(state.maybe_gc(false), None);
 
         // A write will gc though.
-        assert_eq!(state.maybe_gc(true), Some((SeqNo::minimum(), SeqNo(100))));
+        assert_eq!(
+            state.maybe_gc(true),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(100)
+            })
+        );
 
         // Artificially advance the seqno (again) so the seqno_since advances
         // past our internal gc_threshold (again).
@@ -1149,6 +1184,12 @@ mod tests {
 
         // If there are no writers, even a non-write will gc.
         let _ = state.collections.expire_writer(&writer_id);
-        assert_eq!(state.maybe_gc(true), Some((SeqNo(100), SeqNo(200))));
+        assert_eq!(
+            state.maybe_gc(true),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(200)
+            })
+        );
     }
 }

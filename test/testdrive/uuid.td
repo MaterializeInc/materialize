@@ -11,7 +11,7 @@
 # through pgwire). Operations on UUIDs are more thoroughly tested in
 # uuid.slt.
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ set schema={
     "name": "row",
@@ -60,9 +60,9 @@ u      false     uuid
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SINK uuid_sink_${testdrive.seed} FROM data
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'data')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sort-messages=true sink=materialize.public.uuid_sink_${testdrive.seed}
-{"before": null, "after": {"row":{"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row":{"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row":{"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}}
+{"before": null, "after": {"row":{"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}}}

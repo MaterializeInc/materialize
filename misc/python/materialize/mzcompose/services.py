@@ -773,3 +773,18 @@ class Metabase(Service):
                 "ports": ["3000"],
             },
         )
+
+
+class SshBastionHost(Service):
+    def __init__(self, name: str = "ssh-bastion-host") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": "panubo/sshd:1.5.0",
+                "ports": ["22"],
+                "environment": [
+                    "SSH_USERS=mz:1000:1000",
+                    "TCP_FORWARDING=true",
+                ],
+            },
+        )

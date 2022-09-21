@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.64"
+anyhow = "1.0.65"
 async-compression = { version = "0.3.14", features = ["tokio", "gzip"] }
 async-stream = "0.3.3"
 async-trait = "0.1.57"
@@ -19,7 +19,7 @@ aws-smithy-http = "0.48.0"
 aws-types = { version = "0.48.0", features = ["hardcoded-credentials"] }
 bytes = "1.2.1"
 bytesize = "1.1.0"
-chrono = { version = "0.4.21", default-features = false, features = ["std"] }
+chrono = { version = "0.4.22", default-features = false, features = ["std"] }
 crossbeam-channel = { version = "0.5.6" }
 csv-core = { version = "0.1.10" }
 derivative = "2.2.0"
@@ -28,8 +28,8 @@ fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.24"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
-http-serde = "1.1.0"
-itertools = { version = "0.10.3" }
+http-serde = "1.1.2"
+itertools = { version = "0.10.4" }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
@@ -37,7 +37,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-kinesis-util = { path = "../kinesis-util" }
-mz-ore = { path = "../ore", features = ["task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["ssh", "task", "tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
@@ -52,9 +52,9 @@ mz-stash = { path = "../stash" }
 # TODO(benesch): this crate should not depend on the SQL parser.
 mz-sql-parser = { path = "../sql-parser" }
 mz-timely-util = { path = "../timely-util" }
-once_cell = { version = "1.13.1" }
+once_cell = { version = "1.14.0" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-prometheus = { version = "0.13.1", default-features = false }
+prometheus = { version = "0.13.2", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
 prost = { version = "0.11.0", features = ["no-recursion-limit"] }
@@ -66,13 +66,13 @@ serde_json = { version = "1.0.85" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
-tokio-stream = "0.1.9"
+tokio-stream = "0.1.10"
 tokio-util = { version = "0.7.3", features = ["io"] }
-tonic = "0.8.0"
+tonic = "0.8.1"
 tracing = "0.1.36"
 tracing-subscriber = "0.3.15"
-thiserror = { version = "1.0.32" }
-url = { version = "2.2.2", features = ["serde"] }
+thiserror = { version = "1.0.35" }
+url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
 [build-dependencies]
@@ -80,7 +80,7 @@ protobuf-src = "1.1.0"
 tonic-build = "0.8.0"
 
 [dev-dependencies]
-itertools = "0.10.3"
+itertools = "0.10.4"
 tokio = { version = "1.19.2", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]

@@ -29,7 +29,7 @@ name = "persistcli"
 bench = false
 
 [dependencies]
-anyhow = { version = "1.0.64", features = ["backtrace"] }
+anyhow = { version = "1.0.65", features = ["backtrace"] }
 async-stream = "0.3.3"
 async-trait = "0.1.57"
 bytes = "1.2.1"
@@ -41,11 +41,11 @@ mz-ore = { path = "../ore" }
 mz-persist = { path = "../persist" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
-prometheus = { version = "0.13.1", default-features = false }
+prometheus = { version = "0.13.2", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 prost = { version = "0.11.0", features = ["no-recursion-limit"] }
-semver = "1.0.13"
+semver = "1.0.14"
 serde = { version = "1.0.144", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.19.2", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
@@ -57,8 +57,8 @@ tokio-console = ["mz-ore/tokio-console"]
 
 [dev-dependencies]
 async-trait = "0.1.57"
-axum = "0.5.15"
-clap = { version = "3.2.17", features = ["derive", "env"] }
+axum = "0.5.16"
+clap = { version = "3.2.20", features = ["derive", "env"] }
 criterion = { git = "https://github.com/bheisler/criterion.rs.git", branch = "version-0.4", features = ["html_reports"] }
 datadriven = { version = "0.6.0", features = ["async"] }
 futures-task = "0.3.21"

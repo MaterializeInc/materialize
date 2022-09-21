@@ -14,6 +14,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::num::NonZeroUsize;
 
+use bytesize::ByteSize;
 use itertools::Itertools;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -1663,6 +1664,9 @@ impl AggregateExpr {
             AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxUInt16
+            | AggregateFunc::MaxUInt32
+            | AggregateFunc::MaxUInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
             | AggregateFunc::MaxBool
@@ -1673,6 +1677,9 @@ impl AggregateExpr {
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
+            | AggregateFunc::MinUInt16
+            | AggregateFunc::MinUInt32
+            | AggregateFunc::MinUInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
             | AggregateFunc::MinBool
@@ -1717,6 +1724,23 @@ impl AggregateExpr {
             AggregateFunc::SumInt64 => self.expr.clone().call_unary(UnaryFunc::CastInt64ToNumeric(
                 scalar_func::CastInt64ToNumeric(Some(NumericMaxScale::ZERO)),
             )),
+
+            // SumUInt16 takes UInt16s as input, but outputs UInt64s.
+            AggregateFunc::SumUInt16 => self.expr.clone().call_unary(
+                UnaryFunc::CastUint16ToUint64(scalar_func::CastUint16ToUint64),
+            ),
+
+            // SumUInt32 takes UInt32s as input, but outputs UInt64s.
+            AggregateFunc::SumUInt32 => self.expr.clone().call_unary(
+                UnaryFunc::CastUint32ToUint64(scalar_func::CastUint32ToUint64),
+            ),
+
+            // SumUInt64 takes UInt64s as input, but outputs numerics.
+            AggregateFunc::SumUInt64 => {
+                self.expr.clone().call_unary(UnaryFunc::CastUint64ToNumeric(
+                    scalar_func::CastUint64ToNumeric(Some(NumericMaxScale::ZERO)),
+                ))
+            }
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
             AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
@@ -2001,6 +2025,9 @@ impl AggregateExpr {
             | AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxUInt16
+            | AggregateFunc::MaxUInt32
+            | AggregateFunc::MaxUInt64
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
             | AggregateFunc::MaxBool
@@ -2012,6 +2039,9 @@ impl AggregateExpr {
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
+            | AggregateFunc::MinUInt16
+            | AggregateFunc::MinUInt32
+            | AggregateFunc::MinUInt64
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
             | AggregateFunc::MinBool
@@ -2266,10 +2296,11 @@ impl RowSetFinishing {
                         .extend(self.project.iter().map(|i| &datums[*i]));
                     row_buf.clone()
                 };
-                total_bytes += new_row.data().len();
+                total_bytes += new_row.byte_len();
                 if total_bytes > max_result_size {
                     return Err(format!(
-                        "result exceeds max size of {max_result_size} bytes"
+                        "result exceeds max size of {}",
+                        ByteSize::b(u64::cast_from(max_result_size))
                     ));
                 }
                 ret.push(new_row);

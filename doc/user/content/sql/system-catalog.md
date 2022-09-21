@@ -522,7 +522,8 @@ Field            | Type       | Meaning
 
 ### `mz_storage_usage`
 
-The `mz_storage_usage` table contains a row for each storage utilization snapshot taken within the retention period (60 days as of July 2022)
+The `mz_storage_usage` table contains a row for each daily storage utilization
+snapshot collected by the system.
 
 | Field                  | Type                         | Meaning                                               |
 | ---------------------- | ---------------------------- | ----------------------------------------------------- |

@@ -11,7 +11,7 @@
 
 use std::io::{Read, Seek, Write};
 
-use arrow2::io::parquet::read::{read_metadata, FileReader};
+use arrow2::io::parquet::read::{infer_schema, read_metadata, FileReader};
 use arrow2::io::parquet::write::{
     CompressionOptions, Encoding, FileWriter, KeyValue, RowGroupIterator, Version, WriteOptions,
 };
@@ -120,7 +120,9 @@ fn encode_parquet_kvtd<W: Write>(
 }
 
 fn decode_parquet_file_kvtd<R: Read + Seek>(r: &mut R) -> Result<Vec<ColumnarRecords>, Error> {
-    let reader = FileReader::try_new(r, None, None, None, None)?;
+    let metadata = read_metadata(r)?;
+    let schema = infer_schema(&metadata)?;
+    let reader = FileReader::new(r, metadata.row_groups, schema, None, None, None);
 
     let file_schema = reader.schema().fields.as_slice();
     // We're not trying to accept any sort of user created data, so be strict.

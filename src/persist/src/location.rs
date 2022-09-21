@@ -230,7 +230,7 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
             }
         };
         match code {
-            // Feel free to add more things to this whitelist as we encounter
+            // Feel free to add more things to this allowlist as we encounter
             // them as long as you're certain they're determinate.
             &deadpool_postgres::tokio_postgres::error::SqlState::T_R_SERIALIZATION_FAILURE => {
                 ExternalError::Determinate(Determinate {
@@ -279,7 +279,7 @@ pub enum Atomicity {
     AllowNonAtomic,
 }
 
-/// An abstraction for a single arbitrarily-sized binary blob and a associated
+/// An abstraction for a single arbitrarily-sized binary blob and an associated
 /// version number (sequence number).
 #[derive(Debug, Clone, PartialEq)]
 pub struct VersionedData {

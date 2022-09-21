@@ -46,8 +46,8 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema} repeat=1
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ kafka-verify format=avro sort-messages=true sink=materialize.public.sink1
-{"f2": 1} {"before": null, "after": {"row": {"f2": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"f2": 7} {"before": null, "after": {"row": {"f2": 7}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"f2": 1} {"before": null, "after": {"row": {"f2": 1}}}
+{"f2": 7} {"before": null, "after": {"row": {"f2": 7}}}

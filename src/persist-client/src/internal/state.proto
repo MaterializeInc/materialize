@@ -30,6 +30,7 @@ message ProtoHollowBatch {
     ProtoU64Description desc = 1;
     repeated ProtoHollowBatchPart parts = 4;
     uint64 len = 3;
+    repeated uint64 runs = 5;
 
     repeated string deprecated_keys = 2;
 }
@@ -43,6 +44,7 @@ message ProtoReaderState {
     ProtoU64Antichain since = 1;
     uint64 seqno = 2;
     uint64 last_heartbeat_timestamp_ms = 3;
+    uint64 lease_duration_ms = 4;
 }
 
 message ProtoWriterState {

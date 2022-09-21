@@ -69,9 +69,9 @@ CREATE MATERIALIZED VIEW t_view AS SELECT sum(a) AS sum FROM t;
 SHOW MATERIALIZED VIEWS;
 ```
 ```
-  name
---------
- t_view
+name    | cluster
+--------+---------
+t_view  | default
 (1 row)
 ```
 

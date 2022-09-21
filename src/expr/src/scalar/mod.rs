@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use itertools::Itertools;
+use mz_repr::adt::date::DateError;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
@@ -1797,6 +1798,7 @@ pub enum EvalError {
     OidOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
+    DateOutOfRange,
     CharOutOfRange,
     IndexOutOfRange {
         provided: i32,
@@ -1887,6 +1889,7 @@ impl fmt::Display for EvalError {
             EvalError::OidOutOfRange => f.write_str("OID out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
+            EvalError::DateOutOfRange => f.write_str("date out of range"),
             EvalError::CharOutOfRange => f.write_str("\"char\" out of range"),
             EvalError::IndexOutOfRange {
                 provided,
@@ -2065,6 +2068,14 @@ impl From<TypeFromOidError> for EvalError {
     }
 }
 
+impl From<DateError> for EvalError {
+    fn from(e: DateError) -> EvalError {
+        match e {
+            DateError::OutOfRange => EvalError::DateOutOfRange,
+        }
+    }
+}
+
 impl RustType<ProtoEvalError> for EvalError {
     fn into_proto(&self) -> ProtoEvalError {
         use proto_eval_error::Kind::*;
@@ -2092,6 +2103,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::OidOutOfRange => OidOutOfRange(()),
             EvalError::IntervalOutOfRange => IntervalOutOfRange(()),
             EvalError::TimestampOutOfRange => TimestampOutOfRange(()),
+            EvalError::DateOutOfRange => DateOutOfRange(()),
             EvalError::CharOutOfRange => CharOutOfRange(()),
             EvalError::IndexOutOfRange {
                 provided,
@@ -2197,6 +2209,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 OidOutOfRange(()) => Ok(EvalError::OidOutOfRange),
                 IntervalOutOfRange(()) => Ok(EvalError::IntervalOutOfRange),
                 TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),
+                DateOutOfRange(()) => Ok(EvalError::DateOutOfRange),
                 CharOutOfRange(()) => Ok(EvalError::CharOutOfRange),
                 IndexOutOfRange(v) => Ok(EvalError::IndexOutOfRange {
                     provided: v.provided,

@@ -19,6 +19,7 @@
 
 pub mod array;
 pub mod char;
+pub mod date;
 pub mod datetime;
 pub mod interval;
 pub mod jsonb;

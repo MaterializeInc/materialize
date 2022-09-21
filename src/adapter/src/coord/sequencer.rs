@@ -9,7 +9,7 @@
 
 //! Logic for executing a planned SQL query.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::{Duration, Instant};
@@ -22,11 +22,15 @@ use tracing::{event, warn, Level};
 use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
-use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
+use mz_compute_client::controller::{
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging,
+};
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
-use mz_controller::{ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging};
+use mz_compute_client::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, TailSinkConnection,
+};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -34,13 +38,11 @@ use mz_expr::{
 use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::explain_new::{Explain, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
-
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
@@ -51,17 +53,13 @@ use mz_sql::plan::{
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
-    RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
+    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
+    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom,
+    TailPlan, View,
 };
-
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
-
-use mz_storage::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, StorageSinkConnectionBuilder,
-    TailSinkConnection,
-};
+use mz_storage::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage::types::sources::IngestionDescription;
 
 use crate::catalog::{
@@ -79,22 +77,26 @@ use crate::error::AdapterError;
 use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
 use crate::session::vars::IsolationLevel;
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
+    WriteOp,
 };
 use crate::tail::PendingTail;
-use crate::util::{duration_to_timestamp_millis, send_immediate_rows, ClientTransmitter};
-use crate::{guard_write_critical_section, sink_connection, PeekResponseUnary};
+use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
+use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_plan(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
+        mut tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
+        let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        tx.set_allowed(responses);
+
         match plan {
             Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateConnection(plan) => {
@@ -214,13 +216,13 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::StartTransaction(plan) => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
-                let session = session.start_transaction(
+                let (session, result) = session.start_transaction(
                     self.now_datetime(),
                     plan.access,
                     plan.isolation_level,
                 );
                 tx.send(
-                    Ok(ExecuteResponse::StartedTransaction { duplicated }),
+                    result.map(|_| ExecuteResponse::StartedTransaction { duplicated }),
                     session,
                 )
             }
@@ -469,7 +471,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
 
                 self.controller
-                    .storage_mut()
+                    .storage
                     .create_collections(vec![(
                         source_id,
                         CollectionDescription {
@@ -747,7 +749,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect();
 
         self.controller
-            .storage_mut()
+            .storage
             .create_collections(persisted_introspection_sources)
             .await
             .unwrap();
@@ -756,11 +758,14 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
-        self.controller
-            .create_instance(instance.id, instance.logging.clone())
-            .await;
+        self.controller.compute.create_instance(
+            instance.id,
+            instance.logging.clone(),
+            self.catalog.system_config().max_result_size(),
+        )?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
+                .active_compute()
                 .add_replica_to_instance(instance.id, replica_id, replica.config)
                 .await
                 .unwrap();
@@ -803,7 +808,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
 
-        let persisted_source_ids = persisted_logs.get_source_ids();
+        let persisted_source_ids = persisted_logs.get_source_ids().collect();
         let persisted_sources = persisted_logs
             .get_sources()
             .iter()
@@ -877,7 +882,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let replica_concrete_config = instance.replicas_by_id[&replica_id].config.clone();
 
         self.controller
-            .storage_mut()
+            .storage
             .create_collections(persisted_sources)
             .await
             .unwrap();
@@ -895,6 +900,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         self.controller
+            .active_compute()
             .add_replica_to_instance(instance_id, replica_id, replica_concrete_config)
             .await
             .unwrap();
@@ -942,14 +948,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 let collection_desc = table.desc.clone().into();
                 self.controller
-                    .storage_mut()
+                    .storage
                     .create_collections(vec![(table_id, collection_desc)])
                     .await
                     .unwrap();
 
                 let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
                 self.controller
-                    .storage_mut()
+                    .storage
                     .set_read_policy(vec![(table_id, policy)])
                     .await
                     .unwrap();
@@ -1094,7 +1100,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(Some(&session), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
                 txn.dataflow_client
-                    .storage()
+                    .storage
                     .collection(sink.from)
                     .map_err(|e| match e {
                         StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
@@ -1319,7 +1325,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok(df) => {
                 // Announce the creation of the materialized view source.
                 self.controller
-                    .storage_mut()
+                    .storage
                     .create_collections(vec![(
                         id,
                         CollectionDescription {
@@ -1499,7 +1505,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for replica in instance.replicas_by_id.values() {
                 let persisted_logs = replica.config.persisted_logs.clone();
                 let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-                let view_ids = persisted_logs.get_view_ids();
+                let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
                 for log_id in log_and_view_ids {
                     // We consider the dependencies of both views and logs, but remove the
                     // views itself. The views are included as they depend on the source,
@@ -1527,7 +1533,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
             }
-            self.controller.drop_instance(instance_id).await.unwrap();
+            self.controller.compute.drop_instance(instance_id);
         }
 
         Ok(ExecuteResponse::DroppedComputeInstance)
@@ -1564,7 +1570,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .clone();
 
             let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-            let view_ids = persisted_logs.get_view_ids();
+            let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
 
             for log_id in log_and_view_ids {
                 // We consider the dependencies of both views and logs, but remove the
@@ -1616,8 +1622,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
         }
         self.controller
+            .active_compute()
             .drop_replica(instance_id, replica_id, replica_config)
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn sequence_drop_items(
@@ -2026,7 +2034,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.catalog.state(),
                 plan,
                 ExprPrepStyle::OneShot {
-                    logical_time: Some(timestamp),
+                    logical_time: Some(timestamp.into()),
                     session,
                 },
             )?;
@@ -2055,15 +2063,24 @@ impl<S: Append + 'static> Coordinator<S> {
             thinning.len(),
         )?;
 
-        // We only track the peeks in the session if the query doesn't use AS OF, it's a
-        // non-constant or timestamp dependent query.
-        if when == QueryWhen::Immediately
-            && (!matches!(
+        // We only track the peeks in the session if the query doesn't use AS
+        // OF or we're inside an explicit transaction. The latter case is
+        // necessary to support PG's `BEGIN` semantics, whose behavior can
+        // depend on whether or not reads have occurred in the txn.
+        if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
+            || when == QueryWhen::Immediately
+        {
+            let peek_ts = if matches!(
                 peek_plan,
                 peek::PeekPlan::FastPath(peek::FastPathPlan::Constant(_, _))
-            ) || !timestamp_independent)
-        {
-            session.add_transaction_ops(TransactionOps::Peeks(timestamp))?;
+            ) && timestamp_independent
+            {
+                None
+            } else {
+                Some(timestamp)
+            };
+
+            session.add_transaction_ops(TransactionOps::Peeks(peek_ts))?;
         }
 
         // Implement the peek, and capture the response.
@@ -2541,9 +2558,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
                 let mut sources = Vec::new();
                 {
-                    let storage = self.controller.storage();
                     for id in id_bundle.storage_ids.iter() {
-                        let state = storage.collection(*id).unwrap();
+                        let state = self.controller.storage.collection(*id).unwrap();
                         let name = self
                             .catalog
                             .try_get_entry(id)
@@ -2563,7 +2579,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 {
                     if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-                        let compute = self.controller.compute(compute_instance).unwrap();
+                        let compute = self.controller.compute.instance(compute_instance).unwrap();
                         for id in compute_ids {
                             let state = compute.collection(*id).unwrap();
                             let name = self
@@ -2925,12 +2941,8 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let ts = self.get_local_read_ts();
-        let ts = MirScalarExpr::literal_ok(
-            Datum::from(Numeric::from(ts)),
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            },
-        );
+        // TODO: Convert to MzTimestamp.
+        let ts = MirScalarExpr::literal_ok(Datum::from(u64::from(ts)), ScalarType::UInt64);
         let peek_response = match self
             .sequence_peek(
                 &mut session,
@@ -3125,7 +3137,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for o in plan.options {
             options.push(match o {
                 IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.map(Duration::from_millis),
+                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.map(|ts| Duration::from_millis(ts.into())),
                 ),
             });
         }
@@ -3150,9 +3162,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         .index()
                         .expect("setting options on index")
                         .compute_instance;
-                    let window = window.map(duration_to_timestamp_millis);
                     let policy = match window {
-                        Some(time) => ReadPolicy::lag_writes_by(time),
+                        Some(time) => ReadPolicy::lag_writes_by(time.try_into()?),
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
                     self.update_compute_base_read_policy(compute_instance, id, policy)
@@ -3193,7 +3204,7 @@ impl<S: Append + 'static> Coordinator<S> {
         })?;
 
         self.controller
-            .storage_mut()
+            .storage
             .alter_collections(vec![(id, updated_source.host_config.clone())])
             .await?;
 
@@ -3257,6 +3268,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
+        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = match value {
             SetVariableValue::Literal(Value::String(value)) => {
                 catalog::Op::UpdateSystemConfiguration { name, value }
@@ -3273,6 +3285,9 @@ impl<S: Append + 'static> Coordinator<S> {
         };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        if update_max_result_size {
+            self.update_max_result_size().await;
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3282,9 +3297,13 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
+        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        if update_max_result_size {
+            self.update_max_result_size().await;
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3297,6 +3316,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
+        self.update_max_result_size().await;
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3307,6 +3327,16 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(AdapterError::Unauthorized(format!(
                 "only user '{SYSTEM_USER}' is allowed to execute 'ALTER SYSTEM ...'"
             )))
+        }
+    }
+
+    async fn update_max_result_size(&mut self) {
+        let mut compute = self.controller.active_compute();
+        for compute_instance in self.catalog.compute_instances() {
+            let mut instance = compute.instance(compute_instance.id).unwrap();
+            instance
+                .update_max_result_size(self.catalog.system_config().max_result_size())
+                .await;
         }
     }
 

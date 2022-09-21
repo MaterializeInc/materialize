@@ -216,7 +216,7 @@ contains:Decode error: Text: CSV error at record number 2: invalid UTF-8
 
 # Declare a key constraint (PRIMARY KEY NOT ENFORCED)
 
-$ kafka-create-topic topic=static-csv-pkne-sink
+$ kafka-create-topic topic=static-csv-pkne-sink partitions=1
 
 > CREATE SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
   FROM S3 CONNECTION s3_conn
@@ -232,11 +232,11 @@ $ kafka-create-topic topic=static-csv-pkne-sink
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SINK static_csv_pkne_sink FROM static_csv_pkne
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'static-csv-pkne-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-static-csv-pkne-sink-${testdrive.seed}')
   KEY (zip)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 $ kafka-verify format=avro sink=materialize.public.static_csv_pkne_sink sort-messages=true
-{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004", "transaction": {"id": "<>"}}
-{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618", "transaction": {"id": "<>"}}
-{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679", "transaction": {"id": "<>"}}
+{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004"}
+{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618"}
+{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679"}

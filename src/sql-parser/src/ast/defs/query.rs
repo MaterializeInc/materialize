@@ -23,7 +23,9 @@ use std::hash::Hash;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, FunctionArgs, Ident, UnresolvedObjectName, WithOption};
+use crate::ast::{
+    AstInfo, Expr, FunctionArgs, Ident, ShowStatement, UnresolvedObjectName, WithOption,
+};
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
@@ -132,6 +134,7 @@ pub enum SetExpr<T: AstInfo> {
         right: Box<SetExpr<T>>,
     },
     Values(Values<T>),
+    Show(ShowStatement<T>),
     // TODO: ANSI SQL supports `TABLE` here.
 }
 
@@ -145,6 +148,7 @@ impl<T: AstInfo> AstDisplay for SetExpr<T> {
                 f.write_str(")")
             }
             SetExpr::Values(v) => f.write_node(v),
+            SetExpr::Show(v) => f.write_node(v),
             SetExpr::SetOperation {
                 left,
                 right,

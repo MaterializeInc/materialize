@@ -460,13 +460,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 literal_constraints,
                 map_filter_project,
             )) => (
-                (
-                    id,
-                    literal_constraints,
-                    timestamp,
-                    finishing.clone(),
-                    map_filter_project,
-                ),
+                (id, literal_constraints, timestamp, map_filter_project),
                 None,
             ),
             PeekPlan::SlowPath(PeekDataflowPlan {
@@ -483,7 +477,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
-                    .active_compute(compute_instance)
+                    .active_compute()
+                    .instance(compute_instance)
                     .unwrap()
                     .create_dataflows(vec![dataflow])
                     .await
@@ -515,7 +510,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                         index_id, // transient identifier produced by `dataflow_plan`.
                         None,
                         timestamp,
-                        finishing.clone(),
                         map_filter_project,
                     ),
                     Some(index_id),
@@ -549,10 +543,11 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .entry(conn_id)
             .or_default()
             .insert(uuid, compute_instance);
-        let (id, literal_constraints, timestamp, _finishing, map_filter_project) = peek_command;
+        let (id, literal_constraints, timestamp, map_filter_project) = peek_command;
 
         self.controller
-            .active_compute(compute_instance)
+            .active_compute()
+            .instance(compute_instance)
             .unwrap()
             .peek(
                 id,
@@ -604,7 +599,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             }
             for (compute_instance, uuids) in inverse {
                 self.controller
-                    .active_compute(compute_instance)
+                    .active_compute()
+                    .instance(compute_instance)
                     .unwrap()
                     .cancel_peeks(&uuids)
                     .await

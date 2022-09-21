@@ -9,7 +9,7 @@
 
 # Test Avro UPSERT sinks.
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 # sinking directly from an UPSERT source with multi-part key
 
@@ -50,19 +50,19 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
   ENVELOPE UPSERT
 
 > CREATE SINK upsert_input_sink FROM upsert_input
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'upsert-input-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink-${testdrive.seed}')
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 $ kafka-verify format=avro sink=materialize.public.upsert_input_sink sort-messages=true
-{"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "fish", "f2": 1000, "transaction": {"id": "<TIMESTAMP>"}}
-{"key1": "fish", "key2": 2} {"key1": "fish", "key2": 2, "f1": "fish", "f2": 1000, "transaction": {"id": "<TIMESTAMP>"}}
+{"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "fish", "f2": 1000}
+{"key1": "fish", "key2": 2} {"key1": "fish", "key2": 2, "f1": "fish", "f2": 1000}
 
 $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema}
 {"key1": "fisch", "key2": 42} {"f1": "richtig, fisch", "f2": 2000}
 
 $ kafka-verify format=avro sink=materialize.public.upsert_input_sink
-{"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "richtig, fisch", "f2": 2000, "transaction": {"id": "<TIMESTAMP>"}}
+{"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "richtig, fisch", "f2": 2000}
 
 # More complicated scenarios: super keys, consistency input/output
 $ set schema=[
@@ -180,32 +180,32 @@ a  b
 # transaction appear together as one "bundle" in the output. But there is no
 # guarantee on the order within a transaction.
 
-$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 1, "transaction": {"id": "1"}}
-{"a": 2} {"a": 2, "b": 2, "transaction": {"id": "1"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink sort-messages=true
+1	{"a": 1} {"a": 1, "b": 1}
+1	{"a": 2} {"a": 2, "b": 2}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
-{"a": 3} {"a": 3, "b": 1, "transaction": {"id": "2"}}
-{"a": 4} {"a": 4, "b": 2, "transaction": {"id": "2"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink sort-messages=true
+2	{"a": 3} {"a": 3, "b": 1}
+2	{"a": 4} {"a": 4, "b": 2}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 7, "transaction": {"id": "3"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink sort-messages=true
+3	{"a": 1} {"a": 1, "b": 7}
 
 # Again, compare split by transaction. See comment just above.
 
-$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
-{"a": 1, "b": 1} {"a": 1, "b": 1, "transaction": {"id": "1"}}
-{"a": 2, "b": 2} {"a": 2, "b": 2, "transaction": {"id": "1"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
+1	{"a": 1, "b": 1} {"a": 1, "b": 1}
+1	{"a": 2, "b": 2} {"a": 2, "b": 2}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
-{"a": 3, "b": 1} {"a": 3, "b": 1, "transaction": {"id": "2"}}
-{"a": 4, "b": 2} {"a": 4, "b": 2, "transaction": {"id": "2"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
+2	{"a": 3, "b": 1} {"a": 3, "b": 1}
+2	{"a": 4, "b": 2} {"a": 4, "b": 2}
 
 # missing key denotes DELETE
 
-$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
-{"a": 1, "b": 1}
-{"a": 1, "b": 7} {"a": 1, "b": 7, "transaction": {"id": "3"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
+3 {"a": 1, "b": 1}
+3	{"a": 1, "b": 7} {"a": 1, "b": 7}
 
 # verify if/when input deletions are emitted to an UPSERT sink
 
@@ -225,15 +225,15 @@ $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":1}]}}
 
-$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 1, "transaction": {"id": "1"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+1	{"a": 1} {"a": 1, "b": 1}
 
 $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 {"array":[{"data":{"a":1,"b":2},"time":2,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[2],"upper":[3],"counts":[{"time":2,"count":1}]}}
 
-$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 2, "transaction": {"id": "2"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+2	{"a": 1} {"a": 1, "b": 2}
 
 # deletion of the "shadowed" input should not cause downstream updates
 
@@ -255,8 +255,8 @@ $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 {"array":[{"data":{"a":1,"b":2},"time":5,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[5],"upper":[6],"counts":[{"time":5,"count":2}]}}
 
-$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 2, "transaction": {"id": "5"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+5	{"a": 1} {"a": 1, "b": 2}
 
 $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 {"array":[{"data":{"a":1,"b":2},"time":6,"diff":-1}]}
@@ -264,8 +264,8 @@ $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 
 # removing the occluding input should "reveal" the previous input again
 #
-$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 1, "transaction": {"id": "6"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+6	{"a": 1} {"a": 1, "b": 1}
 
 # NOT ENFORCED Keys
 

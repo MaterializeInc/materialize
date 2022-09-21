@@ -93,21 +93,37 @@ SELECT * FROM v
 ----
 1
 
-query TTTTTTT
+query TTTT
 SHOW INDEXES ON v IN CLUSTER bar;
 ----
-bar v v_primary_idx 1 ?column? NULL false
+v_primary_idx v bar {?column?}
 
 statement ok
 CREATE DEFAULT INDEX foo_v_idx IN CLUSTER foo ON v
 
-query TTTTTTT
+query TTTT
 SHOW INDEXES IN CLUSTER bar;
 ----
-bar  v  v_primary_idx  1  ?column?  NULL  false
+v_primary_idx v bar {?column?}
 
 query TTTTTTT
-SHOW EXTENDED INDEXES IN CLUSTER bar;
+SELECT
+    clusters.name AS cluster,
+    objs.name AS on_name,
+    idxs.name AS key_name,
+    idx_cols.index_position AS seq_in_index,
+    obj_cols.name AS column_name,
+    idx_cols.on_expression AS expression,
+    idx_cols.nullable AS nullable
+FROM
+    mz_catalog.mz_indexes AS idxs
+    JOIN mz_catalog.mz_index_columns AS idx_cols ON idxs.id = idx_cols.index_id
+    JOIN mz_catalog.mz_objects AS objs ON idxs.on_id = objs.id
+    JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = idxs.cluster_id
+    LEFT JOIN mz_catalog.mz_columns AS obj_cols
+        ON idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
+WHERE clusters.name = 'bar'
+ORDER BY on_name, seq_in_index ASC;
 ----
 bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  1  operator  NULL  false
 bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  2  worker  NULL  false
@@ -162,11 +178,11 @@ bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_sourc
 bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  4  time  NULL  false
 bar  v  v_primary_idx  1  ?column?  NULL  false
 
-query TTTTTTT
+query TTTT
 SHOW INDEXES;
 ----
-bar  v  v_primary_idx  1  ?column?  NULL  false
-foo  v  foo_v_idx  1  ?column?  NULL  false
+foo_v_idx v foo {?column?}
+v_primary_idx v bar {?column?}
 
 query T
 SELECT
@@ -209,11 +225,11 @@ v_primary_idx
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER bar ON v
 
-query TTTTTTT
+query TTTT
 SHOW INDEXES ON v IN CLUSTER bar;
 ----
-bar v v_primary_idx 1 ?column? NULL false
-bar v v_primary_idx1 1 ?column? NULL false
+v_primary_idx v bar {?column?}
+v_primary_idx1 v bar {?column?}
 
 statement error unknown cluster 'noexist'
 CREATE DEFAULT INDEX IN CLUSTER noexist ON v
@@ -231,11 +247,11 @@ DROP CLUSTER baz
 statement error cannot drop cluster with active indexes or materialized views
 DROP CLUSTER bar
 
-query TTTTTTT
-SHOW INDEXES IN CLUSTER bar WHERE on_name = 'v';
+query TTTT
+SHOW INDEXES IN CLUSTER bar WHERE on = 'v';
 ----
-bar v v_primary_idx 1 ?column? NULL false
-bar v v_primary_idx1 1 ?column? NULL false
+v_primary_idx v bar {?column?}
+v_primary_idx1 v bar {?column?}
 
 statement ok
 DROP INDEX v_primary_idx

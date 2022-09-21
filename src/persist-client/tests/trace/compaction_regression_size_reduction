@@ -21,14 +21,14 @@
 
 # Insert two batches and then a big batch so that 0-1 and 1-2 are fueled to
 # merge. This also creates a FuelingMerge(0-2,2-3).
-insert
-0 1 0 500 k0
-1 2 0 500 k1
-2 3 0 1000 k2
+push-batch
+[0][1][0] 500 k0
+[1][2][0] 500 k1
+[2][3][0] 1000 k2
 ----
 ok
 
-batches
+spine-batches
 ----
 [0][2][0] 2/1000 k0 k1
 [2][3][0] 1000 k2
@@ -38,8 +38,8 @@ take-merge-reqs
 [0][2][0] k0 k1
 
 # Give the FuelingMerge(0-2,2-3) some fuel, but not enough to finish.
-insert
-3 4 0 100 k3
+push-batch
+[3][4][0] 100 k3
 ----
 ok
 
@@ -47,13 +47,13 @@ ok
 # the pre compacted version (1000 vs 1). This creates a scenario where
 # FuelingMerge(0-2,2-3) suddenly has more fuel than it needs.
 apply-merge-res
-0 2 0 1 k0-1
+[0][2][0] 1 k0-1
 ----
 applied
 
 # Insert a batch that would force FuelingMerge(0-2,2-3) to finish and move up a
 # few levels. In the regression, this would panic.
-insert
-4 5 0 10000 k4
+push-batch
+[4][5][0] 10000 k4
 ----
 ok

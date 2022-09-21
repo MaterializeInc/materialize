@@ -17,7 +17,11 @@ k1 0 1
 ----
 parts=1 len=1
 
-compare-and-append input=b0
+register-writer writer_id=w11111111-1111-1111-1111-111111111111
+----
+[0]
+
+compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
 ----
 ok
 
@@ -28,12 +32,12 @@ seqno=v2 batches=
 seqno=v3 batches=b0
 
 # Run gc up to our latest seqno
-gc from_seqno=0 to_seqno=3
+gc to_seqno=3
 ----
 ok
 
 # Now some slow gc req comes in that's behind. In the regression case, this
 # panics.
-gc from_seqno=0 to_seqno=1
+gc to_seqno=1
 ----
 ok

@@ -22,8 +22,8 @@ true
 > SELECT now() - pg_postmaster_start_time() > interval '1 second' AND now() - pg_postmaster_start_time() < interval '1 year';
 true
 
-> SELECT length(cast(mz_cluster_id() as text));
-36
+> SELECT length(cast(mz_environment_id() as text));
+50
 
 > SELECT length(cast(mz_internal.mz_session_id() as text));
 36

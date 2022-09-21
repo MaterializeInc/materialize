@@ -14,7 +14,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
-use mz_controller::ComputeInstanceReplicaAllocation;
+use mz_compute_client::controller::ComputeInstanceReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
 use mz_secrets::SecretsReader;
 use mz_storage::types::hosts::StorageHostResourceAllocation;
@@ -30,6 +30,8 @@ pub struct Config<'a, S> {
     pub unsafe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
+    /// A persistent ID associated with the environment.
+    pub environment_id: String,
     /// Function to generate wall clock now; can be mocked.
     pub now: mz_ore::now::NowFn,
     /// Whether or not to skip catalog migrations.

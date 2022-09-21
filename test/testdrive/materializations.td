@@ -41,18 +41,15 @@ $ kafka-create-topic topic=data
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b
 
-> SHOW FULL VIEWS
-name        type
-----------------
-data_view   user
+> SHOW VIEWS
+name
+---------
+data_view
 
 > SHOW MATERIALIZED VIEWS
-test1
-
-> SHOW FULL MATERIALIZED VIEWS
-cluster   name     type
------------------------
-default   test1    user
+name    cluster
+---------------
+test1   default
 
 > SELECT * FROM test1
 b  sum
@@ -80,7 +77,7 @@ sum   false   numeric
 data_view
 
 > SHOW CREATE MATERIALIZED VIEW test1
-"Materialized View"       "Create Materialized View"
+name                      create_sql
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"default\" AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
 
@@ -148,7 +145,7 @@ a  b
 
 # Cannot create sink from unmaterialized view.
 ! CREATE SINK not_mat_sink2 FROM data_view
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-view2-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-view2-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:data_view is a view, which cannot be exported as a sink
 
@@ -159,7 +156,7 @@ contains:data_view is a view, which cannot be exported as a sink
 
 # or from an indexed unmaterialized view
 ! CREATE SINK not_mat_sink2 FROM test5
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-view2-sink')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-view2-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:test5 is a view, which cannot be exported as a sink
 
@@ -336,16 +333,10 @@ a  b
 1  2
 
 > SHOW SOURCES
-name
---------
-data
-mat_data
-
-> SHOW FULL SOURCES
-name     type type
--------------------
-data     user kafka
-mat_data user kafka
+name     type
+--------------
+data     kafka
+mat_data kafka
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

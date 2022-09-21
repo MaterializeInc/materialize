@@ -16,11 +16,11 @@ use std::rc::Rc;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
+use mz_compute_client::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 
 use crate::compute_state::SinkToken;
 use crate::render::context::Context;

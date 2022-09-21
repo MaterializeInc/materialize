@@ -10,7 +10,8 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
+use mz_repr::adt::date::Date;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -151,7 +152,7 @@ impl fmt::Display for CastStringToNumeric {
 
 sqlfunc!(
     #[sqlname = "text_to_date"]
-    fn cast_string_to_date<'a>(a: &'a str) -> Result<NaiveDate, EvalError> {
+    fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
         strconv::parse_date(a).err_into()
     }
 );

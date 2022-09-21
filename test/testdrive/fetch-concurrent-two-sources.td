@@ -11,7 +11,7 @@
 # Make sure that FETCH-ing using multiple cursors from different sources works as expected
 #
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "type": "int"} ] }
 

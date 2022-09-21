@@ -92,7 +92,7 @@ contains: yshtola is not an SSH connection
 > SELECT name, type FROM mz_connections;
 name    type
 ----------------
-phoenix ssh
+phoenix ssh-tunnel
 yshtola postgres
 
 # SSH tunnel dependencies are properly tracked

@@ -72,7 +72,7 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "456"}
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 > SELECT * FROM v1;
 4

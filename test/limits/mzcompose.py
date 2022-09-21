@@ -235,7 +235,7 @@ class KafkaPartitions(Generator):
             print(f'"{i}" {{"f1": "{i}"}}')
 
         print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
@@ -285,7 +285,7 @@ class KafkaRecordsEnvelopeNone(Generator):
         print('{"f1": "123"}')
 
         print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
@@ -328,7 +328,7 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         print('{"key": "fish"} {"f1": "fish"}')
 
         print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
@@ -374,7 +374,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         )
 
         print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
@@ -407,6 +407,7 @@ class KafkaSinks(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ set-regex match=\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_materialized_views = {KafkaSinks.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -417,7 +418,7 @@ class KafkaSinks(Generator):
             print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
 
         print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
@@ -430,7 +431,7 @@ class KafkaSinks(Generator):
                      > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
                      > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
                      > CREATE SINK s{i} FROM v{i}
-                       INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
+                       INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
                      """
                 )
@@ -438,7 +439,12 @@ class KafkaSinks(Generator):
 
         for i in cls.all():
             print(
-                f'$ kafka-verify format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": {i}}}}}}}\n'
+                dedent(
+                    f"""
+                    $ kafka-verify format=avro sink=materialize.public.s{i}
+                    {{"before": null, "after": {{"row": {{"f1": {i}}}}}}}
+                    """
+                )
             )
 
 
@@ -447,6 +453,7 @@ class KafkaSinksSameSource(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ set-regex match=\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sinks = {KafkaSinksSameSource.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -455,10 +462,10 @@ class KafkaSinksSameSource(Generator):
         )
         print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         print(
-            """> CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';"""
+            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';"""
         )
         print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';"""
+            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';"""
         )
 
         for i in cls.all():
@@ -1401,9 +1408,9 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                          > CREATE MATERIALIZED VIEW v_{cluster_name} AS
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
-                        > CREATE CONNECTION IF NOT EXISTS csr_conn
-                          FOR CONFLUENT SCHEMA REGISTRY
-                          URL '${{testdrive.schema-registry-url}}';
+                         > CREATE CONNECTION IF NOT EXISTS csr_conn
+                           FOR CONFLUENT SCHEMA REGISTRY
+                           URL '${{testdrive.schema-registry-url}}';
 
                          > CREATE SOURCE s_{cluster_name}
                            FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC

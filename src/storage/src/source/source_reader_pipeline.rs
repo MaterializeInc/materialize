@@ -28,21 +28,23 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use differential_dataflow::Hashable;
-use futures::Stream;
 use itertools::Itertools;
+use mz_timely_util::builder_async::Event;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::feedback::ConnectLoop;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::OperatorInfo;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Broadcast, CapabilitySet};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
+use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::StreamExt;
@@ -54,19 +56,22 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
 use mz_timely_util::operator::StreamExt as _;
 
-use crate::controller::CollectionMetadata;
+use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::source::healthcheck::Healthchecker;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::ReclockFollower;
 use crate::source::reclock::ReclockOperator;
+use crate::source::types::SourceConnection;
 use crate::source::types::SourceOutput;
+use crate::source::types::{
+    AsyncSourceToken, SourceMessage, SourceMetrics, SourceReader, SourceToken,
+};
 use crate::source::types::{MaybeLength, SourceMessageType};
-use crate::source::types::{SourceMessage, SourceMetrics, SourceReader, SourceToken};
-use crate::source::util::source;
+use crate::source::util::async_source;
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::SourceError;
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{MzOffset, SourceConnection};
+use crate::types::sources::MzOffset;
 
 // Interval after which the source operator will yield control.
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);
@@ -139,10 +144,11 @@ struct SourceUpperSummary {
 ///
 /// See the [`source` module docs](crate::source) for more details about how raw
 /// sources are used.
-pub fn create_raw_source<G, S: 'static>(
+pub fn create_raw_source<G, S: 'static, R>(
     config: RawSourceCreationConfig<G>,
-    source_connection: &SourceConnection,
+    source_connection: S::Connection,
     connection_context: ConnectionContext,
+    calc: R,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
@@ -151,11 +157,21 @@ pub fn create_raw_source<G, S: 'static>(
     Option<Rc<dyn Any>>,
 )
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = Timestamp> + Clone,
     S: SourceReader,
+    R: ResumptionFrontierCalculator<Timestamp> + 'static,
 {
-    let ((batches, source_upper_summaries), source_reader_token) =
-        source_reader_operator::<G, S>(config.clone(), source_connection, connection_context);
+    let (resume_stream, source_reader_feedback_handle) =
+        super::resumption::resumption_operator(config.clone(), calc);
+
+    let ((batches, source_upper_summaries, resumption_feedback_stream), source_reader_token) =
+        source_reader_operator::<G, S>(
+            config.clone(),
+            source_connection,
+            connection_context,
+            resume_stream,
+        );
+    resumption_feedback_stream.connect_loop(source_reader_feedback_handle);
 
     let (remap_stream, remap_token) =
         remap_operator::<G, S>(config.clone(), source_upper_summaries);
@@ -172,11 +188,14 @@ where
 /// [`SourceMessageBatch`]. Also returns a second stream that can be used to
 /// learn about the `source_upper` that all the source reader instances now
 /// about. This second stream will be used by `remap_operator` to mint new
-/// timestamp bindings into the remap shard.
+/// timestamp bindings into the remap shard. The third stream is to feedback
+/// a frontier for the `resumption_operator` to inspect. For now, this
+/// stream produces NO data.
 fn source_reader_operator<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
-    source_connection: &SourceConnection,
+    source_connection: S::Connection,
     connection_context: ConnectionContext,
+    resume_stream: timely::dataflow::Stream<G, ()>,
 ) -> (
     (
         timely::dataflow::Stream<
@@ -184,8 +203,9 @@ fn source_reader_operator<G, S: 'static>(
             Rc<RefCell<Option<SourceMessageBatch<S::Key, S::Value, S::Diff>>>>,
         >,
         timely::dataflow::Stream<G, SourceUpperSummary>,
+        timely::dataflow::Stream<G, ()>,
     ),
-    Option<SourceToken>,
+    Option<AsyncSourceToken>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -207,285 +227,334 @@ where
         persist_clients,
     } = config;
 
-    let (stream, capability) = source(scope, name.clone(), move |info| {
-        let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-        let waker = futures::task::waker(waker_activator);
+    let initial_resume_upper = resume_upper.clone();
 
-        let metrics_name = upstream_name.clone().unwrap_or_else(|| name.clone());
-        let source_metrics =
-            SourceMetrics::new(base_metrics, &metrics_name, id, &worker_id.to_string());
+    let (stream, capability) = async_source(
+        scope,
+        name.clone(),
+        &resume_stream,
+        move |info: OperatorInfo, mut cap_set, mut resume_input, mut output| {
+            // TODO(guswynn): should sources still be able to self-activate?
+            // probably not, so we should remove this
+            let sync_activator = scope.sync_activator_for(&info.address[..]);
+            let base_metrics = base_metrics.clone();
+            let mut source_reader = Box::pin(async_stream::stream!({
+                let mut source_upper = {
+                    let upper_ts = resume_upper.as_option().copied().unwrap();
+                    let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+                    // This is a TEMPORARY instance of a `ReclockOperator` used to calculate
+                    // a OFFSET `source_upper` for the SourceReader. It cannot be
+                    // shared with the `remap_operator` because its initialization
+                    // is async, which is not acceptable within dataflow creation.
+                    // It cannot be a `ReclockFollower`, which is empty on
+                    // initialization.
+                    let timestamper = match ReclockOperator::new(
+                        Arc::clone(&persist_clients),
+                        storage_metadata.clone(),
+                        now.clone(),
+                        timestamp_interval.clone(),
+                        as_of,
+                    )
+                    .await
+                    {
+                        Ok(t) => t,
+                        Err(e) => {
+                            panic!("Failed to create source {} timestamper: {:#}", name, e);
+                        }
+                    };
+                    timestamper
+                        .source_upper_at_frontier(resume_upper.borrow())
+                        .expect("source_upper_at_frontier to be used correctly")
+                };
 
-        let sync_activator = scope.sync_activator_for(&info.address[..]);
-        let base_metrics = base_metrics.clone();
-        let source_connection = source_connection.clone();
-        let mut source_reader = Box::pin(async_stream::stream!({
-            let upper_ts = resume_upper.as_option().copied().unwrap();
-            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-            let timestamper = match ReclockOperator::new(
-                Arc::clone(&persist_clients),
-                storage_metadata.clone(),
-                now.clone(),
-                timestamp_interval.clone(),
-                as_of,
-            )
-            .await
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    panic!("Failed to create source {} timestamper: {:#}", name, e);
+                let mut healthchecker = if storage_metadata.status_shard.is_some() {
+                    match Healthchecker::new(
+                        name.clone(),
+                        upstream_name,
+                        id,
+                        source_connection.name(),
+                        worker_id,
+                        worker_count,
+                        true,
+                        &persist_clients,
+                        &storage_metadata,
+                        now.clone(),
+                    )
+                    .await
+                    {
+                        Ok(h) => Some(h),
+                        Err(e) => {
+                            panic!(
+                                "Failed to create healthchecker for source {}: {:#}",
+                                &name, e
+                            );
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                // Send along an empty batch, so that the reclock operator knows
+                // about the current frontier. Otherwise, if there are no new
+                // messages after a restart, the reclock operator would be stuck and
+                // not advance its downstream frontier.
+                yield Some((HashMap::new(), Vec::new(), Vec::new(), source_upper.clone()));
+
+                trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
+                source_upper.retain(|pid, _offset| {
+                    crate::source::responsible_for(&id, worker_id, worker_count, &pid)
+                });
+                trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
+
+                let mut start_offsets = Vec::with_capacity(source_upper.len());
+                for (pid, offset) in source_upper.iter() {
+                    start_offsets.push((pid.clone(), Some(offset.clone())));
                 }
-            };
 
-            let mut healthchecker = if storage_metadata.status_shard.is_some() {
-                match Healthchecker::new(
+                let source_reader = S::new(
                     name.clone(),
-                    upstream_name,
                     id,
-                    source_connection.name(),
                     worker_id,
                     worker_count,
-                    true,
-                    &persist_clients,
-                    &storage_metadata,
-                    now.clone(),
-                )
-                .await
-                {
-                    Ok(h) => Some(h),
-                    Err(e) => {
-                        panic!(
-                            "Failed to create healthchecker for source {}: {:#}",
-                            &name, e
-                        );
-                    }
-                }
-            } else {
-                None
-            };
+                    sync_activator,
+                    source_connection.clone(),
+                    start_offsets,
+                    encoding,
+                    base_metrics,
+                    connection_context.clone(),
+                );
 
-            let mut source_upper = timestamper.source_upper_at(upper_ts.saturating_sub(1));
+                let source_stream = source_reader
+                    .expect("Failed to create source")
+                    .into_stream(timestamp_interval)
+                    .fuse();
 
-            // Send along an empty batch, so that the reclock operator knows
-            // about the current frontier. Otherwise, if there are no new
-            // messages after a restart, the reclock operator would be stuck and
-            // not advance its downstream frontier.
-            yield Some((HashMap::new(), Vec::new(), Vec::new(), source_upper.clone()));
+                tokio::pin!(source_stream);
 
-            trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper before thinning: {source_upper:?}");
-            source_upper.retain(|pid, _offset| {
-                crate::source::responsible_for(&id, worker_id, worker_count, &pid)
-            });
-            trace!("source_reader({id}) {worker_id}/{worker_count}: source_upper after thinning: {source_upper:?}");
+                // Emit batches more frequently than we mint new timestamps. We're
+                // hoping that most of the batches that we emit will end up making
+                // it into the freshly minted bindings when remap_operator ticks.
+                let mut emission_interval = tokio::time::interval(timestamp_interval / 5);
+                emission_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-            let mut start_offsets = Vec::with_capacity(source_upper.len());
-            for (pid, offset) in source_upper.iter() {
-                start_offsets.push((pid.clone(), Some(offset.clone())));
-            }
+                let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
+                let mut unconsumed_partitions = Vec::new();
+                let mut non_definite_errors = vec![];
+                loop {
+                    // TODO(guswyn): move lots of this out of the macro so rustfmt works better
+                    tokio::select! {
+                        // N.B. This branch is cancel-safe because `next` only borrows the underlying stream.
+                        item = source_stream.next() => {
+                            match item {
+                                Some(Ok(message)) => {
 
-            let source_reader = S::new(
-                name.clone(),
-                id,
-                worker_id,
-                worker_count,
-                sync_activator,
-                source_connection.clone(),
-                start_offsets,
-                encoding,
-                base_metrics,
-                connection_context.clone(),
-            );
-
-            let source_stream = source_reader
-                .expect("Failed to create source")
-                .into_stream(timestamp_interval)
-                .fuse();
-
-            tokio::pin!(source_stream);
-
-            // Emit batches more frequently than we mint new timestamps. We're
-            // hoping that most of the batches that we emit will end up making
-            // it into the freshly minted bindings when remap_operator ticks.
-            let mut emission_interval = tokio::time::interval(timestamp_interval / 5);
-            emission_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-            let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
-            let mut unconsumed_partitions = Vec::new();
-            let mut non_definite_errors = vec![];
-            loop {
-                // TODO(guswyn): move lots of this out of the macro so rustfmt works better
-                tokio::select! {
-                    // N.B. This branch is cancel-safe because `next` only borrows the underlying stream.
-                    item = source_stream.next() => {
-                        match item {
-                            Some(Ok(message)) => {
-
-                                // Note that this
-                                // 1. Requires that sources that produce
-                                //    `InProgress` messages ALWAYS produce a
-                                //    `Finalized` for the final message.
-                                // 2. Requires that sources that produce
-                                //    `InProgress` messages NEVER produces
-                                //    messages at offsets below the most recent
-                                //    `Finalized` message.
-                                let is_final = matches!(message, SourceMessageType::Finalized(_));
-                                match message {
-                                    SourceMessageType::DropPartitionCapabilities(mut pids) => {
-                                        unconsumed_partitions.append(&mut pids);
-                                    }
-                                    SourceMessageType::Finalized(message) | SourceMessageType::InProgress(message) => {
-                                        let pid = message.partition.clone();
-                                        let offset = message.offset;
-                                        // advance the _offset_ frontier if this the final message for that offset
-                                        if is_final {
-                                            *source_upper.entry(pid.clone()).or_default() = offset + 1;
+                                    // Note that this
+                                    // 1. Requires that sources that produce
+                                    //    `InProgress` messages ALWAYS produce a
+                                    //    `Finalized` for the final message.
+                                    // 2. Requires that sources that produce
+                                    //    `InProgress` messages NEVER produces
+                                    //    messages at offsets below the most recent
+                                    //    `Finalized` message.
+                                    let is_final = matches!(message, SourceMessageType::Finalized(_));
+                                    match message {
+                                        SourceMessageType::DropPartitionCapabilities(mut pids) => {
+                                            unconsumed_partitions.append(&mut pids);
                                         }
-                                        untimestamped_messages.entry(pid).or_default().push((message, offset));
-                                    }
-                                    SourceMessageType::SourceStatus(update) => {
-                                        if let Some(healthchecker) = &mut healthchecker {
-                                            healthchecker.update_status(update).await;
+                                        SourceMessageType::Finalized(message) | SourceMessageType::InProgress(message) => {
+                                            let pid = message.partition.clone();
+                                            let offset = message.offset;
+                                            // advance the _offset_ frontier if this the final message for that offset
+                                            if is_final {
+                                                *source_upper.entry(pid.clone()).or_default() = offset + 1;
+                                            }
+                                            untimestamped_messages.entry(pid).or_default().push((message, offset));
+                                        }
+                                        SourceMessageType::SourceStatus(update) => {
+                                            if let Some(healthchecker) = &mut healthchecker {
+                                                healthchecker.update_status(update).await;
+                                            }
                                         }
                                     }
                                 }
+                                // TODO: Report these errors to the Healthchecker!
+                                Some(Err(e)) => {
+                                    non_definite_errors.push(e);
+                                }
+                                None => {
+                                    // This source reader is done. Yield one final
+                                    // update of the source_upper.
+                                    yield Some(
+                                        (
+                                            std::mem::take(&mut untimestamped_messages),
+                                            non_definite_errors.drain(..).collect_vec(),
+                                            unconsumed_partitions,
+                                            source_upper.clone()
+                                        )
+                                    );
+
+                                    // Then, let the consumer know we're done.
+                                    yield None;
+
+                                    return;
+                                },
                             }
-                            // TODO: Report these errors to the Healthchecker!
-                            Some(Err(e)) => {
-                                non_definite_errors.push(e);
+                        }
+                        // It's time to emit a batch of messages
+                        _ = emission_interval.tick() => {
+
+                            if !untimestamped_messages.is_empty() {
+                                trace!("source_reader({id}) {worker_id}/{worker_count}: \
+                                      emitting new batch. \
+                                      untimestamped_messages.len(): {} \
+                                      unconsumed_partitions: {:?} \
+                                      source_upper: {:?}",
+                                      untimestamped_messages.len(),
+                                      unconsumed_partitions.clone(),
+                                      source_upper);
                             }
-                            None => {
-                                // This source reader is done. Yield one final
-                                // update of the source_upper.
-                                yield Some(
-                                    (
-                                        std::mem::take(&mut untimestamped_messages),
-                                        non_definite_errors.drain(..).collect_vec(),
-                                        unconsumed_partitions,
-                                        source_upper.clone()
-                                    )
-                                );
 
-                                // Then, let the consumer know we're done.
-                                yield None;
-
-                                return;
-                            },
+                            // Emit empty batches as well. Just to keep downstream
+                            // operators informed about the unconsumed partitions
+                            // and the source upper.
+                            yield Some(
+                                (
+                                    std::mem::take(&mut untimestamped_messages),
+                                    non_definite_errors.drain(..).collect_vec(),
+                                    unconsumed_partitions.clone(),
+                                    source_upper.clone()
+                                )
+                            );
                         }
-                    }
-                    // It's time to emit a batch of messages
-                    _ = emission_interval.tick() => {
-
-                        if !untimestamped_messages.is_empty() {
-                            trace!("source_reader({id}) {worker_id}/{worker_count}: \
-                                  emitting new batch. \
-                                  untimestamped_messages.len(): {} \
-                                  unconsumed_partitions: {:?} \
-                                  source_upper: {:?}",
-                                  untimestamped_messages.len(),
-                                  unconsumed_partitions.clone(),
-                                  source_upper);
-                        }
-
-                        // Emit empty batches as well. Just to keep downstream
-                        // operators informed about the unconsumed partitions
-                        // and the source upper.
-                        yield Some(
-                            (
-                                std::mem::take(&mut untimestamped_messages),
-                                non_definite_errors.drain(..).collect_vec(),
-                                unconsumed_partitions.clone(),
-                                source_upper.clone()
-                            )
-                        );
                     }
                 }
-            }
-        }));
+            }));
 
-        let activator = scope.activator_for(&info.address[..]);
-        move |cap_set, output| {
-            // Record operator has been scheduled
-            //
-            // WIP: Should we have these metrics for all three involved
-            // operators?
-            source_metrics.operator_scheduled_counter.inc();
+            async move {
+                // WIP: Should we have these metrics for all three involved
+                // operators?
+                // source_metrics.operator_scheduled_counter.inc();
 
-            let mut context = Context::from_waker(&waker);
+                let mut timer = Instant::now();
 
-            let timer = Instant::now();
+                // We just use an advancing number for our capability. No one cares
+                // about what this actually is, downstream.
+                let mut batch_counter = timely::progress::Timestamp::minimum();
 
-            // We just use an advancing number for our capability. No one cares
-            // about what this actually is, downstream.
-            let mut batch_counter = timely::progress::Timestamp::minimum();
+                loop {
+                    let srnf = source_reader.next();
+                    tokio::pin!(srnf);
+                    let ri = resume_input.next();
+                    tokio::pin!(ri);
 
-            while let Poll::Ready(Some(update)) = source_reader.as_mut().poll_next(&mut context) {
-                let (messages, non_definite_errors, unconsumed_partitions, source_upper) =
-                    match update {
-                        Some(update) => update,
-                        None => {
-                            trace!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
-                            // We will never produce more data, clear our capabilities to
-                            // communicate this downstream.
-                            cap_set.downgrade(&[]);
-                            return;
+                    // `StreamExt::next` and `AsyncInputHandle::next` are both cancel-safe.
+                    let changes = futures::future::select(srnf, ri).await;
+                    use futures::future::Either;
+                    let update = match changes {
+                        Either::Left((update, _)) => update,
+                        Either::Right((Some(Event::Progress(resume_frontier_update)), _)) => {
+                            // The first message from the resumption frontier source
+                            // could be the same frontier as the initialization frontier, so we
+                            // just move on
+                            if PartialOrder::less_equal(
+                                &resume_frontier_update,
+                                &initial_resume_upper,
+                            ) {
+                                continue;
+                            }
+                            tracing::trace!(
+                                %id,
+                                resumption_frontier = ?resume_frontier_update,
+                                "received new resumption frontier"
+                            );
+                            continue;
+                        }
+                        _ => {
+                            continue;
                         }
                     };
 
-                trace!(
-                    "create_source_raw({id}) {worker_id}/{worker_count}: message_batch.len(): {:?}",
-                    messages.len()
-                );
-                trace!(
-                    "create_source_raw({id}) {worker_id}/{worker_count}: source_upper: {:?}",
-                    source_upper
-                );
+                    let update = match update {
+                        Some(update) => update,
+                        None => {
+                            return;
+                        }
+                    };
+                    let (messages, non_definite_errors, unconsumed_partitions, source_upper) =
+                        match update {
+                            Some(update) => update,
+                            None => {
+                                trace!(
+                                    "source_reader({id}) {worker_id}/{worker_count}: is terminated"
+                                );
+                                // We will never produce more data, clear our capabilities to
+                                // communicate this downstream.
+                                cap_set.downgrade(&[]);
+                                return;
+                            }
+                        };
 
-                // We forward only the partitions that we are responsible for to
-                // the remap operator.
-                let source_upper_summary = SourceUpperSummary {
-                    source_upper: source_upper.clone(),
-                };
+                    trace!(
+                        "create_source_raw({id}) {worker_id}/
+                        {worker_count}: message_batch.len(): {:?}",
+                        messages.len()
+                    );
+                    trace!(
+                        "create_source_raw({id}) {worker_id}/{worker_count}: source_upper: {:?}",
+                        source_upper
+                    );
 
-                // Pull the upper to `max` for partitions that we are not
-                // responsible for. That way, the downstream reclock operator
-                // can correcly decide when a reclocked timestamp is closed. We
-                // basically take those partitions "out of the calculation".
-                let mut extended_source_upper = source_upper.clone();
-                extended_source_upper.extend(
-                    unconsumed_partitions
+                    // We forward only the partitions that we are responsible for to
+                    // the remap operator.
+                    let source_upper_summary = SourceUpperSummary {
+                        source_upper: source_upper.clone(),
+                    };
+
+                    // Pull the upper to `max` for partitions that we are not
+                    // responsible for. That way, the downstream reclock operator
+                    // can correctly decide when a reclocked timestamp is closed. We
+                    // basically take those partitions "out of the calculation".
+                    let mut extended_source_upper = source_upper.clone();
+                    extended_source_upper.extend(
+                        unconsumed_partitions
+                            .into_iter()
+                            .map(|pid| (pid, MzOffset { offset: u64::MAX })),
+                    );
+
+                    let non_definite_errors = non_definite_errors
                         .into_iter()
-                        .map(|pid| (pid, MzOffset { offset: u64::MAX })),
-                );
+                        .map(|e| SourceError {
+                            source_id: id,
+                            error: e.inner,
+                        })
+                        .collect_vec();
 
-                let non_definite_errors = non_definite_errors
-                    .into_iter()
-                    .map(|e| SourceError {
-                        source_id: id,
-                        error: e.inner,
-                    })
-                    .collect_vec();
+                    let message_batch = SourceMessageBatch {
+                        messages,
+                        non_definite_errors,
+                        source_upper: extended_source_upper,
+                    };
+                    // Wrap in an Rc to avoid cloning when sending it on.
+                    let message_batch = Rc::new(RefCell::new(Some(message_batch)));
 
-                let message_batch = SourceMessageBatch {
-                    messages,
-                    non_definite_errors,
-                    source_upper: extended_source_upper,
-                };
-                // Wrap in an Rc to avoid cloning when sending it on.
-                let message_batch = Rc::new(RefCell::new(Some(message_batch)));
+                    let cap = cap_set.delayed(&batch_counter);
+                    {
+                        let mut output = output.activate();
+                        let mut session = output.session(&cap);
 
-                let cap = cap_set.delayed(&batch_counter);
-                let mut session = output.session(&cap);
+                        session.give((message_batch, source_upper_summary));
+                    }
 
-                session.give((message_batch, source_upper_summary));
+                    batch_counter = batch_counter.checked_add(1).expect("exhausted counter");
 
-                batch_counter = batch_counter.checked_add(1).expect("exhausted counter");
-
-                if timer.elapsed() > YIELD_INTERVAL {
-                    let _ = activator.activate();
-                    break;
+                    if timer.elapsed() > YIELD_INTERVAL {
+                        timer = Instant::now();
+                        tokio::task::yield_now().await;
+                    }
                 }
             }
-        }
-    });
+        },
+    );
 
     // TODO: Roll all this into one source operator.
     let operator_name = format!("source_reader({})-demux", id);
@@ -494,6 +563,7 @@ where
     let mut input = demux_op.new_input(&stream, Pipeline);
     let (mut batch_output, batch_stream) = demux_op.new_output();
     let (mut summary_output, summary_stream) = demux_op.new_output();
+    let (_feedback_output, feedback_stream) = demux_op.new_output();
     let summary_output_port = summary_stream.name().port;
 
     demux_op.build(move |_caps| {
@@ -518,7 +588,10 @@ where
         }
     });
 
-    ((batch_stream, summary_stream), Some(capability))
+    (
+        (batch_stream, summary_stream, feedback_stream),
+        Some(capability),
+    )
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
@@ -602,7 +675,9 @@ where
             };
             // The global view of the source_upper, which we track by combining
             // summaries from the raw reader operators.
-            let mut global_source_upper = timestamper.source_upper_at(upper_ts.saturating_sub(1));
+            let mut global_source_upper = timestamper
+                .source_upper_at_frontier(resume_upper.borrow())
+                .expect("source_upper_at_frontier to be used correctly");
 
             if active_worker {
                 let new_ts_upper = timestamper
@@ -785,7 +860,7 @@ where
 
         let upper_ts = resume_upper.as_option().copied().unwrap();
         let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-        let mut timestamper = ReclockFollower::new(as_of);
+        let timestamper = ReclockFollower::new(as_of);
 
         move |frontiers| {
             batch_input.for_each(|_cap, data| {
@@ -832,32 +907,34 @@ where
             );
 
             while let Some(untimestamped_batch) = untimestamped_batches.front_mut() {
-                let reclocked = match timestamper.reclock(&mut untimestamped_batch.messages) {
-                    Ok(reclocked) => reclocked,
-                    Err((pid, offset)) => panic!("failed to reclock {} @ {}", pid, offset),
-                };
+                // This scope is necessary to convince rustc that `untimestamped_batches` is unused
+                // when we pop from the front at the bottom of this loop.
+                {
+                    let reclocked = match timestamper.reclock(&mut untimestamped_batch.messages) {
+                        Ok(reclocked) => reclocked,
+                        Err((pid, offset)) => panic!("failed to reclock {} @ {}", pid, offset),
+                    };
 
-                let reclocked = match reclocked {
-                    Some(reclocked) => reclocked,
-                    None => {
-                        trace!(
-                            "reclock({id}) {worker_id}/{worker_count}: \
+                    let reclocked = match reclocked {
+                        Some(reclocked) => reclocked,
+                        None => {
+                            trace!(
+                                "reclock({id}) {worker_id}/{worker_count}: \
                                 cannot yet reclock batch with source frontier {:?} \
                                 reclock.source_frontier: {:?}",
-                            untimestamped_batch.source_upper,
-                            timestamper.source_upper
-                        );
-                        // We keep batches in the order they arrive from the
-                        // source. And we assume that the source frontier never
-                        // regressses. So we can break now.
-                        break;
-                    }
-                };
+                                untimestamped_batch.source_upper,
+                                timestamper.source_upper()
+                            );
+                            // We keep batches in the order they arrive from the
+                            // source. And we assume that the source frontier never
+                            // regressses. So we can break now.
+                            break;
+                        }
+                    };
 
-                let mut output = reclocked_output.activate();
+                    let mut output = reclocked_output.activate();
 
-                for (_, part_messages) in reclocked {
-                    for (message, ts) in part_messages {
+                    reclocked.for_each(|message, ts| {
                         trace!(
                             "reclock({id}) {worker_id}/{worker_count}: \
                                 handling reclocked message: {:?}:{:?} -> {}",
@@ -873,28 +950,28 @@ where
                             &mut metric_updates,
                             ts,
                         )
-                    }
-                }
+                    });
 
-                // TODO: We should not emit the non-definite errors as
-                // DataflowErrors, which will make them end up on the persist
-                // shard for this source. Instead they should be reported to the
-                // Healthchecker. But that's future work.
-                if !untimestamped_batch.non_definite_errors.is_empty() {
-                    // If there are errors, it means that someone must also have
-                    // given us a capability because a batch/batch-summary was
-                    // emitted to the remap operator.
-                    let err_cap = cap_set.delayed(
-                        cap_set
-                            .first()
-                            .expect("missing a capability for emitting errors"),
-                    );
-                    let mut session = output.session(&err_cap);
-                    let errors = untimestamped_batch
-                        .non_definite_errors
-                        .iter()
-                        .map(|e| Err(e.clone()));
-                    session.give_iterator(errors);
+                    // TODO: We should not emit the non-definite errors as
+                    // DataflowErrors, which will make them end up on the persist
+                    // shard for this source. Instead they should be reported to the
+                    // Healthchecker. But that's future work.
+                    if !untimestamped_batch.non_definite_errors.is_empty() {
+                        // If there are errors, it means that someone must also have
+                        // given us a capability because a batch/batch-summary was
+                        // emitted to the remap operator.
+                        let err_cap = cap_set.delayed(
+                            cap_set
+                                .first()
+                                .expect("missing a capability for emitting errors"),
+                        );
+                        let mut session = output.session(&err_cap);
+                        let errors = untimestamped_batch
+                            .non_definite_errors
+                            .iter()
+                            .map(|e| Err(e.clone()));
+                        session.give_iterator(errors);
+                    }
                 }
 
                 // Pop off the processed batch.
@@ -915,7 +992,8 @@ where
                     .expect("there can be at most one element for totally ordered times")
                     .map(|c| c.time())
                     .cloned()
-                    .unwrap_or(Timestamp::MAX),
+                    .unwrap_or(Timestamp::MAX)
+                    .into(),
             );
 
             // It can happen that our view of the global source_upper is not yet
@@ -925,7 +1003,7 @@ where
             if let Ok(new_ts_upper) = timestamper.reclock_frontier(&global_source_upper) {
                 let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
                 for partition_metrics in source_metrics.partition_metrics.values_mut() {
-                    partition_metrics.closed_ts.set(ts);
+                    partition_metrics.closed_ts.set(ts.into());
                 }
 
                 if !cap_set.is_empty() {

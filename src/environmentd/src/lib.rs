@@ -18,6 +18,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context};
 use futures::StreamExt;
@@ -91,6 +92,8 @@ pub struct Config {
     pub adapter_stash_url: String,
 
     // === Cloud options. ===
+    /// The cloud ID of this environment.
+    pub environment_id: String,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     pub availability_zones: Vec<String>,
@@ -102,6 +105,8 @@ pub struct Config {
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
     pub default_storage_host_size: Option<String>,
+    /// The interval at which to collect storage usage information.
+    pub storage_usage_collection_interval: Duration,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -257,6 +262,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage: adapter_storage,
         unsafe_mode: config.unsafe_mode,
         build_info: &BUILD_INFO,
+        environment_id: config.environment_id,
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller: config.secrets_controller,
@@ -266,6 +272,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
         storage_usage_client,
+        storage_usage_collection_interval: config.storage_usage_collection_interval,
     })
     .await?;
 

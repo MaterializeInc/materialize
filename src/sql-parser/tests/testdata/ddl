@@ -1298,7 +1298,7 @@ SHOW SECRETS
 ----
 SHOW SECRETS
 =>
-ShowObjects(ShowObjectsStatement { object_type: Secret, from: None, in_cluster: None, extended: false, full: false, filter: None })
+Show(ShowObjects(ShowObjectsStatement { object_type: Secret, from: None, in_cluster: None, filter: None }))
 
 parse-statement
 ALTER SECRET secret RENAME TO secret2

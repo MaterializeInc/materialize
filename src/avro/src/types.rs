@@ -23,7 +23,8 @@
 
 //! Logic handling the intermediate representation of Avro values.
 
-// `EnumKind` unconditionally introduces a lifetime.
+// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
+// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
 use std::collections::HashMap;
@@ -31,7 +32,7 @@ use std::fmt;
 use std::hash::BuildHasher;
 use std::u8;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDateTime;
 use enum_kinds::EnumKind;
 use serde_json::Value as JsonValue;
 
@@ -75,7 +76,7 @@ pub enum Scalar {
     Long(i64),
     Float(f32),
     Double(f64),
-    Date(NaiveDate),
+    Date(i32),
     Timestamp(NaiveDateTime),
 }
 
@@ -126,8 +127,9 @@ pub enum Value {
     Float(f32),
     /// A `double` Avro value.
     Double(f64),
-    /// A `Date` coming from an avro Logical `Date`
-    Date(NaiveDate),
+    /// A `Date` coming from an avro Logical `Date`, which is an i32 number of
+    /// days since the Unix epoch.
+    Date(i32),
     /// A `DateTime` coming from an avro Logical `Timestamp`
     Timestamp(NaiveDateTime),
 
