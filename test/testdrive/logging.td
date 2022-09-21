@@ -52,6 +52,10 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM count_frontier_delays;
 1
 
+> CREATE VIEW count_dependencies AS SELECT count(*) FROM mz_worker_materialization_dependencies;
+> SELECT count(*) FROM count_dependencies;
+1
+
 > CREATE VIEW count_peeks AS SELECT count(*) FROM mz_peek_active;
 > SELECT count(*) FROM count_peeks;
 1

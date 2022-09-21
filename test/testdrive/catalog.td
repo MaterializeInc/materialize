@@ -466,8 +466,8 @@ mz_dataflow_operator_reachability_internal    log
 mz_dataflow_operator_reachability_internal_1  log
 mz_dataflow_operators                         log
 mz_dataflow_operators_1                       log
-mz_materialization_dependencies               log
-mz_materialization_dependencies_1             log
+mz_worker_materialization_dependencies        log
+mz_worker_materialization_dependencies_1      log
 mz_materializations                           log
 mz_materializations_1                         log
 mz_message_counts_received_internal           log

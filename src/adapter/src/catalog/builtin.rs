@@ -957,8 +957,8 @@ pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
 };
 
-pub const MZ_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
-    name: "mz_materialization_dependencies",
+pub const MZ_WORKER_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
+    name: "mz_worker_materialization_dependencies",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::DataflowDependency),
 };
@@ -2233,7 +2233,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
         Builtin::Log(&MZ_MATERIALIZATIONS),
-        Builtin::Log(&MZ_MATERIALIZATION_DEPENDENCIES),
+        Builtin::Log(&MZ_WORKER_MATERIALIZATION_DEPENDENCIES),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
         Builtin::Log(&MZ_PEEK_ACTIVE),
