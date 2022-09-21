@@ -27,51 +27,51 @@ SELECT ${arg.replica-size} > 1 OR ${arg.replicas} > 1;
   FROM (SELECT SUM(count) as count_all
         FROM
             mz_materialized_views AS views,
-            mz_materializations as mats,
-            mz_worker_materialization_delays AS delays
+            m as compute_exports,
+            mz_worker_compute_delays AS delays
         WHERE
             views.name = 'mv' AND
-            views.id = mats.object_id AND
-            mats.object_id = delays.object_id)
+            views.id = compute_exports.export_id AND
+            compute_exports.export_id = delays.export_id)
 true
 
 > SELECT time > 0
   FROM
     mz_materialized_views AS views,
-    mz_materializations AS mats,
-    mz_materialization_source_frontiers AS sf
+    mz_compute_exports AS compute_exports,
+    mz_compute_import_frontiers AS sf
   WHERE
     views.name = 'mv' AND
-    views.id = mats.object_id AND
-    mats.object_id = sf.object_id
+    views.id = compute_exports.export_id AND
+    compute_exports.export_id = sf.export_id
 true
 
 > CREATE VIEW vv AS SELECT * FROM t
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.object_id, delays.source_id
+  FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_worker_materialization_delays AS delays)
+            mz_worker_compute_delays AS delays)
 1
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.object_id, sf.source_id
+  FROM (SELECT DISTINCT sf.export_id, sf.import_id
         FROM
-            mz_worker_materialization_source_frontiers AS sf)
+            mz_worker_compute_import_frontiers AS sf)
 1
 
 > CREATE DEFAULT INDEX ON vv
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.object_id, delays.source_id
+  FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_worker_materialization_delays AS delays)
+            mz_worker_compute_delays AS delays)
 2
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.object_id, sf.source_id
+  FROM (SELECT DISTINCT sf.export_id, sf.import_id
         FROM
-            mz_worker_materialization_source_frontiers AS sf)
+            mz_worker_compute_import_frontiers AS sf)
 2
 
 > SELECT count_all > 0
@@ -79,52 +79,52 @@ true
         FROM
             mz_views AS views,
             mz_indexes AS indexes,
-            mz_materializations AS mats,
-            mz_worker_materialization_delays AS delays
+            mz_compute_exports AS compute_exports,
+            mz_worker_compute_delays AS delays
         WHERE
             views.name = 'vv' AND
             views.id = indexes.on_id AND
-            indexes.id = mats.object_id AND
-            mats.object_id = delays.object_id)
+            indexes.id = compute_exports.export_id AND
+            compute_exports.export_id = delays.export_id)
 true
 
 > SELECT time > 0
   FROM
     mz_views AS views,
     mz_indexes AS indexes,
-    mz_materializations mats,
-    mz_materialization_source_frontiers AS sf
+    mz_compute_exports compute_exports,
+    mz_compute_import_frontiers AS sf
   WHERE
     views.name = 'vv' AND
     views.id = indexes.on_id AND
-    indexes.id = mats.object_id AND
-    mats.object_id = sf.object_id
+    indexes.id = compute_exports.export_id AND
+    compute_exports.export_id = sf.export_id
 true
 
 > DROP INDEX vv_primary_idx
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.object_id, delays.source_id
+  FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_worker_materialization_delays AS delays)
+            mz_worker_compute_delays AS delays)
 1
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.object_id, sf.source_id
+  FROM (SELECT DISTINCT sf.export_id, sf.import_id
         FROM
-            mz_worker_materialization_source_frontiers AS sf)
+            mz_worker_compute_import_frontiers AS sf)
 1
 
 > DROP MATERIALIZED VIEW mv
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT delays.object_id, delays.source_id
+  FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_worker_materialization_delays AS delays)
+            mz_worker_compute_delays AS delays)
 0
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.object_id, sf.source_id
+  FROM (SELECT DISTINCT sf.export_id, sf.import_id
         FROM
-            mz_worker_materialization_source_frontiers AS sf)
+            mz_worker_compute_import_frontiers AS sf)
 0

@@ -41,7 +41,7 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 1
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_compute_frontiers_%';
 ----
 1
 
@@ -54,7 +54,7 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 3
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_compute_frontiers_%';
 ----
 3
 
@@ -67,7 +67,7 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 2
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_compute_frontiers_%';
 ----
 2
 
@@ -80,7 +80,7 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 1
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_compute_frontiers_%';
 ----
 1
 
@@ -96,7 +96,7 @@ statement ok
 CREATE VIEW v1 AS SELECT * FROM mz_catalog.mz_peek_active_4;
 
 statement ok
-CREATE VIEW w1 AS SELECT * FROM mz_catalog.mz_materialization_frontiers_4;
+CREATE VIEW w1 AS SELECT * FROM mz_catalog.mz_compute_frontiers_4;
 
 statement ok
 CREATE VIEW v11 AS SELECT * FROM v1;
@@ -108,7 +108,7 @@ statement ok
 CREATE VIEW v2 AS SELECT * FROM mz_catalog.mz_peek_active_5;
 
 statement ok
-CREATE VIEW w2 AS SELECT * FROM mz_catalog.mz_materialization_frontiers_5;
+CREATE VIEW w2 AS SELECT * FROM mz_catalog.mz_compute_frontiers_5;
 
 statement ok
 CREATE VIEW v21 AS SELECT * FROM v2;
@@ -157,6 +157,6 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 1
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_compute_frontiers_%';
 ----
 1
