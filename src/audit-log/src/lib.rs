@@ -105,6 +105,7 @@ pub enum EventDetails {
     FullNameV1(FullNameV1),
     NameV1(NameV1),
     RenameItemV1(RenameItemV1),
+    IdNameV1(IdNameV1),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -120,6 +121,12 @@ pub struct NameV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct IdNameV1 {
+    pub id: u64,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct RenameItemV1 {
     pub previous_name: FullNameV1,
     pub new_name: String,
@@ -127,12 +134,14 @@ pub struct RenameItemV1 {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DropComputeInstanceReplicaV1 {
+    pub cluster_id: u64,
     pub cluster_name: String,
     pub replica_name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct CreateComputeInstanceReplicaV1 {
+    pub cluster_id: u64,
     pub cluster_name: String,
     pub replica_name: String,
     pub logical_size: String,
@@ -149,6 +158,7 @@ impl EventDetails {
             }
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::NameV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::IdNameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::FullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }

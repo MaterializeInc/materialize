@@ -15,6 +15,7 @@ use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
+use timely::PartialOrder;
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
@@ -131,6 +132,20 @@ impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
 pub struct SinkAsOf<T = mz_repr::Timestamp> {
     pub frontier: Antichain<T>,
     pub strict: bool,
+}
+
+impl<T: PartialOrder + Clone> SinkAsOf<T> {
+    pub fn maybe_fast_forward(&self, other_since: &Antichain<T>) -> Self {
+        if PartialOrder::less_equal(&self.frontier, other_since) {
+            SinkAsOf {
+                frontier: other_since.to_owned(),
+                // If we're using the since, never read the snapshot
+                strict: true,
+            }
+        } else {
+            self.to_owned()
+        }
+    }
 }
 
 impl Arbitrary for SinkAsOf<mz_repr::Timestamp> {

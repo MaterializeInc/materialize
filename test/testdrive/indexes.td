@@ -189,3 +189,12 @@ contains:cannot show indexes on materialize.public.foo_primary_idx because it is
 > CREATE DEFAULT INDEX IN CLUSTER clstr ON foo;
 > SHOW INDEXES IN CLUSTER clstr WHERE on = 'foo'
 foo_primary_idx1    foo clstr   {a,b,z}
+
+> SHOW INDEXES FROM SCHEMA public WHERE name = 'foo_primary_idx1'
+foo_primary_idx1    foo clstr   {a,b,z}
+
+! SHOW INDEXES FROM SCHEMA public FROM foo
+contains:Cannot specify both FROM SCHEMA and FROM or ON
+
+! SHOW INDEXES FROM SCHEMA nonexistent
+contains:unknown schema 'nonexistent'
