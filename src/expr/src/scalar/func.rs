@@ -1441,8 +1441,8 @@ fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             (Datum::JsonNull, Datum::JsonNull) => true,
             (Datum::False, Datum::False) => true,
             (Datum::True, Datum::True) => true,
-            (Datum::Numeric(a), Datum::Numeric(b)) => (a == b),
-            (Datum::String(a), Datum::String(b)) => (a == b),
+            (Datum::Numeric(a), Datum::Numeric(b)) => a == b,
+            (Datum::String(a), Datum::String(b)) => a == b,
             (Datum::List(a), Datum::List(b)) => b
                 .iter()
                 .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false))),

@@ -1305,6 +1305,7 @@ where
     ///     Once command history becomes durable we can remove this method and use the normal
     ///     `allow_compaction`.
     #[tracing::instrument(level = "debug", skip(self))]
+    #[allow(unused)]
     async fn allow_compaction_unvalidated(
         &mut self,
         frontiers: Vec<(GlobalId, Antichain<T>)>,
