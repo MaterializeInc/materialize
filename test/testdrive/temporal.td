@@ -8,12 +8,12 @@
 # by the Apache License, Version 2.0.
 
 #
-# Using mz_logical_timestamp() with a VIEW source
+# Using mz_now() with a VIEW source
 #
 
 > CREATE VIEW one_ts (ts) AS VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(NULL)
 
-> CREATE MATERIALIZED VIEW one_bound1 AS SELECT * FROM one_ts WHERE mz_logical_timestamp() >= ts
+> CREATE MATERIALIZED VIEW one_bound1 AS SELECT * FROM one_ts WHERE mz_now() >= ts
 
 > SELECT * FROM one_bound1 AS OF 0
 
@@ -21,7 +21,7 @@
 1
 2
 
-> CREATE MATERIALIZED VIEW one_bound2 AS SELECT * FROM one_ts WHERE mz_logical_timestamp() <= ts
+> CREATE MATERIALIZED VIEW one_bound2 AS SELECT * FROM one_ts WHERE mz_now() <= ts
 
 > SELECT * FROM one_bound2 AS OF 0
 1
@@ -51,7 +51,7 @@
 
 > SELECT * FROM one_bound2 AS OF 11
 
-> CREATE MATERIALIZED VIEW two_bounds AS SELECT * FROM one_ts WHERE mz_logical_timestamp() >= ts AND mz_logical_timestamp() >= ts + 3
+> CREATE MATERIALIZED VIEW two_bounds AS SELECT * FROM one_ts WHERE mz_now() >= ts AND mz_now() >= ts + 3
 
 > SELECT * FROM two_bounds AS OF 2
 
@@ -61,7 +61,7 @@ ts
 1
 2
 
-> CREATE MATERIALIZED VIEW two_bounds2 AS SELECT * FROM one_ts WHERE mz_logical_timestamp() <= ts AND mz_logical_timestamp() <= ts + 3
+> CREATE MATERIALIZED VIEW two_bounds2 AS SELECT * FROM one_ts WHERE mz_now() <= ts AND mz_now() <= ts + 3
 
 > SELECT * FROM two_bounds2 AS OF 2
 ts
@@ -82,7 +82,7 @@ ts
 9
 10
 
-> CREATE MATERIALIZED VIEW two_bounds_between AS SELECT * FROM one_ts WHERE mz_logical_timestamp() BETWEEN ts AND ts + 3
+> CREATE MATERIALIZED VIEW two_bounds_between AS SELECT * FROM one_ts WHERE mz_now() BETWEEN ts AND ts + 3
 
 > SELECT * FROM two_bounds_between AS OF 3
 ts
@@ -99,7 +99,7 @@ ts
 4
 5
 
-> CREATE MATERIALIZED VIEW two_bounds_and AS SELECT * FROM one_ts WHERE mz_logical_timestamp() >= ts AND mz_logical_timestamp() <= ts + 3
+> CREATE MATERIALIZED VIEW two_bounds_and AS SELECT * FROM one_ts WHERE mz_now() >= ts AND mz_now() <= ts + 3
 
 > SELECT * FROM two_bounds_and AS OF 3
 
@@ -121,7 +121,7 @@ ts
 
 > DROP VIEW IF EXISTS two_bounds_two_cols CASCADE
 
-> CREATE MATERIALIZED VIEW two_bounds_two_cols AS SELECT * FROM two_ts WHERE mz_logical_timestamp() >= ts1 AND mz_logical_timestamp() >= ts2
+> CREATE MATERIALIZED VIEW two_bounds_two_cols AS SELECT * FROM two_ts WHERE mz_now() >= ts1 AND mz_now() >= ts2
 
 > SELECT * FROM two_bounds_two_cols AS OF 3
 
@@ -140,7 +140,7 @@ ts
 9   14
 10   15
 
-> CREATE MATERIALIZED VIEW two_bounds_two_cols2 AS SELECT * FROM two_ts WHERE mz_logical_timestamp() >= ts1 AND mz_logical_timestamp() <= ts2;
+> CREATE MATERIALIZED VIEW two_bounds_two_cols2 AS SELECT * FROM two_ts WHERE mz_now() >= ts1 AND mz_now() <= ts2;
 
 > SELECT * FROM two_bounds_two_cols2 AS OF 3
 1    6
@@ -168,23 +168,23 @@ ts
 # Using a TABLE source
 #
 
-> CREATE TABLE one_ts (ts BIGINT)
+> CREATE TABLE one_ts (ts MZTIMESTAMP)
 
-> INSERT INTO one_ts VALUES (EXTRACT('epoch' FROM CAST('2000-01-01' AS TIMESTAMP))*1000)
+> INSERT INTO one_ts VALUES ('2000-01-01'::timestamp)
 
-> INSERT INTO one_ts VALUES (EXTRACT('epoch' FROM CAST('2199-12-31' AS TIMESTAMP))*1000)
+> INSERT INTO one_ts VALUES ('2199-12-31'::timestamp)
 
 > INSERT INTO one_ts VALUES (NULL)
 
-> CREATE MATERIALIZED VIEW one_bound1 AS SELECT to_timestamp(ts / 1000) FROM one_ts WHERE ts >= mz_logical_timestamp()
+> CREATE MATERIALIZED VIEW one_bound1 AS SELECT to_timestamp(ts::string::numeric / 1000) FROM one_ts WHERE ts >= mz_now()
 
 > SELECT * FROM one_bound1
       to_timestamp
 "2199-12-31 00:00:00 UTC"
 
-> INSERT INTO one_ts VALUES (EXTRACT('epoch' FROM CAST('2000-01-01' AS TIMESTAMP))*1000)
+> INSERT INTO one_ts VALUES ('2000-01-01'::timestamp)
 
-> INSERT INTO one_ts VALUES (EXTRACT('epoch' FROM CAST('2199-12-31' AS TIMESTAMP))*1000)
+> INSERT INTO one_ts VALUES ('2199-12-31'::timestamp)
 
 > INSERT INTO one_ts VALUES (NULL)
 
@@ -193,16 +193,16 @@ ts
 "2199-12-31 00:00:00 UTC"
 "2199-12-31 00:00:00 UTC"
 
-> CREATE MATERIALIZED VIEW one_bound2 AS SELECT to_timestamp(ts / 1000) FROM one_ts WHERE ts <= mz_logical_timestamp()
+> CREATE MATERIALIZED VIEW one_bound2 AS SELECT to_timestamp(ts::string::numeric / 1000) FROM one_ts WHERE ts <= mz_now()
 
 > SELECT * FROM one_bound2
       to_timestamp
 "2000-01-01 00:00:00 UTC"
 "2000-01-01 00:00:00 UTC"
 
-> INSERT INTO one_ts VALUES (EXTRACT('epoch' FROM CAST('2000-01-01' AS TIMESTAMP))*1000)
+> INSERT INTO one_ts VALUES ('2000-01-01'::timestamp)
 
-> INSERT INTO one_ts VALUES (EXTRACT('epoch' FROM CAST('2199-12-31' AS TIMESTAMP))*1000)
+> INSERT INTO one_ts VALUES ('2199-12-31'::timestamp)
 
 > INSERT INTO one_ts VALUES (NULL)
 
@@ -212,33 +212,33 @@ ts
 "2000-01-01 00:00:00 UTC"
 "2000-01-01 00:00:00 UTC"
 
-> CREATE TABLE first_ts (ts BIGINT)
+> CREATE TABLE first_ts (ts MZTIMESTAMP)
 
-> INSERT INTO first_ts VALUES (EXTRACT('epoch' FROM CAST('2000-01-01' AS TIMESTAMP))*1000)
+> INSERT INTO first_ts VALUES ('2000-01-01'::timestamp)
 
-> INSERT INTO first_ts VALUES (EXTRACT('epoch' FROM CAST('2199-12-31' AS TIMESTAMP))*1000)
+> INSERT INTO first_ts VALUES ('2199-12-31'::timestamp)
 
 > INSERT INTO first_ts VALUES (NULL)
 
-> CREATE TABLE second_ts (ts BIGINT)
+> CREATE TABLE second_ts (ts MZTIMESTAMP)
 
-> INSERT INTO second_ts VALUES (EXTRACT('epoch' FROM CAST('2000-01-01' AS TIMESTAMP))*1000)
+> INSERT INTO second_ts VALUES ('2000-01-01'::timestamp)
 
-> INSERT INTO second_ts VALUES (EXTRACT('epoch' FROM CAST('2199-12-31' AS TIMESTAMP))*1000)
+> INSERT INTO second_ts VALUES ('2199-12-31'::timestamp)
 
 > INSERT INTO second_ts VALUES (NULL)
 
-> CREATE MATERIALIZED VIEW both_ts (first_ts_to_ts, second_ts_to_ts) AS SELECT to_timestamp(first_ts.ts / 1000), to_timestamp(second_ts.ts / 1000) FROM first_ts, second_ts WHERE mz_logical_timestamp() BETWEEN first_ts.ts AND second_ts.ts
+> CREATE MATERIALIZED VIEW both_ts (first_ts_to_ts, second_ts_to_ts) AS SELECT to_timestamp(first_ts.ts::string::numeric / 1000), to_timestamp(second_ts.ts::string::numeric / 1000) FROM first_ts, second_ts WHERE mz_now() BETWEEN first_ts.ts AND second_ts.ts
 
 > SELECT * FROM both_ts
       to_timestamp
 "2000-01-01 00:00:00 UTC" "2199-12-31 00:00:00 UTC"
 
-> INSERT INTO first_ts VALUES (EXTRACT('epoch' FROM CAST('2000-01-01' AS TIMESTAMP))*1000)
+> INSERT INTO first_ts VALUES ('2000-01-01'::timestamp)
 
 > INSERT INTO first_ts VALUES (NULL)
 
-> INSERT INTO second_ts VALUES (EXTRACT('epoch' FROM CAST('2199-12-31' AS TIMESTAMP))*1000)
+> INSERT INTO second_ts VALUES ('2199-12-31'::timestamp)
 
 > INSERT INTO second_ts VALUES (NULL)
 
@@ -248,36 +248,36 @@ ts
 "2000-01-01 00:00:00 UTC" "2199-12-31 00:00:00 UTC"
 "2000-01-01 00:00:00 UTC" "2199-12-31 00:00:00 UTC"
 
-> CREATE MATERIALIZED VIEW v2 (first_ts_a, first_ts_b) AS SELECT * FROM first_ts a, first_ts b WHERE mz_logical_timestamp() = a.ts;
+> CREATE MATERIALIZED VIEW v2 (first_ts_a, first_ts_b) AS SELECT * FROM first_ts a, first_ts b WHERE mz_now() = a.ts;
 
-> CREATE MATERIALIZED VIEW v3 (first_ts_a, first_ts_b) AS SELECT * FROM first_ts a, first_ts b WHERE mz_logical_timestamp() = a.ts AND mz_logical_timestamp() = b.ts;
+> CREATE MATERIALIZED VIEW v3 (first_ts_a, first_ts_b) AS SELECT * FROM first_ts a, first_ts b WHERE mz_now() = a.ts AND mz_now() = b.ts;
 
 #
-# Various errors in the placement of mz_logical_timestamp()
+# Various errors in the placement of mz_now()
 #
 
-!CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_logical_timestamp() != ts;
+!CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_now() != ts;
 contains:Unsupported binary temporal operation: NotEq
 
-!CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_logical_timestamp() + 1 = ts;
-contains:Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: (bigint_to_numeric(#0) = (mz_logical_timestamp() + 1))
+!CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_now() + 1 = ts;
+contains:no overload for mztimestamp + integer
 
-!CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_logical_timestamp() > ts OR ts = 1;
-contains:Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: ((#0 = 1) OR (mz_logical_timestamp() > bigint_to_numeric(#0)))
+!CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_now() > ts OR ts = 1;
+contains:Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mztimestamp-castable type. Expression found: ((#0 = 1) OR (mz_now() > #0))
 
-!CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE ts BETWEEN mz_logical_timestamp() AND mz_logical_timestamp() + 1;
-contains:Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: (#1 <= (mz_logical_timestamp() + 1))
+!CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE ts BETWEEN mz_now() AND mz_now() + 1;
+contains:no overload for mztimestamp + integer
 
 #
 # Numeric comparisons
 #
 
-# Checks that comparisons against mz_logical_timestamp using values with
-# fractional components are valid.
+# Checks that comparisons against mz_now using values with
+# fractional components fail due to lossy conversion of numeric to u64.
 
 > CREATE OR REPLACE MATERIALIZED VIEW numeric_trunc AS
   SELECT 1
-  WHERE mz_logical_timestamp() <= 18446744073709551614.1;
+  WHERE mz_now() <= 18446744073709551614.1;
 
-> SELECT * FROM numeric_trunc;
-1
+! SELECT * FROM numeric_trunc;
+contains:Evaluation error: mztimestamp out of range

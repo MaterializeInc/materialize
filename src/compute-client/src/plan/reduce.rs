@@ -852,6 +852,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MaxUInt16
         | AggregateFunc::MaxUInt32
         | AggregateFunc::MaxUInt64
+        | AggregateFunc::MaxMzTimestamp
         | AggregateFunc::MaxFloat32
         | AggregateFunc::MaxFloat64
         | AggregateFunc::MaxBool
@@ -866,6 +867,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MinUInt16
         | AggregateFunc::MinUInt32
         | AggregateFunc::MinUInt64
+        | AggregateFunc::MinMzTimestamp
         | AggregateFunc::MinFloat32
         | AggregateFunc::MinFloat64
         | AggregateFunc::MinBool

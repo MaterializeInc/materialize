@@ -261,7 +261,7 @@ fn permute_oneshot_mfp_around_index(
     key: &[MirScalarExpr],
 ) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
     // Convert `mfp` to an executable, non-temporal plan.
-    // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
+    // It should be non-temporal, as OneShot preparation populates `mz_now`.
     let mut safe_mfp = mfp
         .clone()
         .into_plan()

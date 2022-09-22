@@ -127,6 +127,8 @@ message ProtoAggregateFunc {
         google.protobuf.Empty sum_uint16 = 49;
         google.protobuf.Empty sum_uint32 = 50;
         google.protobuf.Empty sum_uint64 = 51;
+        google.protobuf.Empty max_mz_timestamp = 52;
+        google.protobuf.Empty min_mz_timestamp = 53;
     }
 }
 

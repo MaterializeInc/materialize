@@ -18,12 +18,12 @@ build apply=PredicatePushdown
 (join
   [(get x)
    (get x)]
-  [[#1 (call_unmaterializable mz_logical_timestamp)]])
+  [[#1 (call_unmaterializable mz_now)]])
 ----
 ----
 %0 =
 | Get x (u0)
-| Filter (#1 = mz_logical_timestamp())
+| Filter (#1 = mz_now())
 
 %1 =
 | Get x (u0)
@@ -38,16 +38,16 @@ build apply=PredicatePushdown
 (join
   [(get x)
    (get x)]
-  [[#1 #3 (call_unmaterializable mz_logical_timestamp)]])
+  [[#1 #3 (call_unmaterializable mz_now)]])
 ----
 ----
 %0 =
 | Get x (u0)
-| Filter (#1 = mz_logical_timestamp())
+| Filter (#1 = mz_now())
 
 %1 =
 | Get x (u0)
-| Filter (#1 = mz_logical_timestamp())
+| Filter (#1 = mz_now())
 
 %2 =
 | Join %0 %1
@@ -61,12 +61,12 @@ build apply=PredicatePushdown
 (join
   [(get x)
    (get x)]
-  [[#1 1 (call_unmaterializable mz_logical_timestamp)]])
+  [[#1 1 (call_unmaterializable mz_now)]])
 ----
 ----
 %0 =
 | Get x (u0)
-| Filter (#1 = 1), (#1 = mz_logical_timestamp())
+| Filter (#1 = 1), (#1 = mz_now())
 
 %1 =
 | Get x (u0)
@@ -85,12 +85,12 @@ build apply=PredicatePushdown
     [(get x)
      (get x)]
     [])
-  [(call_binary eq #1 (call_unmaterializable mz_logical_timestamp))])
+  [(call_binary eq #1 (call_unmaterializable mz_now))])
 ----
 ----
 %0 =
 | Get x (u0)
-| Filter (#1 = mz_logical_timestamp()), (#1) IS NOT NULL
+| Filter (#1 = mz_now()), (#1) IS NOT NULL
 
 %1 =
 | Get x (u0)
@@ -107,12 +107,12 @@ build apply=PredicatePushdown
     [(get x)
      (get x)]
     [])
-  [(call_binary eq (call_unmaterializable mz_logical_timestamp) #1)])
+  [(call_binary eq (call_unmaterializable mz_now) #1)])
 ----
 ----
 %0 =
 | Get x (u0)
-| Filter (#1 = mz_logical_timestamp()), (#1) IS NOT NULL
+| Filter (#1 = mz_now()), (#1) IS NOT NULL
 
 %1 =
 | Get x (u0)

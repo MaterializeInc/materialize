@@ -1750,13 +1750,11 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
         .unwrap();
 
     let row = client
-        .query_one(
-            "SELECT count(*), mz_logical_timestamp()::int8 FROM counter",
-            &[],
-        )
+        .query_one("SELECT count(*), mz_now()::text FROM counter", &[])
         .unwrap();
     let initial_count: i64 = row.get(0);
-    let timestamp_millis: i64 = row.get(1);
+    let timestamp_millis: String = row.get(1);
+    let timestamp_millis: i64 = timestamp_millis.parse().unwrap();
     const WAIT: i64 = 100;
     let next = timestamp_millis + WAIT;
     let expect = initial_count + WAIT;

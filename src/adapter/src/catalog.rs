@@ -2289,6 +2289,7 @@ impl<S: Append> Catalog<S> {
             CatalogType::UInt16 => CatalogType::UInt16,
             CatalogType::UInt32 => CatalogType::UInt32,
             CatalogType::UInt64 => CatalogType::UInt64,
+            CatalogType::MzTimestamp => CatalogType::MzTimestamp,
             CatalogType::Interval => CatalogType::Interval,
             CatalogType::Jsonb => CatalogType::Jsonb,
             CatalogType::Numeric => CatalogType::Numeric,

@@ -647,13 +647,13 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
                 .with_column("object_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("time", ScalarType::Int64.nullable(false)),
+                .with_column("time", ScalarType::MzTimestamp.nullable(false)),
 
             LogVariant::Compute(ComputeLog::SourceFrontierCurrent) => RelationDesc::empty()
                 .with_column("object_id", ScalarType::String.nullable(false))
                 .with_column("source_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("time", ScalarType::Int64.nullable(false)),
+                .with_column("time", ScalarType::MzTimestamp.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierDelay) => RelationDesc::empty()
                 .with_column("object_id", ScalarType::String.nullable(false))

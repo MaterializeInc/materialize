@@ -397,6 +397,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .collect();
                     Value::Record(fields)
                 }
+                ScalarType::MzTimestamp => Value::String(datum.unwrap_mztimestamp().to_string()),
             };
             if typ.nullable {
                 val = Value::Union {

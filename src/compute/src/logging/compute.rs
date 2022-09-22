@@ -215,8 +215,7 @@ pub fn construct<A: Allocate>(
                                     Row::pack_slice(&[
                                         Datum::String(&name.to_string()),
                                         Datum::UInt64(u64::cast_from(worker)),
-                                        // TODO: Convert to MzTimestamp.
-                                        Datum::Int64(logical.try_into().expect("must fit")),
+                                        Datum::MzTimestamp(logical),
                                     ]),
                                     time_ms,
                                     delta,
@@ -258,8 +257,7 @@ pub fn construct<A: Allocate>(
                                         Datum::String(&dataflow.to_string()),
                                         Datum::String(&source_id.to_string()),
                                         Datum::UInt64(u64::cast_from(worker)),
-                                        // TODO: Convert to MzTimestamp.
-                                        Datum::Int64(u64::from(logical) as i64),
+                                        Datum::MzTimestamp(logical),
                                     ]),
                                     time_ms,
                                     i64::from(delta),
@@ -364,8 +362,7 @@ pub fn construct<A: Allocate>(
                     Datum::Uuid(peek.uuid),
                     Datum::UInt64(u64::cast_from(worker)),
                     Datum::String(&peek.id.to_string()),
-                    // TODO: Convert to MzTimestamp.
-                    Datum::Int64(u64::from(peek.time) as i64),
+                    Datum::MzTimestamp(peek.time),
                 ])
             }
         });

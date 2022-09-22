@@ -176,4 +176,4 @@ id      name        position    type
 SID   object_id   1           text
 SID   source_id   2           text
 SID   worker_id   3           uint8
-SID   time        4           bigint
+SID   time        4           mztimestamp

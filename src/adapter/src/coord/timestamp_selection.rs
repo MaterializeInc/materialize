@@ -62,17 +62,18 @@ impl<S: Append + 'static> Coordinator<S> {
             prep_scalar_expr(self.catalog.state(), &mut timestamp, ExprPrepStyle::AsOf)?;
             let evaled = timestamp.eval(&[], &temp_storage)?;
             if evaled.is_null() {
-                coord_bail!("can't use {} as a timestamp for AS OF", evaled);
+                coord_bail!("can't use {} as a mztimestamp for AS OF", evaled);
             }
             let ty = timestamp.typ(&[]);
             let ts: mz_repr::Timestamp = match ty.scalar_type {
+                ScalarType::MzTimestamp => evaled.unwrap_mztimestamp(),
                 ScalarType::Numeric { .. } => {
                     let n = evaled.unwrap_numeric().0;
-                    u64::try_from(n)?.into()
+                    n.try_into()?
                 }
-                ScalarType::Int16 => u64::try_from(evaled.unwrap_int16())?.into(),
-                ScalarType::Int32 => u64::try_from(evaled.unwrap_int32())?.into(),
-                ScalarType::Int64 => u64::try_from(evaled.unwrap_int64())?.into(),
+                ScalarType::Int16 => i64::from(evaled.unwrap_int16()).try_into()?,
+                ScalarType::Int32 => i64::from(evaled.unwrap_int32()).try_into()?,
+                ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
                 ScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
                 ScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
                 ScalarType::UInt64 => evaled.unwrap_uint64().into(),
@@ -81,7 +82,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
                 _ => coord_bail!(
-                    "can't use {} as a timestamp for AS OF",
+                    "can't use {} as a mztimestamp for AS OF",
                     self.catalog.for_session(session).humanize_column_type(&ty)
                 ),
             };

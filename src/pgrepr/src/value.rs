@@ -98,6 +98,8 @@ pub enum Value {
         /// The elements of the vector.
         elements: Vec<Option<Value>>,
     },
+    /// A Materialize timestamp.
+    MzTimestamp(mz_repr::Timestamp),
 }
 
 impl Value {
@@ -124,6 +126,7 @@ impl Value {
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
             (Datum::Numeric(d), ScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
+            (Datum::MzTimestamp(t), ScalarType::MzTimestamp) => Some(Value::MzTimestamp(t)),
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
@@ -255,6 +258,7 @@ impl Value {
             Value::VarChar(s) => Datum::String(buf.push_string(s)),
             Value::Uuid(u) => Datum::Uuid(u),
             Value::Numeric(n) => Datum::Numeric(n.0),
+            Value::MzTimestamp(t) => Datum::MzTimestamp(t),
         }
     }
 
@@ -329,6 +333,7 @@ impl Value {
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
             Value::Numeric(d) => strconv::format_numeric(buf, &d.0),
+            Value::MzTimestamp(t) => strconv::format_mztimestamp(buf, *t),
         }
     }
 
@@ -443,6 +448,7 @@ impl Value {
             Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
             Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
             Value::Numeric(a) => a.to_sql(&PgType::NUMERIC, buf),
+            Value::MzTimestamp(t) => t.to_string().to_sql(&PgType::TEXT, buf),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -514,6 +520,7 @@ impl Value {
             Type::Timestamp { .. } => Value::Timestamp(strconv::parse_timestamp(s)?),
             Type::TimestampTz { .. } => Value::TimestampTz(strconv::parse_timestamptz(s)?),
             Type::Uuid => Value::Uuid(Uuid::parse_str(s)?),
+            Type::MzTimestamp => Value::MzTimestamp(strconv::parse_mztimestamp(s)?),
         })
     }
 
@@ -577,6 +584,11 @@ impl Value {
                 DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz)
             }
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
+            Type::MzTimestamp => {
+                let s = String::from_sql(ty.inner(), raw)?;
+                let t: mz_repr::Timestamp = s.parse()?;
+                Ok(Value::MzTimestamp(t))
+            }
         }
     }
 }

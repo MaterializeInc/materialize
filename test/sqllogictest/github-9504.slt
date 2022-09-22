@@ -19,8 +19,8 @@ statement ok
 CREATE MATERIALIZED VIEW foobar26 AS
   SELECT tableA.id
     FROM tableA
-   WHERE ((1000 * cast(extract(epoch FROM tableA.happened_at) AS numeric)) <= mz_logical_timestamp()
-     AND mz_logical_timestamp() <= (1000 * cast(extract(epoch FROM tableA.happened_at) AS numeric) + offs ))
+   WHERE ((1000 * cast(extract(epoch FROM tableA.happened_at) AS numeric)) <= mz_now()
+     AND mz_now() <= (1000 * cast(extract(epoch FROM tableA.happened_at) AS numeric) + offs ))
      AND id = 10;
 
 statement ok

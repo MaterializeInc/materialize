@@ -305,14 +305,14 @@ View materialize.public.ordered_view (u3):
 
 EOF
 
-# Ensure mz_logical_timestamp doesn't panic in the context of EXPLAIN, which
+# Ensure mz_now doesn't panic in the context of EXPLAIN, which
 # doesn't actually execute the query at any particular timestamp.
 query T multiline
-EXPLAIN SELECT mz_logical_timestamp()
+EXPLAIN SELECT mz_now()
 ----
 %0 =
 | Constant ()
-| Map mz_logical_timestamp()
+| Map mz_now()
 
 EOF
 

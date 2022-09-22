@@ -447,7 +447,7 @@
     description: Specified time component from value
     url: date-part
 
-  - signature: mz_logical_timestamp() -> numeric
+  - signature: mz_now() -> mztimestamp
     description: |
       The logical time at which a query executes. Used for temporal filters and internal debugging.
       <br><br>
