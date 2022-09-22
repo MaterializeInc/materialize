@@ -90,8 +90,14 @@ impl StorageUsageClient {
                     })
                     .await?;
 
-                self.metrics.audit.blob_batch_part_bytes.set(batch_part_bytes);
-                self.metrics.audit.blob_batch_part_count.set(batch_part_count);
+                self.metrics
+                    .audit
+                    .blob_batch_part_bytes
+                    .set(batch_part_bytes);
+                self.metrics
+                    .audit
+                    .blob_batch_part_count
+                    .set(batch_part_count);
                 self.metrics.audit.blob_rollup_bytes.set(rollup_size);
                 self.metrics.audit.blob_rollup_count.set(rollup_count);
                 self.metrics.audit.blob_bytes.set(total_size);

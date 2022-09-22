@@ -19,7 +19,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
-    DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge
+    DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge,
 };
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
