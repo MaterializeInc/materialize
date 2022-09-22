@@ -229,6 +229,13 @@ SHOW INDEXES FROM SCHEMA s IN CLUSTER c
 Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: Some(UnresolvedSchemaName([Ident("s")])), in_cluster: Some(Unresolved(Ident("c"))), filter: None }))
 
 parse-statement
+SHOW INDEXES LIKE 'pattern'
+----
+SHOW INDEXES LIKE 'pattern'
+=>
+Show(ShowIndexes(ShowIndexesStatement { on_object: None, from_schema: None, in_cluster: None, filter: Some(Like("pattern")) }))
+
+parse-statement
 SHOW INDEXES FROM SCHEMA s ON t
 ----
 error: Cannot specify both FROM SCHEMA and FROM or ON

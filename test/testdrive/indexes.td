@@ -173,8 +173,9 @@ foo_expr_idx1   foo <VARIABLE_OUTPUT>   "{pg_catalog.substr(z, 3)}"
 > SHOW INDEXES FROM foo WHERE name = 'noexist'
 > SHOW INDEXES FROM foo WHERE name = 'foo_expr_idx'
 foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
-# TODO(justin): not handled in parser yet:
-#   SHOW INDEXES FROM v LIKE '%v'
+
+> SHOW INDEXES FROM foo LIKE 'foo_primary%'
+foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}
 
 ! SHOW INDEXES FROM nonexistent
 contains:unknown catalog item 'nonexistent'
