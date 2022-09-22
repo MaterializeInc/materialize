@@ -26,3 +26,4 @@ For more information on general Redpanda configuration, see the [Redpanda docume
 ## Related pages
 
 - [`CREATE SOURCE`](/sql/create-source/kafka/)
+- [`CREATE SINK`](/sql/create-sink/#kafka-sinks)

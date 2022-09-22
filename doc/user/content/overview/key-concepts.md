@@ -24,6 +24,7 @@ Component | Use
 **Sources** | Sources describe an external system you want Materialize to read data from (e.g. Kafka).
 **Views** | Views represent queries of sources and other views that you want to save for repeated execution.
 **Indexes** | Indexes represent query results stored in memory.
+**Sinks** | Sinks represent output streams or files that Materialize sends data to.
 **Clusters** | Clusters represent a logical set of indexes that share physical resources.
 **Cluster replicas** | Cluster replicas provide physical resources for a cluster's indexes.
 
@@ -151,7 +152,7 @@ For a deeper dive into how indexes work, see [Arrangements](/overview/arrangemen
 ## Clusters
 
 Clusters are logical components that let you express resource isolation for all
-dataflow-powered objects, e.g. indexes. When creating dataflow-powered
+dataflow-powered objects, e.g. indexes and sinks. When creating dataflow-powered
 objects, you must specify which cluster you want to use. (Not explicitly naming
 a cluster uses your session's default cluster.)
 
@@ -215,6 +216,7 @@ Add replicas to a cluster | Greater tolerance to replica failure
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
 - [`CREATE VIEW`](/sql/create-view)
 - [`CREATE INDEX`](/sql/create-index)
+- [`CREATE SINK`](/sql/create-sink)
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 
