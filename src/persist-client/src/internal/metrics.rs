@@ -66,7 +66,7 @@ pub struct Metrics {
     /// Metrics for various per-shard measurements.
     pub shards: ShardsMetrics,
     /// Metrics for auditing persist usage
-    pub audit: AuditMetrics,
+    pub audit: UsageAuditMetrics,
 
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresConsensusMetrics,
@@ -100,7 +100,7 @@ impl Metrics {
             lease: LeaseMetrics::new(registry),
             state: StateMetrics::new(registry),
             shards: ShardsMetrics::new(registry),
-            audit: AuditMetrics::new(registry),
+            audit: UsageAuditMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
             _vecs: vecs,
             _uptime: uptime,
@@ -998,23 +998,47 @@ impl ShardMetrics {
 
 /// Metrics recorded by audits of persist usage
 #[derive(Debug)]
-pub struct AuditMetrics {
-    /// Sum of size of all parts stored in Blob
-    pub blob_size: UIntGauge,
-    /// Total number of parts stored in Blob
-    pub blob_parts_count: UIntGauge,
+pub struct UsageAuditMetrics {
+    /// Size of all batch parts stored in Blob
+    pub blob_batch_part_bytes: UIntGauge,
+    /// Count of batch parts stored in Blob
+    pub blob_batch_part_count: UIntGauge,
+    /// Size of all state rollups stored in Blob
+    pub blob_rollup_bytes: UIntGauge,
+    /// Count of state rollups stored in Blob
+    pub blob_rollup_count: UIntGauge,
+    /// Size of Blob
+    pub blob_bytes: UIntGauge,
+    /// Count of all blobs
+    pub blob_count: UIntGauge,
 }
 
-impl AuditMetrics {
+impl UsageAuditMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
-        AuditMetrics {
-            blob_size: registry.register(metric!(
-                name: "mz_persist_audit_blob_size",
-                help: "total size (in bytes) of all blobs",
+        UsageAuditMetrics {
+            blob_batch_part_bytes: registry.register(metric!(
+                name: "mz_persist_audit_blob_batch_part_bytes",
+                help: "total size of batch parts in blob",
             )),
-            blob_parts_count: registry.register(metric!(
-                name: "mz_persist_audit_blob_parts_count",
-                help: "count of all parts in blob",
+            blob_batch_part_count: registry.register(metric!(
+                name: "mz_persist_audit_blob_batch_part_count",
+                help: "count of batch parts in blob",
+            )),
+            blob_rollup_bytes: registry.register(metric!(
+                name: "mz_persist_audit_blob_rollup_bytes",
+                help: "total size of state rollups stored in blob",
+            )),
+            blob_rollup_count: registry.register(metric!(
+                name: "mz_persist_audit_blob_rollup_count",
+                help: "count of all state rollups in blob",
+            )),
+            blob_bytes: registry.register(metric!(
+                name: "mz_persist_audit_blob_bytes",
+                help: "total size of blob",
+            )),
+            blob_count: registry.register(metric!(
+                name: "mz_persist_audit_blob_count",
+                help: "count of all blobs",
             )),
         }
     }
