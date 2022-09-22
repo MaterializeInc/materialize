@@ -920,6 +920,10 @@ impl KafkaSinkState {
                         self.retry_on_txn_error(|p| p.begin_transaction()).await?;
                     }
 
+                    info!(
+                        "{}: sending progress for gate ts: {:?}",
+                        &self.name, min_frontier
+                    );
                     self.send_progress_record(min_frontier, progress_state)
                         .await
                         .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
@@ -935,12 +939,17 @@ impl KafkaSinkState {
             let mut write_frontier = self.write_frontier.borrow_mut();
 
             // make sure we don't regress
+            info!(
+                "{}: downgrading write frontier to: {:?}",
+                &self.name, min_frontier
+            );
             assert!(write_frontier.less_equal(&min_frontier));
             write_frontier.clear();
             write_frontier.insert(min_frontier);
         } else {
             // If there's no longer an input frontier, we will no longer receive any data forever and, therefore, will
             // never output more data
+            info!("{}: advancing write frontier to empty", &self.name);
             self.write_frontier.borrow_mut().clear();
         }
 
@@ -1103,9 +1112,15 @@ where
                     shutdown_flush.set(true);
                 }
 
-                // Indicate that the sink is closed to everyone else who
-                // might be tracking its write frontier.
-                s.write_frontier.borrow_mut().clear();
+                // NOTE: This is somewhat subtle, but we never downgrade our
+                // write frontier to the empty frontier when we're shutting
+                // down. We might be shutting down for any number of reasons,
+                // most of them probably not because our source is finished.
+                // Meaning in most cases it would be wrong to advance our write
+                // frontier to the empty frontier.
+                //
+                // This note is here because a previous version of the code
+                // _did_ downgrade to the empty frontier here.
                 return false;
             }
             // Panic if there's not exactly once element in the frontier like we expect.
@@ -1142,7 +1157,10 @@ where
                             return true;
                         }
                     };
-                    info!("Identified latest progress record: {:?}", latest_ts);
+                    info!(
+                        "{}: initial as_of: {:?}, latest progress record: {:?}",
+                        s.name, as_of.frontier, latest_ts
+                    );
                     shared_gate_ts.set(latest_ts);
 
                     let progress_state = init
@@ -1152,9 +1170,10 @@ where
                     if let Some(gate) = latest_ts {
                         assert!(
                             as_of.frontier.iter().all(|ts| *ts <= gate),
-                            "some element of the Sink as_of frontier is too \
+                            "{}: some element of the Sink as_of frontier is too \
                                 far advanced for our output-gating timestamp: \
                                 as_of {:?}, gate_ts: {:?}",
+                            s.name,
                             as_of.frontier,
                             gate
                         );
