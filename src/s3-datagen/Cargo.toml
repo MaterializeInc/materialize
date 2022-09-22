@@ -15,6 +15,6 @@ clap = { version = "3.2.20", features = ["derive"] }
 futures = "0.3.24"
 indicatif = "0.17.1"
 mz-ore = { path = "../ore" }
-tokio = { version = "1.19.2", features = ["macros", "net", "rt", "time"] }
+tokio = { version = "1.21.1", features = ["macros", "net", "rt", "time"] }
 tracing = "0.1.36"
 tracing-subscriber = { version = "0.3.15", default-features = false, features = ["env-filter", "fmt"] }

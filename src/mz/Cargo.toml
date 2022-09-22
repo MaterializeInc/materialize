@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 serde = { version = "1.0.144", features = ["derive"] }
 clap = { version = "3.2.20", features = [ "derive" ] }
-tokio = { version = "1.19.2", features = ["full"] }
+tokio = { version = "1.21.1", features = ["full"] }
 open = "3.0.3"
 axum = "0.5.16"
 rpassword = "7.0"

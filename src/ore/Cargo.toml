@@ -34,7 +34,7 @@ stacker = { version = "0.1.15", optional = true }
 serde = { version = "1.0.144", features = ["derive"], optional = true }
 serde_json = { version = "1.0.82", optional = true }
 ssh-key = { version = "0.4.2", optional = true }
-tokio = { version = "1.19.2", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
+tokio = { version = "1.21.1", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
 tokio-openssl = { version = "0.6.3", optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
 # The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up
@@ -61,7 +61,7 @@ opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-ru
 console-subscriber = { version = "0.1.8", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1.19.2", features = ["macros"] }
+tokio = { version = "1.21.1", features = ["macros"] }
 
 [features]
 default = ["network", "chrono", "cli", "metrics", "stack", "test"]
