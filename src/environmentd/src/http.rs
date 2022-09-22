@@ -57,7 +57,7 @@ use mz_adapter::{
 };
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::OpenTelemetryEnableCallback;
+use mz_ore::tracing::{OpenTelemetryEnableCallback, StderrFilterCallback};
 use mz_repr::{Datum, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement};
@@ -705,16 +705,19 @@ async fn auth<B>(
 pub struct InternalServer {
     metrics_registry: MetricsRegistry,
     otel_enable_callback: OpenTelemetryEnableCallback,
+    stderr_filter_callback: StderrFilterCallback,
 }
 
 impl InternalServer {
     pub fn new(
         metrics_registry: MetricsRegistry,
         otel_enable_callback: OpenTelemetryEnableCallback,
+        stderr_filter_callback: StderrFilterCallback,
     ) -> Self {
         Self {
             metrics_registry,
             otel_enable_callback,
+            stderr_filter_callback,
         }
     }
 
@@ -735,6 +738,13 @@ impl InternalServer {
                 "/api/opentelemetry/config",
                 routing::put(move |payload| async move {
                     mz_http_util::handle_enable_otel(self.otel_enable_callback, payload).await
+                }),
+            )
+            .route(
+                "/api/stderr/config",
+                routing::put(move |payload| async move {
+                    mz_http_util::handle_modify_stderr_filter(self.stderr_filter_callback, payload)
+                        .await
                 }),
             );
         axum::Server::bind(&addr).serve(router.into_make_service())

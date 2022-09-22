@@ -215,6 +215,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
         ),
         otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+        stderr_filter_callback: mz_ore::tracing::StderrFilterCallback::none(),
         storage_usage_collection_interval: config.storage_usage_collection_interval,
     }))?;
     let server = Server {

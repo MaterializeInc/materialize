@@ -3458,6 +3458,7 @@ dependencies = [
  "mz-ore",
  "prometheus",
  "serde",
+ "tracing-subscriber",
 ]
 
 [[package]]
