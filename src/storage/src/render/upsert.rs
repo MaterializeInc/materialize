@@ -310,7 +310,11 @@ where
             // N.B. We make the expected type explicit here to make sure it
             // cannot change by accident.
             let key: &Option<Result<Row, DecodeError>> = key;
-            key.hashed()
+            // Another N.B. we use `as_ref()` here so that we're hashing a
+            // `Option<&Result<Row, DecodeError>`, like we do below. We don't
+            // stricly need it because the result is the same without but with
+            // this we are extra future safe.
+            key.as_ref().hashed()
         }),
         Exchange::new(|((key, _v), _t, _r)| {
             // N.B.  We make the expected type explicit here to make sure it
