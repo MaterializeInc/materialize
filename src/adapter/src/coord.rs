@@ -102,7 +102,7 @@ use mz_sql::ast::{CreateSourceStatement, Raw, Statement};
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::CollectionDescription;
+use mz_storage::controller::{CollectionDescription, DataSource};
 use mz_storage::types::connections::ConnectionContext;
 use mz_storage::types::sinks::StorageSinkConnection;
 use mz_storage::types::sources::{IngestionDescription, Timeline};
@@ -486,7 +486,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             entry.id(),
                             CollectionDescription {
                                 desc: source.desc.clone(),
-                                ingestion: Some(ingestion),
+                                data_source: Some(DataSource::Ingestion(ingestion)),
                                 since: None,
                                 status_collection_id,
                                 host_config: Some(source.host_config.clone()),

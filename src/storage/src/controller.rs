@@ -94,13 +94,22 @@ impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataSource {
+    /// Ingest data from some external source.
+    Ingestion(IngestionDescription),
+    /// Data comes from introspection sources, which the controller itself is
+    /// responisble for generating.
+    Introspection,
+}
+
 /// Describes a request to create a source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CollectionDescription<T> {
     /// The schema of this collection
     pub desc: RelationDesc,
-    /// The description of the source to ingest into this collection, if any.
-    pub ingestion: Option<IngestionDescription<()>>,
+    /// The description of the source of data for this collection to ingest, if any.
+    pub data_source: Option<DataSource>,
     /// An optional frontier to which the collection's `since` should be advanced.
     pub since: Option<Antichain<T>>,
     /// A GlobalId to use for this collection to use for the status collection.
@@ -115,7 +124,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
     fn from(desc: RelationDesc) -> Self {
         Self {
             desc,
-            ingestion: None,
+            data_source: None,
             since: None,
             status_collection_id: None,
             host_config: None,
@@ -315,12 +324,12 @@ pub trait CollectionManager: Debug + Send + StorageController {
     /// Truncates the collection correlated with `global_id`.
     async fn truncate_managed_collection(&mut self, global_id: GlobalId);
 
-    /// Initializes the data expressing which global IDs correlate to which shards.
-    /// ???: Should this be part of a GlobalIdShardIdMapping trait?
+    /// Initializes the data expressing which global IDs correlate to which
+    /// shards. Necessary because we cannot write any of these mappings that we
+    /// discover before the shard mapping collection exists.
     async fn initialize_shard_mapping(&mut self);
 
     /// Writes a new global ID, shard ID pair to the appropriate collection.
-    /// ???: Should this be part of a GlobalIdShardIdMapping trait?
     async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId);
 }
 
@@ -1025,42 +1034,47 @@ where
 
             self.state.collections.insert(id, collection_state);
 
-            if let Some(ingestion) = description.ingestion {
-                // Each ingestion is augmented with the collection metadata.
-                let mut source_imports = BTreeMap::new();
-                for (id, _) in ingestion.source_imports {
-                    let metadata = self.collection(id)?.collection_metadata.clone();
-                    source_imports.insert(id, metadata);
+            if let Some(ingestion) = description.data_source {
+                match ingestion {
+                    DataSource::Ingestion(ingestion) => {
+                        // Each ingestion is augmented with the collection metadata.
+                        let mut source_imports = BTreeMap::new();
+                        for (id, _) in ingestion.source_imports {
+                            let metadata = self.collection(id)?.collection_metadata.clone();
+                            source_imports.insert(id, metadata);
+                        }
+
+                        let desc = IngestionDescription {
+                            source_imports,
+                            storage_metadata: self.collection(id)?.collection_metadata.clone(),
+                            // The rest of the fields are identical
+                            desc: ingestion.desc,
+                            typ: description.desc.typ().clone(),
+                        };
+                        let resume_upper = desc
+                            .storage_metadata
+                            .get_resume_upper(&persist_client, &desc.desc.envelope)
+                            .await;
+                        let augmented_ingestion = IngestSourceCommand {
+                            id,
+                            description: desc,
+                            resume_upper,
+                        };
+
+                        // Provision a storage host for the ingestion.
+                        let client = self
+                            .hosts
+                            .provision(
+                                id,
+                                description.host_config.clone().expect(
+                                    "CollectionDescription with ingestion should have host_config set",
+                                ),
+                            )
+                            .await?;
+                        client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
+                    }
+                    DataSource::Introspection => unreachable!(),
                 }
-
-                let desc = IngestionDescription {
-                    source_imports,
-                    storage_metadata: self.collection(id)?.collection_metadata.clone(),
-                    // The rest of the fields are identical
-                    desc: ingestion.desc,
-                    typ: description.desc.typ().clone(),
-                };
-                let resume_upper = desc
-                    .storage_metadata
-                    .get_resume_upper(&persist_client, &desc.desc.envelope)
-                    .await;
-                let augmented_ingestion = IngestSourceCommand {
-                    id,
-                    description: desc,
-                    resume_upper,
-                };
-
-                // Provision a storage host for the ingestion.
-                let client = self
-                    .hosts
-                    .provision(
-                        id,
-                        description.host_config.clone().expect(
-                            "CollectionDescription with ingestion should have host_config set",
-                        ),
-                    )
-                    .await?;
-                client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
             }
 
             self.register_shard_mapping(id, data_shard).await;

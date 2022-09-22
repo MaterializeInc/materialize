@@ -57,7 +57,7 @@ use mz_sql::plan::{
     RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
+use mz_storage::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage::types::sources::IngestionDescription;
 
@@ -472,7 +472,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         source_id,
                         CollectionDescription {
                             desc: source.desc.clone(),
-                            ingestion: Some(ingestion),
+                            data_source: Some(DataSource::Ingestion(ingestion)),
                             since: None,
                             status_collection_id,
                             host_config: Some(source.host_config),
@@ -1326,7 +1326,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         id,
                         CollectionDescription {
                             desc,
-                            ingestion: None,
+                            data_source: None,
                             since: Some(as_of),
                             status_collection_id: None,
                             host_config: None,
