@@ -32,6 +32,7 @@ use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
 };
+use mz_storage::controller::IntrospectionType;
 
 use crate::catalog::SYSTEM_USER;
 
@@ -104,6 +105,7 @@ pub struct BuiltinStorageCollection {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
+    pub data_source: Option<IntrospectionType>,
 }
 
 #[derive(Hash)]
@@ -1370,6 +1372,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =
     Lazy::new(|| BuiltinStorageCollection {
         name: "mz_source_status_history",
         schema: MZ_CATALOG_SCHEMA,
+        data_source: None,
         desc: RelationDesc::empty()
             .with_column("timestamp", ScalarType::Timestamp.nullable(false))
             .with_column("source_name", ScalarType::String.nullable(false))
@@ -1382,6 +1385,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =
             .with_column("error", ScalarType::String.nullable(true))
             .with_column("metadata", ScalarType::Jsonb.nullable(true)),
     });
+
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage_by_shard",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1394,6 +1398,16 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
             ScalarType::TimestampTz.nullable(false),
         ),
 });
+
+pub static MZ_STORAGE_SHARDS: Lazy<BuiltinStorageCollection> =
+    Lazy::new(|| BuiltinStorageCollection {
+        name: "mz_storage_shards",
+        schema: MZ_INTERNAL_SCHEMA,
+        data_source: Some(IntrospectionType::ShardMapping),
+        desc: RelationDesc::empty()
+            .with_column("object_id", ScalarType::String.nullable(false))
+            .with_column("shard_id", ScalarType::String.nullable(false)),
+    });
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",

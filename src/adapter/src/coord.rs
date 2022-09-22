@@ -103,7 +103,7 @@ use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statemen
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
-use mz_storage::controller::CollectionDescription;
+use mz_storage::controller::{CollectionDescription, DataSource};
 use mz_storage::types::connections::ConnectionContext;
 use mz_storage::types::sinks::StorageSinkConnection;
 use mz_storage::types::sources::{IngestionDescription, SourceExport, Timeline};
@@ -477,7 +477,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
                     // Re-announce the source description.
-                    let ingestion = source.ingestion.clone().map(|ingestion| {
+                    let data_source = source.ingestion.clone().map(|ingestion| {
                         let mut source_imports = BTreeMap::new();
                         for source_import in ingestion.source_imports {
                             source_imports.insert(source_import, ());
@@ -498,12 +498,12 @@ impl<S: Append + 'static> Coordinator<S> {
                             source_exports.insert(subsource, export);
                         }
 
-                        IngestionDescription {
+                        DataSource::Ingestion(IngestionDescription {
                             desc: ingestion.desc,
                             ingestion_metadata: (),
                             source_imports,
                             source_exports,
-                        }
+                        })
                     });
 
                     self.controller
@@ -512,7 +512,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             entry.id(),
                             CollectionDescription {
                                 desc: source.desc.clone(),
-                                ingestion,
+                                data_source,
                                 since: None,
                                 status_collection_id,
                                 host_config: Some(source.host_config.clone()),
@@ -616,7 +616,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), 1));
                 }
                 CatalogItem::StorageCollection(coll) => {
-                    let collection_desc = coll.desc.clone().into();
+                    let collection_desc = CollectionDescription {
+                        desc: coll.desc.clone(),
+                        data_source: coll.data_source.clone().map(DataSource::Introspection),
+                        since: None,
+                        status_collection_id,
+                        host_config: None,
+                    };
+
                     self.controller
                         .storage
                         .create_collections(vec![(entry.id(), collection_desc)])

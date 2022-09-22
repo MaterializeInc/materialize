@@ -57,7 +57,7 @@ use mz_sql::plan::{
     SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
-use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
+use mz_storage::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage::types::sources::{IngestionDescription, SourceExport};
 
@@ -483,7 +483,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         None
                     };
 
-                    let ingestion = source.ingestion.map(|ingestion| {
+                    let data_source = source.ingestion.map(|ingestion| {
                         let mut source_imports = BTreeMap::new();
                         for source_import in ingestion.source_imports {
                             source_imports.insert(source_import, ());
@@ -504,12 +504,12 @@ impl<S: Append + 'static> Coordinator<S> {
                             source_exports.insert(subsource, export);
                         }
 
-                        IngestionDescription {
+                        DataSource::Ingestion(IngestionDescription {
                             desc: ingestion.desc,
                             ingestion_metadata: (),
                             source_imports,
                             source_exports,
-                        }
+                        })
                     });
 
                     self.controller
@@ -518,7 +518,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             source_id,
                             CollectionDescription {
                                 desc: source.desc.clone(),
-                                ingestion,
+                                data_source,
                                 since: None,
                                 status_collection_id,
                                 host_config: Some(source.host_config),
@@ -1423,7 +1423,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         id,
                         CollectionDescription {
                             desc,
-                            ingestion: None,
+                            data_source: None,
                             since: Some(as_of),
                             status_collection_id: None,
                             host_config: None,
