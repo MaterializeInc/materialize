@@ -414,7 +414,7 @@ impl LogView {
 
             LogView::MzMaterializationFrontiers => (
                 "SELECT
-                export_id, pg_catalog.min(time) AS time
+                    export_id, pg_catalog.min(time) AS time
                 FROM mz_catalog.mz_worker_compute_frontiers_{}
                 GROUP BY export_id",
                 "mz_compute_frontiers_{}",

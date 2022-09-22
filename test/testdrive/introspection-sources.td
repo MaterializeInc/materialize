@@ -27,7 +27,7 @@ SELECT ${arg.replica-size} > 1 OR ${arg.replicas} > 1;
   FROM (SELECT SUM(count) as count_all
         FROM
             mz_materialized_views AS views,
-            m as compute_exports,
+            mz_compute_exports as compute_exports,
             mz_worker_compute_delays AS delays
         WHERE
             views.name = 'mv' AND
