@@ -318,7 +318,7 @@ show_indexes ::=
     'SHOW' 'INDEXES'
     ((('FROM' | 'ON') on_name) | ('FROM SCHEMA' schema_name))?
     ('IN' 'CLUSTER' cluster_name)?
-    ('WHERE' expr)
+    ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=
     'SHOW' 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_secrets ::=
