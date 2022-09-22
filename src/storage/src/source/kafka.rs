@@ -528,15 +528,6 @@ async fn create_kafka_config(
 ) -> ClientConfig {
     let mut kafka_config = create_new_client_config(connection_context.librdkafka_log_level);
 
-    crate::types::connections::populate_client_config(
-        kafka_connection.clone(),
-        options,
-        std::collections::HashSet::new(),
-        &mut kafka_config,
-        &*connection_context.secrets_reader,
-    )
-    .await;
-
     // Default to disabling Kafka auto commit. This can be explicitly enabled
     // by the user if they want to use it for progress tracking.
     kafka_config.set("enable.auto.commit", "false");
@@ -559,6 +550,15 @@ async fn create_kafka_config(
 
     kafka_config.set("fetch.message.max.bytes", "134217728");
 
+    crate::types::connections::populate_client_config(
+        kafka_connection.clone(),
+        options,
+        std::collections::HashSet::new(),
+        &mut kafka_config,
+        &*connection_context.secrets_reader,
+    )
+    .await;
+
     // Consumer group ID. librdkafka requires this, and we use offset committing
     // to provide a way for users to monitor ingest progress (though we do not
     // rely on the committed offsets for any functionality)
@@ -569,6 +569,8 @@ async fn create_kafka_config(
     // unique consumer group ID is the most surefire way to ensure that
     // librdkafka does not try to perform its own consumer group balancing,
     // which would wreak havoc with our careful partition assignment strategy.
+    //
+    // TODO(guswynn): make this include the connection id as well
     kafka_config.set(
         "group.id",
         &format!(
