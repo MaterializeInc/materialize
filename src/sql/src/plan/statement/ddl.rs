@@ -732,7 +732,6 @@ pub fn plan_create_source(
             }
         }
         mz_sql_parser::ast::Envelope::Upsert => {
-            scx.require_unsafe_mode("ENVELOPE UPSERT")?;
             let key_encoding = match encoding.key_ref() {
                 None => {
                     bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
