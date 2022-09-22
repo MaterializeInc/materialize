@@ -147,6 +147,12 @@ class KafkaTopics(Generator):
                 """
         )
 
+        print(
+            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            """
+        )
+
         for i in cls.all():
             topic = f"kafka-sources-{i}"
             print(f"$ kafka-create-topic topic={topic}")
@@ -157,7 +163,7 @@ class KafkaTopics(Generator):
 
             print(
                 f"""> CREATE SOURCE s{i}
-                  FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-{topic}-${{testdrive.seed}}'
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-{topic}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE;
                   """
@@ -195,10 +201,16 @@ class KafkaSourcesSameTopic(Generator):
             """
         )
 
+        print(
+            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            """
+        )
+
         for i in cls.all():
             print(
                 f"""> CREATE SOURCE s{i}
-              FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-topic-${{testdrive.seed}}'
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
               """
@@ -242,8 +254,14 @@ class KafkaPartitions(Generator):
         )
 
         print(
+            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            """
+        )
+
+        print(
             """> CREATE SOURCE s1
-            FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-kafka-partitions-${testdrive.seed}'
+            FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-partitions-${testdrive.seed}')
             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
             ENVELOPE NONE;
             """
@@ -292,8 +310,14 @@ class KafkaRecordsEnvelopeNone(Generator):
         )
 
         print(
+            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            """
+        )
+
+        print(
             f"""> CREATE SOURCE kafka_records_envelope_none
-              FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-none-${{testdrive.seed}}'
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-none-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
               """
@@ -335,8 +359,14 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         )
 
         print(
+            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            """
+        )
+
+        print(
             f"""> CREATE SOURCE kafka_records_envelope_upsert_same
-              FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-upsert-same-${{testdrive.seed}}'
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-same-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
               """
@@ -381,8 +411,14 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         )
 
         print(
+            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            """
+        )
+
+        print(
             f"""> CREATE SOURCE kafka_records_envelope_upsert_distinct
-              FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC 'testdrive-kafka-records-envelope-upsert-distinct-${{testdrive.seed}}'
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-distinct-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
               """
@@ -1375,9 +1411,9 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     replica_definitions.append(
                         f"{replica_name} (REMOTE ["
                         + ", ".join(f"'{n}:2100'" for n in nodes)
-                        + "] COMPUTE ["
+                        + "], COMPUTE ["
                         + ", ".join(f"'{n}:2100'" for n in nodes)
-                        + f"] WORKERS {args.workers})"
+                        + f"], WORKERS {args.workers})"
                     )
 
                 c.sql(
@@ -1400,13 +1436,16 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                          > CREATE MATERIALIZED VIEW v_{cluster_name} AS
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
+                        > CREATE CONNECTION IF NOT EXISTS kafka_conn
+                          FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+
                          > CREATE CONNECTION IF NOT EXISTS csr_conn
                            FOR CONFLUENT SCHEMA REGISTRY
                            URL '${{testdrive.schema-registry-url}}';
 
                          > CREATE SOURCE s_{cluster_name}
-                           FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC
-                           'testdrive-instance-size-${{testdrive.seed}}'
+                           FROM KAFKA CONNECTION kafka_conn (TOPIC
+                           'testdrive-instance-size-${{testdrive.seed}}')
                            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                            ENVELOPE NONE
                      """

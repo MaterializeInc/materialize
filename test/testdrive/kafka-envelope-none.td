@@ -9,8 +9,11 @@
 
 $ kafka-create-topic topic=missing_keys_or_values partitions=1
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE missing_keys_or_values
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-missing_keys_or_values-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-missing_keys_or_values-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE KEY

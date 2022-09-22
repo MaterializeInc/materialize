@@ -58,8 +58,8 @@ SELECT * FROM data AS OF 1E38;
 query error decimal cannot be expressed in target primitive type
 SELECT * FROM data AS OF 1.2;
 
-query error cannot call mz_logical_timestamp in AS OF
-SELECT * FROM data AS OF mz_logical_timestamp();
+query error cannot call mz_now in AS OF
+SELECT * FROM data AS OF mz_now();
 
 statement ok
 CREATE TABLE t (i INT);
@@ -83,11 +83,11 @@ SELECT * FROM t AS OF AT LEAST 1
 ----
 1
 
-query error can't use null as a timestamp for AS OF
+query error can't use null as a mztimestamp for AS OF
 SELECT 1 AS OF NULL::timestamp;
 
-query error can't use null as a timestamp for AS OF
+query error can't use null as a mztimestamp for AS OF
 SELECT * FROM data AS OF NULL::numeric;
 
-query error can't use null as a timestamp for AS OF
+query error can't use null as a mztimestamp for AS OF
 TAIL (SELECT 1) AS OF NULL::timestamptz;

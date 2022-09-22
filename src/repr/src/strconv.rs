@@ -213,6 +213,22 @@ where
     Nestable::Yes
 }
 
+/// Parses an `mztimestamp` from `s`.
+pub fn parse_mztimestamp(s: &str) -> Result<crate::Timestamp, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("mztimestamp", s).with_details(e))
+}
+
+/// Writes an `mztimestamp` to `buf`.
+pub fn format_mztimestamp<F>(buf: &mut F, u: crate::Timestamp) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", u);
+    Nestable::Yes
+}
+
 /// Parses an OID from `s`.
 pub fn parse_oid(s: &str) -> Result<u32, ParseError> {
     // For historical reasons in PostgreSQL, OIDs are parsed as `i32`s and then

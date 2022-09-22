@@ -271,6 +271,16 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         (UInt64, Float64) => Implicit: CastUint64ToFloat64(func::CastUint64ToFloat64),
         (UInt64, String) => Assignment: CastUint64ToString(func::CastUint64ToString),
 
+        // MZTIMESTAMP
+        (MzTimestamp, String) => Assignment: CastMzTimestampToString(func::CastMzTimestampToString),
+        (String, MzTimestamp) => Assignment: CastStringToMzTimestamp(func::CastStringToMzTimestamp),
+        (UInt64, MzTimestamp) => Implicit: CastUint64ToMzTimestamp(func::CastUint64ToMzTimestamp),
+        (UInt32, MzTimestamp) => Implicit: CastUint32ToMzTimestamp(func::CastUint32ToMzTimestamp),
+        (Int64, MzTimestamp) => Implicit: CastInt64ToMzTimestamp(func::CastInt64ToMzTimestamp),
+        (Int32, MzTimestamp) => Implicit: CastInt32ToMzTimestamp(func::CastInt32ToMzTimestamp),
+        (Numeric, MzTimestamp) => Implicit: CastNumericToMzTimestamp(func::CastNumericToMzTimestamp),
+        (Timestamp, MzTimestamp) => Implicit: CastTimestampToMzTimestamp(func::CastTimestampToMzTimestamp),
+        (TimestampTz, MzTimestamp) => Implicit: CastTimestampTzToMzTimestamp(func::CastTimestampTzToMzTimestamp),
 
         // OID
         (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),

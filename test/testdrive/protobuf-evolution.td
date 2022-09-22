@@ -32,8 +32,11 @@ $ kafka-create-topic topic=evolution partitions=1
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE evolution FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-evolution-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-evolution-${testdrive.seed}')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true

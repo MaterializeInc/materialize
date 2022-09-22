@@ -261,7 +261,7 @@ struct TxnReads {
     // True iff all statements run so far in the transaction are independent
     // of the chosen logical timestamp (not the PlanContext walltime). This
     // happens if both 1) there are no referenced sources or indexes and 2)
-    // `mz_logical_timestamp()` is not present.
+    // `mz_now()` is not present.
     timestamp_independent: bool,
     read_holds: crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>,
 }

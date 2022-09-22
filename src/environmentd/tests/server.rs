@@ -53,9 +53,12 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         let server = util::start_server(config.clone())?;
         let mut client = server.connect(postgres::NoTls)?;
         client.batch_execute(&format!(
-            "CREATE SOURCE src FROM KAFKA BROKER '{}' TOPIC 'ignored' FORMAT BYTES",
+            "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
             &*KAFKA_ADDRS,
         ))?;
+        client.batch_execute(
+            "CREATE SOURCE src FROM KAFKA CONNECTION kafka_conn (TOPIC 'ignored') FORMAT BYTES",
+        )?;
         client.batch_execute("CREATE VIEW constant AS SELECT 1")?;
         client.batch_execute(
             "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
@@ -104,7 +107,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             .into_iter()
             .map(|row| row.get(0))
             .collect::<Vec<String>>(),
-        vec!["u1", "u2", "u3", "u4", "u5", "u6"]
+        vec!["u1", "u2", "u3", "u4", "u5", "u6", "u7"]
     );
 
     Ok(())

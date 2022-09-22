@@ -21,8 +21,11 @@ INSERT INTO alter_extend_primary_key VALUES (123, 234), (345, 456);
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE alter_extend_primary_key
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_extend_primary_key'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_extend_primary_key')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

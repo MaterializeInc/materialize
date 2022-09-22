@@ -213,18 +213,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-ssh2-lite"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69832303b1bdcfa73a74e30632e227f1f49ecc9d5da23bc1f2e1c268a1e7aad9"
-dependencies = [
- "async-trait",
- "futures-util",
- "ssh2",
- "tokio",
-]
-
-[[package]]
 name = "async-stream"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2760,19 +2748,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libssh2-sys"
-version = "0.2.23"
-source = "git+https://github.com/MaterializeInc/ssh2-rs#cf435572dec61b0bc0945b23121de23dc80aa75d"
-dependencies = [
- "cc",
- "libc",
- "libz-sys",
- "openssl-sys",
- "pkg-config",
- "vcpkg",
-]
-
-[[package]]
 name = "libz-sys"
 version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3458,6 +3433,7 @@ dependencies = [
  "mz-ore",
  "prometheus",
  "serde",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3690,6 +3666,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -3882,18 +3859,21 @@ name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-ssh2-lite",
  "mz-ore",
  "mz-proto",
+ "openssh",
  "openssl",
  "postgres-openssl",
  "proptest",
  "prost",
  "protobuf-src",
+ "rand",
  "serde",
+ "tempfile",
  "tokio",
  "tokio-postgres",
  "tonic-build",
+ "tracing",
 ]
 
 [[package]]
@@ -4622,6 +4602,21 @@ checksum = "b4a3100141f1733ea40b53381b0ae3117330735ef22309a190ac57b9576ea716"
 dependencies = [
  "pathdiff",
  "windows-sys",
+]
+
+[[package]]
+name = "openssh"
+version = "0.9.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76cbcf081bc4d65a3ba0dd5bccccf89470e61d54142174f6c0b531e459aac8ff"
+dependencies = [
+ "dirs",
+ "once_cell",
+ "shell-escape",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-pipe",
 ]
 
 [[package]]
@@ -5891,6 +5886,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "shell-escape"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45bb67a18fa91266cc7807181f62f9178a6873bfad7dc788c42e6430db40184f"
+
+[[package]]
 name = "shell-words"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5998,17 +5999,6 @@ dependencies = [
  "sha2",
  "signature",
  "zeroize",
-]
-
-[[package]]
-name = "ssh2"
-version = "0.9.3"
-source = "git+https://github.com/MaterializeInc/ssh2-rs#cf435572dec61b0bc0945b23121de23dc80aa75d"
-dependencies = [
- "bitflags",
- "libc",
- "libssh2-sys",
- "parking_lot",
 ]
 
 [[package]]
@@ -6475,6 +6465,16 @@ dependencies = [
  "futures-util",
  "openssl",
  "openssl-sys",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-pipe"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f213a84bffbd61b8fa0ba8a044b4bbe35d471d0b518867181e82bd5c15542784"
+dependencies = [
+ "libc",
  "tokio",
 ]
 
@@ -7189,9 +7189,12 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.4.2"
+version = "1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf68b08513768deaa790264a7fac27a58cbf2705cfcdc9448362229217d7e970"
+checksum = "c394b5bd0c6f669e7275d9c20aa90ae064cb22e75a1cad54e1b34088034b149f"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "zstd-sys"

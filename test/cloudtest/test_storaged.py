@@ -10,6 +10,7 @@
 from textwrap import dedent
 
 from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.exists import exists, not_exists
 from materialize.cloudtest.wait import wait
 
 
@@ -23,15 +24,17 @@ def test_storaged_creation(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
+            > CREATE CONNECTION IF NOT EXISTS kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
             > CREATE SOURCE source1
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-test-${testdrive.seed}'
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
 
             > CREATE SOURCE source2
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-test-${testdrive.seed}'
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
             """
@@ -61,9 +64,11 @@ def test_storaged_resizing(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
+            > CREATE CONNECTION IF NOT EXISTS kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
             > CREATE SOURCE resize_storaged
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-test-${testdrive.seed}'
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
             """
@@ -107,9 +112,11 @@ def test_storaged_shutdown(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
+            > CREATE CONNECTION IF NOT EXISTS kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
             > CREATE SOURCE source1
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-test-${testdrive.seed}'
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
 
@@ -130,10 +137,13 @@ def test_storaged_shutdown(mz: MaterializeApplication) -> None:
     ][0]
     assert id is not None
 
-    storaged = f"pod/storage-{id}-0"
+    storaged_pod = f"pod/storage-{id}-0"
+    storaged_svc = f"service/storage-{id}"
 
-    wait(condition="condition=Ready", resource=storaged)
+    wait(condition="condition=Ready", resource=storaged_pod)
+    exists(storaged_svc)
 
     mz.environmentd.sql("DROP SOURCE source1")
 
-    wait(condition="delete", resource=storaged)
+    wait(condition="delete", resource=storaged_pod)
+    not_exists(storaged_svc)

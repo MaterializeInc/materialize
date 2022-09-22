@@ -462,6 +462,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .delete(&name, &DeleteParams::default())
             .await;
         match res {
+            Ok(_) => (),
+            Err(Error::Api(e)) if e.code == 404 => (),
+            Err(e) => return Err(e.into()),
+        }
+
+        let res = self
+            .service_api
+            .delete(&name, &DeleteParams::default())
+            .await;
+        match res {
             Ok(_) => Ok(()),
             Err(Error::Api(e)) if e.code == 404 => Ok(()),
             Err(e) => Err(e.into()),

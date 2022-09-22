@@ -125,12 +125,20 @@ fn test_no_block() -> Result<(), anyhow::Error> {
                 let _ = result?;
 
                 let result = client
-                    .batch_execute(&format!("
-                        CREATE SOURCE foo \
-                        FROM KAFKA BROKER '{}' TOPIC 'foo' \
-                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                    .batch_execute(&format!(
+                        "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
                         &*KAFKA_ADDRS,
                     ))
+                    .await;
+                info!("test_no_block: in thread; create Kafka conn done");
+                let _ = result?;
+
+                let result = client
+                    .batch_execute(
+                        "CREATE SOURCE foo \
+                        FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
+                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                    )
                     .await;
                 info!("test_no_block: in thread; create source done");
                 result
@@ -188,15 +196,20 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
                 schema_registry_server.addr,
             ))
             .await?;
+        client
+            .batch_execute(&format!(
+                "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+                &*KAFKA_ADDRS,
+            ))
+            .await?;
         let source_task = task::spawn(|| "source_client", async move {
             info!("test_drop_connection_race: in task; creating connection and source");
             let result = client
-                .batch_execute(&format!(
+                .batch_execute(
                     "CREATE SOURCE foo \
-                     FROM KAFKA BROKER '{}' TOPIC 'foo' \
+                     FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn",
-                    &*KAFKA_ADDRS,
-                ))
+                )
                 .await;
             info!(
                 "test_drop_connection_race: in task; create source done: {:?}",
@@ -1750,13 +1763,11 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
         .unwrap();
 
     let row = client
-        .query_one(
-            "SELECT count(*), mz_logical_timestamp()::int8 FROM counter",
-            &[],
-        )
+        .query_one("SELECT count(*), mz_now()::text FROM counter", &[])
         .unwrap();
     let initial_count: i64 = row.get(0);
-    let timestamp_millis: i64 = row.get(1);
+    let timestamp_millis: String = row.get(1);
+    let timestamp_millis: i64 = timestamp_millis.parse().unwrap();
     const WAIT: i64 = 100;
     let next = timestamp_millis + WAIT;
     let expect = initial_count + WAIT;

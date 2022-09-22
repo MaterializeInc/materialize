@@ -25,8 +25,11 @@ $ kafka-create-topic topic=decode-1to2-nodefault
 $ kafka-ingest format=avro topic=decode-1to2-nodefault schema=${1column} timestamp=1
 {"f1": 123}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE decode_1to2_nodefault
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-decode-1to2-nodefault-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-1to2-nodefault-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${2columns-nodefault}'
   ENVELOPE NONE
 
@@ -43,7 +46,7 @@ $ kafka-ingest format=avro topic=decode-1to2-default schema=${1column} timestamp
 {"f1": 123}
 
 > CREATE SOURCE decode_1to2_default
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-decode-1to2-default-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-1to2-default-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${2columns-default}'
   ENVELOPE NONE
 
@@ -61,7 +64,7 @@ $ kafka-ingest format=avro topic=decode-2to1 schema=${2columns-nodefault} timest
 {"f2": 345, "f1": 456}
 
 > CREATE SOURCE decode_2to1
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-decode-2to1-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-2to1-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${1column}'
   ENVELOPE NONE
 

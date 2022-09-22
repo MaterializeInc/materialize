@@ -40,9 +40,11 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '2-2'));
                 > SET cluster=c1
 
+                > CREATE CONNECTION kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
                 > CREATE SOURCE s1
-                  FROM KAFKA BROKER '${testdrive.kafka-addr}'
-                  TOPIC'testdrive-test-${testdrive.seed}'
+                  FROM KAFKA CONNECTION kafka
+                  (TOPIC 'testdrive-test-${testdrive.seed}')
                   FORMAT BYTES
                   ENVELOPE NONE;
 

@@ -13,9 +13,12 @@ $ kafka-ingest topic=test format=bytes
 jack,jill
 goofus,gallant
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE src
-  FROM KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-test-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn
+  (TOPIC 'testdrive-test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
 
 > CREATE MATERIALIZED VIEW v AS

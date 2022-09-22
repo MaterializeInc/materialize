@@ -19,8 +19,11 @@ $ kafka-create-topic topic=avro-decode-no-record
 $ kafka-ingest format=avro topic=avro-decode-no-record schema=${no-record} timestamp=1
 123
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE avro_decode_no_record
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-decode-no-record-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-no-record-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${no-record}'
   ENVELOPE NONE
 

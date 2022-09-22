@@ -282,6 +282,7 @@ impl ColumnKnowledge {
                             | AggregateFunc::MaxUInt16
                             | AggregateFunc::MaxUInt32
                             | AggregateFunc::MaxUInt64
+                            | AggregateFunc::MaxMzTimestamp
                             | AggregateFunc::MaxFloat32
                             | AggregateFunc::MaxFloat64
                             | AggregateFunc::MaxBool
@@ -295,6 +296,7 @@ impl ColumnKnowledge {
                             | AggregateFunc::MinUInt16
                             | AggregateFunc::MinUInt32
                             | AggregateFunc::MinUInt64
+                            | AggregateFunc::MinMzTimestamp
                             | AggregateFunc::MinFloat32
                             | AggregateFunc::MinFloat64
                             | AggregateFunc::MinBool

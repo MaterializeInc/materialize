@@ -99,8 +99,11 @@ $ kafka-create-topic topic=data
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"id": "valid1", "a": 2, "b": 1}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > SELECT * FROM t CROSS JOIN data
@@ -198,8 +201,8 @@ contains:null value in column "a" violates not-null constraint
 ! CREATE INDEX ON v (now())
 contains:cannot materialize call to current_timestamp
 
-! CREATE INDEX ON v (mz_logical_timestamp())
-contains:cannot materialize call to mz_logical_timestamp
+! CREATE INDEX ON v (mz_now())
+contains:cannot materialize call to mz_now
 
 ! CREATE INDEX ON v (mz_version())
 contains:cannot materialize call to mz_version

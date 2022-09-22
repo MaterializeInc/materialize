@@ -4755,6 +4755,7 @@ fn scalar_type_from_catalog(
                 CatalogType::UInt16 => Ok(ScalarType::UInt16),
                 CatalogType::UInt32 => Ok(ScalarType::UInt32),
                 CatalogType::UInt64 => Ok(ScalarType::UInt64),
+                CatalogType::MzTimestamp => Ok(ScalarType::MzTimestamp),
                 CatalogType::Interval => Ok(ScalarType::Interval),
                 CatalogType::Jsonb => Ok(ScalarType::Jsonb),
                 CatalogType::Oid => Ok(ScalarType::Oid),

@@ -8,10 +8,10 @@
 # by the Apache License, Version 2.0.
 
 #
-# Make sure that mz_logical_timestamp and other functions with special
+# Make sure that mz_now and other functions with special
 # handling whose code has been refactored repeatedly are not mangled
 # during a restart
 #
 
 > SHOW CREATE MATERIALIZED VIEW special_functions_view;
-"materialize.public.special_functions_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"special_functions_view\" IN CLUSTER \"default\" AS SELECT * FROM \"materialize\".\"public\".\"special_functions\" WHERE \"mz_catalog\".\"mz_logical_timestamp\"() > \"f1\""
+"materialize.public.special_functions_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"special_functions_view\" IN CLUSTER \"default\" AS SELECT * FROM \"materialize\".\"public\".\"special_functions\" WHERE \"mz_catalog\".\"mz_now\"() > \"f1\""

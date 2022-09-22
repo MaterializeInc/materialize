@@ -15,16 +15,19 @@ $ kafka-ingest topic=static format=bytes
 2
 4
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE indexed (c)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-static-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn
+  (TOPIC 'testdrive-static-${testdrive.seed}')
   FORMAT TEXT
 
 > CREATE DEFAULT INDEX ON indexed
 
 > CREATE SOURCE unindexed (c)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-static-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn
+  (TOPIC 'testdrive-static-${testdrive.seed}')
   FORMAT TEXT
 
 > CREATE VIEW v_unindexed AS SELECT count(*) FROM unindexed

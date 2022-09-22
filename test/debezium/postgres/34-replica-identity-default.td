@@ -23,8 +23,11 @@ $ schema-registry-wait-schema schema=postgres.public.replica_identity_default-va
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE replica_identity_default
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.replica_identity_default'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.replica_identity_default')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

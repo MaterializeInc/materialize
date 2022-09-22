@@ -435,6 +435,7 @@ pub enum CatalogType<T: TypeReference> {
     UInt16,
     UInt32,
     UInt64,
+    MzTimestamp,
     Interval,
     Jsonb,
     List {

@@ -78,77 +78,75 @@ pub async fn purify_create_source(
     let mut with_options_map = normalize::options(with_options)?;
 
     match connection {
-        CreateSourceConnection::Kafka(KafkaSourceConnection { connection, .. }) => {
-            match connection {
-                KafkaConnection::Reference {
+        CreateSourceConnection::Kafka(KafkaSourceConnection {
+            connection:
+                KafkaConnection {
                     connection,
                     options: base_with_options,
-                } => {
-                    let scx = StatementContext::new(None, &*catalog);
-                    let connection = {
-                        let item = scx.get_item_by_resolved_name(&connection)?;
-                        // Get Kafka connection
-                        match item.connection()? {
-                            Connection::Kafka(connection) => connection.clone(),
-                            _ => bail!("{} is not a kafka connection", item.name()),
-                        }
-                    };
-
-                    let extracted_options: KafkaConfigOptionExtracted =
-                        base_with_options.clone().try_into()?;
-
-                    let offset_type =
-                        Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
-                    let config_options =
-                        kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
-
-                    let topic = extracted_options.topic.expect("validated topic exists");
-
-                    let consumer = kafka_util::create_consumer(
-                        &topic,
-                        &connection,
-                        &config_options,
-                        connection_context.librdkafka_log_level,
-                        &*connection_context.secrets_reader,
-                    )
-                    .await
-                    .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
-
-                    if let Some(offset_type) = offset_type {
-                        // Translate `START TIMESTAMP` to a start offset
-                        match kafka_util::lookup_start_offsets(
-                            Arc::clone(&consumer),
-                            &topic,
-                            offset_type,
-                            now,
-                        )
-                        .await?
-                        {
-                            Some(start_offsets) => {
-                                // Drop the value we are purifying
-                                base_with_options.retain(|val| match val {
-                                    KafkaConfigOption {
-                                        name: KafkaConfigOptionName::StartTimestamp,
-                                        ..
-                                    } => false,
-                                    _ => true,
-                                });
-                                info!("add start_offset {:?}", start_offsets);
-                                base_with_options.push(KafkaConfigOption {
-                                    name: KafkaConfigOptionName::StartOffset,
-                                    value: Some(WithOptionValue::Value(Value::Array(
-                                        start_offsets
-                                            .iter()
-                                            .map(|offset| Value::Number(offset.to_string()))
-                                            .collect(),
-                                    ))),
-                                });
-                            }
-                            None => {}
-                        }
-                    }
+                },
+            ..
+        }) => {
+            let scx = StatementContext::new(None, &*catalog);
+            let connection = {
+                let item = scx.get_item_by_resolved_name(&connection)?;
+                // Get Kafka connection
+                match item.connection()? {
+                    Connection::Kafka(connection) => connection.clone(),
+                    _ => bail!("{} is not a kafka connection", item.name()),
                 }
-                _ => {}
+            };
+
+            let extracted_options: KafkaConfigOptionExtracted =
+                base_with_options.clone().try_into()?;
+
+            let offset_type =
+                Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
+            let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+            let topic = extracted_options.topic.expect("validated topic exists");
+
+            let consumer = kafka_util::create_consumer(
+                &topic,
+                &connection,
+                &config_options,
+                connection_context.librdkafka_log_level,
+                &*connection_context.secrets_reader,
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+
+            if let Some(offset_type) = offset_type {
+                // Translate `START TIMESTAMP` to a start offset
+                match kafka_util::lookup_start_offsets(
+                    Arc::clone(&consumer),
+                    &topic,
+                    offset_type,
+                    now,
+                )
+                .await?
+                {
+                    Some(start_offsets) => {
+                        // Drop the value we are purifying
+                        base_with_options.retain(|val| match val {
+                            KafkaConfigOption {
+                                name: KafkaConfigOptionName::StartTimestamp,
+                                ..
+                            } => false,
+                            _ => true,
+                        });
+                        info!("add start_offset {:?}", start_offsets);
+                        base_with_options.push(KafkaConfigOption {
+                            name: KafkaConfigOptionName::StartOffset,
+                            value: Some(WithOptionValue::Value(Value::Array(
+                                start_offsets
+                                    .iter()
+                                    .map(|offset| Value::Number(offset.to_string()))
+                                    .collect(),
+                            ))),
+                        });
+                    }
+                    None => {}
+                }
             }
         }
         CreateSourceConnection::S3 { connection, .. } => {
@@ -349,24 +347,19 @@ async fn purify_csr_connection_proto(
     envelope: &Option<Envelope<Aug>>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
-    let topic =
-        if let CreateSourceConnection::Kafka(KafkaSourceConnection {
-            connection, topic, ..
-        }) = connection
-        {
-            match connection {
-                KafkaConnection::Inline { .. } => topic.clone().unwrap(),
-                KafkaConnection::Reference { options, .. } => {
-                    let KafkaConfigOptionExtracted { topic, .. } = options
-                        .clone()
-                        .try_into()
-                        .expect("already verified options valid provided");
-                    topic.expect("already validated topic provided")
-                }
-            }
-        } else {
-            bail!("Confluent Schema Registry is only supported with Kafka sources")
-        };
+    let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
+        connection: KafkaConnection { options, .. },
+        ..
+    }) = connection
+    {
+        let KafkaConfigOptionExtracted { topic, .. } = options
+            .clone()
+            .try_into()
+            .expect("already verified options valid provided");
+        topic.expect("already validated topic provided")
+    } else {
+        bail!("Confluent Schema Registry is only supported with Kafka sources")
+    };
 
     let CsrConnectionProtobuf {
         seed,
@@ -412,24 +405,19 @@ async fn purify_csr_connection_avro(
     envelope: &Option<Envelope<Aug>>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
-    let topic =
-        if let CreateSourceConnection::Kafka(KafkaSourceConnection {
-            connection, topic, ..
-        }) = connection
-        {
-            match connection {
-                KafkaConnection::Inline { .. } => topic.clone().unwrap(),
-                KafkaConnection::Reference { options, .. } => {
-                    let KafkaConfigOptionExtracted { topic, .. } = options
-                        .clone()
-                        .try_into()
-                        .expect("already verified options valid provided");
-                    topic.expect("already validated topic provided")
-                }
-            }
-        } else {
-            bail!("Confluent Schema Registry is only supported with Kafka sources")
-        };
+    let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
+        connection: KafkaConnection { options, .. },
+        ..
+    }) = connection
+    {
+        let KafkaConfigOptionExtracted { topic, .. } = options
+            .clone()
+            .try_into()
+            .expect("already verified options valid provided");
+        topic.expect("already validated topic provided")
+    } else {
+        bail!("Confluent Schema Registry is only supported with Kafka sources")
+    };
 
     let CsrConnectionAvro {
         connection: CsrConnection { connection, .. },
