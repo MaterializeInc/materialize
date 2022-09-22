@@ -1292,30 +1292,6 @@ where
         self.set_read_policy(policies.collect()).await?;
         Ok(())
     }
-
-    /// Downgrade the read capabilities of specific identifiers to specific frontiers.
-    ///
-    /// Downgrading any read capability to the empty frontier will drop the item and eventually reclaim its resources.
-    /// TODO(jkosh44): This method does not validate the provided identifiers. Currently when the
-    ///     controller starts/restarts it has no durable state. That means that it has no way of
-    ///     remembering any past commands sent. In the future we plan on persisting state for the
-    ///     controller so that it is aware of past commands.
-    ///     Therefore this method is for allowing compaction on objects that we know to have been
-    ///     previously created, but have been forgotten by the controller due to a restart.
-    ///     Once command history becomes durable we can remove this method and use the normal
-    ///     `allow_compaction`.
-    #[tracing::instrument(level = "debug", skip(self))]
-    #[allow(unused)]
-    async fn allow_compaction_unvalidated(
-        &mut self,
-        frontiers: Vec<(GlobalId, Antichain<T>)>,
-    ) -> Result<(), ComputeError> {
-        let policies = frontiers
-            .into_iter()
-            .map(|(id, frontier)| (id, ReadPolicy::ValidFrom(frontier)));
-        self.set_read_policy(policies.collect()).await?;
-        Ok(())
-    }
 }
 
 /// A read-only handle to a compute instance.
