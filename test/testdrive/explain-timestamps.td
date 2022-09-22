@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=(\d{13}|u\d{1,3}) replacement=<REDACTED>
+$ set-regex match=(\d{13}|u\d{1,3}|true|false) replacement=<REDACTED>
 
 > CREATE TABLE t1 (a INT);
 
@@ -16,9 +16,9 @@ $ set-regex match=(\d{13}|u\d{1,3}) replacement=<REDACTED>
 # Strict serializable doesn't look at every object in the same time domain
 > SET TRANSACTION_ISOLATION = 'STRICT SERIALIZABLE';
 > EXPLAIN TIMESTAMP FOR SELECT * FROM t1
-"     timestamp: <REDACTED>\n         since:[<REDACTED>]\n         upper:[<REDACTED>]\n     has table: true\n table read ts: <REDACTED>\n\nsource materialize.public.t1 (<REDACTED>, storage):\n read frontier:[<REDACTED>]\nwrite frontier:[<REDACTED>]\n"
+"          query timestamp: <REDACTED>\n                    since:[<REDACTED>]\n                    upper:[<REDACTED>]\n         global timestamp: <REDACTED>\n  can respond immediately: <REDACTED>\n\nsource materialize.public.t1 (<REDACTED>, storage):\n read frontier:[<REDACTED>]\nwrite frontier:[<REDACTED>]\n"
 
 # Serializable does look at every object in the same time domain
 > SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
 > EXPLAIN TIMESTAMP FOR SELECT * FROM t1
-"     timestamp: <REDACTED>\n         since:[<REDACTED>]\n         upper:[<REDACTED>]\n     has table: true\n table read ts: <REDACTED>\n\nsource materialize.public.t1 (<REDACTED>, storage):\n read frontier:[<REDACTED>]\nwrite frontier:[<REDACTED>]\n\nsource materialize.public.t2 (<REDACTED>, storage):\n read frontier:[<REDACTED>]\nwrite frontier:[<REDACTED>]\n"
+"          query timestamp: <REDACTED>\n                    since:[<REDACTED>]\n                    upper:[<REDACTED>]\n         global timestamp: <REDACTED>\n  can respond immediately: <REDACTED>\n\nsource materialize.public.t1 (<REDACTED>, storage):\n read frontier:[<REDACTED>]\nwrite frontier:[<REDACTED>]\n\nsource materialize.public.t2 (<REDACTED>, storage):\n read frontier:[<REDACTED>]\nwrite frontier:[<REDACTED>]\n"

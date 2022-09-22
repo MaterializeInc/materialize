@@ -235,14 +235,14 @@ impl<'a> ViewFormatter<OptimizedMirRelationExpr> for DataflowGraphFormatter<'a> 
 pub struct TimestampExplanation<T> {
     /// The chosen timestamp from `determine_timestamp`.
     pub timestamp: T,
-    /// Whether the query contains a table.
-    pub has_table: bool,
-    /// If the query contains a table, the global table read timestamp.
-    pub table_read_ts: Option<T>,
     /// The read frontier of all involved sources.
     pub since: Vec<T>,
     /// The write frontier of all involved sources.
     pub upper: Vec<T>,
+    /// Whether the query can responded immediately or if it has to block.
+    pub respond_immediately: bool,
+    /// The current value of the global timestamp.
+    pub global_timestamp: T,
     /// Details about each source.
     pub sources: Vec<TimestampSource<T>>,
 }
@@ -255,13 +255,15 @@ pub struct TimestampSource<T> {
 
 impl<T: fmt::Display + fmt::Debug> fmt::Display for TimestampExplanation<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "     timestamp: {:13}", self.timestamp)?;
-        writeln!(f, "         since:{:13?}", self.since)?;
-        writeln!(f, "         upper:{:13?}", self.upper)?;
-        writeln!(f, "     has table: {}", self.has_table)?;
-        if let Some(ts) = &self.table_read_ts {
-            writeln!(f, " table read ts: {:13}", ts)?;
-        }
+        writeln!(f, "          query timestamp: {:13}", self.timestamp)?;
+        writeln!(f, "                    since:{:13?}", self.since)?;
+        writeln!(f, "                    upper:{:13?}", self.upper)?;
+        writeln!(
+            f,
+            "         global timestamp: {:13?}",
+            self.global_timestamp
+        )?;
+        writeln!(f, "  can respond immediately: {}", self.respond_immediately)?;
         for source in &self.sources {
             writeln!(f, "")?;
             writeln!(f, "source {}:", source.name)?;

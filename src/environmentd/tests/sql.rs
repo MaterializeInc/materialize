@@ -1040,35 +1040,28 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().with_now(now);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
-    let timestamp_re = Regex::new(r"\d{4}").unwrap();
+    let timestamp_re = Regex::new(r"\s*(\d{4}|0)").unwrap();
+    let bool_re = Regex::new(r"true|false").unwrap();
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
 
-    let expect = "     timestamp:          <TIMESTAMP>
-         since:[         <TIMESTAMP>]
-         upper:[         <TIMESTAMP>]
-     has table: true
- table read ts:          <TIMESTAMP>
+    let expect = "          query timestamp:<TIMESTAMP>
+                    since:[<TIMESTAMP>]
+                    upper:[<TIMESTAMP>]
+         global timestamp:<TIMESTAMP>
+  can respond immediately: <BOOL>
 
 source materialize.public.t1 (u1, storage):
- read frontier:[         <TIMESTAMP>]
-write frontier:[         <TIMESTAMP>]\n";
+ read frontier:[<TIMESTAMP>]
+write frontier:[<TIMESTAMP>]\n";
 
-    // Upper starts at 0, which the regex doesn't cover. Wait until it moves ahead.
-    Retry::default()
-        .retry(|_| {
-            let row = client
-                .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
-                .unwrap();
-            let explain: String = row.get(0);
-            let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
-            if explain != expect {
-                Err(format!("expected {expect}, got {explain}"))
-            } else {
-                Ok(())
-            }
-        })
+    let row = client
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
         .unwrap();
+    let explain: String = row.get(0);
+    let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+    let explain = bool_re.replace_all(&explain, "<BOOL>");
+    assert_eq!(explain, expect);
 
     Ok(())
 }
@@ -1618,7 +1611,7 @@ fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMil
         .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
         .unwrap();
     let explain: String = row.get(0);
-    let timestamp_re = Regex::new(r"^\s+timestamp:\s+(\d+)\n").unwrap();
+    let timestamp_re = Regex::new(r"^\s+query timestamp:\s+(\d+)\n").unwrap();
     let timestamp_caps = timestamp_re.captures(&explain).unwrap();
     timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
 }

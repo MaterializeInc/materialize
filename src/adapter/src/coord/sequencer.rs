@@ -2561,13 +2561,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     compute_instance,
                 )?;
                 let since = self.least_valid_read(&id_bundle).elements().to_vec();
-                let upper = self.least_valid_write(&id_bundle).elements().to_vec();
-                let has_table = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-                let table_read_ts = if has_table {
-                    Some(self.get_local_read_ts())
-                } else {
-                    None
-                };
+                let upper = self.least_valid_write(&id_bundle);
+                let respond_immediately = !upper.less_equal(&timestamp);
+                let upper = upper.elements().to_vec();
                 let mut sources = Vec::new();
                 {
                     for id in id_bundle.storage_ids.iter() {
@@ -2619,8 +2615,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     timestamp,
                     since,
                     upper,
-                    has_table,
-                    table_read_ts,
+                    global_timestamp: self.get_local_read_ts(),
+                    respond_immediately,
                     sources,
                 };
                 explanation.to_string()
