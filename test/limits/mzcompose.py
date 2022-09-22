@@ -1375,9 +1375,9 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     replica_definitions.append(
                         f"{replica_name} (REMOTE ["
                         + ", ".join(f"'{n}:2100'" for n in nodes)
-                        + "] COMPUTE ["
+                        + "], COMPUTE ["
                         + ", ".join(f"'{n}:2100'" for n in nodes)
-                        + f"] WORKERS {args.workers})"
+                        + f"], WORKERS {args.workers})"
                     )
 
                 c.sql(
