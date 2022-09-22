@@ -258,7 +258,11 @@ impl<T: fmt::Display + fmt::Debug> fmt::Display for TimestampExplanation<T> {
         writeln!(f, "          query timestamp: {:13}", self.timestamp)?;
         writeln!(f, "                    since:{:13?}", self.since)?;
         writeln!(f, "                    upper:{:13?}", self.upper)?;
-        writeln!(f, "         global timestamp: {:13?}", self.upper)?;
+        writeln!(
+            f,
+            "         global timestamp: {:13?}",
+            self.global_timestamp
+        )?;
         writeln!(f, "  can respond immediately: {}", self.respond_immediately)?;
         for source in &self.sources {
             writeln!(f, "")?;

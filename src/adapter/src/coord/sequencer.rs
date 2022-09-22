@@ -2561,8 +2561,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     compute_instance,
                 )?;
                 let since = self.least_valid_read(&id_bundle).elements().to_vec();
-                let upper = self.least_valid_write(&id_bundle).elements().to_vec();
-                let respond_immediately = upper.iter().all(|upper| upper > &timestamp);
+                let upper = self.least_valid_write(&id_bundle);
+                let respond_immediately = !upper.less_equal(&timestamp);
+                let upper = upper.elements().to_vec();
                 let mut sources = Vec::new();
                 {
                     for id in id_bundle.storage_ids.iter() {
