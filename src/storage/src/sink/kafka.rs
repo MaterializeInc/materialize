@@ -399,15 +399,15 @@ struct KafkaSinkState {
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
     sink_state: KafkaSinkStateEnum,
 
-    /// Timestamp of the latest `END` record that was written out to Kafka.
+    /// Timestamp of the latest progress record that was written out to Kafka.
     latest_progress_ts: Timestamp,
 
     /// Write frontier of this sink.
     ///
     /// The write frontier potentially blocks compaction of timestamp bindings
-    /// in upstream sources. The latest written `END` record is used when
+    /// in upstream sources. The latest written progress record is used when
     /// restarting the sink to gate updates with a lower timestamp. We advance
-    /// the write frontier in lockstep with writing out END records. This
+    /// the write frontier in lockstep with writing out progress records. This
     /// ensures that we don't write updates more than once, ensuring
     /// exactly-once guarantees.
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
@@ -745,11 +745,11 @@ impl KafkaSinkState {
 
             let partition = partitions.into_element();
 
-            // We scan from the beginning and see if we can find an END record. We have
+            // We scan from the beginning and see if we can find a progress record. We have
             // to do it like this because Kafka Control Batches mess with offsets. We
-            // therefore cannot simply take the last offset from the back and expect an
-            // END message there. With a transactional producer, the OffsetTail(1) will
-            // not point to an END message but a control message. With aborted
+            // therefore cannot simply take the last offset from the back and expect a
+            // progress message there. With a transactional producer, the OffsetTail(1) will
+            // not point to an progress message but a control message. With aborted
             // transactions, there might even be a lot of garbage at the end of the
             // topic or in between.
 
@@ -881,11 +881,11 @@ impl KafkaSinkState {
     /// Updates the latest progress update timestamp based on the given
     /// input frontier and pending rows.
     ///
-    /// This will emit an `END` record to the progress topic if the frontier
+    /// This will emit a progress record to the progress topic if the frontier
     /// advanced and advance the maintained write frontier, which will in turn
     /// unblock compaction of timestamp bindings in sources.
     ///
-    /// *NOTE*: `END` records will only be emitted when
+    /// *NOTE*: Progress records will only be emitted when
     /// `KafkaSinkConnection.consistency` points to a progress topic. The
     /// write frontier will be advanced regardless.
     async fn maybe_emit_progress(
