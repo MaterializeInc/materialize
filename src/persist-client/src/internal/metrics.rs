@@ -752,10 +752,7 @@ pub struct ShardsMetrics {
     upper: mz_ore::metrics::IntGaugeVec,
     encoded_rollup_size: mz_ore::metrics::UIntGaugeVec,
     encoded_diff_size: mz_ore::metrics::IntCounterVec,
-    // _batch_count is somewhat redundant with _encoded_state_size. It's nice to
-    // see directly as we're getting started, perhaps we're able to drop it
-    // later in favor of only having the latter.
-    batch_count: mz_ore::metrics::UIntGaugeVec,
+    batch_part_count: mz_ore::metrics::UIntGaugeVec,
     update_count: mz_ore::metrics::UIntGaugeVec,
     encoded_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
@@ -811,10 +808,10 @@ impl ShardsMetrics {
                     var_labels: ["shard"],
                 ),
             ),
-            batch_count: registry.register(
+            batch_part_count: registry.register(
                 metric!(
-                    name: "mz_persist_shard_batch_count",
-                    help: "count of batches in all active shards on this process",
+                    name: "mz_persist_shard_batch_part_count",
+                    help: "count of batch parts in all active shards on this process",
                     var_labels: ["shard"],
                 ),
             ),
@@ -899,7 +896,7 @@ pub struct ShardMetrics {
     upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     encoded_rollup_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     encoded_diff_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     encoded_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -926,8 +923,8 @@ impl ShardMetrics {
             encoded_diff_size: shards_metrics
                 .encoded_diff_size
                 .get_delete_on_drop_counter(vec![shard.clone()]),
-            batch_count: shards_metrics
-                .batch_count
+            batch_part_count: shards_metrics
+                .batch_part_count
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             update_count: shards_metrics
                 .update_count
@@ -981,8 +978,8 @@ impl ShardMetrics {
             .inc_by(u64::cast_from(encoded_diff_size))
     }
 
-    pub fn set_batch_count(&self, batch_count: usize) {
-        self.batch_count.set(u64::cast_from(batch_count))
+    pub fn set_batch_part_count(&self, batch_count: usize) {
+        self.batch_part_count.set(u64::cast_from(batch_count))
     }
 
     pub fn set_update_count(&self, update_count: usize) {
