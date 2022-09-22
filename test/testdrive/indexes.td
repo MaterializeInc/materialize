@@ -23,8 +23,11 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 {"a": 1, "b": 1}
 
 # Sources do not have indexes automatically created
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
 > SHOW INDEXES FROM data

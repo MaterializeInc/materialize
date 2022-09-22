@@ -34,9 +34,12 @@ $ kafka-create-topic topic=avroavro
 $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish", "key2": "key2" } {"f1": "fishval", "f2": 1000}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE avroavro
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-avroavro-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-avroavro-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
@@ -61,8 +64,8 @@ $ kafka-ingest format=avro topic=single key-format=avro key-schema=${keyschemasi
 {"key": "fish" } {"f1": "fishval", "f2": 1000}
 
 > CREATE SOURCE single
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-single-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-single-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschemasingle}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named

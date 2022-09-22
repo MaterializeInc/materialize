@@ -36,8 +36,11 @@ $ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE upsert_modification
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-upsert-modification-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-modification-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
@@ -54,29 +57,29 @@ mammal1:moose
 bìrd1:
 
 > CREATE SOURCE texttext
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textbytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
 
 > CREATE SOURCE textbytes
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textbytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
 
 > CREATE SOURCE bytesbytes
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textbytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT BYTES VALUE FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
 
 > CREATE SOURCE bytestext
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textbytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT BYTES VALUE FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT

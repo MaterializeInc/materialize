@@ -51,8 +51,11 @@ $ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=Basi
 # values. This previously crashed Materialize (see #8930).
 {"message": {}}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE basic FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-basic-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-basic-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Basic' USING SCHEMA FILE '${testdrive.temp-dir}/basic.pb'
 
 > SHOW COLUMNS FROM basic

@@ -27,8 +27,11 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 {"a": {"long": 2}, "b": {"long": 2}, "c": {"string": "foo"}, "d": {"long": 4}}
 {"a": {"long": 2}, "b": {"long": 2}, "c": {"long": 3}, "d": {"string": "d"}}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE unions
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
 > SHOW COLUMNS FROM unions

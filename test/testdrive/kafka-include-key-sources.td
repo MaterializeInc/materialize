@@ -28,14 +28,17 @@ $ kafka-create-topic topic=avro-data partitions=1
 $ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflictkeyschema} schema=${schema} timestamp=1
 {"id": 1} {"id": 2, "b": 3}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 ! CREATE SOURCE missing_key_format
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
 contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
 ! CREATE SOURCE missing_key_format
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS key_col
 contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
@@ -46,8 +49,8 @@ contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FO
 
 # "Bare" format works when the key format is in a registry
 > CREATE SOURCE bareformatconfluent
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS named
   ENVELOPE UPSERT
@@ -58,26 +61,26 @@ named         id       b
 1             2        3
 
 ! CREATE SOURCE not_supported
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE TOPIC
 contains:INCLUDE TOPIC not yet supported
 
 ! CREATE SOURCE not_supported
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE TIMESTAMP as myts, TOPIC
 contains:INCLUDE TOPIC not yet supported
 
 ! CREATE SOURCE avro_data_conflict
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
 contains: column "id" specified more than once
 
 > CREATE SOURCE avro_data_explicit (key_id, id, b)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
@@ -88,7 +91,7 @@ key_id id b
 1 2 3
 
 > CREATE SOURCE include_partition
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE PARTITION
 
@@ -98,7 +101,7 @@ id b partition
 2 3 0
 
 > CREATE SOURCE avro_data_as
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS renamed_id
@@ -108,16 +111,14 @@ renamed_id id b
 ------------
 1 2 3
 
-
 > CREATE SOURCE avro_avro_data (key_id, id, b)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
 
-
 > CREATE SOURCE avro_data_upsert
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS renamed
@@ -152,7 +153,7 @@ $ kafka-ingest format=avro topic=avro-data-record schema=${noconflictschema} tim
 {"a": 88}
 
 > CREATE SOURCE avro_key_record_flattened
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-record-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-record-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${multikeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${noconflictschema}'
   INCLUDE KEY
@@ -165,7 +166,7 @@ id     geo    a
 1      nyc    99
 
 > CREATE SOURCE avro_key_record_renamed
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-record-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-record-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${multikeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${noconflictschema}'
   INCLUDE KEY AS named
@@ -178,7 +179,7 @@ named_id named_geo a
 1        nyc       99
 
 ! CREATE SOURCE avro_debezium
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-dbz-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-dbz-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${noconflictschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
@@ -194,7 +195,7 @@ two,2:bee,honey
 :cow,grass
 
 > CREATE SOURCE textsrc
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textsrc-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE KEY
@@ -207,7 +208,7 @@ two,2  bee,honey
 <null> cow,grass
 
 > CREATE SOURCE regexvalue
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textsrc-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY
@@ -220,7 +221,7 @@ two,2  bee    honey
 <null> cow    grass
 
 > CREATE SOURCE regexboth
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textsrc-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
   KEY FORMAT REGEX '(?P<id_name>[^,]+),(?P<id>\w+)'
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY
@@ -232,9 +233,8 @@ one     1      horse  apple
 two     2      bee    honey
 <null>  <null> cow    grass
 
-
 > CREATE SOURCE regexbothnest
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textsrc-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
   KEY FORMAT REGEX '(?P<id_name>[^,]+),(?P<id>\w+)'
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY AS nest
@@ -275,7 +275,7 @@ $ kafka-ingest topic=proto format=protobuf descriptor-file=test.proto message=Va
 {"measurement": 11}
 
 > CREATE SOURCE input_proto
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-proto-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-${testdrive.seed}')
   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
   INCLUDE KEY
@@ -294,7 +294,7 @@ $ kafka-ingest topic=proto-structured
 {"id1": 1, "id2": 2} {"measurement": 10}
 
 > CREATE SOURCE input_proto_structured
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-proto-structured-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-structured-${testdrive.seed}')
   KEY FORMAT PROTOBUF MESSAGE '.KeyComplex' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
   INCLUDE KEY AS key

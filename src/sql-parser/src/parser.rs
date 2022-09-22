@@ -2060,7 +2060,7 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        Ok(KafkaConnection::Reference {
+        Ok(KafkaConnection {
             connection,
             options,
         })
@@ -2449,23 +2449,8 @@ impl<'a> Parser<'a> {
                 })
             }
             KAFKA => {
-                let (connection, topic) =
-                    match self.expect_one_of_keywords(&[BROKER, CONNECTION])? {
-                        BROKER => {
-                            let conn = KafkaConnection::Inline {
-                                broker: self.parse_literal_string()?,
-                            };
-                            self.expect_keyword(TOPIC)?;
-                            let topic = self.parse_literal_string()?;
-                            (conn, Some(topic))
-                        }
-                        CONNECTION => {
-                            let conn = self.parse_kafka_connection_reference()?;
-                            // TOPIC defined in options on `conn`
-                            (conn, None)
-                        }
-                        _ => unreachable!(),
-                    };
+                self.expect_keyword(CONNECTION)?;
+                let connection = self.parse_kafka_connection_reference()?;
                 // one token of lookahead:
                 // * `KEY (` means we're parsing a list of columns for the key
                 // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
@@ -2479,7 +2464,6 @@ impl<'a> Parser<'a> {
                 };
                 Ok(CreateSourceConnection::Kafka(KafkaSourceConnection {
                     connection,
-                    topic,
                     key,
                 }))
             }

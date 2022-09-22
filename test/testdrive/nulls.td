@@ -22,8 +22,11 @@ $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
 {"a": {"long": 2}}
 {"a": null}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE foo
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${foo-schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
@@ -44,7 +47,7 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=nullpayload 
 :así
 
 > CREATE SOURCE nullpayload (col)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nullpayload-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nullpayload-${testdrive.seed}')
   FORMAT BYTES
 
 > SELECT col from nullpayload

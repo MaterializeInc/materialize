@@ -31,10 +31,12 @@ $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keysch
 $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish2"} {"f1": "fishval", "f2": 1000}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE SOURCE headers_src
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-headers_src-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-headers_src-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
@@ -90,8 +92,8 @@ $ kafka-ingest format=avro topic=headers_also key-format=avro key-schema=${keysc
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
 
 > CREATE SOURCE headers_also
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-headers_also-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-headers_also-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS, PARTITION
@@ -132,8 +134,8 @@ $ set schemaheaders={
 $ kafka-create-topic topic=headers_conflict
 
 ! CREATE SOURCE headers_conflict
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-headers_conflict-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-headers_conflict-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schemaheaders}'
   INCLUDE HEADERS
@@ -150,8 +152,8 @@ $ kafka-ingest format=avro topic=headers_conflict key-format=avro key-schema=${k
 
 # using AS to resolve it!
 > CREATE SOURCE headers_conflict2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-headers_conflict-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-headers_conflict-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schemaheaders}'
   INCLUDE HEADERS AS kafka_headers

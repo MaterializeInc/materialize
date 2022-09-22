@@ -34,17 +34,19 @@ This can be used to allow multiple CDC sources, or a CDC source and system time 
 For example, to create two CDC sources that are joinable:
 
 ```sql
+CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'broker';
+
 CREATE SOURCE source_1
-  FROM KAFKA BROKER 'broker' TOPIC 'topic-1'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'topic-1')
   FORMAT AVRO USING SCHEMA 'schema-1'
   ENVELOPE MATERIALIZE
-  WITH (TIMELINE 'my_user_timeline');
+  LEGACYWITH (TIMELINE 'my_user_timeline');
 
 CREATE SOURCE source_2
-  FROM KAFKA BROKER 'broker' TOPIC 'topic-2'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'topic-2')
   FORMAT AVRO USING SCHEMA 'schema-2'
   ENVELOPE MATERIALIZE
-  WITH (TIMELINE 'my_user_timeline');
+  LEGACYWITH (TIMELINE 'my_user_timeline');
 ```
 
 ## CDC Sources
@@ -58,10 +60,10 @@ Joining this source to other system time sources will result in query delays unt
 
 ```sql
 CREATE SOURCE source_3
-  FROM KAFKA BROKER 'broker' TOPIC 'topic-3'
+  FROM KAFKA CONDITION kafka_conn (TOPIC 'topic-3')
   FORMAT AVRO USING SCHEMA 'schema'
   ENVELOPE MATERIALIZE
-  WITH (TIMELINE 'mz_epoch_ms')
+  LEGACYWITH (TIMELINE 'mz_epoch_ms')
 ```
 
 [cdc-sources]: /connect/materialize-cdc
