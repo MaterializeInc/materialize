@@ -1,6 +1,7 @@
 ---
 title: "CREATE SINK"
 description: "`CREATE SINK` sends data from Materialize to an external sink."
+pagerank: 10
 menu:
   # This should also have a "non-content entry" under Connect, which is
   # configured in doc/user/config.toml

@@ -162,7 +162,7 @@ For a deeper dive into how indexes work, see [Arrangements](/overview/arrangemen
 ## Clusters
 
 Clusters are logical components that let you express resource isolation for all
-dataflow-powered objects, e.g. indexes and sinks. When creating dataflow-powered
+dataflow-powered objects, e.g. indexes. When creating dataflow-powered
 objects, you must specify which cluster you want to use. (Not explicitly naming
 a cluster uses your session's default cluster.)
 
