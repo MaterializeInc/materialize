@@ -19,7 +19,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
-    DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry,
+    DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge
 };
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
@@ -65,6 +65,8 @@ pub struct Metrics {
     pub state: StateMetrics,
     /// Metrics for various per-shard measurements.
     pub shards: ShardsMetrics,
+    /// Metrics for auditing persist usage
+    pub audit: AuditMetrics,
 
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresConsensusMetrics,
@@ -98,6 +100,7 @@ impl Metrics {
             lease: LeaseMetrics::new(registry),
             state: StateMetrics::new(registry),
             shards: ShardsMetrics::new(registry),
+            audit: AuditMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
             _vecs: vecs,
             _uptime: uptime,
@@ -993,6 +996,30 @@ impl ShardMetrics {
 
     pub fn set_seqnos_held(&self, seqnos_held: usize) {
         self.seqnos_held.set(u64::cast_from(seqnos_held))
+    }
+}
+
+/// Metrics recorded by audits of persist usage
+#[derive(Debug)]
+pub struct AuditMetrics {
+    /// Sum of size of all parts stored in Blob
+    pub blob_size: UIntGauge,
+    /// Total number of parts stored in Blob
+    pub blob_parts_count: UIntGauge,
+}
+
+impl AuditMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        AuditMetrics {
+            blob_size: registry.register(metric!(
+                name: "mz_persist_audit_blob_size",
+                help: "total size (in bytes) of all blobs",
+            )),
+            blob_parts_count: registry.register(metric!(
+                name: "mz_persist_audit_blob_parts_count",
+                help: "count of all parts in blob",
+            )),
+        }
     }
 }
 

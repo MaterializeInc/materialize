@@ -55,6 +55,8 @@ impl StorageUsageClient {
             &self.metrics.retries.external.storage_usage_shard_size,
             || async {
                 let mut shard_sizes = HashMap::new();
+                let mut total_size = 0;
+                let mut total_parts_count = 0;
                 self.blob
                     .list_keys_and_metadata(&BlobKeyPrefix::All.to_string(), &mut |metadata| {
                         match BlobKey::parse_ids(metadata.key) {
@@ -66,8 +68,14 @@ impl StorageUsageClient {
                                 *shard_sizes.entry(None).or_insert(0) += metadata.size_in_bytes;
                             }
                         }
+                        total_parts_count += 1;
+                        total_size += metadata.size_in_bytes;
                     })
                     .await?;
+
+                self.metrics.audit.blob_size.set(total_size);
+                self.metrics.audit.blob_parts_count.set(total_parts_count);
+
                 Ok(shard_sizes)
             },
         )
