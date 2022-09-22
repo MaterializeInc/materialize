@@ -40,6 +40,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::Activator;
+use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
@@ -891,7 +892,12 @@ impl KafkaSinkState {
     async fn maybe_emit_progress(
         &mut self,
         input_frontier: AntichainRef<'_, Timestamp>,
+        as_of: &SinkAsOf<Timestamp>,
     ) -> anyhow::Result<bool> {
+        if !PartialOrder::less_equal(&as_of.frontier.borrow(), &input_frontier) {
+            return Ok(false);
+        }
+
         let mut progress_emitted = false;
         // This only looks at the first entry of the antichain.
         // If we ever have multi-dimensional time, this is not correct
@@ -1169,7 +1175,7 @@ where
 
                     if let Some(gate) = latest_ts {
                         assert!(
-                            as_of.frontier.iter().all(|ts| *ts <= gate),
+                            PartialOrder::less_equal(&as_of.frontier, &Antichain::from_elem(gate)),
                             "{}: some element of the Sink as_of frontier is too \
                                 far advanced for our output-gating timestamp: \
                                 as_of {:?}, gate_ts: {:?}",
@@ -1318,18 +1324,10 @@ where
             // While we still have ready rows that we're emitting, hold the write
             // frontier at the previous time.
             //
-            // Only ever emit progress records if this operator/worker received
-            // updates. Only one worker receives all the updates and we don't want
-            // the other workers to also emit progress.
-            if is_active_worker
-                && (
-                    // A previous run of this sink produced data
-                    s.sink_state.gate_ts().is_some()
-                    // This run has produced data
-                    || s.latest_progress_ts > Timestamp::minimum()
-                )
-            {
-                match s.maybe_emit_progress(frontier.borrow()).await {
+            // Only one worker receives all the updates and we don't want the
+            // other workers to also emit progress.
+            if is_active_worker {
+                match s.maybe_emit_progress(frontier.borrow(), &as_of).await {
                     Ok(progress_emitted) => {
                         if progress_emitted {
                             // Don't flush if we know there were no records emitted.
