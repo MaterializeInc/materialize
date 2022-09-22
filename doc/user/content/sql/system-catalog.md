@@ -90,7 +90,7 @@ Field           | Type                         | Meaning
 `event_type`    | [`text`]                     | The type of the event: `create`, `drop`, `alter`, or `rename`.
 `object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `index`, `materialized-view`, `sink`, `source`, or `view`.
 `event_details` | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
-`user`          | [`text`]                     | The user who triggered the event.
+`user`          | [`text`]                     | The user who triggered the event, or `NULL` if triggered by the system.
 `occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred.
 
 ### `mz_base_types`

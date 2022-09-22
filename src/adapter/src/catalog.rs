@@ -2567,6 +2567,7 @@ impl<S: Append> Catalog<S> {
         let storage = storage::Connection::open(
             stash,
             &BootstrapArgs {
+                now: (now)(),
                 default_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
             },
@@ -3015,11 +3016,7 @@ impl<S: Append> Catalog<S> {
         object_type: ObjectType,
         event_details: EventDetails,
     ) -> Result<(), Error> {
-        let session = match session {
-            Some(session) => session,
-            None => return Ok(()),
-        };
-        let user = session.user().to_string();
+        let user = session.map(|session| session.user().to_string());
         let occurred_at = (self.state.config.now)();
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(
