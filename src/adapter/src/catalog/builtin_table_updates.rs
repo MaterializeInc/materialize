@@ -674,7 +674,7 @@ impl CatalogState {
             &EventType,
             &ObjectType,
             &EventDetails,
-            &str,
+            &Option<String>,
             u64,
         ) = match event {
             VersionedEvent::V1(ev) => (
@@ -703,7 +703,10 @@ impl CatalogState {
                 Datum::String(&format!("{}", event_type)),
                 Datum::String(&format!("{}", object_type)),
                 event_details,
-                Datum::String(user),
+                match user {
+                    Some(user) => Datum::String(user),
+                    None => Datum::Null,
+                },
                 Datum::TimestampTz(DateTime::from_utc(dt, Utc)),
             ]),
             diff: 1,

@@ -238,6 +238,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let adapter_storage = mz_adapter::catalog::storage::Connection::open(
         stash,
         &BootstrapArgs {
+            now: (config.now)(),
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
             // TODO(benesch, brennan): remove this after v0.27.0-alpha.4 has
             // shipped to cloud since all clusters will have had a default

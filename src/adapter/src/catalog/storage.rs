@@ -14,10 +14,11 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use itertools::{max, Itertools};
+use mz_ore::now::EpochMillis;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
 use mz_ore::cast::CastFrom;
@@ -73,7 +74,7 @@ async fn migrate<S: Append>(
     let migrations: &[for<'a> fn(
         &mut Transaction<'a, S>,
         &'a BootstrapArgs,
-    ) -> Result<(), StashError>] = &[
+    ) -> Result<(), catalog::error::Error>] = &[
         |txn: &mut Transaction<'_, S>, bootstrap_args| {
             txn.id_allocator.insert(
                 IdAllocKey {
@@ -214,35 +215,77 @@ async fn migrate<S: Append>(
                     name: "materialize".into(),
                 },
             )?;
+            let default_instance = ComputeInstanceValue {
+                name: "default".into(),
+                config: Some(ComputeInstanceIntrospectionConfig {
+                    debugging: false,
+                    interval: Duration::from_secs(1),
+                }),
+            };
+            let default_replica = ComputeInstanceReplicaValue {
+                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                name: "default_replica".into(),
+                config: SerializedComputeInstanceReplicaConfig {
+                    persisted_logs: SerializedComputeInstanceReplicaLogging::Default,
+                    location: SerializedComputeInstanceReplicaLocation::Managed {
+                        size: bootstrap_args.default_cluster_replica_size.clone(),
+                        availability_zone: bootstrap_args.default_availability_zone.clone(),
+                        az_user_specified: false,
+                    },
+                },
+            };
             txn.compute_instances.insert(
                 ComputeInstanceKey {
                     id: DEFAULT_COMPUTE_INSTANCE_ID,
                 },
-                ComputeInstanceValue {
-                    name: "default".into(),
-                    config: Some(ComputeInstanceIntrospectionConfig {
-                        debugging: false,
-                        interval: Duration::from_secs(1),
-                    }),
-                },
+                default_instance.clone(),
             )?;
             txn.compute_instance_replicas.insert(
                 ComputeInstanceReplicaKey {
                     id: DEFAULT_REPLICA_ID,
                 },
-                ComputeInstanceReplicaValue {
-                    compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
-                    name: "default_replica".into(),
-                    config: SerializedComputeInstanceReplicaConfig {
-                        persisted_logs: SerializedComputeInstanceReplicaLogging::Default,
-                        location: SerializedComputeInstanceReplicaLocation::Managed {
-                            size: bootstrap_args.default_cluster_replica_size.clone(),
-                            availability_zone: bootstrap_args.default_availability_zone.clone(),
-                            az_user_specified: false,
-                        },
-                    },
-                },
+                default_replica.clone(),
             )?;
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::Cluster,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: DEFAULT_COMPUTE_INSTANCE_ID,
+                            name: default_instance.name.clone(),
+                        }),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::ClusterReplica,
+                        EventDetails::CreateComputeInstanceReplicaV1(
+                            mz_audit_log::CreateComputeInstanceReplicaV1 {
+                                cluster_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                                cluster_name: default_instance.name,
+                                replica_name: default_replica.name,
+                                logical_size: bootstrap_args.default_cluster_replica_size.clone(),
+                            },
+                        ),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
             txn.timestamps.insert(
                 TimestampKey {
                     id: Timeline::EpochMilliseconds.to_string(),
@@ -288,6 +331,7 @@ async fn migrate<S: Append>(
 }
 
 pub struct BootstrapArgs {
+    pub now: EpochMillis,
     pub default_cluster_replica_size: String,
     pub default_availability_zone: String,
 }
