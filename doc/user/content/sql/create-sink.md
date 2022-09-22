@@ -17,12 +17,8 @@ Sinks let you stream data out of Materialize, using either sources or views.
 Sink source type | Description
 -----------------|------------
 **Source** | Simply pass all data received from the source to the sink without modifying it.
+**Table** | Stream all changes to the specified table out to the sink.
 **Materialized view** | Stream all changes to the view to the sink. This lets you use Materialize to process a stream, and then stream the processed values. Note that this feature only works with [materialized views](../create-materialized-view), and _does not_ work with [non-materialized views](../create-view).
-
-### Sinks + clusters
-
-Materialize maintains sinks using dataflows. Each dataflow must belong to a
-[cluster](/overview/key-concepts#clusters).
 
 ## Syntax
 
@@ -44,7 +40,6 @@ Field | Use
 ------|-----
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a sink of the same name already exists. <br/><br/>If _not_ specified, throw an error if a sink of the same name already exists. _(Default)_
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
-_cluster_name_ | The [cluster](/sql/create-cluster) to maintain this sink. If not provided, uses the session's `cluster` variable.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
 **KAFKA CONNECTION** _conn_ | The Kafka [connection](../create-connection) where you want to sink data.
 **TOPIC** _topic&lowbar;prefix_ | The prefix used to generate the Kafka topic name to create and write to.
@@ -69,11 +64,6 @@ Field                | Value type | Description
 `retention_bytes`    | `long`     | Sets the maximum size a Kafka partition can grow before removing old logs.  Accepts values [-1, ...]. `-1` specifics no size limit.  If not set, uses the broker default.
 `avro_key_fullname`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `avro_value_fullname`. The default fullname is `row`.
 `avro_value_fullname`| `text`     | Sets the Avro fullname on the generated value schema. When `KEY` is specified, `avro_key_fullname` must additionally be specified. The default fullname is `envelope`.
-
-#### Authentication
-
-Kafka sinks support the same authentication scheme and options as Kafka sources (`SSL`, `SASL`).
-Check the [Kafka source documentation](/sql/create-source/kafka/#authentication) for more details and examples.
 
 ### `WITH SNAPSHOT` or `WITHOUT SNAPSHOT`
 

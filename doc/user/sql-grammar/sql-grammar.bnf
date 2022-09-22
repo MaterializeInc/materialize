@@ -65,13 +65,11 @@ create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink ::=
     'CREATE SINK' 'IF NOT EXISTS'? sink_name
-    ('IN' 'CLUSTER' cluster_name)?
     'FROM' item_name
     'INTO' sink_kafka_connector
-    ( sink_with_options )?
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
-    ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
+    ('WITH' with_options)?
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -262,9 +260,8 @@ jsonb_agg ::=
 jsonb_object_agg ::=
   'jsonb_object_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 sink_kafka_connector ::=
-    'KAFKA' 'CONNECTION' conn 'TOPIC' topic-prefix
+    'KAFKA' 'CONNECTION' conn (with_options)?
     ('KEY' '(' key_column ( ',' key_column )* ')')?
-    ('CONSISTENCY' '(' 'TOPIC' consistency_topic ('FORMAT' consistency_format_spec)? ')' )?
 list_agg ::=
   'list_agg' '(' value  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 lit_cast ::=
