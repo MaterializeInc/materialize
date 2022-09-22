@@ -94,13 +94,18 @@ impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
+pub enum IntrospectionType {
+    ShardMapping,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataSource {
     /// Ingest data from some external source.
     Ingestion(IngestionDescription),
     /// Data comes from introspection sources, which the controller itself is
     /// responisble for generating.
-    Introspection,
+    Introspection(IntrospectionType),
 }
 
 /// Describes a request to create a source.
@@ -1073,7 +1078,7 @@ where
                             .await?;
                         client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
                     }
-                    DataSource::Introspection => unreachable!(),
+                    DataSource::Introspection(_) => unreachable!(),
                 }
             }
 

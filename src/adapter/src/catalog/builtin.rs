@@ -25,6 +25,7 @@
 use std::hash::Hash;
 
 use differential_dataflow::Hashable;
+use mz_storage::controller::IntrospectionType;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
@@ -92,6 +93,7 @@ pub struct BuiltinStorageCollection {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
+    pub data_source: Option<IntrospectionType>,
 }
 
 #[derive(Hash)]
@@ -1291,6 +1293,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =
     Lazy::new(|| BuiltinStorageCollection {
         name: "mz_source_status_history",
         schema: MZ_CATALOG_SCHEMA,
+        data_source: None,
         desc: RelationDesc::empty()
             .with_column("timestamp", ScalarType::Timestamp.nullable(false))
             .with_column("source_name", ScalarType::String.nullable(false))
@@ -1308,6 +1311,7 @@ pub static MZ_STORAGE_SHARDS: Lazy<BuiltinStorageCollection> =
     Lazy::new(|| BuiltinStorageCollection {
         name: "mz_storage_shards",
         schema: MZ_CATALOG_SCHEMA,
+        data_source: Some(IntrospectionType::ShardMapping),
         desc: RelationDesc::empty()
             .with_column("object_id", ScalarType::String.nullable(false))
             .with_column("shard_id", ScalarType::String.nullable(false)),

@@ -590,7 +590,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), 1));
                 }
                 CatalogItem::StorageCollection(coll) => {
-                    let collection_desc = coll.desc.clone().into();
+                    let collection_desc = CollectionDescription {
+                        desc: coll.desc.clone(),
+                        data_source: coll.data_source.clone().map(DataSource::Introspection),
+                        since: None,
+                        status_collection_id,
+                        host_config: None,
+                    };
+
                     self.controller
                         .storage
                         .create_managed_collections(vec![(entry.id(), collection_desc)])
