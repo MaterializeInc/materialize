@@ -2614,6 +2614,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     timestamp,
                     since,
                     upper,
+                    global_timestamp: self.get_local_read_ts(),
                     respond_immediately,
                     sources,
                 };
