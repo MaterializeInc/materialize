@@ -66,7 +66,7 @@ function Views() {
     SELECT
       id, name, records
     FROM
-      mz_catalog.mz_records_per_dataflow_global
+      mz_internal.mz_records_per_dataflow_global
     ${where_fragment}
     ORDER BY
       records DESC
@@ -165,7 +165,7 @@ function View(props) {
         SELECT
           name, records
         FROM
-          mz_catalog.mz_records_per_dataflow_global
+          mz_internal.mz_records_per_dataflow_global
         WHERE
           id = ${props.dataflow_id};
 
@@ -177,21 +177,21 @@ function View(props) {
         SELECT DISTINCT
           id, address
         FROM
-          mz_catalog.mz_dataflow_addresses
+          mz_internal.mz_dataflow_addresses
         WHERE
           id
           IN (
               SELECT
                 id
               FROM
-                mz_catalog.mz_dataflow_addresses
+                mz_internal.mz_dataflow_addresses
               WHERE
                 address[1]
                   = (
                       SELECT DISTINCT
                         address[1]
                       FROM
-                        mz_catalog.mz_dataflow_addresses
+                        mz_internal.mz_dataflow_addresses
                       WHERE
                         id = ${props.dataflow_id}
                     )
@@ -200,21 +200,21 @@ function View(props) {
         SELECT DISTINCT
           id, name
         FROM
-          mz_catalog.mz_dataflow_operators
+          mz_internal.mz_dataflow_operators
         WHERE
           id
           IN (
               SELECT
                 id
               FROM
-                mz_catalog.mz_dataflow_addresses
+                mz_internal.mz_dataflow_addresses
               WHERE
                 address[1]
                   = (
                       SELECT DISTINCT
                         address[1]
                       FROM
-                        mz_catalog.mz_dataflow_addresses
+                        mz_internal.mz_dataflow_addresses
                       WHERE
                         id = ${props.dataflow_id}
                     )
@@ -223,8 +223,8 @@ function View(props) {
         SELECT
           id, from_index, to_index, sum(sent) as sent
         FROM
-          mz_catalog.mz_dataflow_channels AS channels
-          LEFT JOIN mz_catalog.mz_message_counts AS counts
+          mz_internal.mz_dataflow_channels AS channels
+          LEFT JOIN mz_internal.mz_message_counts AS counts
               ON channels.id = counts.channel_id AND channels.worker_id = counts.from_worker_id
         WHERE
           id
@@ -232,14 +232,14 @@ function View(props) {
               SELECT
                 id
               FROM
-                mz_catalog.mz_dataflow_addresses
+                mz_internal.mz_dataflow_addresses
               WHERE
                 address[1]
                   = (
                       SELECT DISTINCT
                         address[1]
                       FROM
-                        mz_catalog.mz_dataflow_addresses
+                        mz_internal.mz_dataflow_addresses
                       WHERE
                         id = ${props.dataflow_id}
                     )
@@ -250,21 +250,21 @@ function View(props) {
         SELECT
           id, sum(elapsed_ns)
         FROM
-          mz_catalog.mz_scheduling_elapsed
+          mz_internal.mz_scheduling_elapsed
         WHERE
           id
           IN (
               SELECT
                 id
               FROM
-                mz_catalog.mz_dataflow_addresses
+                mz_internal.mz_dataflow_addresses
               WHERE
                 address[1]
                   = (
                       SELECT DISTINCT
                         address[1]
                       FROM
-                        mz_catalog.mz_dataflow_addresses
+                        mz_internal.mz_dataflow_addresses
                       WHERE
                         id = ${props.dataflow_id}
                     )
@@ -275,7 +275,7 @@ function View(props) {
         SELECT
           id, sum(records)
         FROM
-          mz_catalog.mz_records_per_dataflow_operator
+          mz_internal.mz_records_per_dataflow_operator
         WHERE
           dataflow_id = ${props.dataflow_id}
         GROUP BY
