@@ -102,7 +102,15 @@ SELECT pg_typeof('{1}'::int4_list_list_too::int4_list_list)
 ----
 int4_list_list
 
+query TTT
+SELECT CAST('2020-01-01' AS date), CAST('2020-01-01'::timestamp as date), CAST('2020-01-01'::timestamptz as date)
+----
+2020-01-01
+2020-01-01
+2020-01-01
+
 # Postgres also supports `typename ( expression )` cast expressions with some limitations.
+# https://www.postgresql.org/docs/13/sql-expressions.html#SQL-SYNTAX-TYPE-CASTS
 # TODO: Support these more generally instead of just `date`.
 
 query TTT
@@ -115,5 +123,5 @@ SELECT date('2020-01-01'), date('2020-01-01'::timestamp), date('2020-01-01'::tim
 query error invalid input syntax
 SELECT date('2000')
 
-query error function .* does not exist
+query error Cannot call function date\(unknown, unknown\): arguments cannot be implicitly cast to any implementation's parameters
 SELECT date('2000', 'a')

@@ -1645,6 +1645,7 @@ struct AllocatedBuiltinSystemIds<T> {
 pub struct SystemObjectMapping {
     schema_name: String,
     object_name: String,
+    object_type: CatalogItemType,
     id: GlobalId,
     fingerprint: u64,
 }
@@ -1872,7 +1873,11 @@ impl<S: Append> Catalog<S> {
                     .collect(),
                 |builtin| {
                     persisted_builtin_ids
-                        .get(&(builtin.schema().to_string(), builtin.name().to_string()))
+                        .get(&(
+                            builtin.schema().to_string(),
+                            builtin.name().to_string(),
+                            builtin.catalog_item_type(),
+                        ))
                         .cloned()
                 },
             )
@@ -1959,6 +1964,7 @@ impl<S: Append> Catalog<S> {
             .map(|(builtin, id)| SystemObjectMapping {
                 schema_name: builtin.schema().to_string(),
                 object_name: builtin.name().to_string(),
+                object_type: builtin.catalog_item_type(),
                 id: *id,
                 fingerprint: builtin.fingerprint(),
             })
@@ -2182,7 +2188,11 @@ impl<S: Append> Catalog<S> {
         } = self
             .allocate_system_ids(BUILTINS::types().collect(), |typ| {
                 persisted_builtin_ids
-                    .get(&(typ.schema.to_string(), typ.name.to_string()))
+                    .get(&(
+                        typ.schema.to_string(),
+                        typ.name.to_string(),
+                        CatalogItemType::Type,
+                    ))
                     .cloned()
             })
             .await?;
@@ -2239,6 +2249,7 @@ impl<S: Append> Catalog<S> {
             .map(|(typ, id)| SystemObjectMapping {
                 schema_name: typ.schema.to_string(),
                 object_name: typ.name.to_string(),
+                object_type: CatalogItemType::Type,
                 id: *id,
                 fingerprint: typ.fingerprint(),
             })
@@ -2369,6 +2380,7 @@ impl<S: Append> Catalog<S> {
                     SystemObjectMapping {
                         schema_name: schema_name.to_string(),
                         object_name: entry.name.item.clone(),
+                        object_type: entry.item_type(),
                         id: new_id,
                         fingerprint: *fingerprint,
                     },

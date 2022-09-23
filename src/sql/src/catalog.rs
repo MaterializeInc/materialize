@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_compute_client::controller::ComputeInstanceId;
@@ -340,7 +341,7 @@ pub trait CatalogItem {
 }
 
 /// The type of a [`CatalogItem`].
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Deserialize, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum CatalogItemType {
     /// A table.
     Table,

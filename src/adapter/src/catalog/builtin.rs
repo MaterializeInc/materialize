@@ -30,7 +30,9 @@ use serde::Serialize;
 
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql::catalog::{CatalogType, CatalogTypeDetails, NameReference, TypeReference};
+use mz_sql::catalog::{
+    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
+};
 
 use crate::catalog::SYSTEM_USER;
 
@@ -69,6 +71,17 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
             Builtin::StorageCollection(coll) => coll.schema,
+        }
+    }
+
+    pub fn catalog_item_type(&self) -> CatalogItemType {
+        match self {
+            Builtin::Log(_) => CatalogItemType::Source,
+            Builtin::Table(_) => CatalogItemType::Table,
+            Builtin::View(_) => CatalogItemType::View,
+            Builtin::Type(_) => CatalogItemType::Type,
+            Builtin::Func(_) => CatalogItemType::Func,
+            Builtin::StorageCollection(_) => CatalogItemType::Source,
         }
     }
 }

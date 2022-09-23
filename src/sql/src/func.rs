@@ -1873,6 +1873,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         "chr" => Scalar {
             params!(Int32) => UnaryFunc::Chr(func::Chr), 1621;
         },
+        "date" => Scalar {
+            params!(Timestamp) => UnaryFunc::CastTimestampToDate(func::CastTimestampToDate), 2029;
+            params!(TimestampTz) => UnaryFunc::CastTimestampTzToDate(func::CastTimestampTzToDate), 1178;
+        },
         "date_bin" => Scalar {
             params!(Interval, Timestamp) => Operation::binary(|ecx, stride, source| {
                 ecx.require_unsafe_mode("binary date_bin")?;

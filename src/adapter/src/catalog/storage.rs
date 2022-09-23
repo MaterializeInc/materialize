@@ -24,7 +24,7 @@ use mz_compute_client::controller::{ComputeInstanceId, ConcreteComputeInstanceRe
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;
-use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType};
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
@@ -532,14 +532,14 @@ impl<S: Append> Connection<S> {
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
     pub async fn load_system_gids(
         &mut self,
-    ) -> Result<BTreeMap<(String, String), (GlobalId, u64)>, Error> {
+    ) -> Result<BTreeMap<(String, String, CatalogItemType), (GlobalId, u64)>, Error> {
         Ok(COLLECTION_SYSTEM_GID_MAPPING
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(|(k, v)| {
                 (
-                    (k.schema_name, k.object_name),
+                    (k.schema_name, k.object_name, k.object_type),
                     (GlobalId::System(v.id), v.fingerprint),
                 )
             })
@@ -589,6 +589,7 @@ impl<S: Append> Connection<S> {
             |SystemObjectMapping {
                  schema_name,
                  object_name,
+                 object_type,
                  id,
                  fingerprint,
              }| {
@@ -601,6 +602,7 @@ impl<S: Append> Connection<S> {
                     GidMappingKey {
                         schema_name,
                         object_name,
+                        object_type,
                     },
                     GidMappingValue { id, fingerprint },
                 )
@@ -1467,6 +1469,7 @@ struct IdAllocValue {
 struct GidMappingKey {
     schema_name: String,
     object_name: String,
+    object_type: CatalogItemType,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]

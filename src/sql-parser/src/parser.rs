@@ -609,27 +609,6 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // TODO: This is a temporary hack to allow us to support the special
-        // `date(expr)` cast function without needing to write a migration. It
-        // will be removed during a wipe week.
-        if let (FunctionArgs::Args { args, order_by }, None, None, false) =
-            (&args, &filter, &over, distinct)
-        {
-            if order_by.is_empty()
-                && args.len() == 1
-                && name.0.len() == 1
-                && name.0[0].as_str().eq_ignore_ascii_case("date")
-            {
-                return Ok(Expr::Cast {
-                    expr: Box::new(args[0].clone()),
-                    data_type: RawDataType::Other {
-                        name: RawObjectName::Name(name),
-                        typ_mod: Vec::new(),
-                    },
-                });
-            }
-        }
-
         Ok(Expr::Function(Function {
             name,
             args,
