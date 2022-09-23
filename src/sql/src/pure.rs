@@ -103,7 +103,9 @@ pub async fn purify_create_source(
                 Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
             let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
 
-            let topic = extracted_options.topic.expect("validated topic exists");
+            let topic = extracted_options
+                .topic
+                .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
 
             let consumer = kafka_util::create_consumer(
                 &topic,

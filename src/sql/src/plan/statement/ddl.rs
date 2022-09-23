@@ -404,7 +404,7 @@ pub fn plan_create_source(
 
             let topic = extracted_options
                 .topic
-                .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
+                .expect("validated exists during purification");
             let group_id_prefix = extracted_options.group_id_prefix;
 
             let mut start_offsets = HashMap::new();
