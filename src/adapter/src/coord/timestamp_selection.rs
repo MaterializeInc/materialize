@@ -13,6 +13,7 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
 use mz_compute_client::controller::ComputeInstanceId;
+use mz_expr::MirScalarExpr;
 use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::{RowArena, ScalarType, Timestamp};
 use mz_sql::plan::QueryWhen;
@@ -57,35 +58,8 @@ impl<S: Append + 'static> Coordinator<S> {
         // Initialize candidate to the minimum correct time.
         let mut candidate = Timestamp::minimum();
 
-        if let Some(mut timestamp) = when.advance_to_timestamp() {
-            let temp_storage = RowArena::new();
-            prep_scalar_expr(self.catalog.state(), &mut timestamp, ExprPrepStyle::AsOf)?;
-            let evaled = timestamp.eval(&[], &temp_storage)?;
-            if evaled.is_null() {
-                coord_bail!("can't use {} as a mztimestamp for AS OF", evaled);
-            }
-            let ty = timestamp.typ(&[]);
-            let ts: mz_repr::Timestamp = match ty.scalar_type {
-                ScalarType::MzTimestamp => evaled.unwrap_mztimestamp(),
-                ScalarType::Numeric { .. } => {
-                    let n = evaled.unwrap_numeric().0;
-                    n.try_into()?
-                }
-                ScalarType::Int16 => i64::from(evaled.unwrap_int16()).try_into()?,
-                ScalarType::Int32 => i64::from(evaled.unwrap_int32()).try_into()?,
-                ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
-                ScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
-                ScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
-                ScalarType::UInt64 => evaled.unwrap_uint64().into(),
-                ScalarType::TimestampTz => {
-                    evaled.unwrap_timestamptz().timestamp_millis().try_into()?
-                }
-                ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
-                _ => coord_bail!(
-                    "can't use {} as a mztimestamp for AS OF",
-                    self.catalog.for_session(session).humanize_column_type(&ty)
-                ),
-            };
+        if let Some(timestamp) = when.advance_to_timestamp() {
+            let ts = self.evaluate_when(timestamp, session)?;
             candidate.join_assign(&ts);
         }
 
@@ -123,52 +97,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if since.less_equal(&candidate) {
             Ok(candidate)
         } else {
-            let invalid_indexes =
-                if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-                    compute_ids
-                        .iter()
-                        .filter_map(|id| {
-                            let since = self
-                                .controller
-                                .compute
-                                .collection(compute_instance, *id)
-                                .unwrap()
-                                .read_frontier()
-                                .to_owned();
-                            if since.less_equal(&candidate) {
-                                None
-                            } else {
-                                Some(since)
-                            }
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-            let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
-                let since = self
-                    .controller
-                    .storage
-                    .collection(*id)
-                    .unwrap()
-                    .read_capabilities
-                    .frontier()
-                    .to_owned();
-                if since.less_equal(&candidate) {
-                    None
-                } else {
-                    Some(since)
-                }
-            });
-            let invalid = invalid_indexes
-                .into_iter()
-                .chain(invalid_sources)
-                .collect::<Vec<_>>();
-            coord_bail!(
-                "Timestamp ({}) is not valid for all inputs: {:?}",
-                candidate,
-                invalid
-            );
+            coord_bail!(self.generate_error_msg(id_bundle, compute_instance, candidate));
         }
     }
 
@@ -251,5 +180,91 @@ impl<S: Append + 'static> Coordinator<S> {
             // are known to have completed (non-tailed files for example).
             Timestamp::MAX
         }
+    }
+
+    fn evaluate_when(
+        &self,
+        mut timestamp: MirScalarExpr,
+        session: &Session,
+    ) -> Result<mz_repr::Timestamp, AdapterError> {
+        let temp_storage = RowArena::new();
+        prep_scalar_expr(self.catalog.state(), &mut timestamp, ExprPrepStyle::AsOf)?;
+        let evaled = timestamp.eval(&[], &temp_storage)?;
+        if evaled.is_null() {
+            coord_bail!("can't use {} as a mztimestamp for AS OF", evaled);
+        }
+        let ty = timestamp.typ(&[]);
+        Ok(match ty.scalar_type {
+            ScalarType::MzTimestamp => evaled.unwrap_mztimestamp(),
+            ScalarType::Numeric { .. } => {
+                let n = evaled.unwrap_numeric().0;
+                n.try_into()?
+            }
+            ScalarType::Int16 => i64::from(evaled.unwrap_int16()).try_into()?,
+            ScalarType::Int32 => i64::from(evaled.unwrap_int32()).try_into()?,
+            ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
+            ScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
+            ScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
+            ScalarType::UInt64 => evaled.unwrap_uint64().into(),
+            ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
+            ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
+            _ => coord_bail!(
+                "can't use {} as a mztimestamp for AS OF",
+                self.catalog.for_session(session).humanize_column_type(&ty)
+            ),
+        })
+    }
+
+    fn generate_error_msg(
+        &self,
+        id_bundle: &CollectionIdBundle,
+        compute_instance: ComputeInstanceId,
+        candidate: mz_repr::Timestamp,
+    ) -> String {
+        let invalid_indexes =
+            if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
+                compute_ids
+                    .iter()
+                    .filter_map(|id| {
+                        let since = self
+                            .controller
+                            .compute
+                            .collection(compute_instance, *id)
+                            .unwrap()
+                            .read_frontier()
+                            .to_owned();
+                        if since.less_equal(&candidate) {
+                            None
+                        } else {
+                            Some(since)
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
+            let since = self
+                .controller
+                .storage
+                .collection(*id)
+                .unwrap()
+                .read_capabilities
+                .frontier()
+                .to_owned();
+            if since.less_equal(&candidate) {
+                None
+            } else {
+                Some(since)
+            }
+        });
+        let invalid = invalid_indexes
+            .into_iter()
+            .chain(invalid_sources)
+            .collect::<Vec<_>>();
+        format!(
+            "Timestamp ({}) is not valid for all inputs: {:?}",
+            candidate, invalid
+        )
     }
 }
