@@ -1032,8 +1032,6 @@ where
     // our internal state after the send loop
     let mut progress_update = None;
 
-    let shutdown_flush = Cell::new(false);
-
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = id.hashed();
     let is_active_worker = (hashed_id as usize) % scope.peers() == scope.index();
@@ -1045,14 +1043,6 @@ where
         async_op!(|_initial_capabilities, frontiers| {
             if s.shutdown_flag.load(Ordering::SeqCst) {
                 debug!("shutting down sink: {}", &s.name);
-
-                // Approximately one last attempt to push anything pending to kafka before closing.
-                if !shutdown_flush.get() {
-                    debug!("flushing kafka producer for sink: {}", &s.name);
-                    let _ = s.producer.flush().await;
-                    shutdown_flush.set(true);
-                }
-
                 // NOTE: This is somewhat subtle, but we never downgrade our
                 // write frontier to the empty frontier when we're shutting
                 // down. We might be shutting down for any number of reasons,
