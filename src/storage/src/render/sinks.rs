@@ -54,6 +54,8 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         Arc::clone(&storage_state.persist_clients),
         sink.from_storage_metadata.clone(),
         Some(sink.as_of.frontier.clone()),
+        // TODO: we might not need the snapshot
+        true, /* include snapshot */
         timely::progress::Antichain::new(),
         None,
         // Copy the logic in DeltaJoin/Get/Join to start.

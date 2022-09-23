@@ -90,6 +90,7 @@ where
         Arc::clone(&compute_state.persist_clients),
         target.clone(),
         source_as_of,
+        true,             /* include snapshot */
         Antichain::new(), // we want all updates
         None,             // no MFP
         // Copy the logic in DeltaJoin/Get/Join to start.

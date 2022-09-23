@@ -290,6 +290,7 @@ where
                                     persist_clients,
                                     tx_storage_metadata,
                                     Some(as_of),
+                                    true, /* include snapshot */
                                     Antichain::new(),
                                     None,
                                     // Copy the logic in DeltaJoin/Get/Join to start.
@@ -341,6 +342,7 @@ where
                                 persist_clients,
                                 description.storage_metadata.clone(),
                                 Some(Antichain::from_elem(previous_as_of)),
+                                true, /* include snapshot */
                                 Antichain::new(),
                                 None,
                                 // Copy the logic in DeltaJoin/Get/Join to start.

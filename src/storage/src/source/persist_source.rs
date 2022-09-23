@@ -52,6 +52,7 @@ pub fn persist_source<G, YFn>(
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
     as_of: Option<Antichain<Timestamp>>,
+    include_snapshot: bool,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
@@ -70,6 +71,7 @@ where
         persist_clients,
         metadata,
         as_of,
+        include_snapshot,
         until,
         map_filter_project,
         yield_fn,
@@ -93,6 +95,7 @@ pub fn persist_source_core<G, YFn>(
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
     as_of: Option<Antichain<Timestamp>>,
+    include_snapshot: bool,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
@@ -182,7 +185,7 @@ where
         yield (Vec::new(), as_of_stream.clone());
 
         let mut subscription = read
-            .subscribe(as_of_stream.clone())
+            .subscribe(include_snapshot, as_of_stream.clone())
             .await
             .unwrap_or_else(|e| {
                 panic!(

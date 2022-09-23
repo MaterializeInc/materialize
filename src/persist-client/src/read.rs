@@ -561,9 +561,14 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn subscribe(
         mut self,
+        include_snapshot: bool,
         as_of: Antichain<T>,
     ) -> Result<Subscribe<K, V, T, D>, Since<T>> {
-        let snapshot_parts = self.snapshot(as_of.clone()).await?;
+        let snapshot_parts = if include_snapshot {
+            self.snapshot(as_of.clone()).await?
+        } else {
+            Vec::new()
+        };
         let listen = self.listen(as_of.clone()).await?;
         Ok(Subscribe::new(snapshot_parts, as_of, listen))
     }
@@ -799,7 +804,7 @@ mod tests {
         write.expect_compare_and_append(&data[2..3], 2, 3).await;
 
         let subscribe = read
-            .subscribe(timely::progress::Antichain::from_elem(2))
+            .subscribe(true, timely::progress::Antichain::from_elem(2))
             .await
             .unwrap();
         assert!(
@@ -839,7 +844,7 @@ mod tests {
         let fetcher = read.clone().await.batch_fetcher().await;
 
         let mut subscribe = read
-            .subscribe(timely::progress::Antichain::from_elem(1))
+            .subscribe(true, timely::progress::Antichain::from_elem(1))
             .await
             .expect("cannot serve requested as_of");
 
