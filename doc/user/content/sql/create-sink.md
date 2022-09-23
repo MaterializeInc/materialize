@@ -141,7 +141,7 @@ You can find the topic name and other metadata for each Kafka sink by querying `
 {{% kafka-sink-drop  %}}
 {{</ note >}}
 
-To achieve its exactly-once processing guarantees, Materialize needs to store some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular Kafka connection. The name of this progress topic can be specified when [creating a connection](/sql/create-connection); otherwise, a default is chosen based on the Materialize environment id and the connection id. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not specified.
+To achieve its exactly-once processing guarantees, Materialize needs to store some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular Kafka connection. The name of this progress topic can be specified when [creating a connection](/sql/create-connection); otherwise, a default is chosen based on the Materialize environment `id` and the connection `id`. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not user-specified.
 
 ## Examples
 
