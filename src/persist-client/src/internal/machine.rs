@@ -876,7 +876,7 @@ pub mod datadriven {
 
     pub async fn blob_scan_batches(
         datadriven: &mut MachineState,
-        args: DirectiveArgs<'_>,
+        _args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let key_prefix = BlobKeyPrefix::Shard(&datadriven.shard_id).to_string();
 
