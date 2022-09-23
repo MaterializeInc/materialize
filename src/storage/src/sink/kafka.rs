@@ -1155,14 +1155,10 @@ where
                             .expect("init_transactions");
                     }
 
-                    let latest_ts = match s.determine_latest_progress_record().await {
-                        Ok(ts) => ts,
-                        Err(e) => {
-                            s.shutdown_flag.store(true, Ordering::SeqCst);
-                            info!("shutting down kafka sink while initializing: {}", e);
-                            return true;
-                        }
-                    };
+                    let latest_ts = s
+                        .determine_latest_progress_record()
+                        .await
+                        .expect("determining latest progress record");
                     info!(
                         "{}: initial as_of: {:?}, latest progress record: {:?}",
                         s.name, as_of.frontier, latest_ts
