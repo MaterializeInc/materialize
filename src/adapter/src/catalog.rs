@@ -2862,6 +2862,10 @@ impl<S: Append> Catalog<S> {
         self.state.get_information_schema_id()
     }
 
+    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
+        self.state.get_mz_internal_schema_id()
+    }
+
     pub fn get_database(&self, id: &DatabaseId) -> &Database {
         self.state.get_database(id)
     }
