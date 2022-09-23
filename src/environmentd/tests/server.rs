@@ -61,7 +61,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         )?;
         client.batch_execute("CREATE VIEW constant AS SELECT 1")?;
         client.batch_execute(
-            "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
+            "CREATE VIEW logging_derived AS SELECT * FROM mz_internal.mz_arrangement_sizes",
         )?;
         client.batch_execute(
             "CREATE VIEW mat (a, a_data, c, c_data) AS SELECT 'a', data, 'c' AS c, data FROM src",
@@ -594,7 +594,10 @@ fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
     // No dataflows expected at startup.
     assert_eq!(
         client1
-            .query_one("SELECT count(*) FROM mz_dataflow_operators", &[])?
+            .query_one(
+                "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                &[]
+            )?
             .get::<_, i64>(0),
         0
     );
@@ -604,7 +607,10 @@ fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
         Retry::default()
             .retry(|_state| {
                 let count: i64 = client2
-                    .query_one("SELECT count(*) FROM mz_dataflow_operators", &[])
+                    .query_one(
+                        "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                        &[],
+                    )
                     .map_err(|_| ())?
                     .get(0);
                 if count == 0 {
@@ -626,7 +632,10 @@ fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
     Retry::default()
         .retry(|_state| {
             let count: i64 = client1
-                .query_one("SELECT count(*) FROM mz_dataflow_operators", &[])
+                .query_one(
+                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                    &[],
+                )
                 .map_err(|_| ())?
                 .get(0);
             if count == 0 {

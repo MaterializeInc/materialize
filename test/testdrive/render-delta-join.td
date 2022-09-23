@@ -51,18 +51,18 @@ SELECT ${arg.replicas} > 1
 > SELECT
     sum(sent) as sent
   FROM
-    mz_catalog.mz_dataflow_channels AS channels
-    LEFT JOIN mz_catalog.mz_message_counts AS counts
+    mz_internal.mz_dataflow_channels AS channels
+    LEFT JOIN mz_internal.mz_message_counts AS counts
         ON channels.id = counts.channel_id AND channels.worker_id = counts.from_worker_id
   WHERE id IN
         (SELECT id
-         FROM mz_catalog.mz_dataflow_addresses
+         FROM mz_internal.mz_dataflow_addresses
          WHERE address[1] =
              (SELECT DISTINCT address[1]
-              FROM mz_catalog.mz_dataflow_addresses
+              FROM mz_internal.mz_dataflow_addresses
               WHERE id =
                   (SELECT DISTINCT id
-                   FROM mz_catalog.mz_dataflows
+                   FROM mz_internal.mz_dataflows
                    WHERE name LIKE '%.delta_join%')))
   GROUP BY id, from_index, to_index, from_port, to_port
   HAVING sum(sent) > 100

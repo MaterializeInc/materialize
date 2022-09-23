@@ -27,8 +27,8 @@ SELECT ${arg.replica-size} > 1 OR ${arg.replicas} > 1;
   FROM (SELECT SUM(count) as count_all
         FROM
             mz_materialized_views AS views,
-            mz_materializations as mats,
-            mz_worker_materialization_delays AS delays
+            mz_internal.mz_materializations as mats,
+            mz_internal.mz_worker_materialization_delays AS delays
         WHERE
             views.name = 'mv' AND
             views.id = mats.object_id AND
@@ -38,8 +38,8 @@ true
 > SELECT time > 0
   FROM
     mz_materialized_views AS views,
-    mz_materializations AS mats,
-    mz_materialization_source_frontiers AS sf
+    mz_internal.mz_materializations AS mats,
+    mz_internal.mz_materialization_source_frontiers AS sf
   WHERE
     views.name = 'mv' AND
     views.id = mats.object_id AND
@@ -51,13 +51,13 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.object_id, delays.source_id
         FROM
-            mz_worker_materialization_delays AS delays)
+            mz_internal.mz_worker_materialization_delays AS delays)
 1
 
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT sf.object_id, sf.source_id
         FROM
-            mz_worker_materialization_source_frontiers AS sf)
+            mz_internal.mz_worker_materialization_source_frontiers AS sf)
 1
 
 > CREATE DEFAULT INDEX ON vv
@@ -65,13 +65,13 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.object_id, delays.source_id
         FROM
-            mz_worker_materialization_delays AS delays)
+            mz_internal.mz_worker_materialization_delays AS delays)
 2
 
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT sf.object_id, sf.source_id
         FROM
-            mz_worker_materialization_source_frontiers AS sf)
+            mz_internal.mz_worker_materialization_source_frontiers AS sf)
 2
 
 > SELECT count_all > 0
@@ -79,8 +79,8 @@ true
         FROM
             mz_views AS views,
             mz_indexes AS indexes,
-            mz_materializations AS mats,
-            mz_worker_materialization_delays AS delays
+            mz_internal.mz_materializations AS mats,
+            mz_internal.mz_worker_materialization_delays AS delays
         WHERE
             views.name = 'vv' AND
             views.id = indexes.on_id AND
@@ -92,8 +92,8 @@ true
   FROM
     mz_views AS views,
     mz_indexes AS indexes,
-    mz_materializations mats,
-    mz_materialization_source_frontiers AS sf
+    mz_internal.mz_materializations mats,
+    mz_internal.mz_materialization_source_frontiers AS sf
   WHERE
     views.name = 'vv' AND
     views.id = indexes.on_id AND
@@ -106,13 +106,13 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.object_id, delays.source_id
         FROM
-            mz_worker_materialization_delays AS delays)
+            mz_internal.mz_worker_materialization_delays AS delays)
 1
 
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT sf.object_id, sf.source_id
         FROM
-            mz_worker_materialization_source_frontiers AS sf)
+            mz_internal.mz_worker_materialization_source_frontiers AS sf)
 1
 
 > DROP MATERIALIZED VIEW mv
@@ -120,11 +120,11 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.object_id, delays.source_id
         FROM
-            mz_worker_materialization_delays AS delays)
+            mz_internal.mz_worker_materialization_delays AS delays)
 0
 
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT sf.object_id, sf.source_id
         FROM
-            mz_worker_materialization_source_frontiers AS sf)
+            mz_internal.mz_worker_materialization_source_frontiers AS sf)
 0

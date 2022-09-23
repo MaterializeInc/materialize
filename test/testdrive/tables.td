@@ -118,7 +118,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 $ skip-if
 SELECT ${arg.replicas} > 1
 
-> SELECT * FROM t CROSS JOIN mz_dataflow_operators LIMIT 0
+> SELECT * FROM t CROSS JOIN mz_internal.mz_dataflow_operators LIMIT 0
 
 > DROP SOURCE data
 
