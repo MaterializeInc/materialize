@@ -91,7 +91,6 @@ pub(crate) fn exit_with_fail_message(message: ExitMessage) -> ! {
 
 /// Layouts an UUID.
 /// Frontegg API needs the UUID with the layout.
-/// More info about the layout: https://www.uuidtools.com/uuid-versions-explained
 fn layout_uuid(uuid: String) -> String {
     let low_time = uuid[0..8].to_string();
     let mid_time = uuid[8..12].to_string();
