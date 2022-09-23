@@ -894,6 +894,11 @@ impl KafkaSinkState {
         input_frontier: AntichainRef<'_, Timestamp>,
         as_of: &SinkAsOf<Timestamp>,
     ) -> anyhow::Result<bool> {
+        // If we emit a progress record before the as_of, we open ourselves to the possibility that
+        // we restart the sink with a gate timestamp behind the ASOF.  If that happens, we're unable
+        // to tell the difference between some records we've already written out and those that we
+        // still need to write out. (This is because asking for records with a given ASOF will fast
+        // forward all records at or before to the requested ASOF.)
         if !PartialOrder::less_equal(&as_of.frontier.borrow(), &input_frontier) {
             return Ok(false);
         }
