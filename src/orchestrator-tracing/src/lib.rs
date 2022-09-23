@@ -35,7 +35,7 @@ use mz_ore::cli::{DefaultTrue, KeyValueArg};
 #[cfg(feature = "tokio-console")]
 use mz_ore::tracing::TokioConsoleConfig;
 use mz_ore::tracing::{
-    OpenTelemetryConfig, OpenTelemetryEnableCallback, StderrLogConfig, TracingConfig,
+    OpenTelemetryConfig, StderrLogConfig, TracingConfig,
 };
 
 /// Command line arguments for application tracing.
@@ -228,7 +228,6 @@ impl From<&TracingCliArgs> for TracingConfig {
 pub struct TracingOrchestrator {
     inner: Arc<dyn Orchestrator>,
     tracing_args: TracingCliArgs,
-    otel_enable_callback: OpenTelemetryEnableCallback,
 }
 
 impl TracingOrchestrator {
@@ -243,12 +242,10 @@ impl TracingOrchestrator {
     pub fn new(
         inner: Arc<dyn Orchestrator>,
         tracing_args: TracingCliArgs,
-        otel_enable_callback: OpenTelemetryEnableCallback,
     ) -> TracingOrchestrator {
         TracingOrchestrator {
             inner,
             tracing_args,
-            otel_enable_callback,
         }
     }
 }
@@ -259,7 +256,6 @@ impl Orchestrator for TracingOrchestrator {
             namespace: namespace.to_string(),
             inner: self.inner.namespace(namespace),
             tracing_args: self.tracing_args.clone(),
-            otel_enable_callback: self.otel_enable_callback.clone(),
         })
     }
 }
@@ -269,7 +265,6 @@ struct NamespacedTracingOrchestrator {
     namespace: String,
     inner: Arc<dyn NamespacedOrchestrator>,
     tracing_args: TracingCliArgs,
-    otel_enable_callback: OpenTelemetryEnableCallback,
 }
 
 #[async_trait]
@@ -317,11 +312,6 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 for kv in opentelemetry_resource {
                     args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
                 }
-
-                args.push(format!(
-                    "--opentelemetry-enabled={}",
-                    self.otel_enable_callback.current_enabled()
-                ));
             }
             #[cfg(feature = "tokio-console")]
             if let Some(port) = tokio_console_port {

@@ -37,7 +37,7 @@ use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
-use mz_ore::tracing::{OpenTelemetryEnableCallback, StderrFilterCallback};
+use mz_ore::tracing::TracingTargetCallbacks;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
@@ -111,10 +111,8 @@ pub struct Config {
     // === Tracing options. ===
     /// The metrics registry to use.
     pub metrics_registry: MetricsRegistry,
-    /// A callback to enable or disable the OpenTelemetry tracing collector.
-    pub otel_enable_callback: OpenTelemetryEnableCallback,
-    /// A callback to modify the stderr log filter
-    pub stderr_filter_callback: StderrFilterCallback,
+    /// Callbacks used to modify tracing/logging filters
+    pub tracing_target_callbacks: TracingTargetCallbacks,
 
     // === Testing options. ===
     /// A now generation function for mocking time.
@@ -212,8 +210,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         let metrics_registry = config.metrics_registry.clone();
         let server = http::InternalServer::new(
             metrics_registry,
-            config.otel_enable_callback,
-            config.stderr_filter_callback,
+            config.tracing_target_callbacks,
         );
         let bound_server = server.bind(config.internal_http_listen_addr);
         let internal_http_local_addr = bound_server.local_addr();
