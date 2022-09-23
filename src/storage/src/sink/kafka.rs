@@ -901,7 +901,10 @@ impl KafkaSinkState {
         // to tell the difference between some records we've already written out and those that we
         // still need to write out. (This is because asking for records with a given ASOF will fast
         // forward all records at or before to the requested ASOF.)
-        if !PartialOrder::less_equal(&as_of.frontier, &min_frontier) {
+        //
+        // N.B. This condition is _not_ symmetric with the assert on the gate_ts on sink startup
+        // because we subtract 1 below to determine what progress value to actually write out.
+        if !PartialOrder::less_than(&as_of.frontier, &min_frontier) {
             return Ok(false);
         }
 
@@ -919,8 +922,16 @@ impl KafkaSinkState {
             .cloned();
 
         if let Some(min_frontier) = min_frontier {
-            // a frontier of `t` means we still might receive updates with `t`.
-            // The progress frontier we emit is a strict frontier, so subtract `1`.
+            // A frontier of `t` means we still might receive updates with `t`. The progress
+            // frontier we emit `f` indicates that all future values will be greater than `f`.
+            //
+            // The progress notion of frontier does not mesh with the notion of frontier in timely.
+            // This is confusing -- but still preferrable.  Were we to define the "progress
+            // frontier" to be the earliest time we could still write more data, we would need to
+            // write out a progress record of `t + 1` when we write out data.  Furthermore, were we
+            // to ever move to a notion of multi-dimensional time, it is more natural (and easier
+            // to keep the system correct) to record the time of the data we write to the progress
+            // topic.
             let min_frontier = min_frontier.saturating_sub(1);
 
             if min_frontier > self.latest_progress_ts {
