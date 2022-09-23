@@ -34,7 +34,9 @@ use mz_orchestrator::{
 use mz_ore::cli::{DefaultTrue, KeyValueArg};
 #[cfg(feature = "tokio-console")]
 use mz_ore::tracing::TokioConsoleConfig;
-use mz_ore::tracing::{OpenTelemetryConfig, StderrLogConfig, TracingConfig};
+use mz_ore::tracing::{
+    OpenTelemetryConfig, StderrLogConfig, TracingConfig,
+};
 
 /// Command line arguments for application tracing.
 ///
@@ -237,7 +239,10 @@ impl TracingOrchestrator {
     ///
     /// All services created by the orchestrator **must** embed the
     /// [`TracingCliArgs`] in their command-line argument parser.
-    pub fn new(inner: Arc<dyn Orchestrator>, tracing_args: TracingCliArgs) -> TracingOrchestrator {
+    pub fn new(
+        inner: Arc<dyn Orchestrator>,
+        tracing_args: TracingCliArgs,
+    ) -> TracingOrchestrator {
         TracingOrchestrator {
             inner,
             tracing_args,
