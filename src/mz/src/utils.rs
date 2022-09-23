@@ -52,39 +52,6 @@ impl FromStr for CloudProviderRegion {
     }
 }
 
-// pub(crate) type Password = String;
-
-// trait PasswordMethods {
-//     fn from_client_id_and_secret(client_id: &str, secret: &str) -> Result<Self, ParseError> where Self: Sized;
-
-//     fn to_client_id() -> String;
-
-//     fn to_secret() -> String;
-// }
-
-// // Example one: 097104df-3a09-4e1b-8f11-d59baea4fad9
-// // Example two: 15157d52-5ab2-4795-9a15-cd0b889aeb61
-// impl PasswordMethods for Password {
-
-//     fn from_client_id_and_secret(client_id: &str, secret: &str) -> Result<Self, ParseError> {
-//         if client_id.len() != 36 {
-//             Err(ParseError)
-//         } else if secret.len() != 36 {
-//             Err(ParseError)
-//         } else {
-//             Ok(("mzp_".to_owned() + &client_id + &secret).replace("-", ""))
-//         }
-//     }
-
-//     fn to_client_id() -> String {
-//         self::
-//     }
-
-//     fn to_secret() -> String {
-//         todo!()
-//     }
-// }
-
 /// Trim lines. Useful when reading input data.
 pub(crate) fn trim_newline(s: &mut String) {
     if s.ends_with('\n') {
