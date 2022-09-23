@@ -188,7 +188,7 @@ First, declare a `TAIL` cursor:
 
 ```sql
 BEGIN;
-DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_scheduling_elapsed);
+DECLARE c CURSOR FOR TAIL (SELECT * FROM mz_internal.mz_scheduling_elapsed);
 ```
 
 Then, use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it's ready:
@@ -222,7 +222,7 @@ FETCH ALL c WITH (timeout='0s');
 If you want to use `TAIL` from an interactive SQL session (e.g.`psql`), wrap the query in `COPY`:
 
 ```sql
-COPY (TAIL (SELECT * FROM mz_scheduling_elapsed)) TO STDOUT;
+COPY (TAIL (SELECT * FROM mz_internal.mz_scheduling_elapsed)) TO STDOUT;
 ```
 
 | Additional guides |
