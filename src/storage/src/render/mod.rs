@@ -142,7 +142,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
         scope.clone().region_named(&name, |region| {
             let debug_name = format!("{debug_name}-sources");
 
-            let ((ok, err), token) = crate::render::sources::render_source(
+            let ((ok, err), source_token) = crate::render::sources::render_source(
                 region,
                 &debug_name,
                 id,
@@ -153,14 +153,15 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let source_data = ok.map(Ok).concat(&err.map(Err));
 
-            crate::render::persist_sink::render(
+            let sink_token = crate::render::persist_sink::render(
                 region,
                 id,
                 description.storage_metadata,
                 source_data,
                 storage_state,
-                Rc::clone(&token),
             );
+
+            let token = Rc::new((source_token, sink_token));
 
             storage_state.source_tokens.insert(id, token);
         })

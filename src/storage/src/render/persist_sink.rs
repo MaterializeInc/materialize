@@ -34,8 +34,8 @@ pub fn render<G>(
     metadata: CollectionMetadata,
     source_data: Collection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &mut StorageState,
-    token: Rc<dyn Any>,
-) where
+) -> Rc<dyn Any>
+where
     G: Scope<Timestamp = Timestamp>,
 {
     let operator_name = format!("persist_sink({})", metadata.data_shard);
@@ -61,6 +61,8 @@ pub fn render<G>(
         current_upper.borrow_mut().clear();
     }
 
+    // Dropping this token signals that the operator should shut down cleanly.
+    let token = Rc::new(());
     let weak_token = Rc::downgrade(&token);
 
     let persist_clients = Arc::clone(&storage_state.persist_clients);
@@ -198,5 +200,7 @@ pub fn render<G>(
                 }
             }
         },
-    )
+    );
+
+    token
 }
