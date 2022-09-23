@@ -285,18 +285,6 @@ pub struct DisplayInTimeline<'a, T: ?Sized> {
     t: &'a T,
     timeline: Option<&'a Timeline>,
 }
-/*
-        writeln!(f, "          query timestamp: {:13}", self.timestamp)?;
-        writeln!(f, "                    since:{:13?}", self.since)?;
-        writeln!(f, "                    upper:{:13?}", self.upper)?;
-        writeln!(
-            f,
-            "         global timestamp: {:13?}",
-            self.global_timestamp
-        )?;
-        writeln!(f, "  can respond immediately: {}", self.respond_immediately)?;
-
-*/
 impl<'a, T> fmt::Display for DisplayInTimeline<'a, T>
 where
     T: DisplayableInTimeline,
