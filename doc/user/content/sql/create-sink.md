@@ -129,8 +129,7 @@ Note that:
 
 ### Kafka sinks
 
-When sinking into Kafka,
-Materialize will write all the changes from the specified source, table, or materialized view into the topic you specify.
+When sinking into Kafka, Materialize will write all the changes from the specified source, table, or materialized view into the topic you specify.
 If the topic does not exist, Materialize will use the Kafka Admin API to create the topic.
 
 For Avro-encoded sinks, Materialize will publish the sink's Avro schema to the Confluent Schema Registry. Materialize will not publish schemas for JSON-encoded sinks.

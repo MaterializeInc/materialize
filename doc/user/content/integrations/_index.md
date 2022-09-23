@@ -33,7 +33,7 @@ For listed tools that are not yet production-ready, you can register your intere
 
 ### Kafka
 
-Kafka is supported as a [**source**](/overview/key-concepts/#sources) and as a [**sink**](/overview/key-concepts/#sinks), with features like **upserts**, **Debezium** CDC, and **exactly-once** processing.
+Kafka is supported as a [**source**](/overview/key-concepts/#sources) and as a [**sink**](/overview/key-concepts/#sinks), with **exactly-once** semantics and features like **upserts** and **Debezium** CDC.
 
 | Service | Support level | Notes                                                                                                                                                                                                                                                                                                                                                      |  |
 | --- | --- |------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------| --- |
