@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -54,12 +55,20 @@ where
 
     let mut input = persist_op.new_input(&source_data.inner, Exchange::new(move |_| hashed_id));
 
-    let current_upper = Rc::clone(&storage_state.source_uppers[&src_id]);
-    if !active_write_worker {
+    // Initialize shared frontier tracking.
+    let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
+        Antichain::from_elem(Timestamp::minimum())
+    } else {
         // This worker is not writing, so make sure it's "taken out" of the
         // calculation by advancing to the empty frontier.
-        current_upper.borrow_mut().clear();
-    }
+        Antichain::new()
+    }));
+
+    storage_state
+        .source_uppers
+        .insert(src_id, Rc::clone(&shared_frontier));
+
+    let current_upper = shared_frontier;
 
     // Dropping this token signals that the operator should shut down cleanly.
     let token = Rc::new(());

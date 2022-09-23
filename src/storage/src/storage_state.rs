@@ -169,14 +169,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .ingestions
                         .insert(ingestion.id, ingestion.description.clone());
 
-                    // Initialize shared frontier tracking.
-                    self.storage_state.source_uppers.insert(
-                        ingestion.id,
-                        Rc::new(RefCell::new(Antichain::from_elem(
-                            mz_repr::Timestamp::minimum(),
-                        ))),
-                    );
-
                     crate::render::build_ingestion_dataflow(
                         &mut self.timely_worker,
                         &mut self.storage_state,
