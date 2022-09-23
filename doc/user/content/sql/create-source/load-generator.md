@@ -31,6 +31,12 @@ _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
 
+### `WITH` options
+
+Field                                | Value     | Description
+-------------------------------------|-----------|-------------------------------------
+`SIZE`                               | `text`    | The size for the source. For valid sizes, see [source sizes](/sql/create-source#sizes).
+
 ## Description
 
 Materialize has several built-in load generators, which provide a quick way to

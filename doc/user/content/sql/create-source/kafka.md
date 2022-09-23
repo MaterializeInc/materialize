@@ -53,7 +53,7 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 {{% create-source/syntax-connector-details connector="kafka" envelopes="debezium upsert append-only" %}}
 
-### `WITH` options
+### Kafka connection options
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
@@ -64,6 +64,12 @@ Field                                | Value     | Description
 `topic_metadata_refresh_interval_ms` | `int`     | Default: `300000`. Sets the frequency in `ms` at which the system checks for new partitions. Accepts values [0,3600000].
 `enable_auto_commit`                 | `boolean` | Default: `false`. Controls whether or not Materialize commits read offsets back into Kafka. This is purely for consumer progress monitoring and does not cause Materialize to resume reading from where it left off across restarts.
 `fetch_message_max_bytes` | `int` | Default: `134217728`. Controls the initial maximum number of bytes per topic+partition to request when fetching messages from the broker. If the client encounters a message larger than this value it will gradually try to increase it until the entire message can be fetched. Accepts values [1, 1000000000].
+
+### `WITH` options
+
+Field                                | Value     | Description
+-------------------------------------|-----------|-------------------------------------
+`SIZE`                               | `text`    | The size for the source. For valid sizes, see [source sizes](/sql/create-source#sizes).
 
 ## Supported formats
 
