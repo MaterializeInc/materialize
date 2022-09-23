@@ -610,7 +610,7 @@ impl CatalogState {
                         qualifiers: ObjectQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
-                                self.get_mz_catalog_schema_id().clone(),
+                                self.get_mz_internal_schema_id().clone(),
                             ),
                         },
                         item: index_name.clone(),
