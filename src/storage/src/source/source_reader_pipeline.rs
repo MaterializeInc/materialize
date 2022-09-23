@@ -194,6 +194,30 @@ where
     ((reclocked_stream, reclocked_err_stream), Some(token))
 }
 
+/// A type-alias that represents actual data coming out of the source reader.
+// Rust doesn't actually type-check the aliases until they are used, so we
+// can do `<S as SourceReader>` as we please here.
+type MessageAndOffset<S> = (
+    SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value, <S as SourceReader>::Diff>,
+    MzOffset,
+);
+
+/// A type that represents data coming out of the source reader, in addition
+/// to other information it needs to communicate to various operators.
+struct SourceReaderOperatorOutput<S: SourceReader> {
+    /// Messages and their offsets from the source reader.
+    messages: HashMap<PartitionId, Vec<MessageAndOffset<S>>>,
+    /// See `SourceMessageBatch`.
+    non_definite_errors: Vec<SourceReaderError>,
+    /// A list of partitions that this source reader instance
+    /// is sure it doesn't care about. Required so the
+    /// remap operator can eventually determine whether
+    /// a timestamp is closed.
+    unconsumed_partitions: Vec<PartitionId>,
+    /// See `SourceMessageBatch`.
+    source_upper: OffsetAntichain,
+}
+
 fn build_source_reader_stream<G, S>(
     source_reader: S,
     config: RawSourceCreationConfig,
@@ -202,26 +226,7 @@ fn build_source_reader_stream<G, S>(
     mut source_upper: OffsetAntichain,
 ) -> Pin<
     // TODO(guswynn): determine if this boxing is necessary
-    Box<
-        impl Stream<
-            Item = Option<(
-                HashMap<
-                    PartitionId,
-                    Vec<(
-                        SourceMessage<
-                            <S as SourceReader>::Key,
-                            <S as SourceReader>::Value,
-                            <S as SourceReader>::Diff,
-                        >,
-                        MzOffset,
-                    )>,
-                >,
-                Vec<SourceReaderError>,
-                Vec<PartitionId>,
-                OffsetAntichain,
-            )>,
-        >,
-    >,
+    Box<impl Stream<Item = Option<SourceReaderOperatorOutput<S>>>>,
 >
 where
     G: Scope<Timestamp = Timestamp>,
@@ -273,7 +278,12 @@ where
         // about the current frontier. Otherwise, if there are no new
         // messages after a restart, the reclock operator would be stuck and
         // not advance its downstream frontier.
-        yield Some((HashMap::new(), Vec::new(), Vec::new(), initial_source_upper));
+        yield Some(SourceReaderOperatorOutput {
+            messages: HashMap::new(),
+            non_definite_errors: Vec::new(),
+            unconsumed_partitions: Vec::new(),
+            source_upper: initial_source_upper,
+        });
 
         let source_stream = source_reader.into_stream(timestamp_interval).fuse();
 
@@ -333,12 +343,12 @@ where
                             // This source reader is done. Yield one final
                             // update of the source_upper.
                             yield Some(
-                                (
-                                    std::mem::take(&mut untimestamped_messages),
-                                    non_definite_errors.drain(..).collect_vec(),
+                                SourceReaderOperatorOutput {
+                                    messages: std::mem::take(&mut untimestamped_messages),
+                                    non_definite_errors: non_definite_errors.drain(..).collect_vec(),
                                     unconsumed_partitions,
-                                    source_upper.clone()
-                                )
+                                    source_upper: source_upper.clone(),
+                                }
                             );
 
                             // Then, let the consumer know we're done.
@@ -366,12 +376,12 @@ where
                     // operators informed about the unconsumed partitions
                     // and the source upper.
                     yield Some(
-                        (
-                            std::mem::take(&mut untimestamped_messages),
-                            non_definite_errors.drain(..).collect_vec(),
-                            unconsumed_partitions.clone(),
-                            source_upper.clone()
-                        )
+                        SourceReaderOperatorOutput {
+                            messages: std::mem::take(&mut untimestamped_messages),
+                            non_definite_errors: non_definite_errors.drain(..).collect_vec(),
+                            unconsumed_partitions: unconsumed_partitions.clone(),
+                            source_upper: source_upper.clone()
+                        }
                     );
                 }
             }
@@ -437,10 +447,10 @@ where
             async move {
                 // Setup time!
 
-                // required to build the initial source_upper and to ensure the offset committer
-                // operator correctly.
+                // Required to build the initial source_upper and to ensure the offset committer
+                // operator works correctly.
                 reclock_follower
-                    .ensure_initialized_to(initial_resume_upper.clone())
+                    .ensure_initialized_to(initial_resume_upper.borrow())
                     .await;
 
                 let mut source_upper = reclock_follower
@@ -530,7 +540,7 @@ where
                             offset_commit_handle.commit_offsets(offset_upper.as_data_offsets());
 
                             // Compact the in-memory remap trace shared between this
-                            // operator the reclock operator. We do this here for convenience! The
+                            // operator and the reclock operator. We do this here for convenience! The
                             // ordering doesn't really matter.
                             let upper_ts = resume_upper.as_option().copied().unwrap();
                             let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
@@ -548,19 +558,21 @@ where
                             return;
                         }
                     };
-                    let (messages, non_definite_errors, unconsumed_partitions, source_upper) =
-                        match update {
-                            Some(update) => update,
-                            None => {
-                                trace!(
-                                    "source_reader({id}) {worker_id}/{worker_count}: is terminated"
-                                );
-                                // We will never produce more data, clear our capabilities to
-                                // communicate this downstream.
-                                cap_set.downgrade(&[]);
-                                return;
-                            }
-                        };
+                    let SourceReaderOperatorOutput {
+                        messages,
+                        non_definite_errors,
+                        unconsumed_partitions,
+                        source_upper,
+                    } = match update {
+                        Some(update) => update,
+                        None => {
+                            trace!("source_reader({id}) {worker_id}/{worker_count}: is terminated");
+                            // We will never produce more data, clear our capabilities to
+                            // communicate this downstream.
+                            cap_set.downgrade(&[]);
+                            return;
+                        }
+                    };
 
                     trace!(
                         "create_source_raw({id}) {worker_id}/
