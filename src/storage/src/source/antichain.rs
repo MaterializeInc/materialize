@@ -25,7 +25,9 @@ use crate::types::sources::MzOffset;
 ///     - Note that this `Antichain` can also have been filtered, as in, missing some
 ///     partitions for which data exists but we don't care about. This is semantically
 ///     different than if we just don't have data, but it is represented the same
-/// - Is not generic over `T`, but instead uses `MzOffset`, which we have
+/// - Is not generic over `T`, but instead uses `MzOffset`, which:
+///     - implements `TotalOrder`
+///     - implements `checked_sub`
 /// - Allows users to go from a _frontier_ to an actual set of offsets that are
 /// connected to real data.
 ///     - This is a consequence of implementation, where the _frontier_ is ALWAYS
@@ -38,8 +40,8 @@ use crate::types::sources::MzOffset;
 ///   - "Frontier" apis, which directly manipulate the underlying frontier.
 ///   Useful for implementing primitives like reclocking
 ///   - "Data" apis, that maintain special invariants:
-///     - `insert_data_up_to` updates the frontier based a given offset
-///     that
+///     - `insert_data_up_to` updates the frontier based on a given offset
+///     that is associated with actual data.
 ///     - `as_data_offsets` inverts the behavior of `insert_data_up_to`
 ///     and returns a `HashMap<PartitionId, MzOffset>` of offets
 ///     of real committed data.
