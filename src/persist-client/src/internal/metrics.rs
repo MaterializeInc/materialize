@@ -516,6 +516,7 @@ impl BatchWriteMetrics {
 
 #[derive(Debug)]
 pub struct CompactionMetrics {
+    pub(crate) requested: IntCounter,
     pub(crate) skipped: IntCounter,
     pub(crate) started: IntCounter,
     pub(crate) applied: IntCounter,
@@ -530,6 +531,10 @@ pub struct CompactionMetrics {
 impl CompactionMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         CompactionMetrics {
+            requested: registry.register(metric!(
+                name: "mz_persist_compaction_requested",
+                help: "count of total compaction requests",
+            )),
             skipped: registry.register(metric!(
                 name: "mz_persist_compaction_skipped",
                 help: "count of compactions skipped due to heuristics",

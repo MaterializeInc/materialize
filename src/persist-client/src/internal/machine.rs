@@ -1044,7 +1044,7 @@ pub mod datadriven {
             ),
             inputs,
         };
-        let res = Compactor::compact::<u64, i64>(
+        let res = Compactor::<u64, i64>::compact(
             cfg,
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
