@@ -29,6 +29,12 @@ _src_name_  | The name for the source.
 **CONNECTION** _connection_name_ | The name of the Postgres connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
 **PUBLICATION** _publication_name_ | Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 
+### `WITH` options
+
+Field                                | Value     | Description
+-------------------------------------|-----------|-------------------------------------
+`SIZE`                               | `text`    | The size for the source. For valid sizes, see [source sizes](/sql/create-source#sizes).
+
 ## Features
 
 ### Change data capture

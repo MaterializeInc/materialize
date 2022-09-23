@@ -220,6 +220,32 @@ The envelope exposes the `before` and `after` value fields from change events. I
 
 Debezium may produce duplicate records if the connector is interrupted. Materialize makes a best-effort attempt to detect and filter out duplicates.
 
+## Sizes
+
+The `SIZE` option controls the amount of CPU and memory available to the source.
+
+Valid sizes are:
+
+- `3xsmall`
+- `2xsmall`
+- `xsmall`
+- `small`
+- `medium`
+- `large`
+
+The default source size is `3xsmall`.
+
+Consider increasing the size of your source when:
+
+  * You want to increase throughput. Larger sources will typically ingest data
+    faster, as they have more CPU available to read and decode data from your
+    external system.
+
+  * You are using the [upsert envelope](#upsert-envelope) and your source
+    contains many unique keys. The upsert envelope must keep in-memory state
+    proportional to the number of unique keys in your upstream source. Larger
+    sizes can store more unique keys.
+
 ## Related pages
 
 - [Key Concepts](../../overview/key-concepts/)

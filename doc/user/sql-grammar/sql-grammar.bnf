@@ -79,6 +79,7 @@ create_source_kafka ::=
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
   )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_kinesis ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -90,12 +91,14 @@ create_source_load_generator ::=
   ('(' (col_name) ( ( ',' col_name ) )*)?
   'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
     'TICK INTERVAL' interval
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   'PUBLICATION' publication_name
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -393,7 +396,7 @@ update_stmt ::=
   'UPDATE' table_name ('AS'? alias)?
   'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
   'WHERE' condition
-with_options ::= 'WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
+with_options ::= ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 with_options_aws ::= 'WITH' '('
     (
       static_credentials
