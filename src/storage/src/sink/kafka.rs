@@ -891,33 +891,33 @@ impl KafkaSinkState {
     /// write frontier will be advanced regardless.
     async fn maybe_emit_progress(
         &mut self,
-        input_frontier: AntichainRef<'_, Timestamp>,
+        mut input_frontier: Antichain<Timestamp>,
         as_of: &SinkAsOf<Timestamp>,
     ) -> anyhow::Result<bool> {
+        input_frontier.extend(self.pending_rows.keys().min().cloned());
+        let min_frontier = input_frontier;
+
         // If we emit a progress record before the as_of, we open ourselves to the possibility that
         // we restart the sink with a gate timestamp behind the ASOF.  If that happens, we're unable
         // to tell the difference between some records we've already written out and those that we
         // still need to write out. (This is because asking for records with a given ASOF will fast
         // forward all records at or before to the requested ASOF.)
-        if !PartialOrder::less_equal(&as_of.frontier.borrow(), &input_frontier) {
+        if !PartialOrder::less_equal(&as_of.frontier, &min_frontier) {
             return Ok(false);
         }
 
         let mut progress_emitted = false;
+
         // This only looks at the first entry of the antichain.
         // If we ever have multi-dimensional time, this is not correct
         // anymore. There might not even be progress in the first dimension.
         // We panic, so that future developers introducing multi-dimensional
         // time in Materialize will notice.
-        let input_frontier = input_frontier
+        let min_frontier = min_frontier
             .iter()
             .at_most_one()
             .expect("more than one element in the frontier")
             .cloned();
-
-        let min_pending_ts = self.pending_rows.keys().min().cloned();
-
-        let min_frontier = input_frontier.into_iter().chain(min_pending_ts).min();
 
         if let Some(min_frontier) = min_frontier {
             // a frontier of `t` means we still might receive updates with `t`.
@@ -1332,7 +1332,7 @@ where
             // Only one worker receives all the updates and we don't want the
             // other workers to also emit progress.
             if is_active_worker {
-                match s.maybe_emit_progress(frontier.borrow(), &as_of).await {
+                match s.maybe_emit_progress(frontier.clone(), &as_of).await {
                     Ok(progress_emitted) => {
                         if progress_emitted {
                             // Don't flush if we know there were no records emitted.
