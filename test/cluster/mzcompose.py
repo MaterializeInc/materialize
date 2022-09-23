@@ -372,10 +372,8 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
         c.run("testdrive", "pg-snapshot-resumption/01-configure-postgres.td")
         c.run("testdrive", "pg-snapshot-resumption/02-create-sources.td")
 
-        # Temporarily disabled because it is timing out.
-        # https://github.com/MaterializeInc/materialize/issues/14533
-        # # storaged should crash
-        # c.run("testdrive", "pg-snapshot-resumption/03-while-storaged-down.td")
+        # storaged should crash
+        c.run("testdrive", "pg-snapshot-resumption/03-while-storaged-down.td")
 
         print("Sleeping to ensure that storaged crashes")
         time.sleep(10)

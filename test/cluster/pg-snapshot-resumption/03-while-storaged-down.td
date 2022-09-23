@@ -7,14 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# With storaged down, the upper of t1 will not advance. However, the global timestamp will advance.
-# In strict serializable mode we may select a timestamp that is ahead of on of the table's upper and hang forever.
-> SET transaction_isolation = serializable
+$ set-regex match=(\d{13}|u\d{1,3}) replacement=<REDACTED>
+$ set-regex match=(\s{12}0) replacement=<ZERO>
 
 # Increased from the default because of CI flakiness.
-$ set-sql-timeout duration=180s
+$ set-sql-timeout duration=10s
 
-> SELECT COUNT(*) FROM t1;
-0
-
-> SET transaction_isolation = 'strict serializable'
+# The source should not yet be queryable because we fail while attempting the
+# initial snapshot.
+> EXPLAIN TIMESTAMP FOR SELECT COUNT(*) FROM t1
+"     timestamp: <ZERO>\n         since:[<ZERO>]\n         upper:[<ZERO>]\n     has table: false\n\nsource materialize.public.mz_source (<REDACTED>, storage):\n read frontier:[<ZERO>]\nwrite frontier:[<ZERO>]\n"
