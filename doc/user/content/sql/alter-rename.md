@@ -8,7 +8,7 @@ menu:
 
 `ALTER ... RENAME` renames an item, albeit with some [limitations](#details).
 
-Note that renaming schemas and databases are in development. {{% gh 3680 %}}
+Note that renaming schemas and databases are in development {{% gh 3680 %}}.
 
 ## Syntax
 
