@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=(\d{13}|u\d{1,3}|true|false) replacement=<REDACTED>
+$ set-regex match=(\d{13}|u\d{1,3} \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<REDACTED>
 
 > CREATE TABLE t1 (a INT);
 
