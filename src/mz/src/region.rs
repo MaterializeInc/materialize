@@ -34,10 +34,7 @@ pub(crate) async fn enable_region_environment(
     cloud_provider: &CloudProvider,
     valid_profile: &ValidProfile,
 ) -> Result<Region, reqwest::Error> {
-    let authorization: String = format!(
-        "Bearer {}",
-        valid_profile.frontegg_auth_machine.access_token
-    );
+    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
 
     let headers = build_region_request_headers(&authorization);
     let body: HashMap<char, char> = HashMap::new();
@@ -64,10 +61,7 @@ pub(crate) async fn get_cloud_provider_region_details(
     cloud_provider_region: &CloudProvider,
     valid_profile: &ValidProfile,
 ) -> Result<Vec<Region>, anyhow::Error> {
-    let authorization: String = format!(
-        "Bearer {}",
-        valid_profile.frontegg_auth_machine.access_token
-    );
+    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
     let headers = build_region_request_headers(&authorization);
     let mut region_api_url = cloud_provider_region.region_controller_url.clone();
     region_api_url.push_str("/api/environmentassignment");
@@ -83,10 +77,7 @@ pub(crate) async fn region_environment_details(
     region: &Region,
     valid_profile: &ValidProfile,
 ) -> Result<Option<Vec<Environment>>, Error> {
-    let authorization: String = format!(
-        "Bearer {}",
-        valid_profile.frontegg_auth_machine.access_token
-    );
+    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
     let headers = build_region_request_headers(authorization.as_str());
     let mut region_api_url = region.environment_controller_url
         [0..region.environment_controller_url.len() - 4]
@@ -117,7 +108,7 @@ pub(crate) async fn list_regions(
 
     for cloud_provider in cloud_providers {
         let cloud_provider_region_details =
-            get_cloud_provider_region_details(client, &cloud_provider, valid_profile)
+            get_cloud_provider_region_details(client, cloud_provider, valid_profile)
                 .await
                 .with_context(|| "Retrieving region details.")?;
         match cloud_provider_region_details.get(0) {
@@ -142,10 +133,7 @@ pub(crate) async fn list_cloud_providers(
     client: &Client,
     valid_profile: &ValidProfile,
 ) -> Result<Vec<CloudProvider>, Error> {
-    let authorization: String = format!(
-        "Bearer {}",
-        valid_profile.frontegg_auth_machine.access_token
-    );
+    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
 
     let headers = build_region_request_headers(&authorization);
 
@@ -207,7 +195,7 @@ pub(crate) async fn get_provider_by_region_name(
     valid_profile: &ValidProfile,
     cloud_provider_region: &CloudProviderRegion,
 ) -> Result<CloudProvider> {
-    let cloud_providers = list_cloud_providers(&client, &valid_profile)
+    let cloud_providers = list_cloud_providers(client, valid_profile)
         .await
         .with_context(|| "Retrieving cloud providers.")?;
 
@@ -225,10 +213,9 @@ pub(crate) async fn get_provider_region(
     valid_profile: &ValidProfile,
     cloud_provider_region: &CloudProviderRegion,
 ) -> Result<Region> {
-    let cloud_provider =
-        get_provider_by_region_name(&client, &valid_profile, &cloud_provider_region)
-            .await
-            .with_context(|| "Retrieving cloud provider.")?;
+    let cloud_provider = get_provider_by_region_name(client, valid_profile, cloud_provider_region)
+        .await
+        .with_context(|| "Retrieving cloud provider.")?;
 
     let cloud_provider_region_details =
         get_cloud_provider_region_details(client, &cloud_provider, valid_profile)
@@ -247,7 +234,7 @@ pub(crate) async fn get_region_environment(
     valid_profile: &ValidProfile,
     region: &Region,
 ) -> Result<Environment> {
-    let environment_details = region_environment_details(&client, &region, &valid_profile)
+    let environment_details = region_environment_details(client, region, valid_profile)
         .await
         .with_context(|| "Environment unavailable")?;
     let environment_list = environment_details.with_context(|| "Environment unlisted")?;

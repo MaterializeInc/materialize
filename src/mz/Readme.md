@@ -1,6 +1,6 @@
 # Materialize CLI
 
-```shell
+```
 Command-line interface for Materialize.
 
 USAGE:
@@ -11,11 +11,12 @@ OPTIONS:
     -p, --profile <PROFILE>    Specify a particular configuration profile
 
 SUBCOMMANDS:
-    docs       Open the docs
-    help       Print this message or the help of the given subcommand(s)
-    login      Open the web login
-    regions    Show commands for interaction with the region
-    shell      Open a SQL shell over a region
+    app-password    Show commands to interact with passwords
+    docs            Open the docs
+    help            Print this message or the help of the given subcommand(s)
+    login           Open the web login
+    region          Show commands to interact with regions
+    shell           Open a SQL shell over a region
 ```
 
 ## Documentation
@@ -37,7 +38,7 @@ Interaction with regions requires a profile. There are two ways to configure one
 - Login command
 - Configuration file
 
-The quickest way to create a default profile is by running the login command:
+The quickest way to create a _default_ profile is by running the login command:
 
 ```bash
 mz login
@@ -49,7 +50,7 @@ If you prefer to type your email and password in the console use the `--interact
 mz login --interactive
 ```
 
-After login successfully, the CLI will create and populate the configuration file with a default profile.
+After a successful login, the CLI will create and populate the configuration file with a _default_ profile.
 
 ### Configuration file
 
@@ -58,46 +59,60 @@ The configuration file stores all the available profiles. You can add your own a
 ```TOML
 ["profiles.PROFILE_NAME"]
 email = "your@email.com"
-secret = "YOUR_SECRET"
-client_id = "YOUR_CLIENT_ID"
+app_password = "YOUR_APP_PASSWORD"
 ```
 
-##### Paths
-Linux: `.config/mz/profiles.toml`
-macOS (Monterrey): `.config/mz/profiles.toml`
-Windows: `%UserProfile%\.config\mz\profiles.toml`
+#### Paths
+* Linux: `.config/mz/profiles.toml`
+
+* macOS (Monterrey): `.config/mz/profiles.toml`
+
+* Windows: `%UserProfile%\.config\mz\profiles.toml`
 
 Example:
 ```TOML
 ["profiles.production"]
 email = "account@example.com"
-secret = "e1620d58-b3f5-454c-bdc8-6ac07da79fd1"
-client_id = "f599e025-11b3-4fd8-876f-293787dca3c9"
+app-password = "mzp_e1620d58b3f5454cbdc86ac07da79fd1f599e02511b34fd8876f293787dca3c9"
 
 ["profiles.staging"]
 email = "account@example.com"
-secret = "d0061af2-f4fd-4b31-a5b2-24efac4df25b"
-client_id = "c01b79a5-6152-45a3-a8b8-2482bc728458"
+app-password = "mzp_c01b79a5615245a3a8b82482bc728458d0061af2f4fd4b31a5b224efac4df25b"
+```
+
+### App-Passwords
+
+Create a new app-password to access Materialize's regions:
+
+```bash
+mz app-password create <NAME>
+```
+
+Make sure to store the password safely after its creation. App-passwords aren't recoverable.
+
+List all the app-passwords names available:
+```bash
+mz app-password list
 ```
 
 ### Regions
 
-Deploy Materialize in any region:
+Enable Materialize in a region:
 
 ```bash
-mz regions enable aws/us-east-1
+mz region enable aws/us-east-1
 ```
 
-List all the enabled regions:
+List all the enabled region:
 
 ```bash
-mz regions list
+mz region list
 ```
 
 Check any enabled region's status:
 
 ```bash
-mz regions status aws/us-east-1
+mz region status aws/us-east-1
 ```
 
 ### Shell
@@ -131,7 +146,7 @@ https://win.rustup.rs/
 Install `psql` dependency for the shell command:
 
 ```bash
-# Linux (TBC)
+# Linux
 apt-get install postgresql-client
 
 # macOS

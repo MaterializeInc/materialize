@@ -15,9 +15,9 @@ use std::time::Duration;
 use std::{collections::HashMap, io::Write};
 
 use crate::profiles::save_profile;
-use crate::utils::{exit_with_fail_message, trim_newline};
+use crate::utils::{exit_with_fail_message, password_from_api_token, trim_newline};
 use crate::{
-    BrowserAPIToken, ExitMessage, FronteggAPIToken, FronteggAuthUser, Profile, API_TOKEN_AUTH_URL,
+    BrowserAPIToken, ExitMessage, FronteggAPIToken, FronteggAuth, Profile, API_TOKEN_AUTH_URL,
     DEFAULT_PROFILE_NAME, USER_AUTH_URL, WEB_LOGIN_URL,
 };
 use mz_ore::task;
@@ -35,13 +35,14 @@ async fn request(
     }): Query<BrowserAPIToken>,
 ) -> impl IntoResponse {
     if !secret.is_empty() {
+        let app_password = password_from_api_token(FronteggAPIToken { client_id, secret });
+
         let profile = Profile {
             name: name
                 .get_or_insert(DEFAULT_PROFILE_NAME.to_string())
                 .to_string(),
             email,
-            secret,
-            client_id,
+            app_password,
             region: None,
         };
         save_profile(profile).unwrap();
@@ -80,9 +81,10 @@ pub(crate) async fn login_with_browser(profile_name: &str) -> Result<(), std::io
 }
 
 /// Generates an API token using an access token
-async fn generate_api_token(
+pub(crate) async fn generate_api_token(
     client: &Client,
-    access_token_response: FronteggAuthUser,
+    access_token_response: FronteggAuth,
+    description: &String,
 ) -> Result<FronteggAPIToken, reqwest::Error> {
     let authorization: String = format!("Bearer {}", access_token_response.access_token);
 
@@ -94,7 +96,7 @@ async fn generate_api_token(
         HeaderValue::from_str(authorization.as_str()).unwrap(),
     );
     let mut body = HashMap::new();
-    body.insert("description", &"Token for the CLI");
+    body.insert("description", description);
 
     client
         .post(API_TOKEN_AUTH_URL)
@@ -111,7 +113,7 @@ async fn authenticate_user(
     client: &Client,
     email: &str,
     password: &str,
-) -> Result<FronteggAuthUser, reqwest::Error> {
+) -> Result<FronteggAuth, reqwest::Error> {
     let mut access_token_request_body = HashMap::new();
     access_token_request_body.insert("email", email);
     access_token_request_body.insert("password", password);
@@ -120,14 +122,19 @@ async fn authenticate_user(
     headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-    client
+    let response = client
         .post(USER_AUTH_URL)
         .headers(headers)
         .json(&access_token_request_body)
         .send()
-        .await?
-        .json::<FronteggAuthUser>()
-        .await
+        .await?;
+
+    match response.status() {
+        StatusCode::UNAUTHORIZED => {
+            exit_with_fail_message(ExitMessage::Str("Invalid user or password."))
+        }
+        _ => response.json::<FronteggAuth>().await,
+    }
 }
 
 /// Log the user using the console, generates an API token and saves the new profile data.
@@ -149,13 +156,13 @@ pub(crate) async fn login_with_console(profile_name: &String) -> Result<(), reqw
     // Check if there is a secret somewhere.
     // If there is none save the api token someone on the root folder.
     let auth_user = authenticate_user(&client, &email, &password).await?;
-    let api_token = generate_api_token(&client, auth_user).await?;
+    let api_token =
+        generate_api_token(&client, auth_user, &String::from("Token for the CLI")).await?;
 
     let profile = Profile {
         name: profile_name.to_string(),
         email,
-        secret: api_token.secret,
-        client_id: api_token.client_id,
+        app_password: password_from_api_token(api_token),
         region: None,
     };
     save_profile(profile).unwrap();
