@@ -320,20 +320,32 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline> fmt::Display
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let timeline = self.timeline.as_ref();
-        writeln!(f, "          query timestamp: {}", self.timestamp.display(timeline))?;
-        writeln!(f, "          since:{:?}",
+        writeln!(
+            f,
+            "          query timestamp: {}",
+            self.timestamp.display(timeline)
+        )?;
+        writeln!(
+            f,
+            "          since:{:?}",
             self.since
                 .iter()
                 .map(|t| t.display(timeline))
                 .collect::<Vec<_>>()
         )?;
-        writeln!(f, "          upper:{:?}",
+        writeln!(
+            f,
+            "          upper:{:?}",
             self.upper
                 .iter()
                 .map(|t| t.display(timeline))
                 .collect::<Vec<_>>()
         )?;
-        writeln!(f, "         global timestamp: {}", self.global_timestamp.display(timeline))?;
+        writeln!(
+            f,
+            "         global timestamp: {}",
+            self.global_timestamp.display(timeline)
+        )?;
         writeln!(f, "  can respond immediately: {}", self.respond_immediately)?;
         for source in &self.sources {
             writeln!(f, "")?;
