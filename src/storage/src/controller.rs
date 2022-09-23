@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tokio_stream::StreamMap;
 use tracing::debug;
 
@@ -772,6 +772,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64> {
     persist: Arc<Mutex<PersistClientCache>>,
     now: NowFn,
     managed_collections: Arc<Mutex<HashSet<GlobalId>>>,
+    managed_collection_tx: Option<mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>>,
 }
 
 impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
@@ -942,13 +943,13 @@ where
 
         self.create_collections(collections).await?;
 
-        for id in ids {
-            self.register_managed_collection(id).await;
-            if Some(id) == self.state.shard_collection_global_id {
-                self.truncate_managed_collection(id).await;
-                self.initialize_shard_mapping().await;
-            }
-        }
+        // for id in ids {
+        //     self.register_managed_collection(id).await;
+        //     if Some(id) == self.state.shard_collection_global_id {
+
+        //         self.initialize_shard_mapping().await;
+        //     }
+        // }
 
         Ok(())
     }
@@ -1078,7 +1079,73 @@ where
                             .await?;
                         client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
                     }
-                    DataSource::Introspection(_) => unreachable!(),
+                    DataSource::Introspection(i) => {
+                        if self.managed_collection_tx.is_none() {
+                            // Set up automatic timestamp advancer
+                            let now = self.now.clone();
+                            let collections = Arc::clone(&self.managed_collections);
+                            let write_handle = Arc::clone(&self.state.persist_write_handles);
+                            let (tx, mut rx) = mpsc::channel(1);
+                            self.managed_collection_tx = Some(tx);
+
+                            mz_ore::task::spawn(
+                                || "ControllerManagedCollectionWriter",
+                                async move {
+                                    let mut interval = tokio::time::interval(
+                                        tokio::time::Duration::from_millis(1_000),
+                                    );
+                                    loop {
+                                        tokio::select! {
+                                            _ = interval.tick() => {
+                                                let upper = T::from(now());
+                                                let updates = collections
+                                                    .lock()
+                                                    .await
+                                                    .iter()
+                                                    .map(|id| (*id, vec![], upper.clone()))
+                                                    .collect::<Vec<_>>();
+                                                // When advancing timestamps, errors don't matter
+                                                let _ = write_handle.append(updates).await;
+                                            },
+                                            cmd = rx.recv() => {
+                                                if let Some((id, rows)) = cmd {
+                                                    let now = now();
+                                                    let lower = T::from(now - 1);
+                                                    let upper = T::from(now);
+                                                    let mut updates = vec![(id, rows.into_iter().map(|(row, diff)| Update {
+                                                        row,
+                                                        diff,
+                                                        timestamp: lower.clone()
+                                                    }).collect::<Vec<_>>(), upper.clone())];
+
+                                                    updates.append(&mut collections
+                                                        .lock()
+                                                        .await
+                                                        .iter()
+                                                        .filter_map(|inner_id| if id == *inner_id {
+                                                            None
+                                                        } else {
+                                                            Some((*inner_id, vec![], upper.clone()))
+                                                        })
+                                                        .collect::<Vec<_>>());
+
+                                                    write_handle.append(updates).await.unwrap().unwrap();
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                            );
+                        }
+                        match i {
+                            IntrospectionType::ShardMapping => {
+                                self.state.shard_collection_global_id = Some(id);
+                                self.managed_collections.lock().await.insert(id);
+                                self.truncate_managed_collection(id).await;
+                                self.initialize_shard_mapping().await;
+                            }
+                        };
+                    }
                 }
             }
 
@@ -1543,26 +1610,9 @@ where
             "cannot append collection before it's managed"
         );
 
-        // Write values as of now.
-        let now = (self.now)();
-        let lower = T::from(now);
-        let upper = T::from(now + 1);
-
-        // Insert `T` into updates.
-        let commands: Vec<_> = updates
-            .into_iter()
-            .map(|(row, diff)| Update {
-                row,
-                diff,
-                timestamp: lower.clone(),
-            })
-            .collect();
-
-        self.append(vec![(id, commands, upper)])
-            .unwrap()
-            .await
-            .unwrap()
-            .unwrap();
+        if let Some(tx) = &self.managed_collection_tx {
+            tx.send((id, updates)).await.expect("task hung up")
+        }
     }
 }
 
@@ -1606,28 +1656,8 @@ where
             persist: persist_clients,
             now,
             managed_collections: Arc::new(Mutex::new(HashSet::new())),
+            managed_collection_tx: None,
         };
-
-        // Set up automatic timestamp advancer
-        let now = c.now.clone();
-        let collections = Arc::clone(&c.managed_collections);
-        let write_handle = Arc::clone(&c.state.persist_write_handles);
-
-        mz_ore::task::spawn(|| "ControllerManagedCollectionTimestamper", async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
-            loop {
-                interval.tick().await;
-                let upper = T::from(now());
-                let updates = collections
-                    .lock()
-                    .await
-                    .iter()
-                    .map(|id| (*id, vec![], upper.clone()))
-                    .collect::<Vec<_>>();
-                write_handle.append(updates).await.unwrap().unwrap();
-            }
-        });
-
         c
     }
 }
