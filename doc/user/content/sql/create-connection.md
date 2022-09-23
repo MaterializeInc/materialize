@@ -47,33 +47,6 @@ CREATE CONNECTION kafka_connection
     SSL CERTIFICATE = SECRET kafka_ssl_crt;
 ```
 
-#### Confluent Schema Registry SSL options {#csr-ssl}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:| ------------
-`URL`                       | `text`           | ✓        | The schema registry URL.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-`SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
-`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
-`PASSWORD`                  | secret           |          | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
-`USERNAME`                  | secret or `text` |          | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
-
-##### Example
-
-```sql
-CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
-CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
-CREATE SECRET csr_password AS '<CSR_PASSWORD>';
-
-CREATE CONNECTION csr_ssl
-  FOR CONFLUENT SCHEMA REGISTRY
-    URL 'rp-f00000bar.data.vectorized.cloud:30993',
-    SSL KEY = SECRET csr_ssl_key,
-    SSL CERTIFICATE = SECRET csr_ssl_crt,
-    USERNAME = 'foo',
-    PASSWORD = SECRET csr_password;
-```
-
 ### SASL {#kafka-sasl}
 
 To create a connection to a Kafka broker that requires [SASL authentication](https://docs.confluent.io/platform/current/kafka/authentication_sasl/auth-sasl-overview.html), use the provided options.
@@ -100,6 +73,39 @@ CREATE CONNECTION kafka_connection
     SASL MECHANISMS = 'SCRAM-SHA-256',
     SASL USERNAME = 'foo',
     SASL PASSWORD = SECRET kafka_password;
+```
+
+### Other {#kafka-other}
+
+Field                                   | Value            | Required | Description
+----------------------------------------|------------------|:--------:|-------------------------------
+`PROGRESS TOPIC`                        | `text`           |          | The name of a topic that Kafka sinks can use to track internal consistency metadata. If this is not specified, a default topic name will be selected.
+
+## Confluent Schema Registry
+
+Field                       | Value            | Required | Description
+----------------------------|------------------|:--------:| ------------
+`URL`                       | `text`           | ✓        | The schema registry URL.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
+`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
+`PASSWORD`                  | secret           |          | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
+`USERNAME`                  | secret or `text` |          | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
+
+##### Example
+
+```sql
+CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
+CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
+CREATE SECRET csr_password AS '<CSR_PASSWORD>';
+
+CREATE CONNECTION csr_ssl
+  FOR CONFLUENT SCHEMA REGISTRY
+    URL 'rp-f00000bar.data.vectorized.cloud:30993',
+    SSL KEY = SECRET csr_ssl_key,
+    SSL CERTIFICATE = SECRET csr_ssl_crt,
+    USERNAME = 'foo',
+    PASSWORD = SECRET csr_password;
 ```
 
 ## Postgres

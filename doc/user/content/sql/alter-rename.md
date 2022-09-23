@@ -118,10 +118,11 @@ SHOW VIEWS;
  v2
 ```
 
-## Related pages
+## See also
 
 - [`SHOW CREATE VIEW`](/sql/show-create-view)
 - [`SHOW VIEWS`](/sql/show-views)
 - [`SHOW SOURCES`](/sql/show-sources)
 - [`SHOW INDEXES`](/sql/show-indexes)
 - [`SHOW SECRETS`](/sql/show-secrets)
+- [`SHOW SINKS`](/sql/show-sinks)
