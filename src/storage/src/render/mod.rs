@@ -117,7 +117,7 @@ use crate::types::sinks::StorageSinkDesc;
 use crate::types::sources::IngestionDescription;
 
 mod debezium;
-mod persist_sink;
+pub mod persist_sink;
 pub mod sinks;
 pub mod sources;
 mod upsert;
@@ -149,7 +149,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 &debug_name,
                 id,
                 description.clone(),
-                resume_upper,
+                resume_upper.clone(),
                 storage_state,
             );
 
@@ -164,16 +164,37 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 .source_uppers
                 .insert(id, Rc::clone(&shared_frontier));
 
-            let sink_token = crate::render::persist_sink::render(
+            let (ok_stream, err_stream, persist_token) =
+                crate::source::persist_source::persist_source(
+                    region,
+                    id,
+                    Arc::clone(&persist_clients),
+                    description.storage_metadata.clone(),
+                    Some(resume_upper.clone()),
+                    false,            /* don't include snapshot */
+                    Antichain::new(), // we want all updates
+                    None,             // no MFP
+                    // Copy the logic in DeltaJoin/Get/Join to start.
+                    |_timer, count| count > 1_000_000,
+                );
+            use differential_dataflow::AsCollection;
+            let persist_collection = ok_stream
+                .as_collection()
+                .map(Ok)
+                .concat(&err_stream.as_collection().map(Err));
+
+            let sink_token = crate::render::persist_sink::install_desired_into_persist(
                 region,
                 id,
-                description.storage_metadata,
+                &description.storage_metadata,
                 source_data,
+                persist_collection,
+                resume_upper,
                 persist_clients,
                 shared_frontier,
             );
 
-            let token = Rc::new((source_token, sink_token));
+            let token = Rc::new((source_token, persist_token, sink_token));
 
             storage_state.source_tokens.insert(id, token);
         })
