@@ -1040,7 +1040,7 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().with_now(now);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
-    let timestamp_re = Regex::new(r"\s*(\d{4}|0)").unwrap();
+    let timestamp_re = Regex::new(r"\s*(\d{4}|0) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
     let bool_re = Regex::new(r"true|false").unwrap();
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;

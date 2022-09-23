@@ -315,7 +315,7 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline> fmt::Display
         )?;
         writeln!(
             f,
-            "          since:{:?}",
+            "                    since:{:?}",
             self.since
                 .iter()
                 .map(|t| t.display(timeline))
@@ -323,7 +323,7 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline> fmt::Display
         )?;
         writeln!(
             f,
-            "          upper:{:?}",
+            "                    upper:{:?}",
             self.upper
                 .iter()
                 .map(|t| t.display(timeline))
