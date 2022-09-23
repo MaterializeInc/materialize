@@ -26,7 +26,7 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
-use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
+use rdkafka::message::{Header, Message, OwnedHeaders, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use rdkafka::{Offset, TopicPartitionList};
@@ -41,7 +41,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
-use tokio::sync::Mutex;
+
 use tracing::{debug, error, info, warn};
 
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
@@ -172,58 +172,13 @@ impl SinkMetrics {
     }
 }
 
-#[derive(Clone)]
-pub struct KafkaSinkSendRetryManager {
-    // Because we flush this fully before moving onto the next timestamp, this queue cannot contain
-    // more messages than are contained in a single timely timestamp.  It's also unlikely to get
-    // beyond the size of the rdkafka internal message queue because that seems to stop accepting
-    // new messages when errors are being returned by the delivery callback -- though we should not
-    // rely on that fact if/when we eventually (tm) get around to making our queues bounded.
-    //
-    // If perf becomes an issue, we can do something slightly more complex with a crossbeam channel
-    q: VecDeque<OwnedMessage>,
-    outstanding_send_count: u64,
-}
-
-impl KafkaSinkSendRetryManager {
-    fn new() -> Self {
-        Self {
-            q: VecDeque::new(),
-            outstanding_send_count: 0,
-        }
-    }
-    fn record_send(&mut self) {
-        self.outstanding_send_count += 1;
-    }
-    fn record_error(&mut self, msg: OwnedMessage) {
-        self.q.push_back(msg);
-        self.outstanding_send_count -= 1;
-    }
-    fn record_success(&mut self) {
-        self.outstanding_send_count -= 1;
-    }
-    fn sends_flushed(&mut self) -> bool {
-        self.outstanding_send_count == 0 && self.q.is_empty()
-    }
-    fn pop_retry(&mut self) -> Option<OwnedMessage> {
-        self.q.pop_front()
-    }
-}
-
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
-    retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
 }
 
 impl SinkProducerContext {
-    pub fn new(
-        metrics: Arc<SinkMetrics>,
-        retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
-    ) -> Self {
-        SinkProducerContext {
-            metrics,
-            retry_manager,
-        }
+    pub fn new(metrics: Arc<SinkMetrics>) -> Self {
+        SinkProducerContext { metrics }
     }
 }
 
@@ -242,16 +197,13 @@ impl ProducerContext for SinkProducerContext {
 
     fn delivery(&self, result: &DeliveryResult, _: Self::DeliveryOpaque) {
         match result {
-            Ok(_) => self.retry_manager.blocking_lock().record_success(),
+            Ok(_) => {}
             Err((e, msg)) => {
                 self.metrics.message_delivery_errors_counter.inc();
                 // TODO: figure out a good way to back these retries off.  Should be okay without
                 // because we seem to very rarely end up in a constant state where rdkafka::send
                 // works but everything is immediately rejected and hits this branch.
                 warn!("Kafka producer delivery error {:?} for {:?}", e, msg);
-                self.retry_manager
-                    .blocking_lock()
-                    .record_error(msg.detach());
             }
         }
     }
@@ -396,7 +348,6 @@ struct KafkaSinkState {
     transactional: bool,
     pending_rows: HashMap<Timestamp, Vec<EncodedRow>>,
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
-    retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
     sink_state: KafkaSinkStateEnum,
 
     /// Timestamp of the latest progress record that was written out to Kafka.
@@ -442,15 +393,12 @@ impl KafkaSinkState {
             &worker_id,
         ));
 
-        let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
-
         let producer = KafkaTxProducer {
             name: sink_name.clone(),
             inner: Arc::new(
                 config
                     .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
                         Arc::clone(&metrics),
-                        Arc::clone(&retry_manager),
                     ))
                     .expect("creating kafka producer for Kafka sink failed"),
             ),
@@ -473,7 +421,6 @@ impl KafkaSinkState {
             transactional: connection.exactly_once,
             pending_rows: HashMap::new(),
             ready_rows: VecDeque::new(),
-            retry_manager,
             sink_state,
             latest_progress_ts: Timestamp::minimum(),
             write_frontier,
@@ -624,7 +571,6 @@ impl KafkaSinkState {
             match self.producer.send(record) {
                 Ok(()) => {
                     self.metrics.messages_sent_counter.inc();
-                    self.retry_manager.lock().await.record_send();
                     return Ok(());
                 }
                 Err((e, rec)) => {
@@ -651,42 +597,6 @@ impl KafkaSinkState {
             }
         }
         Err(last_error)
-    }
-
-    async fn flush(&self) -> KafkaResult<()> {
-        self.flush_inner().await?;
-        while !{
-            let mut guard = self.retry_manager.lock().await;
-            guard.sends_flushed()
-        } {
-            while let Some(msg) = {
-                let mut guard = self.retry_manager.lock().await;
-                guard.pop_retry()
-            } {
-                let mut transformed_msg = BaseRecord::to(msg.topic());
-                transformed_msg = match msg.key() {
-                    Some(k) => transformed_msg.key(k),
-                    None => transformed_msg,
-                };
-                transformed_msg = match msg.payload() {
-                    Some(p) => transformed_msg.payload(p),
-                    None => transformed_msg,
-                };
-                self.send(transformed_msg).await?;
-            }
-            self.flush_inner().await?;
-        }
-        Ok(())
-    }
-
-    async fn flush_inner(&self) -> KafkaResult<()> {
-        let self_producer = self.producer.clone();
-        // Only actually used for retriable errors.
-        Retry::default()
-            // Because we only expect to receive timeout errors, we should clamp fairly low.
-            .clamp_backoff(Duration::from_secs(60))
-            .retry_async(|_| self_producer.flush())
-            .await
     }
 
     async fn determine_latest_progress_record(&self) -> Result<Option<Timestamp>, anyhow::Error> {
@@ -1298,10 +1208,6 @@ where
                     }
                 }
 
-                // Flush to make sure that errored messages have been properly retried before
-                // sending progress records and commit transactions.
-                bail_err!(s.flush().await, "post-records flush");
-
                 if let Some(ref progress_state) = s.sink_state.unwrap_running() {
                     bail_err!(
                         s.send_progress_record(*ts, progress_state).await,
@@ -1316,8 +1222,6 @@ where
                         "commit transaction"
                     );
                 };
-
-                bail_err!(s.flush().await, "post-commit flush");
 
                 // sanity check for the continuous updating
                 // of the write frontier below
@@ -1343,13 +1247,7 @@ where
             // other workers to also emit progress.
             if is_active_worker {
                 match s.maybe_emit_progress(frontier.clone(), &as_of).await {
-                    Ok(progress_emitted) => {
-                        if progress_emitted {
-                            // Don't flush if we know there were no records emitted.
-                            // It has a noticeable negative performance impact.
-                            bail_err!(s.flush().await, "progress emitted flush");
-                        }
-                    }
+                    Ok(_) => {}
                     Err(e) => {
                         // This can happen when the producer has not been
                         // initialized yet. This also means, that we only start
@@ -1362,17 +1260,9 @@ where
 
             // We want debug_assert but also to print out if we would have failed the assertion in release mode
             let in_flight_count = s.producer.inner.in_flight_count();
-            let sends_flushed = s.retry_manager.lock().await.sends_flushed();
-            if cfg!(debug_assertions) {
-                assert_eq!(in_flight_count, 0);
-                assert!(sends_flushed);
-            } else {
-                if in_flight_count != 0 {
-                    error!("Producer has {:?} messages in flight", in_flight_count);
-                }
-                if !sends_flushed {
-                    error!("Retry manager has not flushed sends");
-                }
+            debug_assert_eq!(in_flight_count, 0);
+            if in_flight_count != 0 {
+                error!("Producer has {:?} messages in flight", in_flight_count);
             }
 
             if !s.pending_rows.is_empty() {
