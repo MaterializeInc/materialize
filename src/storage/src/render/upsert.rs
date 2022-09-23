@@ -57,8 +57,6 @@ struct UpsertSourceData {
 pub(crate) fn upsert<G>(
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
-    // Full arity, including the key columns
-    source_arity: usize,
     upsert_envelope: UpsertEnvelope,
     previous: Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     previous_token: Option<Rc<dyn Any>>,
@@ -113,9 +111,12 @@ where
     // when it is transmitted.
     let temporal = Vec::new();
     let predicates = Vec::new();
-    let position_or = (0..source_arity).map(Some).collect::<Vec<_>>();
+    let position_or = (0..upsert_envelope.source_arity)
+        .map(Some)
+        .collect::<Vec<_>>();
     let temporal_plan = if !temporal.is_empty() {
-        let temporal_mfp = mz_expr::MapFilterProject::new(source_arity).filter(temporal);
+        let temporal_mfp =
+            mz_expr::MapFilterProject::new(upsert_envelope.source_arity).filter(temporal);
         Some(temporal_mfp.into_plan().unwrap_or_else(|e| panic!("{}", e)))
     } else {
         None

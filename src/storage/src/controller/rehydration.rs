@@ -172,16 +172,7 @@ where
 
         for ingest in self.sources.values_mut() {
             let mut persist_clients = self.persist.lock().await;
-            let persist_client = persist_clients
-                .open(ingest.description.storage_metadata.persist_location.clone())
-                .await
-                .expect("error creating persist client");
-
-            ingest.resume_upper = ingest
-                .description
-                .storage_metadata
-                .get_resume_upper::<T>(&persist_client, &ingest.description.desc.envelope)
-                .await;
+            ingest.resume_upper = ingest.description.resume_upper(&mut persist_clients).await;
         }
 
         for export in self.sinks.values_mut() {

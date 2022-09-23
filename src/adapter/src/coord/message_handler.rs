@@ -239,11 +239,6 @@ impl<S: Append + 'static> Coordinator<S> {
     ) {
         otel_ctx.attach_as_parent();
 
-        let stmt = match result {
-            Ok(stmt) => stmt,
-            Err(e) => return tx.send(Err(e), session),
-        };
-
         // Ensure that all dependencies still exist after purification, as a
         // `DROP CONNECTION` may have sneaked in. If any have gone missing, we
         // repurify the original statement. This will either produce a nice
@@ -261,15 +256,58 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
-        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
-            Ok(Plan::CreateSource(plan)) => plan,
-            Ok(_) => unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource"),
+        let (subsource_stmts, stmt) = match result {
+            Ok(ok) => ok,
             Err(e) => return tx.send(Err(e), session),
         };
 
-        let result = self
-            .sequence_create_source(&mut session, plan, depends_on)
-            .await;
+        let mut plans = vec![];
+        let mut id_allocation = HashMap::new();
+
+        // First we'll allocate global ids for each subsource and plan them
+        for (transient_id, subsource_stmt) in subsource_stmts {
+            let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&subsource_stmt));
+            let source_id = match self.catalog.allocate_user_id().await {
+                Ok(id) => id,
+                Err(e) => return tx.send(Err(e.into()), session),
+            };
+            let plan = match self.plan_statement(
+                &mut session,
+                Statement::CreateSubsource(subsource_stmt),
+                &params,
+            ) {
+                Ok(Plan::CreateSource(plan)) => plan,
+                Ok(_) => {
+                    unreachable!("planning CREATE SUBSOURCE must result in a Plan::CreateSource")
+                }
+                Err(e) => return tx.send(Err(e), session),
+            };
+            id_allocation.insert(transient_id, source_id);
+            plans.push((source_id, plan, depends_on));
+        }
+
+        // Then, we'll rewrite the source statement to point to the newly minted global ids and
+        // plan it too
+        let stmt = match mz_sql::names::resolve_transient_ids(&id_allocation, stmt) {
+            Ok(ok) => ok,
+            Err(e) => return tx.send(Err(e.into()), session),
+        };
+        let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
+        let source_id = match self.catalog.allocate_user_id().await {
+            Ok(id) => id,
+            Err(e) => return tx.send(Err(e.into()), session),
+        };
+        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
+            Ok(Plan::CreateSource(plan)) => plan,
+            Ok(_) => {
+                unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
+            }
+            Err(e) => return tx.send(Err(e), session),
+        };
+        plans.push((source_id, plan, depends_on));
+
+        // Finally, sequence all plans in one go
+        let result = self.sequence_create_source(&mut session, plans).await;
         tx.send(result, session);
     }
 

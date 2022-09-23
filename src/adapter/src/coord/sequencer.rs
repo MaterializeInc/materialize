@@ -97,7 +97,17 @@ impl<S: Append + 'static> Coordinator<S> {
         tx.set_allowed(responses);
 
         match plan {
-            Plan::CreateSource(_) => unreachable!("handled separately"),
+            Plan::CreateSource(plan) => {
+                let source_id = match self.catalog.allocate_user_id().await {
+                    Ok(id) => id,
+                    Err(e) => return tx.send(Err(e.into()), session),
+                };
+                tx.send(
+                    self.sequence_create_source(&mut session, vec![(source_id, plan, depends_on)])
+                        .await,
+                    session,
+                );
+            }
             Plan::CreateConnection(plan) => {
                 tx.send(
                     self.sequence_create_connection(&session, plan, depends_on)
@@ -414,87 +424,115 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
-        plan: CreateSourcePlan,
-        depends_on: Vec<GlobalId>,
+        plans: Vec<(GlobalId, CreateSourcePlan, Vec<GlobalId>)>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = vec![];
-        let source_id = self.catalog.allocate_user_id().await?;
-        let source_oid = self.catalog.allocate_oid()?;
-        let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
-        let source = catalog::Source {
-            create_sql: plan.source.create_sql,
-            connection_id: plan.source.connection_id,
-            source_desc: plan.source.source_desc,
-            desc: plan.source.desc,
-            timeline: plan.timeline,
-            depends_on,
-            host_config,
-        };
-        ops.push(catalog::Op::CreateItem {
-            id: source_id,
-            oid: source_oid,
-            name: plan.name.clone(),
-            item: CatalogItem::Source(source.clone()),
-        });
+        let mut sources = vec![];
+
+        let if_not_exists_ids = plans
+            .iter()
+            .filter_map(
+                |(id, plan, _)| {
+                    if plan.if_not_exists {
+                        Some(*id)
+                    } else {
+                        None
+                    }
+                },
+            )
+            .collect::<Vec<_>>();
+
+        for (source_id, plan, depends_on) in plans {
+            let source_oid = self.catalog.allocate_oid()?;
+            let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
+            let source = catalog::Source {
+                create_sql: plan.source.create_sql,
+                ingestion: plan.source.ingestion.map(|ingestion| catalog::Ingestion {
+                    connection_id: ingestion.connection_id,
+                    desc: ingestion.desc,
+                    source_imports: ingestion.source_imports,
+                    subsource_exports: ingestion.subsource_exports,
+                }),
+                desc: plan.source.desc,
+                timeline: plan.timeline,
+                depends_on,
+                host_config,
+            };
+            ops.push(catalog::Op::CreateItem {
+                id: source_id,
+                oid: source_oid,
+                name: plan.name.clone(),
+                item: CatalogItem::Source(source.clone()),
+            });
+            sources.push((source_id, source));
+        }
         match self
             .catalog_transact(Some(session), ops, move |_| Ok(()))
             .await
         {
             Ok(()) => {
-                // Do everything to instantiate the source at the coordinator and
-                // inform the timestamper and dataflow workers of its existence before
-                // shipping any dataflows that depend on its existence.
+                for (source_id, source) in sources {
+                    // This is disabled for the moment because it has unusual upper
+                    // advancement behavior.
+                    // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
+                    let status_collection_id = if false {
+                        Some(self.catalog.resolve_builtin_storage_collection(
+                            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                        ))
+                    } else {
+                        None
+                    };
 
-                let mut ingestion = IngestionDescription {
-                    desc: source.source_desc.clone(),
-                    source_imports: BTreeMap::new(),
-                    storage_metadata: (),
-                    typ: source.desc.typ().clone(),
-                };
+                    let ingestion = source.ingestion.map(|ingestion| {
+                        let mut source_imports = BTreeMap::new();
+                        for source_import in ingestion.source_imports {
+                            source_imports.insert(source_import, ());
+                        }
 
-                for id in self.catalog.state().get_entry(&source_id).uses() {
-                    if self.catalog.state().get_entry(id).source().is_some() {
-                        ingestion.source_imports.insert(*id, ());
-                    }
+                        let mut source_exports = BTreeMap::new();
+                        // By convention the first output corresponds to the main source object
+                        source_exports.insert(source_id, (0, ()));
+                        for (subsource, stream_idx) in ingestion.subsource_exports {
+                            source_exports.insert(subsource, (stream_idx, ()));
+                        }
+
+                        IngestionDescription {
+                            desc: ingestion.desc,
+                            ingestion_metadata: (),
+                            source_imports,
+                            source_exports,
+                        }
+                    });
+
+                    self.controller
+                        .storage
+                        .create_collections(vec![(
+                            source_id,
+                            CollectionDescription {
+                                desc: source.desc.clone(),
+                                ingestion,
+                                since: None,
+                                status_collection_id,
+                                host_config: Some(source.host_config),
+                            },
+                        )])
+                        .await
+                        .unwrap();
+
+                    self.initialize_storage_read_policies(
+                        vec![source_id],
+                        DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                    )
+                    .await;
                 }
-
-                // This is disabled for the moment because it has unusual upper
-                // advancement behavior.
-                // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-                let status_collection_id = if false {
-                    Some(self.catalog.resolve_builtin_storage_collection(
-                        &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                    ))
-                } else {
-                    None
-                };
-
-                self.controller
-                    .storage
-                    .create_collections(vec![(
-                        source_id,
-                        CollectionDescription {
-                            desc: source.desc.clone(),
-                            ingestion: Some(ingestion),
-                            since: None,
-                            status_collection_id,
-                            host_config: Some(source.host_config),
-                        },
-                    )])
-                    .await
-                    .unwrap();
-
-                self.initialize_storage_read_policies(
-                    vec![source_id],
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-                )
-                .await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                kind: catalog::ErrorKind::ItemAlreadyExists(id, _),
                 ..
-            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
+            })) if if_not_exists_ids.contains(&id) => {
+                Ok(ExecuteResponse::CreatedConnection { existed: true })
+            }
             Err(err) => Err(err),
         }
     }
@@ -532,7 +570,7 @@ impl<S: Append + 'static> Coordinator<S> {
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection { existed: false }),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection { existed: true }),
             Err(err) => Err(err),
@@ -1022,7 +1060,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
             Err(err) => Err(err),
@@ -1061,7 +1099,7 @@ impl<S: Append + 'static> Coordinator<S> {
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret { existed: false }),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedSecret { existed: true }),
             Err(err) => {
@@ -1158,7 +1196,7 @@ impl<S: Append + 'static> Coordinator<S> {
         match result {
             Ok(()) => {}
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => {
                 tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
@@ -1218,7 +1256,7 @@ impl<S: Append + 'static> Coordinator<S> {
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(()) => Ok(ExecuteResponse::CreatedView { existed: false }),
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
             Err(err) => Err(err),
@@ -1397,7 +1435,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Ok(ExecuteResponse::CreatedMaterializedView { existed: false })
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedMaterializedView { existed: true }),
             Err(err) => Err(err),
@@ -1452,7 +1490,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
             Err(err) => Err(err),

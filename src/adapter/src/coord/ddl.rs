@@ -88,21 +88,23 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        match &source.source_desc.connection {
-                            SourceConnection::Postgres(PostgresSourceConnection {
-                                connection,
-                                details,
-                                ..
-                            }) => {
-                                let config = connection
-                                    .config(&*self.connection_context.secrets_reader)
-                                    .await
-                                    .unwrap_or_else(|e| {
-                                        panic!("Postgres source {id} missing secrets: {e}")
-                                    });
-                                replication_slots_to_drop.push((config, details.slot.clone()));
+                        if let Some(ingestion) = &source.ingestion {
+                            match &ingestion.desc.connection {
+                                SourceConnection::Postgres(PostgresSourceConnection {
+                                    connection,
+                                    details,
+                                    ..
+                                }) => {
+                                    let config = connection
+                                        .config(&*self.connection_context.secrets_reader)
+                                        .await
+                                        .unwrap_or_else(|e| {
+                                            panic!("Postgres source {id} missing secrets: {e}")
+                                        });
+                                    replication_slots_to_drop.push((config, details.slot.clone()));
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                     CatalogItem::Sink(catalog::Sink { connection, .. }) => match connection {

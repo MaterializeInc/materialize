@@ -23,6 +23,7 @@ use mz_repr::GlobalId;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
+use crate::ast::visit::{Visit, VisitNode};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     self, AstInfo, Cte, Ident, Query, Raw, RawClusterName, RawDataType, RawObjectName, Statement,
@@ -1139,6 +1140,138 @@ where
     let result = node.fold(&mut resolver);
     resolver.status?;
     Ok((result, resolver.ids))
+}
+
+#[derive(Debug)]
+pub struct TransientResolver<'a> {
+    /// A HashMap mapping each transient global id to its final non-transient global id
+    allocation: &'a HashMap<GlobalId, GlobalId>,
+    status: Result<(), PlanError>,
+}
+
+impl<'a> TransientResolver<'a> {
+    fn new(allocation: &'a HashMap<GlobalId, GlobalId>) -> Self {
+        TransientResolver {
+            allocation,
+            status: Ok(()),
+        }
+    }
+}
+
+impl Fold<Aug, Aug> for TransientResolver<'_> {
+    fn fold_object_name(&mut self, object_name: ResolvedObjectName) -> ResolvedObjectName {
+        match object_name {
+            ResolvedObjectName::Object {
+                id: transient_id @ GlobalId::Transient(_),
+                qualifiers,
+                full_name,
+                print_id,
+            } => {
+                let id = match self.allocation.get(&transient_id) {
+                    Some(id) => *id,
+                    None => {
+                        let obj = ResolvedObjectName::Object {
+                            id: transient_id,
+                            qualifiers: qualifiers.clone(),
+                            full_name: full_name.clone(),
+                            print_id,
+                        };
+                        self.status = Err(PlanError::InvalidObject(obj));
+                        transient_id
+                    }
+                };
+                ResolvedObjectName::Object {
+                    id,
+                    qualifiers,
+                    full_name,
+                    print_id,
+                }
+            }
+            other => other,
+        }
+    }
+    fn fold_cluster_name(
+        &mut self,
+        node: <Aug as AstInfo>::ClusterName,
+    ) -> <Aug as AstInfo>::ClusterName {
+        node
+    }
+    fn fold_cte_id(&mut self, node: <Aug as AstInfo>::CteId) -> <Aug as AstInfo>::CteId {
+        node
+    }
+    fn fold_data_type(&mut self, node: <Aug as AstInfo>::DataType) -> <Aug as AstInfo>::DataType {
+        node
+    }
+    fn fold_database_name(
+        &mut self,
+        node: <Aug as AstInfo>::DatabaseName,
+    ) -> <Aug as AstInfo>::DatabaseName {
+        node
+    }
+    fn fold_nested_statement(
+        &mut self,
+        node: <Aug as AstInfo>::NestedStatement,
+    ) -> <Aug as AstInfo>::NestedStatement {
+        node
+    }
+    fn fold_schema_name(
+        &mut self,
+        node: <Aug as AstInfo>::SchemaName,
+    ) -> <Aug as AstInfo>::SchemaName {
+        node
+    }
+}
+
+pub fn resolve_transient_ids<N>(
+    allocation: &HashMap<GlobalId, GlobalId>,
+    node: N,
+) -> Result<N::Folded, PlanError>
+where
+    N: FoldNode<Aug, Aug>,
+{
+    let mut resolver = TransientResolver::new(allocation);
+    let result = node.fold(&mut resolver);
+    resolver.status?;
+    Ok(result)
+}
+
+#[derive(Debug, Default)]
+pub struct DependencyVisitor {
+    ids: HashSet<GlobalId>,
+}
+
+impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
+    fn visit_object_name(&mut self, object_name: &'ast <Aug as AstInfo>::ObjectName) {
+        if let ResolvedObjectName::Object { id, .. } = object_name {
+            self.ids.insert(*id);
+        }
+    }
+
+    fn visit_data_type(&mut self, data_type: &'ast <Aug as AstInfo>::DataType) {
+        match data_type {
+            ResolvedDataType::AnonymousList(data_type) => self.visit_data_type(data_type),
+            ResolvedDataType::AnonymousMap {
+                key_type,
+                value_type,
+            } => {
+                self.visit_data_type(key_type);
+                self.visit_data_type(value_type);
+            }
+            ResolvedDataType::Named { id, .. } => {
+                self.ids.insert(*id);
+            }
+            ResolvedDataType::Error => {}
+        }
+    }
+}
+
+pub fn visit_dependencies<'ast, N>(node: &'ast N) -> HashSet<GlobalId>
+where
+    N: VisitNode<'ast, Aug> + 'ast,
+{
+    let mut visitor = DependencyVisitor::default();
+    node.visit(&mut visitor);
+    visitor.ids
 }
 
 // Used when displaying a view's source for human creation. If the name

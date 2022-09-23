@@ -99,7 +99,7 @@ use mz_persist_client::usage::StorageUsageClient;
 use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
-use mz_sql::ast::{CreateSourceStatement, Raw, Statement};
+use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
@@ -199,7 +199,13 @@ pub struct CreateSourceStatementReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<CreateSourceStatement<Aug>, AdapterError>,
+    pub result: Result<
+        (
+            Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+            CreateSourceStatement<Aug>,
+        ),
+        AdapterError,
+    >,
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
@@ -471,18 +477,26 @@ impl<S: Append + 'static> Coordinator<S> {
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
                     // Re-announce the source description.
-                    let mut ingestion = IngestionDescription {
-                        desc: source.source_desc.clone(),
-                        source_imports: BTreeMap::new(),
-                        storage_metadata: (),
-                        typ: source.desc.typ().clone(),
-                    };
-
-                    for id in entry.uses() {
-                        if self.catalog.state().get_entry(id).source().is_some() {
-                            ingestion.source_imports.insert(*id, ());
+                    let ingestion = source.ingestion.clone().map(|ingestion| {
+                        let mut source_imports = BTreeMap::new();
+                        for source_import in ingestion.source_imports {
+                            source_imports.insert(source_import, ());
                         }
-                    }
+
+                        let mut source_exports = BTreeMap::new();
+                        // By convention the first output corresponds to the main source object
+                        source_exports.insert(entry.id(), (0, ()));
+                        for (subsource, stream_idx) in ingestion.subsource_exports {
+                            source_exports.insert(subsource, (stream_idx, ()));
+                        }
+
+                        IngestionDescription {
+                            desc: ingestion.desc,
+                            ingestion_metadata: (),
+                            source_imports,
+                            source_exports,
+                        }
+                    });
 
                     self.controller
                         .storage
@@ -490,7 +504,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             entry.id(),
                             CollectionDescription {
                                 desc: source.desc.clone(),
-                                ingestion: Some(ingestion),
+                                ingestion,
                                 since: None,
                                 status_collection_id,
                                 host_config: Some(source.host_config.clone()),

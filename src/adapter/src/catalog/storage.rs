@@ -1007,6 +1007,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         ) {
             Ok(_) => Ok(()),
             Err(_) => Err(Error::new(ErrorKind::ItemAlreadyExists(
+                id,
                 item_name.to_owned(),
             ))),
         }

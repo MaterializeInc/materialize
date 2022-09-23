@@ -23,7 +23,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement, CreateTableStatement,
     CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op,
     Query, Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName,
     Value, ViewDefinition,
@@ -296,8 +296,26 @@ pub fn create_statement(
             if_not_exists,
             key_constraint: _,
             with_options: _,
+            subsources: _,
         }) => {
             *name = allocate_name(name)?;
+            *if_not_exists = false;
+        }
+
+        Statement::CreateSubsource(CreateSubsourceStatement {
+            name,
+            columns,
+            constraints: _,
+            if_not_exists,
+        }) => {
+            *name = allocate_name(name)?;
+            let mut normalizer = QueryNormalizer::new(scx);
+            for c in columns {
+                normalizer.visit_column_def_mut(c);
+            }
+            if let Some(err) = normalizer.err {
+                return Err(err);
+            }
             *if_not_exists = false;
         }
 

@@ -16,18 +16,22 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::BufMut;
+use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
-use mz_ore::now::NowFn;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
-use mz_persist_types::Codec;
+use mz_expr::PartitionId;
+use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::TryFromProtoError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_repr::{ColumnType, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::controller::CollectionMetadata;
 use crate::types::connections::aws::AwsConfig;
@@ -49,9 +53,78 @@ pub struct IngestionDescription<S = ()> {
     /// Source collections made available to this ingestion.
     pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
-    pub storage_metadata: S,
-    /// The relation type this ingestion should produce
-    pub typ: RelationType,
+    pub ingestion_metadata: S,
+    /// Collections to be exported by this ingestion. Each GlobalId is associated with the ordinal
+    /// of the output stream it should be connected to
+    pub source_exports: BTreeMap<GlobalId, (usize, S)>,
+}
+
+impl IngestionDescription<CollectionMetadata> {
+    /// Calculates the frontier that this ingestion can resume at
+    pub async fn resume_upper<T: Timestamp + Codec64 + Lattice>(
+        &self,
+        client_cache: &mut PersistClientCache,
+    ) -> Antichain<T> {
+        // An ingestion can resume at the minimum of..
+        let mut resume_upper = Antichain::new();
+
+        // ..the upper frontier of each source export
+        for (_, metadata) in self.source_exports.values() {
+            // Explicit destructuring to force a compile error when the metadata change
+            let CollectionMetadata {
+                persist_location,
+                remap_shard: _,
+                data_shard,
+                // The status shard only contains non-definite status updates
+                status_shard: _,
+            } = metadata;
+            let handle = client_cache
+                .open(persist_location.clone())
+                .await
+                .expect("error creating persist client")
+                .open_writer::<SourceData, (), T, Diff>(*data_shard)
+                .await
+                .unwrap();
+            for t in handle.upper().elements() {
+                resume_upper.insert(t.clone());
+            }
+        }
+
+        // ..the upper frontier of ingestion state
+        let CollectionMetadata {
+            persist_location,
+            remap_shard,
+            data_shard: _,
+            // The status shard only contains non-definite status updates
+            status_shard: _,
+        } = &self.ingestion_metadata;
+        let handle = client_cache
+            .open(persist_location.clone())
+            .await
+            .expect("error creating persist client")
+            .open_writer::<(), PartitionId, T, MzOffset>(*remap_shard)
+            .await
+            .unwrap();
+        for t in handle.upper().elements() {
+            resume_upper.insert(t.clone());
+        }
+
+        // ..the upper of an implied envelope state shard. Eventually this could become actual
+        // state shards and this section will be removed.
+        let envelope_upper = match self.desc.envelope {
+            // We can only resume with the None envelope, which is stateless,
+            // or with the [Debezium] Upsert envelope, which is easy
+            //   (re-ingest the last emitted state)
+            SourceEnvelope::None(_) | SourceEnvelope::Upsert(_) => Antichain::new(),
+            // Otherwise re-ingest everything
+            _ => Antichain::from_elem(T::minimum()),
+        };
+        for t in envelope_upper {
+            resume_upper.insert(t);
+        }
+
+        resume_upper
+    }
 }
 
 impl<S> Arbitrary for IngestionDescription<S>
@@ -65,37 +138,47 @@ where
         (
             any::<SourceDesc>(),
             any::<BTreeMap<GlobalId, S>>(),
+            any::<BTreeMap<GlobalId, (usize, S)>>(),
             any::<S>(),
-            any::<RelationType>(),
         )
-            .prop_map(|(desc, source_imports, storage_metadata, typ)| Self {
-                desc,
-                source_imports,
-                storage_metadata,
-                typ,
-            })
+            .prop_map(
+                |(desc, source_imports, source_exports, ingestion_metadata)| Self {
+                    desc,
+                    source_imports,
+                    source_exports,
+                    ingestion_metadata,
+                },
+            )
             .boxed()
     }
 }
 
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
     fn into_proto(&self) -> ProtoIngestionDescription {
+        use proto_ingestion_description::*;
         // we have to turn a BTreeMap into a vec here
         let source_imports: Vec<_> = self
             .source_imports
             .iter()
-            .map(
-                |(id, meta)| proto_ingestion_description::ProtoSourceMetadataImport {
-                    id: Some(id.into_proto()),
-                    storage_metadata: Some(meta.into_proto()),
-                },
-            )
+            .map(|(id, meta)| ProtoSourceImport {
+                id: Some(id.into_proto()),
+                storage_metadata: Some(meta.into_proto()),
+            })
+            .collect();
+        let source_exports: Vec<_> = self
+            .source_exports
+            .iter()
+            .map(|(id, (output_index, meta))| ProtoSourceExport {
+                id: Some(id.into_proto()),
+                output_index: output_index.into_proto(),
+                storage_metadata: Some(meta.into_proto()),
+            })
             .collect();
         ProtoIngestionDescription {
             source_imports,
+            source_exports,
+            ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
             desc: Some(self.desc.into_proto()),
-            storage_metadata: Some(self.storage_metadata.into_proto()),
-            typ: Some(self.typ.into_proto()),
         }
     }
 
@@ -107,23 +190,34 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
                 .into_iter()
                 .map(
                     |psmi| -> Result<(GlobalId, CollectionMetadata), TryFromProtoError> {
-                        let id = psmi.id.into_rust_if_some("ProtoSourceMetadataImport::id")?;
+                        let id = psmi.id.into_rust_if_some("ProtoSourceImport::id")?;
                         let meta = psmi
                             .storage_metadata
-                            .into_rust_if_some("ProtoSourceMetadataImport::storage_metadata")?;
+                            .into_rust_if_some("ProtoSourceImport::storage_metadata")?;
                         Ok((id, meta))
+                    },
+                )
+                .collect::<Result<_, TryFromProtoError>>()?,
+            source_exports: proto
+                .source_exports
+                .into_iter()
+                .map(
+                    |psme| -> Result<(GlobalId, (usize, CollectionMetadata)), TryFromProtoError> {
+                        let id = psme.id.into_rust_if_some("ProtoSourceImport::id")?;
+                        let output_index = psme.output_index.into_rust()?;
+                        let meta = psme
+                            .storage_metadata
+                            .into_rust_if_some("ProtoSourceImport::storage_metadata")?;
+                        Ok((id, (output_index, meta)))
                     },
                 )
                 .collect::<Result<_, TryFromProtoError>>()?,
             desc: proto
                 .desc
                 .into_rust_if_some("ProtoIngestionDescription::desc")?,
-            storage_metadata: proto
-                .storage_metadata
-                .into_rust_if_some("ProtoIngestionDescription::storage_metadata")?,
-            typ: proto
-                .typ
-                .into_rust_if_some("ProtoIngestionDescription::typ")?,
+            ingestion_metadata: proto
+                .ingestion_metadata
+                .into_rust_if_some("ProtoIngestionDescription::ingestion_metadata")?,
         })
     }
 }
@@ -540,6 +634,8 @@ impl RustType<ProtoNoneEnvelope> for NoneEnvelope {
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct UpsertEnvelope {
+    /// Full arity, including the key columns
+    pub source_arity: usize,
     /// What style of Upsert we are using
     pub style: UpsertStyle,
     /// The indices of the keys in the full value row, used
@@ -550,6 +646,7 @@ pub struct UpsertEnvelope {
 impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
     fn into_proto(&self) -> ProtoUpsertEnvelope {
         ProtoUpsertEnvelope {
+            source_arity: self.source_arity.into_proto(),
             style: Some(self.style.into_proto()),
             key_indices: self.key_indices.into_proto(),
         }
@@ -557,6 +654,7 @@ impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
 
     fn from_proto(proto: ProtoUpsertEnvelope) -> Result<Self, TryFromProtoError> {
         Ok(UpsertEnvelope {
+            source_arity: proto.source_arity.into_rust()?,
             style: proto
                 .style
                 .into_rust_if_some("ProtoUpsertEnvelope::style")?,
@@ -830,16 +928,19 @@ impl UnplannedSourceEnvelope {
     ///
     /// Panics if the input envelope is `UnplannedSourceEnvelope::Upsert` and
     /// key is not passed as `Some`
+    // TODO(petrosagg): This API looks very error prone. Can we statically enforce it somehow?
     fn into_source_envelope(
         self,
         key: Option<Vec<usize>>,
         key_arity: Option<usize>,
+        source_arity: Option<usize>,
     ) -> SourceEnvelope {
         match self {
             UnplannedSourceEnvelope::Upsert(upsert_style) => {
                 SourceEnvelope::Upsert(UpsertEnvelope {
                     style: upsert_style,
                     key_indices: key.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert"),
+                    source_arity: source_arity.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert"),
                 })
             },
             UnplannedSourceEnvelope::Debezium(inner) => {
@@ -868,7 +969,7 @@ impl UnplannedSourceEnvelope {
                     Some(desc) => desc,
                     None => {
                         return Ok((
-                            self.into_source_envelope(None, None),
+                            self.into_source_envelope(None, None, None),
                             value_desc.concat(metadata_desc),
                         ))
                     }
@@ -909,9 +1010,10 @@ impl UnplannedSourceEnvelope {
                         (key_desc.with_key(vec![0]).concat(value_desc), Some(vec![0]))
                     }
                 };
+                let desc = keyed.concat(metadata_desc);
                 (
-                    self.into_source_envelope(key, Some(key_arity)),
-                    keyed.concat(metadata_desc),
+                    self.into_source_envelope(key, Some(key_arity), Some(desc.arity())),
+                    desc,
                 )
             }
             UnplannedSourceEnvelope::Debezium(DebeziumEnvelope { after_idx, .. })
@@ -929,7 +1031,10 @@ impl UnplannedSourceEnvelope {
                             _ => desc,
                         };
 
-                        (self.into_source_envelope(key, None), desc)
+                        (
+                            self.into_source_envelope(key, None, Some(desc.arity())),
+                            desc,
+                        )
                     }
                     ty => bail!(
                         "Incorrect type for Debezium value, expected Record, got {:?}",
@@ -947,7 +1052,7 @@ impl UnplannedSourceEnvelope {
                             // TODO maybe check this by name
                             match &fields[0].1.scalar_type {
                                 ScalarType::Record { fields, .. } => (
-                                    self.into_source_envelope(None, None),
+                                    self.into_source_envelope(None, None, None),
                                     RelationDesc::from_names_and_types(fields.clone()),
                                 ),
                                 ty => {
@@ -1221,6 +1326,19 @@ impl SourceDesc {
                 ..
             } => false,
         }
+    }
+
+    /// The number of outputs this source will produce
+    pub fn num_outputs(&self) -> usize {
+        let subsources = match &self.connection {
+            SourceConnection::Kafka(_)
+            | SourceConnection::Kinesis(_)
+            | SourceConnection::S3(_)
+            | SourceConnection::LoadGenerator(_) => 0,
+            SourceConnection::Postgres(connection) => connection.details.tables.len(),
+        };
+        // Every ingestion produces a main stream plus subsource streams
+        subsources + 1
     }
 
     pub fn name(&self) -> &'static str {

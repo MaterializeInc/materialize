@@ -43,7 +43,7 @@ use timely::dataflow::operators::feedback::ConnectLoop;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::{Broadcast, CapabilitySet};
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Partition};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -53,6 +53,7 @@ use tokio_stream::{Stream, StreamExt};
 use tracing::trace;
 
 use mz_expr::PartitionId;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
@@ -91,6 +92,8 @@ pub struct RawSourceCreationConfig {
     pub upstream_name: Option<String>,
     /// The ID of this instantiation of this source.
     pub id: GlobalId,
+    /// The number of expected outputs from this ingestion
+    pub num_outputs: usize,
     /// The ID of the worker on which this operator is executing
     pub worker_id: usize,
     /// The total count of workers
@@ -154,7 +157,7 @@ pub fn create_raw_source<G, S: 'static, R>(
     calc: R,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
+        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
     Option<Rc<dyn Any>>,
@@ -245,6 +248,7 @@ where
         name,
         upstream_name,
         id,
+        num_outputs: _,
         worker_id,
         worker_count,
         timestamp_interval,
@@ -455,6 +459,7 @@ where
         name,
         upstream_name: _,
         id,
+        num_outputs: _,
         worker_id,
         worker_count,
         timestamp_interval: _,
@@ -743,6 +748,7 @@ where
         name,
         upstream_name: _,
         id,
+        num_outputs: _,
         worker_id,
         worker_count,
         timestamp_interval,
@@ -963,7 +969,7 @@ fn reclock_operator<G, S: 'static>(
     >,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
+        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
     Option<SourceToken>,
@@ -976,6 +982,7 @@ where
         name,
         upstream_name,
         id,
+        num_outputs,
         worker_id,
         worker_count,
         timestamp_interval: _,
@@ -1181,7 +1188,7 @@ where
                         let errors = untimestamped_batch
                             .non_definite_errors
                             .iter()
-                            .map(|e| Err(e.clone()));
+                            .map(|e| (0, Err(e.clone())));
                         session.give_iterator(errors);
                     }
                 }
@@ -1239,9 +1246,17 @@ where
         }
     });
 
-    let (ok_stream, err_stream) = reclocked_stream.map_fallible("reclock-demux", |r| r);
+    let (ok_muxed_stream, err_stream) =
+        reclocked_stream.map_fallible("reclock-demux", |(output, r)| match r {
+            Ok(ok) => Ok((output, ok)),
+            Err(err) => Err(err),
+        });
 
-    ((ok_stream, err_stream), None)
+    let ok_streams = ok_muxed_stream.partition(u64::cast_from(num_outputs), |(output, data)| {
+        (u64::cast_from(output), data)
+    });
+
+    ((ok_streams, err_stream), None)
 }
 
 /// Take `message` and assign it the appropriate timestamps and push it into the
@@ -1255,8 +1270,17 @@ fn handle_message<S: SourceReader>(
     cap_set: &CapabilitySet<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
-        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>>,
+        (
+            usize,
+            Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
+        ),
+        Tee<
+            Timestamp,
+            (
+                usize,
+                Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
+            ),
+        >,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
     ts: Timestamp,
@@ -1278,15 +1302,18 @@ fn handle_message<S: SourceReader>(
         *bytes_read += len;
     }
     let ts_cap = cap_set.delayed(&ts);
-    output.session(&ts_cap).give(Ok(SourceOutput::new(
-        key,
-        out,
-        offset,
-        message.upstream_time_millis,
-        message.partition,
-        message.headers,
-        message.specific_diff,
-    )));
+    output.session(&ts_cap).give((
+        message.output,
+        Ok(SourceOutput::new(
+            key,
+            out,
+            offset,
+            message.upstream_time_millis,
+            message.partition,
+            message.headers,
+            message.specific_diff,
+        )),
+    ));
     match metric_updates.entry(partition) {
         Entry::Occupied(mut entry) => {
             entry.insert((offset, ts, entry.get().2 + 1));

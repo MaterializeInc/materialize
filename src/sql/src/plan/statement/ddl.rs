@@ -72,9 +72,10 @@ use crate::ast::{
     CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
     CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
     CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSourceSubsource, CreateSourceSubsources,
+    CreateSubsourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
+    CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
     CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
     DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
     DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
@@ -107,7 +108,7 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
     DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index,
-    MaterializedView, Params, Plan, RotateKeysPlan, Secret, Sink, Source, StorageHostConfig, Table,
+    Ingestion, MaterializedView, Params, Plan, RotateKeysPlan, Secret, Sink, Source, StorageHostConfig, Table,
     Type, View,
 };
 
@@ -305,6 +306,13 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_create_subsource(
+    _: &StatementContext,
+    _: CreateSubsourceStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 generate_extracted_config!(
     CreateSourceOption,
     (IgnoreKeys, bool),
@@ -330,6 +338,7 @@ pub fn plan_create_source(
         key_constraint,
         include_metadata,
         with_options,
+        subsources,
     } = &stmt;
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
@@ -585,6 +594,7 @@ pub fn plan_create_source(
             let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
             let details =
                 ProtoPostgresSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
+
             let connection = SourceConnection::Postgres(PostgresSourceConnection {
                 connection,
                 publication: publication.expect("validated exists during purification"),
@@ -741,6 +751,79 @@ pub fn plan_create_source(
         None => scx.catalog.config().timestamp_interval,
     };
 
+    let source_desc = SourceDesc {
+        connection: external_connection,
+        encoding,
+        envelope: envelope.clone(),
+        metadata_columns: metadata_column_types,
+        timestamp_interval,
+    };
+
+    // Here we will store the available subsources for this ingestion. Sources like postgres and
+    // the load generator make additional streams available identified by their index and
+    // associated to a FullObjectName
+    let mut available_subsources = HashMap::new();
+    for (name, output_idx) in source_desc.subsource_outputs() {
+        let name = match normalize::full_name(name) {
+            Ok(name) => name,
+            Err(_) => sql_bail!("[internal error] sources must declare valid subsource names"),
+        };
+        available_subsources.insert(name, output_idx);
+    }
+
+    let requested_subsources = match subsources {
+        Some(CreateSourceSubsources::Subset(subsources)) => {
+            let mut requested_subsources = vec![];
+            for subsource in subsources {
+                let (name, target) = match subsource {
+                    CreateSourceSubsource::Targeted(name, target) => (name, target),
+                    CreateSourceSubsource::Aliased(_, _) | CreateSourceSubsource::Bare(_) => {
+                        sql_bail!(
+                            "[internal error] subsources should be resolved during purification"
+                        )
+                    }
+                };
+                requested_subsources.push((name.clone(), target));
+            }
+            requested_subsources
+        }
+        None => {
+            // The user is only allowed to skip specifying subsources if there aren't any
+            if !available_subsources.is_empty() {
+                let subtables = available_subsources.keys().collect_vec();
+                sql_bail!("Source has the following subtables: {subtables:?}. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
+            }
+            vec![]
+        }
+        Some(CreateSourceSubsources::All) => {
+            sql_bail!("[internal error] subsources should be resolved during purification")
+        }
+    };
+
+    let mut subsource_exports = HashMap::new();
+    for (name, target) in requested_subsources {
+        let name = normalize::full_name(name)?;
+        let idx = match available_subsources.get(&name) {
+            Some(idx) => idx,
+            None => sql_bail!("Requested non-existent subtable: {name}"),
+        };
+
+        let target_id = match target {
+            ResolvedObjectName::Object { id, .. } => id,
+            ResolvedObjectName::Cte { .. } | ResolvedObjectName::Error => {
+                sql_bail!("[internal error] invalid target id")
+            }
+        };
+        // TODO(petrosagg): This is the point where we would normally look into the catalog for the
+        // item with ID `target` and verify that its RelationDesc is identical to the type of the
+        // dataflow output. We can't do that here however because the subsources are created in the
+        // same transaction as this source and they are not yet in the catalog. In the future, when
+        // provisional catalogs are made available to the planner we could do the check. For now
+        // we don't allow users to manually target subsources and rely on purification generating
+        // correct definitions.
+        subsource_exports.insert(*target_id, *idx);
+    }
+
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
@@ -763,14 +846,13 @@ pub fn plan_create_source(
 
     let source = Source {
         create_sql,
-        connection_id,
-        source_desc: SourceDesc {
-            connection: external_connection,
-            encoding,
-            envelope,
-            metadata_columns: metadata_column_types,
-            timestamp_interval,
-        },
+        ingestion: Some(Ingestion {
+            connection_id,
+            desc: source_desc,
+            // Currently no source reads from another source
+            source_imports: HashSet::new(),
+            subsource_exports,
+        }),
         desc,
     };
 
@@ -780,6 +862,111 @@ pub fn plan_create_source(
         if_not_exists,
         timeline,
         host_config,
+    }))
+}
+
+pub fn plan_create_subsource(
+    scx: &StatementContext,
+    stmt: CreateSubsourceStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let CreateSubsourceStatement {
+        name,
+        columns,
+        constraints,
+        if_not_exists,
+    } = &stmt;
+
+    let names: Vec<_> = columns
+        .iter()
+        .map(|c| normalize::column_name(c.name.clone()))
+        .collect();
+
+    if let Some(dup) = names.iter().duplicates().next() {
+        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+    }
+
+    // Build initial relation type that handles declared data types
+    // and NOT NULL constraints.
+    let mut column_types = Vec::with_capacity(columns.len());
+    let mut keys = Vec::new();
+
+    for (i, c) in columns.into_iter().enumerate() {
+        let aug_data_type = &c.data_type;
+        let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
+        let mut nullable = true;
+        for option in &c.options {
+            match &option.option {
+                ColumnOption::NotNull => nullable = false,
+                ColumnOption::Default(_) => {
+                    bail_unsupported!("Subsources cannot have default values")
+                }
+                ColumnOption::Unique { is_primary } => {
+                    keys.push(vec![i]);
+                    if *is_primary {
+                        nullable = false;
+                    }
+                }
+                other => {
+                    bail_unsupported!(format!(
+                        "CREATE SUBSOURCE with column constraint: {}",
+                        other
+                    ))
+                }
+            }
+        }
+        column_types.push(ty.nullable(nullable));
+    }
+
+    for constraint in constraints {
+        match constraint {
+            TableConstraint::Unique {
+                name: _,
+                columns,
+                is_primary,
+            } => {
+                let mut key = vec![];
+                for column in columns {
+                    let column = normalize::column_name(column.clone());
+                    match names.iter().position(|name| *name == column) {
+                        None => sql_bail!("unknown column in constraint: {}", column),
+                        Some(i) => {
+                            key.push(i);
+                            if *is_primary {
+                                column_types[i].nullable = false;
+                            }
+                        }
+                    }
+                }
+                keys.push(key);
+            }
+            TableConstraint::ForeignKey { .. } => {
+                bail_unsupported!("CREATE SUBSOURCE with a foreign key")
+            }
+            TableConstraint::Check { .. } => {
+                bail_unsupported!("CREATE SUBSOURCE with a check constraint")
+            }
+        }
+    }
+
+    let if_not_exists = *if_not_exists;
+    let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateSubsource(stmt))?;
+
+    let typ = RelationType::new(column_types).with_keys(keys);
+    let desc = RelationDesc::new(typ, names);
+
+    let source = Source {
+        create_sql,
+        ingestion: None,
+        desc,
+    };
+
+    Ok(Plan::CreateSource(CreateSourcePlan {
+        name,
+        source,
+        if_not_exists,
+        timeline: Timeline::EpochMilliseconds,
+        host_config: StorageHostConfig::Undefined,
     }))
 }
 
@@ -1163,7 +1350,7 @@ pub fn plan_create_view(
                 );
             }
             let cascade = false;
-            plan_drop_item(scx, ObjectType::View, item, cascade)?
+            plan_drop_item(scx, ObjectType::View, item, &[], cascade)?
         } else {
             None
         }
@@ -1194,7 +1381,10 @@ pub fn plan_create_views(
         targets,
     }: CreateViewsStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let source_desc = scx.get_item_by_resolved_name(&source_name)?.source_desc()?;
+    let source_desc = match scx.get_item_by_resolved_name(&source_name)?.source_desc()? {
+        Some(source_desc) => source_desc,
+        None => sql_bail!("cannot generate views from subsources"),
+    };
     match &source_desc.connection {
         SourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
             load_generator, ..
@@ -1460,7 +1650,7 @@ pub fn plan_create_materialized_view(
                     );
                 }
                 let cascade = false;
-                replace = plan_drop_item(scx, ObjectType::MaterializedView, item, cascade)?;
+                replace = plan_drop_item(scx, ObjectType::MaterializedView, item, &[], cascade)?;
             }
         }
         IfExistsBehavior::Skip => if_not_exists = true,
@@ -2736,7 +2926,12 @@ pub fn plan_drop_objects(
     for name in names {
         let name = normalize::unresolved_object_name(name)?;
         match scx.catalog.resolve_item(&name) {
-            Ok(item) => items.push(item),
+            Ok(item) => {
+                items.push(item);
+                for subsource_id in item.subsources() {
+                    items.push(scx.catalog.get_item(&subsource_id));
+                }
+            }
             Err(_) if if_exists => {
                 // TODO(benesch/jkosh44): generate a notice indicating items do not exist.
             }
@@ -2945,8 +3140,15 @@ pub fn plan_drop_items(
     cascade: bool,
 ) -> Result<Plan, PlanError> {
     let mut ids = vec![];
-    for item in items {
-        ids.extend(plan_drop_item(scx, object_type, item, cascade)?);
+    for (i, item) in items.iter().enumerate() {
+        let assume_dropped = &items[0..i];
+        ids.extend(plan_drop_item(
+            scx,
+            object_type,
+            *item,
+            assume_dropped,
+            cascade,
+        )?);
     }
     Ok(Plan::DropItems(DropItemsPlan {
         items: ids,
@@ -2958,6 +3160,7 @@ pub fn plan_drop_item(
     scx: &StatementContext,
     object_type: ObjectType,
     catalog_entry: &dyn CatalogItem,
+    assume_dropped: &[&dyn CatalogItem],
     cascade: bool,
 ) -> Result<Option<GlobalId>, PlanError> {
     if catalog_entry.id().is_system() {
@@ -2984,6 +3187,14 @@ pub fn plan_drop_item(
     }
     if !cascade {
         for id in catalog_entry.used_by() {
+            // If dep is already dropped as part of this plan then it can't prevent the drop
+            if assume_dropped
+                .iter()
+                .find(|item| item.id() == *id)
+                .is_some()
+            {
+                continue;
+            }
             let dep = scx.catalog.get_item(id);
             if dependency_prevents_drop(object_type, dep) {
                 sql_bail!(

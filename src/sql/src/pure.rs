@@ -17,12 +17,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
-use mz_secrets::SecretsReader;
-use mz_sql_parser::ast::{
-    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, Envelope,
-    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
-    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy,
-};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -32,15 +26,21 @@ use uuid::Uuid;
 use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_proto::RustType;
-use mz_repr::strconv;
+use mz_repr::{strconv, GlobalId};
+use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::{
+    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, Envelope,
+    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy,
+};
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_storage::types::connections::{Connection, ConnectionContext};
 use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value,
-    WithOptionValue,
+    CreateSourceSubsource, CreateSourceSubsources, CreateSubsourceStatement, CsrConnectionAvro,
+    CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value, WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
@@ -52,24 +52,35 @@ use crate::plan::StatementContext;
 ///
 /// See the section on [purification](crate#purification) in the crate
 /// documentation for details.
-///
-/// Note that purification is asynchronous, and may take an unboundedly long
-/// time to complete. As a result purification does *not* have access to a
-/// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
-/// locking access to the catalog for an unbounded amount of time.
 pub async fn purify_create_source(
     catalog: Box<dyn SessionCatalog>,
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
     connection_context: ConnectionContext,
-) -> Result<CreateSourceStatement<Aug>, anyhow::Error> {
+) -> Result<
+    (
+        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+        CreateSourceStatement<Aug>,
+    ),
+    anyhow::Error,
+> {
     let CreateSourceStatement {
         connection,
         format,
         envelope,
         include_metadata: _,
+        subsources: requested_subsources,
         ..
     } = &mut stmt;
+
+    // Disallow manually targetting subsources, this syntax is reserved for purification only
+    if let Some(CreateSourceSubsources::Subset(subsources)) = requested_subsources {
+        for subsource in subsources {
+            if matches!(subsource, CreateSourceSubsource::Targeted(_, _)) {
+                bail!("Cannot alias subsource using `INTO`, use `AS` instead");
+            }
+        }
+    }
 
     match connection {
         CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -221,7 +232,7 @@ pub async fn purify_create_source(
 
     purify_source_format(&*catalog, format, connection, envelope, &connection_context).await?;
 
-    Ok(stmt)
+    Ok((vec![], stmt))
 }
 
 async fn purify_source_format(

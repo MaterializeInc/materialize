@@ -365,6 +365,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
                     | Statement::CreateSource(_)
+                    | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)

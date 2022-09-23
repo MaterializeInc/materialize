@@ -1595,6 +1595,8 @@ impl<'a> Parser<'a> {
             self.parse_create_index()
         } else if self.peek_keyword(SOURCE) {
             self.parse_create_source()
+        } else if self.peek_keyword(SUBSOURCE) {
+            self.parse_create_subsource()
         } else if self.peek_keyword(TABLE)
             || self.peek_keywords(&[TEMP, TABLE])
             || self.peek_keywords(&[TEMPORARY, TABLE])
@@ -2189,6 +2191,21 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_create_subsource(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(SUBSOURCE)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_object_name()?;
+
+        let (columns, constraints) = self.parse_columns(Mandatory)?;
+
+        Ok(Statement::CreateSubsource(CreateSubsourceStatement {
+            name,
+            if_not_exists,
+            columns,
+            constraints,
+        }))
+    }
+
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SOURCE)?;
         let if_not_exists = self.parse_if_not_exists()?;
@@ -2226,6 +2243,27 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
+        let subsources = if self.parse_keywords(&[FOR, TABLES]) {
+            self.expect_token(&Token::LParen)?;
+            let subsources = self.parse_comma_separated(|parser| {
+                let name = parser.parse_object_name()?;
+                let subsource = if parser.parse_keyword(INTO) {
+                    CreateSourceSubsource::Targeted(name, parser.parse_raw_name()?)
+                } else if parser.parse_keyword(AS) {
+                    CreateSourceSubsource::Aliased(name, parser.parse_object_name()?)
+                } else {
+                    CreateSourceSubsource::Bare(name)
+                };
+                Ok(subsource)
+            })?;
+            self.expect_token(&Token::RParen)?;
+            Some(CreateSourceSubsources::Subset(subsources))
+        } else if self.parse_keywords(&[FOR, ALL, TABLES]) {
+            Some(CreateSourceSubsources::All)
+        } else {
+            None
+        };
+
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
             col_names,
@@ -2236,6 +2274,7 @@ impl<'a> Parser<'a> {
             if_not_exists,
             key_constraint,
             with_options,
+            subsources,
         }))
     }
 

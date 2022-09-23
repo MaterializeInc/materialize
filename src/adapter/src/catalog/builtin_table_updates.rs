@@ -198,19 +198,26 @@ impl CatalogState {
             }
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
-            CatalogItem::Source(source) => self.pack_source_update(
-                id,
-                oid,
-                schema_id,
-                name,
-                source.source_desc.name(),
-                source.connection_id,
-                match &source.host_config {
-                    StorageHostConfig::Remote { .. } => None,
-                    StorageHostConfig::Managed { size, .. } => Some(size),
-                },
-                diff,
-            ),
+            CatalogItem::Source(source) => {
+                let source_type = match &source.ingestion {
+                    Some(ingestion) => ingestion.desc.name(),
+                    None => "subsource",
+                };
+                let connection_id = source.ingestion.as_ref().and_then(|ingestion| ingestion.connection_id);
+                self.pack_source_update(
+                    id,
+                    oid,
+                    schema_id,
+                    name,
+                    source_type,
+                    connection_id,
+                    match &source.host_config {
+                        StorageHostConfig::Remote { .. } => None,
+                        StorageHostConfig::Managed { size, .. } => Some(size),
+                    },
+                    diff,
+                )
+            }
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
             CatalogItem::MaterializedView(mview) => {
                 self.pack_materialized_view_update(id, oid, schema_id, name, mview, diff)

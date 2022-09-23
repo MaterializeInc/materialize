@@ -73,6 +73,7 @@ message ProtoNoneEnvelope {
 message ProtoUpsertEnvelope {
     ProtoUpsertStyle style = 1;
     repeated uint64 key_indices = 2;
+    uint64 source_arity = 3;
 }
 
 message ProtoUpsertStyle {
@@ -228,13 +229,17 @@ message ProtoCompression {
 }
 
 message ProtoIngestionDescription {
-    // ProtoSourceImport is taken by ProtoDataflowDescription
-    message ProtoSourceMetadataImport {
+    message ProtoSourceImport {
         mz_repr.global_id.ProtoGlobalId id = 1;
         mz_storage.controller.ProtoCollectionMetadata storage_metadata = 2;
     }
-    repeated ProtoSourceMetadataImport source_imports = 1;
-    ProtoSourceDesc desc = 2;
-    mz_storage.controller.ProtoCollectionMetadata storage_metadata = 3;
-    mz_repr.relation_and_scalar.ProtoRelationType typ = 4;
+    message ProtoSourceExport {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        uint64 output_index = 2;
+        mz_storage.controller.ProtoCollectionMetadata storage_metadata = 3;
+    }
+    repeated ProtoSourceImport source_imports = 1;
+    repeated ProtoSourceExport source_exports = 2;
+    mz_storage.controller.ProtoCollectionMetadata ingestion_metadata = 3;
+    ProtoSourceDesc desc = 4;
 }

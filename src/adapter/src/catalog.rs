@@ -1364,14 +1364,23 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    pub connection_id: Option<GlobalId>,
-    // TODO(benesch): this field contains connection information that could be
-    // derived from the connection ID. Too hard to fix at the moment.
-    pub source_desc: SourceDesc,
+    /// The ingestion description of this source. If set, it will correspond to an ingestion that
+    /// will insert data in this source and maybe other, dependent subsources.
+    pub ingestion: Option<Ingestion>,
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
     pub host_config: StorageHostConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Ingestion {
+    pub connection_id: Option<GlobalId>,
+    // TODO(benesch): this field contains connection information that could be
+    // derived from the connection ID. Too hard to fix at the moment.
+    pub desc: SourceDesc,
+    pub source_imports: HashSet<GlobalId>,
+    pub subsource_exports: HashMap<GlobalId, usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1506,9 +1515,15 @@ impl CatalogItem {
         }
     }
 
-    pub fn source_desc(&self, name: &QualifiedObjectName) -> Result<&SourceDesc, SqlCatalogError> {
+    pub fn source_desc(
+        &self,
+        name: &QualifiedObjectName,
+    ) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         match &self {
-            CatalogItem::Source(source) => Ok(&source.source_desc),
+            CatalogItem::Source(source) => match &source.ingestion {
+                Some(ingestion) => Ok(Some(&ingestion.desc)),
+                None => Ok(None),
+            },
             _ => Err(SqlCatalogError::UnexpectedType(
                 name.item.clone(),
                 CatalogItemType::Source,
@@ -1701,8 +1716,8 @@ impl CatalogEntry {
     }
 
     /// Returns the [`mz_storage::types::sources::SourceDesc`] associated with
-    /// this `CatalogEntry`.
-    pub fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
+    /// this `CatalogEntry`, if any.
+    pub fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         self.item.source_desc(self.name())
     }
 
@@ -3160,7 +3175,10 @@ impl<S: Append> Catalog<S> {
                         && !temporary_drops.contains(&(conn_id, name.item.clone()))
                         || creating.contains(&(conn_id, &name.item))
                     {
-                        return Err(Error::new(ErrorKind::ItemAlreadyExists(name.item.clone())));
+                        return Err(Error::new(ErrorKind::ItemAlreadyExists(
+                            *id,
+                            name.item.clone(),
+                        )));
                     } else {
                         creating.insert((conn_id, &name.item));
                         temporary_ids.push(id.clone());
@@ -4390,8 +4408,12 @@ impl<S: Append> Catalog<S> {
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
-                connection_id: source.connection_id,
-                source_desc: source.source_desc,
+                ingestion: source.ingestion.map(|ingestion| Ingestion {
+                    connection_id: ingestion.connection_id,
+                    desc: ingestion.desc,
+                    source_imports: ingestion.source_imports,
+                    subsource_exports: ingestion.subsource_exports,
+                }),
                 desc: source.desc,
                 timeline,
                 depends_on,
@@ -5169,7 +5191,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.func()
     }
 
-    fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
+    fn source_desc(&self) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         self.source_desc()
     }
 
@@ -5228,6 +5250,26 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn used_by(&self) -> &[GlobalId] {
         self.used_by()
+    }
+
+    fn subsources(&self) -> Vec<GlobalId> {
+        match &self.item {
+            CatalogItem::Source(source) => match &source.ingestion {
+                Some(ingestion) => ingestion.subsource_exports.keys().copied().collect(),
+                None => vec![],
+            },
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_)
+            | CatalogItem::StorageCollection(_) => vec![],
+        }
     }
 }
 

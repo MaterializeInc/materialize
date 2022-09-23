@@ -963,17 +963,39 @@ where
                     source_imports.insert(id, metadata);
                 }
 
+                // The ingestion metadata is simply the collection metadata of the collection with
+                // the associated ingestion
+                let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
+
+                let mut source_exports = BTreeMap::new();
+                for (id, (stream, _)) in ingestion.source_exports {
+                    let metadata = self.collection(id)?.collection_metadata.clone();
+                    source_exports.insert(id, (stream, metadata));
+                }
+
                 let desc = IngestionDescription {
                     source_imports,
-                    storage_metadata: self.collection(id)?.collection_metadata.clone(),
+                    source_exports,
+                    ingestion_metadata,
                     // The rest of the fields are identical
                     desc: ingestion.desc,
-                    typ: description.desc.typ().clone(),
                 };
-                let resume_upper = desc
-                    .storage_metadata
-                    .get_resume_upper(&persist_client, &desc.desc.envelope)
-                    .await;
+                let mut persist_clients = self.persist.lock().await;
+                let mut resume_upper = Antichain::new();
+                for (_, storage_metadata) in desc.source_exports.values() {
+                    let persist_client = persist_clients
+                        .open(storage_metadata.persist_location.clone())
+                        .await
+                        .expect("error creating persist client");
+
+                    let export_resume_upper = storage_metadata
+                        .get_resume_upper::<T>(&persist_client, &desc.desc.envelope)
+                        .await;
+                    for ts in export_resume_upper {
+                        resume_upper.insert(ts);
+                    }
+                }
+
                 let augmented_ingestion = CreateSourceCommand {
                     id,
                     description: desc,
