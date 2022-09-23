@@ -99,12 +99,14 @@
 //! roughly "as correct as possible" even when errors are present in the errs
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker as TimelyWorker;
 
 use mz_repr::GlobalId;
@@ -153,12 +155,22 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let source_data = ok.map(Ok).concat(&err.map(Err));
 
+            let persist_clients = Arc::clone(&storage_state.persist_clients);
+
+            // Initialize shared frontier tracking.
+            let shared_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
+
+            storage_state
+                .source_uppers
+                .insert(id, Rc::clone(&shared_frontier));
+
             let sink_token = crate::render::persist_sink::render(
                 region,
                 id,
                 description.storage_metadata,
                 source_data,
-                storage_state,
+                persist_clients,
+                shared_frontier,
             );
 
             let token = Rc::new((source_token, sink_token));

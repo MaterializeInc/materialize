@@ -14,6 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
+use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 use timely::dataflow::channels::pact::Exchange;
@@ -22,8 +23,7 @@ use timely::dataflow::Scope;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::PartialOrder;
-
-use crate::storage_state::StorageState;
+use tokio::sync::Mutex;
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
@@ -34,12 +34,14 @@ pub fn render<G>(
     src_id: GlobalId,
     metadata: CollectionMetadata,
     source_data: Collection<G, Result<Row, DataflowError>, Diff>,
-    storage_state: &mut StorageState,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
+    shared_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     let operator_name = format!("persist_sink({})", metadata.data_shard);
+
     let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
 
     // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
@@ -55,18 +57,11 @@ where
 
     let mut input = persist_op.new_input(&source_data.inner, Exchange::new(move |_| hashed_id));
 
-    // Initialize shared frontier tracking.
-    let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
-        Antichain::from_elem(Timestamp::minimum())
-    } else {
+    if !active_write_worker {
         // This worker is not writing, so make sure it's "taken out" of the
         // calculation by advancing to the empty frontier.
-        Antichain::new()
-    }));
-
-    storage_state
-        .source_uppers
-        .insert(src_id, Rc::clone(&shared_frontier));
+        shared_frontier.borrow_mut().clear();
+    }
 
     let current_upper = shared_frontier;
 
@@ -74,7 +69,6 @@ where
     let token = Rc::new(());
     let weak_token = Rc::downgrade(&token);
 
-    let persist_clients = Arc::clone(&storage_state.persist_clients);
     persist_op.build_async(
         scope.clone(),
         move |mut capabilities, frontiers, scheduler| async move {

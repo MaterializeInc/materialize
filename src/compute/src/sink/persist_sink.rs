@@ -101,14 +101,27 @@ where
         .map(Ok)
         .concat(&err_stream.as_collection().map(Err));
 
+    let persist_clients = Arc::clone(&compute_state.persist_clients);
+
+    // Initialize shared frontier tracking.
+    let shared_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
+
+    compute_state
+        .sink_write_frontiers
+        .insert(sink_id, Rc::clone(&shared_frontier));
+
+    let mut scope = desired_collection.inner.scope();
+
     Some(Rc::new((
         install_desired_into_persist(
+            &mut scope,
             sink_id,
             target,
             desired_collection,
             persist_collection,
             as_of,
-            compute_state,
+            persist_clients,
+            shared_frontier,
         ),
         token,
     )))
@@ -136,17 +149,18 @@ where
 ///    description and all the batches that belong to it and append it to the
 ///    persist shard.
 fn install_desired_into_persist<G>(
+    scope: &mut G,
     sink_id: GlobalId,
     target: &CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
-    compute_state: &mut crate::compute_state::ComputeState,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
+    shared_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let persist_clients = Arc::clone(&compute_state.persist_clients);
     let shard_id = target.data_shard;
 
     let operator_name = format!("persist_sink {}", sink_id);
@@ -158,8 +172,6 @@ where
             as_of
         );
     }
-
-    let mut scope = desired_collection.inner.scope();
 
     // The append operator keeps capabilities that it downgrades to match the
     // current upper frontier of the persist shard. This frontier can be
@@ -176,7 +188,7 @@ where
         &persist_feedback_stream,
         as_of,
         Arc::clone(&persist_clients),
-        compute_state,
+        shared_frontier,
     );
 
     let (written_batches, write_token) = write_batches(
@@ -224,7 +236,7 @@ fn mint_batch_descriptions<G>(
     persist_feedback_stream: &Stream<G, ()>,
     as_of: Antichain<Timestamp>,
     persist_clients: Arc<Mutex<PersistClientCache>>,
-    compute_state: &mut crate::compute_state::ComputeState,
+    shared_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> (
     Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     Rc<dyn Any>,
@@ -247,19 +259,12 @@ where
     let hashed_id = sink_id.hashed();
     let active_worker = (hashed_id as usize) % scope.peers() == scope.index();
 
-    // Only the "active" operator will mint batches. All other workers have an
-    // empty frontier. It's necessary to insert all of these into
-    // `compute_state. sink_write_frontier` below so we properly clear out
-    // default frontiers of non-active workers.
-    let shared_frontier = Rc::new(RefCell::new(if active_worker {
-        Antichain::from_elem(TimelyTimestamp::minimum())
-    } else {
-        Antichain::new()
-    }));
-
-    compute_state
-        .sink_write_frontiers
-        .insert(sink_id, Rc::clone(&shared_frontier));
+    if !active_worker {
+        // Only the "active" operator will mint batches. All other workers have
+        // an empty frontier to make sure it's "taken out" of the calculation by
+        // advancing to the empty frontier.
+        shared_frontier.borrow_mut().clear();
+    }
 
     let mut mint_op = OperatorBuilder::new(
         format!("{} mint_batch_descriptions", operator_name),
