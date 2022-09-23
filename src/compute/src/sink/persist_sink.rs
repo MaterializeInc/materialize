@@ -86,7 +86,7 @@ where
     let source_as_of = None;
     let (ok_stream, err_stream, token) = mz_storage::source::persist_source::persist_source(
         &desired_collection.scope(),
-        sink_id.clone(),
+        sink_id,
         Arc::clone(&compute_state.persist_clients),
         target.clone(),
         source_as_of,
@@ -120,7 +120,7 @@ where
 /// operator graph:
 ///
 /// 1. `mint_batch_descriptions` emits new batch descriptions whenever the
-///    frontier of `persist_stream` advances *and `persist_frontie`* is less
+///    frontier of `persist_stream` advances *and `persist_frontier`* is less
 ///    than `desired_frontier`. A batch description is a pair of `(lower,
 ///    upper)` that tells write operators which updates to write and in the end
 ///    tells the append operator what frontiers to use when calling
@@ -169,7 +169,7 @@ where
     let (persist_feedback_handle, persist_feedback_stream) = scope.feedback(Timestamp::default());
 
     let (batch_descriptions, mint_token) = mint_batch_descriptions(
-        sink_id.clone(),
+        sink_id,
         operator_name.clone(),
         target,
         &desired_collection.inner,
@@ -547,7 +547,7 @@ where
             move |(row, _ts, _diff): &(Result<Row, DataflowError>, Timestamp, Diff)| row.hashed(),
         ),
         // This connection specification makes sure that the persist frontier is
-        // not taking into account when determining downstream implications.
+        // not taken into account when determining downstream implications.
         // We're only interested in the frontier to know when we are ready to
         // write out new data (when the corrections have "settled"). But the
         // persist frontier must not hold back the downstream frontier,
@@ -634,8 +634,9 @@ where
                         assert!(
                             existing.is_none(),
                             "write_batches: sink {} got more than one \
-                            batch for a given description lower, in-flight: {:?}",
+                            batch for description {:?}, in-flight: {:?}",
                             sink_id,
+                            description,
                             in_flight_batches
                         );
                     }
@@ -854,9 +855,10 @@ where
     let token = Rc::new(());
     let token_weak = Rc::downgrade(&token);
 
-    // This operator accepts the current and desired update streams for a `persist` shard.
-    // It attempts to write out updates, starting from the current's upper frontier, that
-    // will cause the changes of desired to be committed to persist.
+    // This operator accepts the batch descriptions and tokens that represent
+    // written batches. Written batches get appended to persist when we learn
+    // from our input frontiers that we have seen all batches for a given batch
+    // description.
 
     append_op.build_async(
         scope,
