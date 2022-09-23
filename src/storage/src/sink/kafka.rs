@@ -442,6 +442,16 @@ impl KafkaSinkState {
         // all bets are off and full exactly once support is required.
         config.set("enable.idempotence", "true");
 
+        // We rely on the Kafka client's built-in retries for produced messages, instead of
+        // explicitly retrying ourselves. Aside from convenience, this also plays better with
+        // transactional producing: any failed send will fail a transaction, even if we manually
+        // re-produce it later.
+        //
+        // At time of writing, we're fine with the default values... but let's set them here to be
+        // explicit.
+        config.set("message.send.max.retries", "2147483647");
+        config.set("message.timeout.ms", "300000");
+
         // Increase limits for the Kafka producer's internal buffering of messages
         // Currently we don't have a great backpressure mechanism to tell indexes or
         // views to slow down, so the only thing we can do with a message that we
