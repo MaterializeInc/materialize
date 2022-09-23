@@ -490,8 +490,8 @@ where
         self.collections.trace.upper()
     }
 
-    pub fn batch_count(&self) -> usize {
-        self.collections.trace.num_hollow_batches()
+    pub fn batch_part_count(&self) -> usize {
+        self.collections.trace.num_batch_parts()
     }
 
     pub fn num_updates(&self) -> usize {
