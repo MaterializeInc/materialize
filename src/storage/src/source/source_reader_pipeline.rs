@@ -229,6 +229,8 @@ where
 
     let initial_resume_upper = resume_upper.clone();
 
+    tracing::info!("{}: initial_resume_upper: {:?}", name, initial_resume_upper,);
+
     let (stream, capability) = async_source(
         scope,
         name.clone(),
@@ -266,6 +268,13 @@ where
                         .source_upper_at_frontier(resume_upper.borrow())
                         .expect("source_upper_at_frontier to be used correctly")
                 };
+
+                tracing::info!(
+                    "{}: resume_upper: {:?}, source_upper: {:?}",
+                    name,
+                    resume_upper,
+                    source_upper
+                );
 
                 let mut healthchecker = if storage_metadata.status_shard.is_some() {
                     match Healthchecker::new(
@@ -340,6 +349,7 @@ where
                 let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
                 let mut unconsumed_partitions = Vec::new();
                 let mut non_definite_errors = vec![];
+
                 loop {
                     // TODO(guswyn): move lots of this out of the macro so rustfmt works better
                     tokio::select! {
@@ -900,7 +910,7 @@ where
             // Accumulate updates to offsets for system table metrics collection
             let mut metric_updates = HashMap::new();
 
-            trace!(
+            tracing::info!(
                 "reclock({id}) {worker_id}/{worker_count}: \
                 untimestamped_batches.len(): {}",
                 untimestamped_batches.len(),
@@ -918,7 +928,7 @@ where
                     let reclocked = match reclocked {
                         Some(reclocked) => reclocked,
                         None => {
-                            trace!(
+                            tracing::info!(
                                 "reclock({id}) {worker_id}/{worker_count}: \
                                 cannot yet reclock batch with source frontier {:?} \
                                 reclock.source_frontier: {:?}",
@@ -931,6 +941,11 @@ where
                             break;
                         }
                     };
+
+                    tracing::info!(
+                        "Reclocked a batch! source_upper: {:?}",
+                        untimestamped_batch.source_upper
+                    );
 
                     let mut output = reclocked_output.activate();
 
@@ -1000,22 +1015,42 @@ where
             // up to date with what the ReclockOperator thinks. We will
             // evantually learn about an up-to-date frontier in a future
             // invocation.
-            if let Ok(new_ts_upper) = timestamper.reclock_frontier(&global_source_upper) {
-                let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
-                for partition_metrics in source_metrics.partition_metrics.values_mut() {
-                    partition_metrics.closed_ts.set(ts.into());
-                }
+            //
+            // Only downgrade the frontier once we have seen some data. This
+            // makes it so that we don't downgrade while we're still reading the
+            // initial snapshot (for sources that have some initial snapshot
+            // behaviour).
+            //
+            // NOTE: The semantics of the source frontier are different from how
+            // timely Antichains work. An empty source upper means that we have
+            // not yet seen any data. (TODO: double check with Petros!)
+            if !global_source_upper.is_empty() {
+                if let Ok(new_ts_upper) = timestamper.reclock_frontier(&global_source_upper) {
+                    let ts = new_ts_upper.as_option().cloned().unwrap_or(Timestamp::MAX);
+                    for partition_metrics in source_metrics.partition_metrics.values_mut() {
+                        partition_metrics.closed_ts.set(ts.into());
+                    }
 
-                if !cap_set.is_empty() {
-                    trace!(
+                    if !cap_set.is_empty() {
+                        tracing::info!(
+                            "reclock({id}) {worker_id}/{worker_count}: \
+                        downgrading to {:?}, \
+                        global_source_upper: {:?}",
+                            new_ts_upper,
+                            global_source_upper
+                        );
+
+                        cap_set
+                            .try_downgrade(new_ts_upper.iter())
+                            .expect("cannot downgrade in reclock");
+                    }
+                } else {
+                    tracing::info!(
                         "reclock({id}) {worker_id}/{worker_count}: \
-                        downgrading to {:?}",
-                        new_ts_upper
+                    NO reclock frontier yet, \
+                    global_source_upper: {:?}",
+                        global_source_upper
                     );
-
-                    cap_set
-                        .try_downgrade(new_ts_upper.iter())
-                        .expect("cannot downgrade in reclock");
                 }
             }
         }

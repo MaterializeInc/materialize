@@ -132,6 +132,15 @@ pub fn render<G>(
                     .collect();
                 finalized_timestamps.sort_unstable();
 
+                tracing::info!(
+                    "current_upper: {:?}, input_upper: {:?}, \
+                    stashed_batches: {}, finalized_timestamps: {}",
+                    current_upper.borrow(),
+                    input_upper,
+                    stashed_batches.len(),
+                    finalized_timestamps.len()
+                );
+
                 // If the frontier has advanced, we need to finalize data being written to persist
                 if PartialOrder::less_than(&*current_upper.borrow(), &input_upper) {
                     // We always append, even in case we don't have any updates, because appending
@@ -148,17 +157,22 @@ pub fn render<G>(
                             .expect("cannot append updates")
                             .expect("invalid/outdated upper");
 
+                        tracing::info!("finalized timestamps is EMPTY");
+
                         // advance our stashed frontier
                         *current_upper.borrow_mut() = input_upper.clone();
                         // wait for more data or a new input frontier
                         continue;
                     }
 
+                    tracing::info!("emitting some finalized timestamps");
+
                     // `current_upper` tracks the last known upper
                     let mut expected_upper = current_upper.borrow().clone();
                     let finalized_batch_count = finalized_timestamps.len();
 
                     for (i, ts) in finalized_timestamps.into_iter().enumerate() {
+                        tracing::info!("emitting for timestamp {}", ts);
                         // TODO(aljoscha): Figure out how errors from this should be reported.
 
                         // Set the upper to the upper of the batch (which is 1 past the ts it
@@ -169,12 +183,16 @@ pub fn render<G>(
                             Antichain::from_elem(ts.step_forward())
                         };
 
+                        tracing::info!("before finish batch {}", ts);
                         let mut batch = stashed_batches
                             .remove(&ts)
                             .expect("batch for timestamp to still be there")
                             .finish(new_upper.clone())
                             .await
                             .expect("invalid usage");
+                        tracing::info!("after finish batch {}", ts);
+
+                        tracing::info!("compare_and_append'ing batch. new_upper: {:?}", new_upper);
 
                         write
                             .compare_and_append_batch(

@@ -559,6 +559,14 @@ impl ReclockOperator {
         // Any updates to the remap trace that occured during minting.
         let mut trace_updates: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> = HashMap::new();
 
+        // NOTE: The semantics of the source frontier are different from how
+        // timely Antichains work. An empty source upper means that we have not
+        // yet seen any data, so we don't want to mint any bindings. (TODO:
+        // double check with Petros!)
+        if source_frontier.is_empty() {
+            return trace_updates;
+        }
+
         loop {
             let mut updates = vec![];
             for (pid, upper) in source_frontier {
@@ -610,7 +618,7 @@ impl ReclockOperator {
         updates: &[(P, MzOffset)],
     ) -> Result<Vec<(PartitionId, Vec<(Timestamp, MzOffset)>)>, Upper<Timestamp>>
     where
-        P: Borrow<PartitionId>,
+        P: Borrow<PartitionId> + std::fmt::Debug,
     {
         let next_ts = loop {
             match self.next_mint_timestamp() {
@@ -622,6 +630,12 @@ impl ReclockOperator {
         loop {
             let upper = self.upper.clone();
             let new_upper = new_upper.clone();
+            tracing::info!(
+                "appending new bindings: {:?}, upper: {:?}, new_upper: {:?}",
+                updates,
+                upper,
+                new_upper
+            );
             let updates = updates
                 .iter()
                 .map(|(pid, diff)| (((), pid.borrow()), next_ts, diff));
