@@ -14,7 +14,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
-use timely::PartialOrder;
 use tokio::sync::OwnedMutexGuard;
 use tracing::warn;
 
@@ -23,10 +22,9 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_stash::Append;
 use mz_storage::protocol::client::Update;
-use mz_storage::types::sources::Timeline;
 
 use crate::catalog::BuiltinTableUpdate;
-use crate::coord::timeline::{TimelineState, WriteTimestamp};
+use crate::coord::timeline::WriteTimestamp;
 use crate::coord::{Coordinator, Message, PendingTxn};
 use crate::session::{Session, WriteOp};
 use crate::util::{ClientTransmitter, CompletedClientTransmitter};
@@ -316,7 +314,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await
                 .expect("One-shot dropped while waiting synchronously")
                 .unwrap();
-            self.group_commit_apply(timestamp, responses, true, write_lock_guard)
+            self.group_commit_apply(timestamp, responses, write_lock_guard)
                 .await;
         } else {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -352,47 +350,16 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         timestamp: Timestamp,
         responses: Vec<CompletedClientTransmitter<ExecuteResponse>>,
-        in_ddl: bool,
         _write_lock_guard: Option<OwnedMutexGuard<()>>,
     ) {
         self.apply_local_write(timestamp).await;
-
-        // If we're in the middle of DDL then the catalog and COMPUTE/STORAGE may be out of sync,
-        // so we don't advance other timelines and we don't update read holds.
-        if !in_ddl {
-            let global_timelines = std::mem::take(&mut self.global_timelines);
-            for (
-                timeline,
-                TimelineState {
-                    mut oracle,
-                    mut read_holds,
-                },
-            ) in global_timelines
-            {
-                let now = if timeline == Timeline::EpochMilliseconds {
-                    timestamp
-                } else {
-                    // For non realtime sources, we define now as the largest timestamp, not in
-                    // advance of any object's upper. This is the largest timestamp that is closed
-                    // to writes.
-                    let id_bundle = self.ids_in_timeline(&timeline);
-                    self.largest_not_in_advance_of_upper(&id_bundle)
-                };
-                oracle
-                    .apply_write(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
-                    .await;
-                let read_ts = oracle.read_ts();
-                if read_holds.time.less_than(&read_ts) {
-                    read_holds = self.update_read_hold(read_holds, read_ts).await;
-                }
-                self.global_timelines
-                    .insert(timeline, TimelineState { oracle, read_holds });
-            }
-        }
-
         for response in responses {
             response.send();
         }
+
+        self.internal_cmd_tx
+            .send(Message::AdvanceTimelines)
+            .expect("sending to self.internal_cmd_tx cannot fail");
     }
 
     /// Submit a write to be executed during the next group commit.
