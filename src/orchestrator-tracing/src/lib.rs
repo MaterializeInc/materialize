@@ -312,7 +312,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 for kv in opentelemetry_resource {
                     args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
                 }
-                args.push(format!("--opentelemetry-enabled={}", opentelemetry_enabled));
+                args.push(format!(
+                    "--opentelemetry-enabled={}",
+                    opentelemetry_enabled
+                ));
             }
             #[cfg(feature = "tokio-console")]
             if let Some(port) = tokio_console_port {
