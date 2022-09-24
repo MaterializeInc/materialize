@@ -963,6 +963,7 @@ impl MirScalarExpr {
                             let top_list_create = exprs.swap_remove(0);
                             *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
                         } else if *func == VariadicFunc::Or || *func == VariadicFunc::And {
+                            // Note: It's important that we have called `flatten_associative` above.
                             e.undistribute_and_or();
                             e.reduce_and_canonicalize_and_or();
                         }
@@ -1301,133 +1302,194 @@ impl MirScalarExpr {
     }
 
     /// AND/OR undistribution (factoring out) to apply at each `MirScalarExpr`.
-    /// Transforms (a && b) || (a && c) into a && (b || c)
-    /// Transforms (a || b) && (a || c) into a || (b && c)
     ///
-    /// Assumes that AND/OR are already flattened (flatten_and_or)
+    /// This method attempts to apply one of the [distribution laws][distributivity]
+    /// (in a direction opposite to the their name):
+    /// ```text
+    /// (a && b) || (a && c) --> a && (b || c)  // Undistribute-OR
+    /// (a || b) && (a || c) --> a || (b && c)  // Undistribute-AND
+    /// ```
+    /// or one of their corresponding two [absorption law][absorption] special
+    /// cases:
+    /// ```text
+    /// a || (a && c)  -->  a  // Absorb-OR
+    /// a && (a || c)  -->  a  // Absorb-AND
+    /// ```
     ///
-    /// Also works with more than 2 arguments at the top, e.g.:
+    /// The method also works with more than 2 arguments at the top, e.g.
+    /// ```text
     /// (a && b) || (a && c) || (a && d)  -->  a && (b || c || d)
-    /// Can factor out something from only a subset of the top arguments, e.g.:
+    /// ```
+    /// It can also factor out only a subset of the top arguments, e.g.
+    /// ```text
     /// (a && b) || (a && c) || (d && e)  -->  (a && (b || c)) || (d && e)
-    /// Note that sometimes there are two overlapping possibilities to factor out from, e.g.
-    /// (a && b) || (a && c) || (d && c): Here we can factor out `a` from from the 1. and 2. terms,
-    /// or we can factor out `c` from the 2. and 3. terms. One of these might lead to more/better
-    /// undistribution opportunities later, but we just pick one randomly.
+    /// ```
     ///
-    /// It also handles the absorption law (<https://en.wikipedia.org/wiki/Absorption_law>):
-    ///   a || (a && c)  -->  a
-    ///   a && (a || c)  -->  a
-    /// For example,
-    ///   a || (a && c) || (a && d)
-    ///   -->
-    ///   a && (true || c || d)
-    ///   -->
-    ///   a && true
-    ///   -->
-    ///   a
-    /// where only the first step is performed by this function, the rest is done by
-    /// reduce_and_canonicalize_and_or called after us in `reduce()`.
+    /// Note that sometimes there are two overlapping possibilities to factor
+    /// out from, e.g.
+    /// ```text
+    /// (a && b) || (a && c) || (d && c)
+    /// ```
+    /// Here we can factor out `a` from from the 1. and 2. terms, or we can
+    /// factor out `c` from the 2. and 3. terms. One of these might lead to
+    /// more/better undistribution opportunities later, but we just pick one
+    /// locally, because recursively trying out all of them would lead to
+    /// exponential run time.
+    ///
+    /// The local heuristic is that we prefer a candidate that leads to an
+    /// absorption, or if there is no such one then we simply pick the first. In
+    /// case of multiple absorption candidates, it doesn't matter which one we
+    /// pick, because applying an absorption cannot adversely effect the
+    /// possibility of applying other absorptions.
+    ///
+    /// # Assumption
+    ///
+    /// Assumes that nested chains of AND/OR applications are flattened (this
+    /// can be enforced with [`Self::flatten_associative`]).
+    ///
+    /// # Examples
+    ///
+    /// Absorb-OR:
+    /// ```text
+    /// a || (a && c) || (a && d)
+    /// -->
+    /// a && (true || c || d)
+    /// -->
+    /// a && true
+    /// -->
+    /// a
+    /// ```
+    /// Here only the first step is performed by this method. The rest is done
+    /// by [`Self::reduce_and_canonicalize_and_or`] called after us in
+    /// `reduce()`.
+    ///
+    /// [distributivity]: https://en.wikipedia.org/wiki/Distributive_property
+    /// [absorption]: https://en.wikipedia.org/wiki/Absorption_law
     fn undistribute_and_or(&mut self) {
-        self.reduce_and_canonicalize_and_or(); // We don't want to deal with 1-arg AND/OR
-        if let MirScalarExpr::CallVariadic {
-            exprs: outer_operands,
-            func: outer_func @ (VariadicFunc::Or | VariadicFunc::And),
-        } = self
-        {
-            let inner_func = outer_func.switch_and_or();
+        // It wouldn't be strictly necessary to wrap this fn in this loop, because `reduce()` calls
+        // us in a loop anyway. However, `reduce()` tries to do many other things, so the loop here
+        // improves performance when there are several undistributions to apply in sequence, which
+        // can occur in `CanonicalizeMfp` when undoing the DNF.
+        let mut old_self = MirScalarExpr::column(0);
+        while old_self != *self {
+            old_self = self.clone();
+            self.reduce_and_canonicalize_and_or(); // We don't want to deal with 1-arg AND/OR at the top
+            if let MirScalarExpr::CallVariadic {
+                exprs: outer_operands,
+                func: outer_func @ (VariadicFunc::Or | VariadicFunc::And),
+            } = self
+            {
+                let inner_func = outer_func.switch_and_or();
 
-            // Make sure that each outer operand is a call to inner_func, by wrapping in a 1-arg
-            // call if necessary.
-            outer_operands.iter_mut().for_each(|o| {
-                if !matches!(o, MirScalarExpr::CallVariadic {func: f, ..} if *f == inner_func) {
-                    *o = MirScalarExpr::CallVariadic {
-                        func: inner_func.clone(),
-                        exprs: vec![o.take()],
-                    };
-                }
-            });
-
-            let mut inner_operands_refs: Vec<&mut Vec<MirScalarExpr>> = outer_operands
-                .iter_mut()
-                .map(|o| match o {
-                    MirScalarExpr::CallVariadic { func: f, exprs } if *f == inner_func => exprs,
-                    _ => unreachable!(), // the wrapping made sure that we'll get a match
-                })
-                .collect();
-
-            // Find inner operands to undistribute, i.e., which are in _all_ of the outer operands.
-            let mut intersection = inner_operands_refs
-                .iter()
-                .map(|v| (**v).clone())
-                .reduce(|ops1, ops2| ops1.into_iter().filter(|e| ops2.contains(e)).collect())
-                .unwrap();
-            intersection.sort();
-            intersection.dedup();
-
-            if !intersection.is_empty() {
-                // Remove the intersection from the inner operands
-                inner_operands_refs
-                    .iter_mut()
-                    .for_each(|ops| (**ops).retain(|o| !intersection.contains(o)));
-
-                // Simplify terms that now have only 0 or 1 args due to removing the intersection.
-                outer_operands
-                    .iter_mut()
-                    .for_each(|o| o.reduce_and_canonicalize_and_or());
-
-                // Add the intersection at the beginning
-                *self = MirScalarExpr::CallVariadic {
-                    func: inner_func,
-                    exprs: intersection
-                        .into_iter()
-                        .chain_one((*self).clone())
-                        .collect(),
-                };
-            } else {
-                // If the intersection was empty, that means that there is nothing we can factor out
-                // from _all_ the top-level args. However, we might still find something to factor
-                // out from a subset of the top-level args. To find such an opportunity, we look for
-                // duplicates across all inner args, e.g. if we have
-                // `(...) OR (... AND `a` AND ...) OR (...) OR (... AND `a` AND ...)`
-                // then we'll find that `a` occurs in more than one top-level arg, so
-                // `indexes_to_undistribute` will point us to the 2. and 4. top-level args.
-
-                // Create (inner_operand, index) pairs, where the index is the position in outer_operands
-                let mut all_inner_operands: Vec<(MirScalarExpr, usize)> = inner_operands_refs
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(i, inner_vec)| inner_vec.iter().map(move |a| ((*a).clone(), i)))
-                    .collect();
-                // Find an inner operand that occurs more than once, and get a vector of its positions
-                all_inner_operands.sort();
-                let mut indexes_to_undistribute = all_inner_operands
-                    .iter()
-                    .group_by(|(a, _i)| a)
-                    .into_iter()
-                    .map(|(_a, g)| g.map(|(_a, i)| *i).collect_vec())
-                    .find(|g| g.len() > 1);
-                // `swap_remove_multiple` cannot handle duplicates
-                indexes_to_undistribute.as_mut().map(|vec| {
-                    vec.sort();
-                    vec.dedup();
+                // Make sure that each outer operand is a call to inner_func, by wrapping in a 1-arg
+                // call if necessary.
+                outer_operands.iter_mut().for_each(|o| {
+                    if !matches!(o, MirScalarExpr::CallVariadic {func: f, ..} if *f == inner_func) {
+                        *o = MirScalarExpr::CallVariadic {
+                            func: inner_func.clone(),
+                            exprs: vec![o.take()],
+                        };
+                    }
                 });
 
-                // In any case, undo the 1-arg wrapping that we did at the beginning.
-                outer_operands
+                let mut inner_operands_refs: Vec<&mut Vec<MirScalarExpr>> = outer_operands
                     .iter_mut()
-                    .for_each(|o| o.reduce_and_canonicalize_and_or());
+                    .map(|o| match o {
+                        MirScalarExpr::CallVariadic { func: f, exprs } if *f == inner_func => exprs,
+                        _ => unreachable!(), // the wrapping made sure that we'll get a match
+                    })
+                    .collect();
 
-                if let Some(indexes_to_undistribute) = indexes_to_undistribute {
-                    // Found something to undistribute from a subset of the outer operands.
-                    // We temporarily remove these from outer_operands, call ourselves on it, and
-                    // then push back the result.
-                    let mut undistribute_from = MirScalarExpr::CallVariadic {
-                        func: (*outer_func).clone(),
-                        exprs: swap_remove_multiple(outer_operands, indexes_to_undistribute),
+                // Find inner operands to undistribute, i.e., which are in _all_ of the outer operands.
+                let mut intersection = inner_operands_refs
+                    .iter()
+                    .map(|v| (*v).clone())
+                    .reduce(|ops1, ops2| ops1.into_iter().filter(|e| ops2.contains(e)).collect())
+                    .unwrap();
+                intersection.sort();
+                intersection.dedup();
+
+                if !intersection.is_empty() {
+                    // Factor out the intersection from all the top-level args.
+
+                    // Remove the intersection from each inner operand vector.
+                    inner_operands_refs
+                        .iter_mut()
+                        .for_each(|ops| (**ops).retain(|o| !intersection.contains(o)));
+
+                    // Simplify terms that now have only 0 or 1 args due to removing the intersection.
+                    outer_operands
+                        .iter_mut()
+                        .for_each(|o| o.reduce_and_canonicalize_and_or());
+
+                    // Add the intersection at the beginning
+                    *self = MirScalarExpr::CallVariadic {
+                        func: inner_func,
+                        exprs: intersection.into_iter().chain_one(self.clone()).collect(),
                     };
-                    undistribute_from.undistribute_and_or();
-                    outer_operands.push(undistribute_from);
+                } else {
+                    // If the intersection was empty, that means that there is nothing we can factor out
+                    // from _all_ the top-level args. However, we might still find something to factor
+                    // out from a subset of the top-level args. To find such an opportunity, we look for
+                    // duplicates across all inner args, e.g. if we have
+                    // `(...) OR (... AND `a` AND ...) OR (...) OR (... AND `a` AND ...)`
+                    // then we'll find that `a` occurs in more than one top-level arg, so
+                    // `indexes_to_undistribute` will point us to the 2. and 4. top-level args.
+
+                    // Create (inner_operand, index) pairs, where the index is the position in
+                    // outer_operands
+                    let all_inner_operands = inner_operands_refs
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(i, inner_vec)| inner_vec.iter().map(move |a| ((*a).clone(), i)))
+                        .sorted()
+                        .collect_vec();
+
+                    // Find inner operand expressions that occur in more than one top-level arg.
+                    // Each inner vector in `undistribution_opportunities` will belong to one such inner
+                    // operand expression, and it is a set of indexes pointing to top-level args where
+                    // that inner operand occurs.
+                    let undistribution_opportunities = all_inner_operands
+                        .iter()
+                        .group_by(|(a, _i)| a)
+                        .into_iter()
+                        .map(|(_a, g)| g.map(|(_a, i)| *i).sorted().dedup().collect_vec())
+                        .filter(|g| g.len() > 1)
+                        .collect_vec();
+
+                    // Choose one of the inner vectors from `undistribution_opportunities`.
+                    let indexes_to_undistribute = undistribution_opportunities
+                        .iter()
+                        // Let's prefer index sets that directly lead to an absorption.
+                        .find(|index_set| {
+                            index_set
+                                .iter()
+                                .any(|i| inner_operands_refs.get(*i).unwrap().len() == 1)
+                        })
+                        // If we didn't find any absorption, then any index set will do.
+                        .or_else(|| undistribution_opportunities.first())
+                        .cloned();
+
+                    // In any case, undo the 1-arg wrapping that we did at the beginning.
+                    outer_operands
+                        .iter_mut()
+                        .for_each(|o| o.reduce_and_canonicalize_and_or());
+
+                    if let Some(indexes_to_undistribute) = indexes_to_undistribute {
+                        // Found something to undistribute from a subset of the outer operands.
+                        // We temporarily remove these from outer_operands, call ourselves on it, and
+                        // then push back the result.
+                        let mut undistribute_from = MirScalarExpr::CallVariadic {
+                            func: outer_func.clone(),
+                            exprs: swap_remove_multiple(outer_operands, indexes_to_undistribute),
+                        };
+                        // By construction, the recursive call is guaranteed to hit
+                        // the `!intersection.is_empty()` branch.
+                        undistribute_from.undistribute_and_or();
+                        // Append the undistributed result to outer operands that were not included in
+                        // indexes_to_undistribute.
+                        outer_operands.push(undistribute_from);
+                    }
                 }
             }
         }
