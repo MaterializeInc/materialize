@@ -1202,7 +1202,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Upserts persisted system configuration `name` to `value`.
-    pub async fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
+    pub fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
@@ -1215,7 +1215,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Removes persisted system configuration `name`.
-    pub async fn remove_system_config(&mut self, name: &str) {
+    pub fn remove_system_config(&mut self, name: &str) {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
@@ -1223,7 +1223,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Removes all persisted system configurations.
-    pub async fn clear_system_configs(&mut self) {
+    pub fn clear_system_configs(&mut self) {
         self.system_configurations.delete(|_k, _v| true);
     }
 

@@ -125,7 +125,7 @@ impl Server {
                     conn_id,
                     secret_key,
                 }) => {
-                    adapter_client.cancel_request(conn_id, secret_key).await;
+                    adapter_client.cancel_request(conn_id, secret_key);
                     // For security, the client is not told whether the cancel
                     // request succeeds or fails.
                     return Ok(());

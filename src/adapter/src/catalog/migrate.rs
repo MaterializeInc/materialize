@@ -53,7 +53,7 @@ pub(crate) async fn migrate<S: Append>(catalog: &mut Catalog<S>) -> Result<(), a
     // migrations are *weird*: they're rewriting the catalog while looking at
     // it. You probably should be adding a basic AST migration above, unless
     // you are really certain you want one of these crazy migrations.
-    let cat = Catalog::load_catalog_items(&mut tx, &catalog).await?;
+    let cat = Catalog::load_catalog_items(&mut tx, &catalog)?;
     let _conn_cat = cat.for_system_session();
     rewrite_items(&mut tx, |_item| Ok(()))?;
     tx.commit().await.map_err(|e| e.into())

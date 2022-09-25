@@ -153,7 +153,7 @@ impl ConnClient {
     }
 
     /// Cancels the query currently running on another connection.
-    pub async fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
+    pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
         self.inner
             .cmd_tx
             .send(Command::CancelRequest {
@@ -298,8 +298,8 @@ impl SessionClient {
     }
 
     /// Cancels the query currently running on another connection.
-    pub async fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        self.inner.cancel_request(conn_id, secret_key).await
+    pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
+        self.inner.cancel_request(conn_id, secret_key)
     }
 
     /// Ends a transaction.

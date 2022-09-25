@@ -245,7 +245,7 @@ where
                     Some(response) => response,
                 };
 
-                self.send_response(client, response).await
+                self.send_response(client, response)
             }
         }
     }
@@ -257,13 +257,13 @@ where
     ) -> RehydrationTaskState {
         for command in commands {
             if let Err(e) = client.send(command).await {
-                return self.send_response(client, Err(e)).await;
+                return self.send_response(client, Err(e));
             }
         }
         RehydrationTaskState::Pump { client }
     }
 
-    async fn send_response(
+    fn send_response(
         &mut self,
         client: StorageGrpcClient,
         response: Result<StorageResponse<T>, anyhow::Error>,

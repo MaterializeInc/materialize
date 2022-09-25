@@ -141,7 +141,7 @@ impl ConsensusConfig {
     }
 
     /// Parses a [Consensus] config from a uri string.
-    pub async fn try_from(
+    pub fn try_from(
         value: &str,
         connection_pool_max_size: usize,
         metrics: PostgresConsensusMetrics,
@@ -156,7 +156,7 @@ impl ConsensusConfig {
 
         let config = match url.scheme() {
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
-                PostgresConsensusConfig::new(value, connection_pool_max_size, metrics).await?,
+                PostgresConsensusConfig::new(value, connection_pool_max_size, metrics)?,
             )),
             "mem" => {
                 if !cfg!(debug_assertions) {

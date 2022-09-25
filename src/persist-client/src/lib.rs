@@ -117,8 +117,7 @@ impl PersistLocation {
             &self.consensus_uri,
             config.consensus_connection_pool_max_size,
             metrics.postgres_consensus.clone(),
-        )
-        .await?;
+        )?;
         let consensus = retry_external(&metrics.retries.external.consensus_open, || {
             consensus.clone().open()
         })
@@ -328,7 +327,7 @@ impl PersistClient {
     ///
     /// This is exposed mostly for testing. Persist users likely want
     /// [crate::cache::PersistClientCache::open].
-    pub async fn new(
+    pub fn new(
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
