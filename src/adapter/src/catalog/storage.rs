@@ -532,14 +532,14 @@ impl<S: Append> Connection<S> {
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
     pub async fn load_system_gids(
         &mut self,
-    ) -> Result<BTreeMap<(String, String, CatalogItemType), (GlobalId, u64)>, Error> {
+    ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, u64)>, Error> {
         Ok(COLLECTION_SYSTEM_GID_MAPPING
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(|(k, v)| {
                 (
-                    (k.schema_name, k.object_name, k.object_type),
+                    (k.schema_name, k.object_type, k.object_name),
                     (GlobalId::System(v.id), v.fingerprint),
                 )
             })
@@ -588,8 +588,8 @@ impl<S: Append> Connection<S> {
         let mappings = mappings.into_iter().map(
             |SystemObjectMapping {
                  schema_name,
-                 object_name,
                  object_type,
+                 object_name,
                  id,
                  fingerprint,
              }| {
@@ -601,8 +601,8 @@ impl<S: Append> Connection<S> {
                 (
                     GidMappingKey {
                         schema_name,
-                        object_name,
                         object_type,
+                        object_name,
                     },
                     GidMappingValue { id, fingerprint },
                 )
@@ -1468,8 +1468,8 @@ struct IdAllocValue {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct GidMappingKey {
     schema_name: String,
-    object_name: String,
     object_type: CatalogItemType,
+    object_name: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
