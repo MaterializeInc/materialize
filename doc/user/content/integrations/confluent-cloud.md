@@ -48,7 +48,7 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
     Otherwise, you can find more information about how to do that [here](https://docs.confluent.io/cloud/current/get-started/index.html#step-2-create-a-ak-topic).
 
 4. #### Create a source in Materialize
-    a. Open the [Confluent Cloud Dashboard](https://confluent.cloud/) and select your cluster
+    a. Open the [Confluent Cloud dashboard](https://confluent.cloud/) and select your cluster
 
     b. Click on **Overview** and select **Cluster settings**
 
