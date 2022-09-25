@@ -144,14 +144,6 @@ allow-git = [
     # Waiting for an official release of criterion v0.4, which upgrades to clap v3.
     "https://github.com/bheisler/criterion.rs.git",
 
-    # Waiting on v0.18.
-    # See: https://github.com/open-telemetry/opentelemetry-rust/pull/779
-    "https://github.com/MaterializeInc/opentelemetry-rust.git",
-
-    # Waiting on tracing-opentelemetry to upgrade to the as-yet unreleased
-    # v0.18 of opentelemetry.
-    "https://github.com/MaterializeInc/tracing.git",
-
     # Waiting on https://github.com/tikv/pprof-rs/pull/158 to make it into a
     # release.
     "https://github.com/MaterializeInc/pprof-rs.git",
