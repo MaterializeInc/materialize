@@ -33,7 +33,7 @@ _src_name_  | The name for the source.
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | The size for the source. For valid sizes, see [source sizes](/sql/create-source#sizes).
+`SIZE`                               | `text`    | Default: `3xsmall`. The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Features
 
@@ -174,6 +174,26 @@ FROM POSTGRES
   CONNECTION pg_connection
   PUBLICATION 'mz_source';
 ```
+
+### Sizing a source
+
+To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
+
+```sql
+CREATE SOURCE mz_source
+FROM POSTGRES
+  CONNECTION pg_connection
+  PUBLICATION 'mz_source'
+  WITH (SIZE = 'xsmall');
+```
+
+To resize the source after creation:
+
+```sql
+ALTER SOURCE mz_source SET (SIZE = 'large');
+```
+
+By default, sources are provisioned using the smallest size (`3xsmall`). For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
 
 ## Related pages
 
