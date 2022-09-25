@@ -152,14 +152,14 @@ To achieve its exactly-once processing guarantees, Materialize needs to store so
 CREATE SOURCE quotes
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
 FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 ```sql
 CREATE SINK quotes_sink
 FROM quotes
 INTO KAFKA CONNECTION kafka_connection (TOPIC 'quotes-sink')
 FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
 #### From materialized views
@@ -168,7 +168,7 @@ FORMAT AVRO USING
 CREATE SOURCE quotes
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
 FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 ```sql
 CREATE MATERIALIZED VIEW frank_quotes AS
@@ -180,7 +180,7 @@ CREATE SINK frank_quotes_sink
 FROM frank_quotes
 INTO KAFKA CONNECTION kafka_connection (TOPIC 'frank-quotes-sink')
 FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
 #### Get actual Kafka topic names
@@ -206,7 +206,7 @@ JOIN mz_kafka_sinks ON mz_sinks.id = mz_kafka_sinks.sink_id
 CREATE SOURCE quotes
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
 FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 ```sql
 CREATE SINK quotes_sink
@@ -221,7 +221,7 @@ FORMAT JSON;
 CREATE SOURCE quotes
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'quotes')
 FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+    CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 ```sql
 CREATE MATERIALIZED VIEW frank_quotes AS
