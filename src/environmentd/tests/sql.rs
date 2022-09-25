@@ -1611,7 +1611,9 @@ fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMil
         .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
         .unwrap();
     let explain: String = row.get(0);
-    let timestamp_re = Regex::new(r"^\s+query timestamp:\s+(\d+)\n").unwrap();
+    let timestamp_re =
+        Regex::new(r"^\s+query timestamp:\s+(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d\.\d\d\d\)\n")
+            .unwrap();
     let timestamp_caps = timestamp_re.captures(&explain).unwrap();
     timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
 }
