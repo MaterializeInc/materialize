@@ -1971,7 +1971,7 @@ impl<S: Append> Catalog<S> {
                     )
                 }
             };
-            
+
             assert!(
                 prev_id.is_none(),
                 "builtin name collision on {:?}",
@@ -2261,7 +2261,7 @@ impl<S: Append> Catalog<S> {
                     depends_on: vec![],
                 }),
             );
-            
+
             assert!(
                 prev_id.is_none(),
                 "builtin name collision on {:?}",
