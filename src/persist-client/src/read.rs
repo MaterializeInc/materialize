@@ -485,7 +485,7 @@ where
     /// `as_of` that would have been accepted.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
-        let () = self.machine.verify_listen(&as_of).await?;
+        let () = self.machine.verify_listen(&as_of)?;
         Ok(Listen::new(self, as_of).await)
     }
 

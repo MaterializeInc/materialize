@@ -65,18 +65,7 @@ shared volumes, those files will be owned by root *on your host machine*.
 
 ## Upgrading the Rust version
 
-1. Update each [Cargo.toml] file with the desired version. On macOS, from the root
-   directory, run:
-
-   ```
-   find . -type f -name Cargo.toml -exec sed -i '' 's/rust-version = ".*"/rust-version = "THE_NEW_VERSION"/' {} \;
-   ```
-
-   The equivalent on GNU/Linux is:
-   ```
-   find . -type f -name Cargo.toml -exec sed -i 's/rust-version = ".*"/rust-version = "THE_NEW_VERSION"/' {} \;
-   ```
-
+1. Update the workspace [Cargo.toml] file with the desired version.
 2. Update your local stable Rust installation so that it can build with the new minimum version:
 
    ```

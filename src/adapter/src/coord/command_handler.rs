@@ -157,11 +157,7 @@ impl<S: Append + 'static> Coordinator<S> {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
-        if let Err(e) = self
-            .catalog
-            .create_temporary_schema(session.conn_id())
-            .await
-        {
+        if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
             let _ = tx.send(Response {
                 result: Err(e.into()),
                 session,
@@ -432,7 +428,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(&mut session, stmt, &params).await {
+            _ => match self.plan_statement(&mut session, stmt, &params) {
                 Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
                 Err(e) => tx.send(Err(e), session),
             },

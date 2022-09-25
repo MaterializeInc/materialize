@@ -97,18 +97,18 @@ pub fn bench_persist(c: &mut Criterion) {
     plumbing::bench_encode_batch("plumbing/encode_batch", throughput, c, &data);
 }
 
-async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
+fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
     let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
     let consensus = Arc::new(MemConsensus::default());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime).await
+    PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime)
 }
 
 async fn create_file_pg_client(
 ) -> Result<Option<(Arc<PostgresConsensus>, PersistClient, TempDir)>, ExternalError> {
-    let pg = match PostgresConsensusConfig::new_for_test().await? {
+    let pg = match PostgresConsensusConfig::new_for_test()? {
         Some(x) => x,
         None => return Ok(None),
     };
@@ -121,7 +121,7 @@ async fn create_file_pg_client(
     let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let client = PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime).await?;
+    let client = PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime)?;
     Ok(Some((postgres_consensus, client, dir)))
 }
 
@@ -131,7 +131,7 @@ async fn create_s3_pg_client(
         Some(x) => x,
         None => return Ok(None),
     };
-    let pg = match PostgresConsensusConfig::new_for_test().await? {
+    let pg = match PostgresConsensusConfig::new_for_test()? {
         Some(x) => x,
         None => return Ok(None),
     };
@@ -142,7 +142,7 @@ async fn create_s3_pg_client(
     let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let client = PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime).await?;
+    let client = PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime)?;
     Ok(Some((postgres_consensus, client)))
 }
 
@@ -158,9 +158,7 @@ fn bench_all_clients<BenchClientFn>(
     // bench_client_fn and drop it after to keep mem usage down.
     {
         g.bench_function(BenchmarkId::new("mem_mem", data.goodput_pretty()), |b| {
-            let client = runtime
-                .block_on(create_mem_mem_client())
-                .expect("failed to create mem_mem client");
+            let client = create_mem_mem_client().expect("failed to create mem_mem client");
             bench_client_fn(b, &client);
         });
     }
@@ -260,9 +258,8 @@ fn bench_all_consensus<BenchConsensusFn>(
     }
 
     // Only run Postgres benchmarks if the magic env vars are set.
-    if let Some(config) = runtime
-        .block_on(PostgresConsensusConfig::new_for_test())
-        .expect("failed to load postgres config")
+    if let Some(config) =
+        PostgresConsensusConfig::new_for_test().expect("failed to load postgres config")
     {
         let postgres_consensus = runtime
             .block_on(PostgresConsensus::open(config))

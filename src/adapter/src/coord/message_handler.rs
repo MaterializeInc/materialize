@@ -258,10 +258,7 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
-        let plan = match self
-            .plan_statement(&mut session, Statement::CreateSource(stmt), &params)
-            .await
-        {
+        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
             Ok(Plan::CreateSource(plan)) => plan,
             Ok(_) => unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource"),
             Err(e) => return tx.send(Err(e), session),

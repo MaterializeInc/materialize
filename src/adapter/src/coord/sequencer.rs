@@ -421,7 +421,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id().await?;
-        let source_oid = self.catalog.allocate_oid().await?;
+        let source_oid = self.catalog.allocate_oid()?;
         let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
@@ -506,7 +506,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: CreateConnectionPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let connection_oid = self.catalog.allocate_oid().await?;
+        let connection_oid = self.catalog.allocate_oid()?;
         let connection_gid = self.catalog.allocate_user_id().await?;
         let mut connection = plan.connection.connection.clone();
 
@@ -569,8 +569,8 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let db_oid = self.catalog.allocate_oid().await?;
-        let schema_oid = self.catalog.allocate_oid().await?;
+        let db_oid = self.catalog.allocate_oid()?;
+        let schema_oid = self.catalog.allocate_oid()?;
         let ops = vec![catalog::Op::CreateDatabase {
             name: plan.name.clone(),
             oid: db_oid,
@@ -591,7 +591,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateSchema {
             database_id: plan.database_spec,
             schema_name: plan.schema_name,
@@ -615,7 +615,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateRole {
             name: plan.name,
             oid,
@@ -640,7 +640,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("Must have at least one availability zone");
         let first_argmin = n_replicas_per_az
             .iter()
-            .find_map(|(k, v)| (*v == min).then(|| k))
+            .find_map(|(k, v)| (*v == min).then_some(k))
             .expect("Must have at least one availability zone");
         first_argmin.clone()
     }
@@ -946,7 +946,7 @@ impl<S: Append + 'static> Coordinator<S> {
             conn_id,
             depends_on,
         };
-        let table_oid = self.catalog.allocate_oid().await?;
+        let table_oid = self.catalog.allocate_oid()?;
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
             oid: table_oid,
@@ -1014,7 +1014,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let payload = self.extract_secret(session, &mut secret.secret_as)?;
 
         let id = self.catalog.allocate_user_id().await?;
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let secret = catalog::Secret {
             create_sql: format!("CREATE SECRET {} AS '********'", full_name),
         };
@@ -1068,7 +1068,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 return;
             }
         };
-        let oid = match self.catalog.allocate_oid().await {
+        let oid = match self.catalog.allocate_oid() {
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
@@ -1227,7 +1227,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ops.extend(self.catalog.drop_items_ops(&[id]));
         }
         let view_id = self.catalog.allocate_user_id().await?;
-        let view_oid = self.catalog.allocate_oid().await?;
+        let view_oid = self.catalog.allocate_oid()?;
         let optimized_expr = self.view_optimizer.optimize(view.expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
@@ -1290,7 +1290,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Allocate IDs for the materialized view in the catalog.
         let id = self.catalog.allocate_user_id().await?;
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         // Allocate a unique ID that can be used by the dataflow builder to
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
@@ -1394,7 +1394,7 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
             compute_instance,
         };
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -1439,7 +1439,7 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
         };
         let id = self.catalog.allocate_user_id().await?;
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -3297,7 +3297,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
         if update_max_result_size {
-            self.update_max_result_size().await;
+            self.update_max_result_size();
         }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
@@ -3313,7 +3313,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
         if update_max_result_size {
-            self.update_max_result_size().await;
+            self.update_max_result_size();
         }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
@@ -3327,7 +3327,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
-        self.update_max_result_size().await;
+        self.update_max_result_size();
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3341,7 +3341,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    async fn update_max_result_size(&mut self) {
+    fn update_max_result_size(&mut self) {
         let mut compute = self.controller.active_compute();
         for compute_instance in self.catalog.compute_instances() {
             compute
