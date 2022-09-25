@@ -36,7 +36,7 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
 
     d. In the **API Keys** section, choose **Add Key**
 
-    e. Specify the scope for the **API key** and then click **Create Key**. If you choose to create a **Granular access** API key, make sure to give the **API key** **Read** and **Write** access to the topic you want to create a source for.
+    e. Specify the scope for the API key and then click **Create Key**. If you choose to create a _granular access_ API key, make sure to give the key `Read` and `Write` access to the topic you want to create a source for.
 
     Take note of the API Key you just created, as well as the API Key secret key; you'll need them later on. Keep in mind that the API Key secret key contains sensitive information, and you should store it somewhere safe!
 
