@@ -2,20 +2,26 @@
 name = "mz-postgres-util"
 description = "PostgreSQL utility library."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.65"
 mz-ore = { path = "../ore", features = ["task"] }
 mz-proto = { path = "../proto" }
 openssl = { version = "0.10.41", features = ["vendored"] }
+openssh = "0.9.7"
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-prost = { version = "0.10.3", features = ["no-recursion-limit"] }
-serde = { version = "1.0.140", features = ["derive"] }
+prost = { version = "0.11.0", features = ["no-recursion-limit"] }
+rand = "0.8.5"
+serde = { version = "1.0.144", features = ["derive"] }
+tempfile = "3.3.0"
+tokio = { version = "1.19.2", features = ["fs", "rt", "sync"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tracing = "0.1.36"
 
 [build-dependencies]
-tonic-build = "0.7"
+protobuf-src = "1.1.0"
+tonic-build = "0.8.0"

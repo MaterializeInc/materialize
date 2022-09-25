@@ -120,9 +120,7 @@ def start_services(
             cluster_services.append(
                 Computed(
                     name=node_names[node_id],
-                    workers=workers,
                     options=options,
-                    peers=node_names,
                     image=f"materialize/computed:{tag}" if tag else None,
                 )
             )
@@ -151,7 +149,9 @@ def start_services(
             c.sql(
                 "CREATE CLUSTER REPLICA default.feature_benchmark REMOTE ["
                 + ",".join([f"'computed_{n}:2100'" for n in range(0, nodes)])
-                + "];"
+                + "], COMPUTE ["
+                + ",".join([f"'computed_{n}:2102'" for n in range(0, nodes)])
+                + f"], WORKERS {workers};"
             )
 
             c.sql("DROP CLUSTER REPLICA default.default_replica")

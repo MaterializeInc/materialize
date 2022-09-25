@@ -8,11 +8,13 @@
 // by the Apache License, Version 2.0.
 
 mod add_partitions;
+mod commit;
 mod create_topic;
 mod ingest;
 mod verify;
 
 pub use add_partitions::build_add_partitions;
+pub use commit::build_verify_commit;
 pub use create_topic::build_create_topic;
 pub use ingest::build_ingest;
 pub use verify::build_verify;

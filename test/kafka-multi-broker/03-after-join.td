@@ -11,6 +11,8 @@
 # Ingest some more data and read it back
 #
 
+
+
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": "string" } ] }
 
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=21

@@ -21,5 +21,8 @@ SELECT 'true'::universe.database.schema.bool
 statement ok
 CREATE TABLE not_a_secret (a int);
 
+statement ok
+CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'broker';
+
 statement error materialize.public.not_a_secret is not a secret
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (secret = SECRET not_a_secret);
+CREATE SOURCE source FROM KAFKA CONNECTION kafka_conn (TOPIC 'topic') LEGACYWITH (secret = SECRET not_a_secret);

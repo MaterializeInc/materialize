@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use mz_adapter::session::ClientSeverity;
+use mz_adapter::ExecuteResponsePartialError;
 use postgres::error::SqlState;
 
 use mz_adapter::session::ClientSeverity as AdapterClientSeverity;
@@ -397,10 +399,12 @@ impl ErrorResponse {
             AdapterError::QGM(_) => SqlState::INTERNAL_ERROR,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+            AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::StatementTimeout => SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
             AdapterError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
             AdapterError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
+            AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
@@ -448,6 +452,30 @@ impl ErrorResponse {
     pub fn with_position(mut self, position: usize) -> ErrorResponse {
         self.position = Some(position);
         self
+    }
+}
+
+impl From<ExecuteResponsePartialError> for ErrorResponse {
+    fn from(
+        ExecuteResponsePartialError {
+            severity,
+            code,
+            message,
+        }: ExecuteResponsePartialError,
+    ) -> Self {
+        let gen = match severity {
+            ClientSeverity::Debug1
+            | ClientSeverity::Debug2
+            | ClientSeverity::Debug3
+            | ClientSeverity::Debug4
+            | ClientSeverity::Debug5 => Self::debug,
+            ClientSeverity::Error => Self::error,
+            ClientSeverity::Info => Self::info,
+            ClientSeverity::Log => Self::log,
+            ClientSeverity::Notice => Self::notice,
+            ClientSeverity::Warning => Self::warning,
+        };
+        gen(code, &message)
     }
 }
 

@@ -1,5 +1,7 @@
 # Test binary encodings
 
+# Intervals
+
 send
 Parse {"query": "SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds'"}
 Bind {"result_formats": [1]}
@@ -93,5 +95,199 @@ ReadyForQuery
 ParseComplete
 BindComplete
 DataRow {"fields":["[148, 182, 46, 0, 0, 0, 0, 1, 128, 0, 0, 1, 0, 0, 0, 0]"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# Integers
+
+send
+Parse {"query": "SELECT 42::int2"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["\u0000*"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT 42::uint2"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["\u0000*"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT -32768::int2"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["[128, 0]"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT 32768::uint2"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["[128, 0]"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT 42::int4"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["\u0000\u0000\u0000*"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT 42::uint4"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["\u0000\u0000\u0000*"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT -2147483648::int4"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["[128, 0, 0, 0]"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT 2147483648::uint4"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["[128, 0, 0, 0]"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT 42::int8"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["\u0000\u0000\u0000\u0000\u0000\u0000\u0000*"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT 42::uint8"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["\u0000\u0000\u0000\u0000\u0000\u0000\u0000*"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT -9223372036854775808::int8"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["[128, 0, 0, 0, 0, 0, 0, 0]"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT 9223372036854775808::uint8"}
+Bind {"result_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["[128, 0, 0, 0, 0, 0, 0, 0]"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}

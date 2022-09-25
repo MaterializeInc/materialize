@@ -12,11 +12,11 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 # Without EXTENDED, SHOW TYPES shouldn't have anything to return.
 > SHOW TYPES
 
-> SHOW FULL TYPES
+> SHOW TYPES
 
-> SHOW EXTENDED TYPES
+> SHOW TYPES FROM pg_catalog
 name
-----
+---------------------
 _bool
 _bpchar
 _bytea
@@ -28,8 +28,12 @@ _int2
 _int2vector
 _int4
 _int8
+_uint2
+_uint4
+_uint8
 _interval
 _jsonb
+_mztimestamp
 _numeric
 _oid
 _record
@@ -62,87 +66,26 @@ int2
 int2vector
 int4
 int8
+uint2
+uint4
+uint8
 interval
 jsonb
 list
 map
+mztimestamp
 numeric
 oid
-record
 regclass
 regproc
 regtype
+record
 text
 time
 timestamp
 timestamptz
 uuid
 varchar
-
-> SHOW EXTENDED FULL TYPES
-name             type
-----------------------
-_bool                       system
-_bpchar                     system
-_bytea                      system
-_char                       system
-_date                       system
-_float4                     system
-_float8                     system
-_int2                       system
-_int2vector                 system
-_int4                       system
-_int8                       system
-_interval                   system
-_jsonb                      system
-_numeric                    system
-_oid                        system
-_record                     system
-_regclass                   system
-_regproc                    system
-_regtype                    system
-_text                       system
-_time                       system
-_timestamp                  system
-_timestamptz                system
-_uuid                       system
-_varchar                    system
-any                         system
-anyarray                    system
-anycompatible               system
-anycompatiblearray          system
-anycompatiblelist           system
-anycompatiblemap            system
-anycompatiblenonarray       system
-anyelement                  system
-anynonarray                 system
-bool                        system
-bpchar                      system
-bytea                       system
-char                        system
-date                        system
-float4                      system
-float8                      system
-int2                        system
-int2vector                  system
-int4                        system
-int8                        system
-interval                    system
-jsonb                       system
-list                        system
-map                         system
-numeric                     system
-oid                         system
-regclass                    system
-regproc                     system
-regtype                     system
-record                      system
-text                        system
-time                        system
-timestamp                   system
-timestamptz                 system
-uuid                        system
-varchar                     system
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_tables = 10000
@@ -173,6 +116,12 @@ ALTER SYSTEM SET max_tables = 10000
 
 > CREATE TABLE int8_t (a int8);
 > CREATE TABLE bigint_t (a bigint);
+
+> CREATE TABLE uint2_t (a uint2);
+
+> CREATE TABLE uint4_t (a uint4);
+
+> CREATE TABLE uint8_t (a uint8);
 
 > CREATE TABLE interval_t (a interval);
 
@@ -209,14 +158,14 @@ ALTER SYSTEM SET max_tables = 10000
 > CREATE TYPE int_list_list_c AS LIST (element_type=int_list_c);
 > CREATE TYPE int_record_record_c AS (j1 int, j2 int_record_c);
 
-> SHOW FULL TYPES
-name                type
-------------------------
-int_list_c          user
-int_map_c           user
-int_list_list_c     user
-int_record_c        user
-int_record_record_c user
+> SHOW TYPES
+name
+-------------------
+int_list_c
+int_map_c
+int_list_list_c
+int_record_c
+int_record_record_c
 
 # Allow creating tables using custom types
 > CREATE TABLE custom_types (a int_list_c, b int_map_c);
@@ -240,12 +189,12 @@ int_record_record_c user
 > CREATE TYPE other.other_int_map_c AS MAP (key_type=text, value_type=int4);
 > CREATE TYPE other.other_record_c AS (a int, b text);
 
-> SHOW FULL TYPES FROM other;
-name                type
--------------------------
-other_int_list_c    user
-other_int_map_c     user
-other_record_c      user
+> SHOW TYPES FROM other;
+name
+----------------
+other_int_list_c
+other_int_map_c
+other_record_c
 
 > CREATE TABLE custom_types_4 (a other.other_int_list_c, b other.other_int_map_c);
 

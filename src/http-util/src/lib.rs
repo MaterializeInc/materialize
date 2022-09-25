@@ -18,6 +18,7 @@ use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
+use tracing_subscriber::filter::Targets;
 
 /// Renders a template into an HTTP response.
 pub fn template_response<T>(template: T) -> Html<String>
@@ -127,6 +128,26 @@ pub async fn handle_enable_otel(
                 if cfg.enabled { "enabled" } else { "disabled" }
             ),
         ),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DynamicStderrConfig {
+    targets: String,
+}
+
+/// Allows dynamic control of the stderr log filter
+#[allow(clippy::unused_async)]
+pub async fn handle_modify_stderr_filter(
+    callback: mz_ore::tracing::StderrFilterCallback,
+    Json(cfg): Json<DynamicStderrConfig>,
+) -> impl IntoResponse {
+    match cfg.targets.parse::<Targets>() {
+        Ok(targets) => match callback.call(targets) {
+            Ok(()) => (StatusCode::OK, format!("{}", cfg.targets)),
+            Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+        },
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
     }
 }

@@ -20,21 +20,23 @@ use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
-use timely::progress::ChangeBatch;
 use uuid::Uuid;
 
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
-use mz_timely_util::progress::any_change_batch;
+use mz_timely_util::progress::any_antichain;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.response.rs"));
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeResponse<T = mz_repr::Timestamp> {
-    /// A list of identifiers of traces, with prior and new upper frontiers.
-    FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
+    /// A list of identifiers of traces, with new upper frontiers.
+    ///
+    /// TODO(teskje): Consider also reporting the previous upper frontier and using that
+    /// information to assert the correct implementation of our protocols at various places.
+    FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
     /// The worker's response to a specified (by connection id) peek.
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified tail.
@@ -91,7 +93,7 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4)
+            proptest::collection::vec((any::<GlobalId>(), any_antichain()), 1..4)
                 .prop_map(ComputeResponse::FrontierUppers),
             (any_uuid(), any::<PeekResponse>()).prop_map(|(id, resp)| {
                 ComputeResponse::PeekResponse(id, resp, OpenTelemetryContext::empty())
@@ -203,7 +205,7 @@ impl RustType<ProtoTailResponse> for TailResponse<mz_repr::Timestamp> {
         ProtoTailResponse {
             kind: Some(match self {
                 TailResponse::Batch(tail_batch) => Batch(tail_batch.into_proto()),
-                TailResponse::DroppedAt(antichain) => DroppedAt(antichain.into()),
+                TailResponse::DroppedAt(antichain) => DroppedAt(antichain.into_proto()),
             }),
         }
     }
@@ -212,7 +214,7 @@ impl RustType<ProtoTailResponse> for TailResponse<mz_repr::Timestamp> {
         use proto_tail_response::Kind::*;
         match proto.kind {
             Some(Batch(tail_batch)) => Ok(TailResponse::Batch(tail_batch.into_rust()?)),
-            Some(DroppedAt(antichain)) => Ok(TailResponse::DroppedAt(antichain.into())),
+            Some(DroppedAt(antichain)) => Ok(TailResponse::DroppedAt(antichain.into_rust()?)),
             None => Err(TryFromProtoError::missing_field("ProtoTailResponse::kind")),
         }
     }
@@ -225,7 +227,7 @@ impl Arbitrary for TailResponse<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
             any::<TailBatch<mz_repr::Timestamp>>().prop_map(TailResponse::Batch),
-            proptest::collection::vec(any::<u64>(), 1..4)
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4)
                 .prop_map(|antichain| TailResponse::DroppedAt(Antichain::from(antichain)))
         ]
         .boxed()
@@ -247,13 +249,13 @@ impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoTailBatch {
         use proto_tail_batch::ProtoUpdate;
         ProtoTailBatch {
-            lower: Some((&self.lower).into()),
-            upper: Some((&self.upper).into()),
+            lower: Some(self.lower.into_proto()),
+            upper: Some(self.upper.into_proto()),
             updates: self
                 .updates
                 .iter()
                 .map(|(t, r, d)| ProtoUpdate {
-                    timestamp: *t,
+                    timestamp: t.into(),
                     row: Some(r.into_proto()),
                     diff: *d,
                 })
@@ -263,20 +265,14 @@ impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoTailBatch) -> Result<Self, TryFromProtoError> {
         Ok(TailBatch {
-            lower: proto
-                .lower
-                .map(Into::into)
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::lower"))?,
-            upper: proto
-                .upper
-                .map(Into::into)
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::upper"))?,
+            lower: proto.lower.into_rust_if_some("ProtoTailUpdate::lower")?,
+            upper: proto.upper.into_rust_if_some("ProtoTailUpdate::upper")?,
             updates: proto
                 .updates
                 .into_iter()
                 .map(|update| {
                     Ok((
-                        update.timestamp,
+                        update.timestamp.into(),
                         update.row.into_rust_if_some("ProtoUpdate::row")?,
                         update.diff,
                     ))
@@ -292,8 +288,8 @@ impl Arbitrary for TailBatch<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            proptest::collection::vec(any::<u64>(), 1..4),
-            proptest::collection::vec(any::<u64>(), 1..4),
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
             proptest::collection::vec(
                 (any::<mz_repr::Timestamp>(), any::<Row>(), any::<Diff>()),
                 1..4,
@@ -324,25 +320,7 @@ mod tests {
         fn compute_response_protobuf_roundtrip(expect in any::<ComputeResponse<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeResponse>(&expect);
             assert!(actual.is_ok());
-            let actual = actual.unwrap();
-            if let ComputeResponse::FrontierUppers(expected_traces) = expect {
-                if let ComputeResponse::FrontierUppers(actual_traces) = actual {
-                    assert_eq!(actual_traces.len(), expected_traces.len());
-                    for ((actual_id, mut actual_changes), (expected_id, mut expected_changes)) in actual_traces.into_iter().zip(expected_traces.into_iter()) {
-                        assert_eq!(actual_id, expected_id);
-                        // `ChangeBatch`es representing equivalent sets of
-                        // changes could have different internal
-                        // representations, so they need to be compacted before comparing.
-                        actual_changes.compact();
-                        expected_changes.compact();
-                        assert_eq!(actual_changes, expected_changes);
-                    }
-                } else {
-                    assert_eq!(actual, ComputeResponse::FrontierUppers(expected_traces));
-                }
-            } else {
-                assert_eq!(actual, expect);
-            }
+            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

@@ -28,6 +28,13 @@ $ kafka-ingest topic=upgrade-proto-source-${arg.upgrade-from-version} format=pro
 {"id": "c"}
 {"id": "h"}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE kafka_proto_source
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-upgrade-proto-source-${arg.upgrade-from-version}-${testdrive.seed}'
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upgrade-proto-source-${arg.upgrade-from-version}-${testdrive.seed}')
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

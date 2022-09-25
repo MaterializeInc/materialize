@@ -22,20 +22,18 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 
-use mz_expr::PartitionId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
-use crate::controller::CollectionMetadata;
+use crate::controller::{CollectionMetadata, SourceResumptionFrontierCalculator};
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
-use crate::source::persist_source;
+use crate::source::types::DecodeResult;
 use crate::source::{
-    self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
+    self, persist_source, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
     LoadGeneratorSourceReader, PostgresSourceReader, RawSourceCreationConfig, S3SourceReader,
 };
 use crate::types::errors::{DataflowError, DecodeError, EnvelopeError};
 use crate::types::sources::{encoding::*, *};
-use crate::types::transforms::LinearOperator;
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -71,7 +69,6 @@ pub fn render_source<G>(
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<G::Timestamp>,
-    mut linear_operators: Option<LinearOperator>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
@@ -80,13 +77,6 @@ pub fn render_source<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    // Blank out trivial linear operators.
-    if let Some(operator) = &linear_operators {
-        if operator.is_trivial(description.typ.arity()) {
-            linear_operators = None;
-        }
-    }
-
     // Tokens that we should return from the method.
     let mut needed_tokens: Vec<Rc<dyn Any>> = Vec::new();
 
@@ -103,7 +93,7 @@ where
         encoding,
         envelope,
         metadata_columns,
-        ts_frequency,
+        timestamp_interval,
     } = description.desc;
 
     // All sources should push their various error streams into this vector,
@@ -116,78 +106,79 @@ where
     // is called on each timely worker as part of
     // [`super::build_storage_dataflow`].
 
-    // All workers are responsible for reading in Kafka sources. Other sources
-    // support single-threaded ingestion only. Note that in all cases we want all
-    // readers of the same source or same partition to reside on the same worker,
-    // and only load-balance responsibility across distinct sources.
-    let active_read_worker = if let SourceConnection::Kafka(_) = connection {
-        true
-    } else {
-        // TODO: This feels icky, but getting rid of hardcoding this difference between
-        // Kafka and all other sources seems harder.
-        crate::source::responsible_for(&id, scope.index(), scope.peers(), &PartitionId::None)
-    };
-
     let source_name = format!("{}-{}", connection.name(), id);
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
         upstream_name: connection.upstream_name().map(ToOwned::to_owned),
         id,
-        scope,
-        // Distribute read responsibility among workers.
-        active: active_read_worker,
-        timestamp_frequency: ts_frequency,
+        timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
         encoding: encoding.clone(),
         now: storage_state.now.clone(),
-        base_metrics: &storage_state.source_metrics,
+        // TODO(guswynn): avoid extra clones here
+        base_metrics: storage_state.source_metrics.clone(),
         resume_upper: resume_upper.clone(),
         storage_metadata: description.storage_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
     };
 
+    let resumption_calculator = SourceResumptionFrontierCalculator::new(
+        description.storage_metadata.clone(),
+        envelope.clone(),
+    );
+
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let ((ok_source, err_source), capability) = match connection {
-        SourceConnection::Kafka(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader>(
+        SourceConnection::Kafka(connection) => {
+            let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
+                scope,
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
+                resumption_calculator,
             );
             ((SourceType::Delimited(ok), err), cap)
         }
-        SourceConnection::Kinesis(_) => {
+        SourceConnection::Kinesis(connection) => {
             let ((ok, err), cap) =
-                source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>>(
+                source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
+                    scope,
                     base_source_config,
-                    &connection,
+                    connection,
                     storage_state.connection_context.clone(),
+                    resumption_calculator,
                 );
             ((SourceType::Delimited(ok), err), cap)
         }
-        SourceConnection::S3(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader>(
+        SourceConnection::S3(connection) => {
+            let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
+                scope,
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
+                resumption_calculator,
             );
             ((SourceType::ByteStream(ok), err), cap)
         }
-        SourceConnection::Postgres(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader>(
+        SourceConnection::Postgres(connection) => {
+            let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
+                scope,
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
+                resumption_calculator,
             );
             ((SourceType::Row(ok), err), cap)
         }
-        SourceConnection::LoadGenerator(_) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader>(
+        SourceConnection::LoadGenerator(connection) => {
+            let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
+                scope,
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
+                resumption_calculator,
             );
             ((SourceType::Row(ok), err), cap)
         }
@@ -252,7 +243,6 @@ where
                     value_encoding,
                     dataflow_debug_name,
                     metadata_columns,
-                    &mut linear_operators,
                     storage_state.decode_metrics.clone(),
                     &storage_state.connection_context,
                 ),
@@ -261,7 +251,6 @@ where
                     value_encoding,
                     dataflow_debug_name,
                     metadata_columns,
-                    &mut linear_operators,
                     storage_state.decode_metrics.clone(),
                     &storage_state.connection_context,
                 ),
@@ -301,6 +290,10 @@ where
                                     persist_clients,
                                     tx_storage_metadata,
                                     as_of,
+                                    Antichain::new(),
+                                    None,
+                                    // Copy the logic in DeltaJoin/Get/Join to start.
+                                    |_timer, count| count > 1_000_000,
                                 );
                             let (tx_source_ok, tx_source_err) = (
                                 tx_source_ok_stream.as_collection(),
@@ -333,12 +326,12 @@ where
                             // We are at the end of time, so our `as_of` is everything.
                             Some(Timestamp::MAX)
                         }
-                        Some(&0) => {
+                        Some(&Timestamp::MIN) => {
                             // We are the beginning of time (no data persisted yet), so we can
                             // skip reading out of persist.
                             None
                         }
-                        Some(&t) => Some(t - 1),
+                        Some(&t) => Some(t.saturating_sub(1)),
                     };
                     let (previous_stream, previous_token) =
                         if let Some(previous_as_of) = previous_as_of {
@@ -348,6 +341,10 @@ where
                                 persist_clients,
                                 description.storage_metadata.clone(),
                                 Antichain::from_elem(previous_as_of),
+                                Antichain::new(),
+                                None,
+                                // Copy the logic in DeltaJoin/Get/Join to start.
+                                |_timer, count| count > 1_000_000,
                             );
                             (stream, Some(tok))
                         } else {
@@ -356,7 +353,6 @@ where
                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                         &transformed_results,
                         resume_upper,
-                        &mut linear_operators,
                         description.typ.arity(),
                         upsert_envelope.clone(),
                         previous_stream,
@@ -381,8 +377,11 @@ where
                     // place and re-use. There seem to be enough instances of this
                     // by now.
                     fn split_ok_err(
-                        x: (Result<Row, DataflowError>, u64, Diff),
-                    ) -> Result<(Row, u64, Diff), (DataflowError, u64, Diff)> {
+                        x: (Result<Row, DataflowError>, mz_repr::Timestamp, Diff),
+                    ) -> Result<
+                        (Row, mz_repr::Timestamp, Diff),
+                        (DataflowError, mz_repr::Timestamp, Diff),
+                    > {
                         match x {
                             (Ok(row), ts, diff) => Ok((row, ts, diff)),
                             (Err(err), ts, diff) => Err((err, ts, diff)),
@@ -406,35 +405,7 @@ where
     // Perform various additional transformations on the collection.
 
     // Force a shuffling of data in case sources are not uniformly distributed.
-    let mut collection = stream.inner.exchange(|x| x.hashed()).as_collection();
-
-    // Implement source filtering and projection.
-    // At the moment this is strictly optional, but we perform it anyhow
-    // to demonstrate the intended use.
-    if let Some(operators) = linear_operators {
-        // Apply predicates and insert dummy values into undemanded columns.
-        let (collection2, errors) = collection
-            .inner
-            .flat_map_fallible("SourceLinearOperators", {
-                // Produce an executable plan reflecting the linear operators.
-                let linear_op_mfp = operators
-                    .to_mfp(&description.typ)
-                    .into_plan()
-                    .unwrap_or_else(|e| panic!("{}", e));
-                // Reusable allocation for unpacking datums.
-                let mut datum_vec = mz_repr::DatumVec::new();
-                let mut row_builder = Row::default();
-                // Closure that applies the linear operators to each `input_row`.
-                move |(input_row, time, diff)| {
-                    let arena = mz_repr::RowArena::new();
-                    let mut datums_local = datum_vec.borrow_with(&input_row);
-                    linear_op_mfp.evaluate(&mut datums_local, &arena, time, diff, &mut row_builder)
-                }
-            });
-
-        collection = collection2.as_collection();
-        error_collections.push(errors.as_collection());
-    };
+    let collection = stream.inner.exchange(|x| x.hashed()).as_collection();
 
     // Flatten the error collections.
     let err_collection = match error_collections.len() {

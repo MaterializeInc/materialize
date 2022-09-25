@@ -36,8 +36,16 @@ class Capabilities:
         """Add new capabilities."""
         self._capabilities.extend(capabilities)
 
+    def remove_capability_instance(self, capability: T) -> None:
+        """Remove a specific capability."""
+
+        self._capabilities = [
+            cap for cap in self._capabilities if not cap == capability
+        ]
+
     def _remove(self, capabilities: Set[Type[T]]) -> None:
         """Remove all existing capabilities of the specified types."""
+
         self._capabilities = [
             cap for cap in self._capabilities if type(cap) not in capabilities
         ]
@@ -64,7 +72,7 @@ class Action:
         """Compute the capability classes that this action requires."""
         return set()
 
-    def removes(self) -> Set[Type[Capability]]:
+    def withholds(self) -> Set[Type[Capability]]:
         """Compute the capability classes that this action will make unavailable."""
         return set()
 
@@ -78,6 +86,9 @@ class Action:
 
 
 class Scenario:
+    def bootstrap(self) -> List[Type[Action]]:
+        return []
+
     def config(self) -> Dict[Type[Action], float]:
         assert False
 
@@ -96,12 +107,18 @@ class Test:
         self._actions: List[Action] = []
         self._capabilities = Capabilities()
 
+        for action_class in self._scenario.bootstrap():
+            action = action_class(capabilities=self._capabilities)
+            self._actions.append(action)
+            self._capabilities._extend(action.provides())
+            self._capabilities._remove(action.withholds())
+
         for i in range(0, actions):
             action_class = self._pick_action_class()
             action = action_class(capabilities=self._capabilities)
             self._actions.append(action)
             self._capabilities._extend(action.provides())
-            self._capabilities._remove(action.removes())
+            self._capabilities._remove(action.withholds())
 
     def run(self, c: Composition) -> None:
         """Run the Zippy test."""
@@ -120,6 +137,10 @@ class Test:
                 if self._can_run(leaf):
                     action_classes.append(leaf)
                     class_weights.append(self._scenario.config()[action_class])
+
+        assert (
+            len(action_classes) > 0
+        ), "No actions available to take. You may be stopping or deleting items without starting them again."
 
         return random.choices(action_classes, weights=class_weights, k=1)[0]
 

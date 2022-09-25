@@ -23,22 +23,15 @@ where
     F: FnMut(&mut mz_sql::ast::Statement<Raw>) -> Result<(), anyhow::Error>,
 {
     let items = tx.loaded_items();
-    for (id, name, def) in items {
-        let SerializedCatalogItem::V1 {
-            create_sql,
-            eval_env,
-        } = serde_json::from_slice(&def)?;
+    for (id, name, SerializedCatalogItem::V1 { create_sql }) in items {
         let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element();
 
         f(&mut stmt)?;
 
         let serialized_item = SerializedCatalogItem::V1 {
             create_sql: stmt.to_ast_string_stable(),
-            eval_env,
         };
 
-        let serialized_item =
-            serde_json::to_vec(&serialized_item).expect("catalog serialization cannot fail");
         tx.update_item(id, &name.item, &serialized_item)?;
     }
     Ok(())
@@ -60,7 +53,7 @@ pub(crate) async fn migrate<S: Append>(catalog: &mut Catalog<S>) -> Result<(), a
     // migrations are *weird*: they're rewriting the catalog while looking at
     // it. You probably should be adding a basic AST migration above, unless
     // you are really certain you want one of these crazy migrations.
-    let cat = Catalog::load_catalog_items(&mut tx, &catalog).await?;
+    let cat = Catalog::load_catalog_items(&mut tx, &catalog)?;
     let _conn_cat = cat.for_system_session();
     rewrite_items(&mut tx, |_item| Ok(()))?;
     tx.commit().await.map_err(|e| e.into())

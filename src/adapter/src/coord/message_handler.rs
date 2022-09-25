@@ -11,18 +11,21 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use chrono::DurationRound;
 use tracing::{event, warn, Level};
 
-use mz_controller::{ComputeInstanceEvent, ControllerResponse};
+use mz_compute_client::controller::ComputeInstanceEvent;
+use mz_controller::ControllerResponse;
+use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_stash::Append;
 
-use crate::catalog::{self};
+use crate::catalog;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
 
@@ -130,6 +133,28 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
+        self.schedule_storage_usage_collection().await;
+    }
+
+    pub async fn schedule_storage_usage_collection(&self) {
+        let previous_collection_ts = self
+            .catalog
+            .most_recent_storage_usage_collection()
+            .await
+            .expect("unable to get storage usage")
+            .unwrap_or(EpochMillis::MIN);
+        let time_since_previous_collection = self.now().saturating_sub(previous_collection_ts);
+        let next_collection_interval = self
+            .storage_usage_collection_interval
+            .saturating_sub(Duration::from_millis(time_since_previous_collection));
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        task::spawn(|| "storage_usage_collection", async move {
+            tokio::time::sleep(next_collection_interval).await;
+            // If sending fails, the main thread has shutdown.
+            if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
+                return;
+            }
+        });
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -157,9 +182,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
             ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
-                let replica_status_granularity = chrono::Duration::seconds(60);
+                let replica_status_interval = chrono::Duration::seconds(60);
                 let when_coarsened = when
-                    .duration_trunc(replica_status_granularity)
+                    .duration_trunc(replica_status_interval)
                     .expect("Time coarsening should not fail");
                 let new = ReplicaMetadata {
                     last_heartbeat: when_coarsened,
@@ -233,10 +258,7 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
-        let plan = match self
-            .plan_statement(&mut session, Statement::CreateSource(stmt), &params)
-            .await
-        {
+        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
             Ok(Plan::CreateSource(plan)) => plan,
             Ok(_) => unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource"),
             Err(e) => return tx.send(Err(e), session),
@@ -318,7 +340,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
                         .await;
                 }
-                Deferred::GroupCommit => self.group_commit_initiate().await,
+                Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
             }
         }
         // N.B. if no deferred plans, write lock is released by drop

@@ -154,15 +154,22 @@ $ set reader-schema={
 
 $ kafka-create-topic topic=avro-data
 
-$ kafka-ingest format=avro topic=avro-data schema=${writer-schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=avro-data schema=${writer-schema} timestamp=1
 { "f5": 1234, "f4": {"variant1": [0]}, "f3": 2345, "f2": "Diamonds", "f1": {"variant4": [0, 1, 2, 3]}, "f6": {"hello": 123, "another": 2144} }
 
-$ kafka-ingest format=avro topic=avro-data schema=${reader-schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=avro-data schema=${reader-schema} timestamp=1
 { "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE avro_data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > SELECT f0::text, f11, f12, f13, f2, f51, f52
   FROM avro_data
@@ -180,12 +187,12 @@ f0 f11 f12 f13 f2 f51 f52
 
 $ kafka-create-topic topic=avro-data-no-registry
 
-$ kafka-ingest format=avro topic=avro-data-no-registry schema=${reader-schema} publish=true confluent-wire-format=false timestamp=1
+$ kafka-ingest format=avro topic=avro-data-no-registry schema=${reader-schema} confluent-wire-format=false timestamp=1
 { "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
 
 > CREATE SOURCE avro_data_no_registry
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-no-registry-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${reader-schema}' WITH (CONFLUENT WIRE FORMAT = false)
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-no-registry-${testdrive.seed}')
+  FORMAT AVRO USING SCHEMA '${reader-schema}' (CONFLUENT WIRE FORMAT = false)
 
 > SELECT f2
   FROM avro_data_no_registry
@@ -198,7 +205,7 @@ $ kafka-ingest format=bytes topic=avro-corrupted-values timestamp=1
 garbage
 
 > CREATE SOURCE avro_corrupted_values
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-corrupted-values-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-corrupted-values-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${reader-schema}'
 
 ! SELECT f2 FROM avro_corrupted_values
@@ -211,8 +218,8 @@ $ kafka-ingest format=bytes topic=avro-corrupted-values2 timestamp=1
 garbage
 
 > CREATE SOURCE avro_corrupted_values2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-corrupted-values2-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${reader-schema}' WITH (CONFLUENT WIRE FORMAT = false)
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-corrupted-values2-${testdrive.seed}')
+  FORMAT AVRO USING SCHEMA '${reader-schema}' (CONFLUENT WIRE FORMAT = false)
 
 ! SELECT f2 FROM avro_corrupted_values2
 contains:Decode error: Decoding error: Expected non-negative integer, got -49

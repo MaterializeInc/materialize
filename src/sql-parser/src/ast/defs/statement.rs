@@ -18,7 +18,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
+// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
+#![allow(clippy::extra_unused_lifetimes)]
+
 use std::fmt;
+
+use enum_kinds::EnumKind;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
@@ -30,7 +36,8 @@ use crate::ast::{
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
+#[enum_kind(StatementKind)]
 pub enum Statement<T: AstInfo> {
     Select(SelectStatement<T>),
     Insert(InsertStatement<T>),
@@ -59,6 +66,7 @@ pub enum Statement<T: AstInfo> {
     AlterSystemSet(AlterSystemSetStatement),
     AlterSystemReset(AlterSystemResetStatement),
     AlterSystemResetAll(AlterSystemResetAllStatement),
+    AlterConnection(AlterConnectionStatement),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement),
     DropSchema(DropSchemaStatement),
@@ -68,19 +76,7 @@ pub enum Statement<T: AstInfo> {
     DropClusterReplicas(DropClusterReplicasStatement),
     SetVariable(SetVariableStatement),
     ResetVariable(ResetVariableStatement),
-    ShowDatabases(ShowDatabasesStatement<T>),
-    ShowSchemas(ShowSchemasStatement<T>),
-    ShowObjects(ShowObjectsStatement<T>),
-    ShowIndexes(ShowIndexesStatement<T>),
-    ShowColumns(ShowColumnsStatement<T>),
-    ShowCreateView(ShowCreateViewStatement<T>),
-    ShowCreateMaterializedView(ShowCreateMaterializedViewStatement<T>),
-    ShowCreateSource(ShowCreateSourceStatement<T>),
-    ShowCreateTable(ShowCreateTableStatement<T>),
-    ShowCreateSink(ShowCreateSinkStatement<T>),
-    ShowCreateIndex(ShowCreateIndexStatement<T>),
-    ShowCreateConnection(ShowCreateConnectionStatement<T>),
-    ShowVariable(ShowVariableStatement),
+    Show(ShowStatement<T>),
     StartTransaction(StartTransactionStatement),
     SetTransaction(SetTransactionStatement),
     Commit(CommitStatement),
@@ -126,6 +122,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterSystemSet(stmt) => f.write_node(stmt),
             Statement::AlterSystemReset(stmt) => f.write_node(stmt),
             Statement::AlterSystemResetAll(stmt) => f.write_node(stmt),
+            Statement::AlterConnection(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
@@ -135,19 +132,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::DropClusterReplicas(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
             Statement::ResetVariable(stmt) => f.write_node(stmt),
-            Statement::ShowDatabases(stmt) => f.write_node(stmt),
-            Statement::ShowSchemas(stmt) => f.write_node(stmt),
-            Statement::ShowObjects(stmt) => f.write_node(stmt),
-            Statement::ShowIndexes(stmt) => f.write_node(stmt),
-            Statement::ShowColumns(stmt) => f.write_node(stmt),
-            Statement::ShowCreateView(stmt) => f.write_node(stmt),
-            Statement::ShowCreateMaterializedView(stmt) => f.write_node(stmt),
-            Statement::ShowCreateSource(stmt) => f.write_node(stmt),
-            Statement::ShowCreateTable(stmt) => f.write_node(stmt),
-            Statement::ShowCreateSink(stmt) => f.write_node(stmt),
-            Statement::ShowCreateIndex(stmt) => f.write_node(stmt),
-            Statement::ShowCreateConnection(stmt) => f.write_node(stmt),
-            Statement::ShowVariable(stmt) => f.write_node(stmt),
+            Statement::Show(stmt) => f.write_node(stmt),
             Statement::StartTransaction(stmt) => f.write_node(stmt),
             Statement::SetTransaction(stmt) => f.write_node(stmt),
             Statement::Commit(stmt) => f.write_node(stmt),
@@ -502,7 +487,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         f.write_str("FROM ");
         f.write_node(&self.connection);
         if !self.legacy_with_options.is_empty() {
-            f.write_str(" WITH (");
+            f.write_str(" LEGACYWITH (");
             f.write_node(&display::comma_separated(&self.legacy_with_options));
             f.write_str(")");
         }
@@ -529,18 +514,48 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
 }
 impl_display_t!(CreateSourceStatement);
 
+/// An option in a `CREATE SINK` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateSinkOptionName {
+    Snapshot,
+}
+
+impl AstDisplay for CreateSinkOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CreateSinkOptionName::Snapshot => {
+                f.write_str("SNAPSHOT");
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSinkOption<T: AstInfo> {
+    pub name: CreateSinkOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateSinkOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
+    pub if_not_exists: bool,
     pub from: T::ObjectName,
     pub connection: CreateSinkConnection<T>,
-    pub with_options: Vec<WithOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope<T>>,
-    pub with_snapshot: bool,
-    pub as_of: Option<AsOf<T>>,
-    pub if_not_exists: bool,
+    pub with_options: Vec<CreateSinkOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
@@ -554,11 +569,6 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         f.write_node(&self.from);
         f.write_str(" INTO ");
         f.write_node(&self.connection);
-        if !self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
-        }
         if let Some(format) = &self.format {
             f.write_str(" FORMAT ");
             f.write_node(format);
@@ -567,15 +577,11 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
             f.write_str(" ENVELOPE ");
             f.write_node(envelope);
         }
-        if self.with_snapshot {
-            f.write_str(" WITH SNAPSHOT");
-        } else {
-            f.write_str(" WITHOUT SNAPSHOT");
-        }
 
-        if let Some(as_of) = &self.as_of {
-            f.write_str(" ");
-            f.write_node(as_of);
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
         }
     }
 }
@@ -988,8 +994,8 @@ impl_display_t!(CreateClusterStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClusterOption<T: AstInfo> {
-    /// The `INTROSPECTION GRANULARITY [[=] <interval>] option.
-    IntrospectionGranularity(WithOptionValue<T>),
+    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
+    IntrospectionInterval(WithOptionValue<T>),
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
     IntrospectionDebugging(WithOptionValue<T>),
     /// The `REPLICAS` option.
@@ -999,9 +1005,9 @@ pub enum ClusterOption<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterOption::IntrospectionGranularity(granularity) => {
-                f.write_str("INTROSPECTION GRANULARITY ");
-                f.write_node(granularity);
+            ClusterOption::IntrospectionInterval(interval) => {
+                f.write_str("INTROSPECTION INTERVAL ");
+                f.write_node(interval);
             }
             ClusterOption::IntrospectionDebugging(debugging) => {
                 f.write_str("INTROSPECTION DEBUGGING ");
@@ -1065,6 +1071,10 @@ pub enum ReplicaOptionName {
     Size,
     /// The `AVAILABILITY ZONE [[=] <size>]` option.
     AvailabilityZone,
+    /// The `WORKERS [[=] <workers>]` option
+    Workers,
+    /// The `COMPUTE [<host> [, <host> ...]]` option.
+    Compute,
 }
 
 impl AstDisplay for ReplicaOptionName {
@@ -1073,6 +1083,8 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::Remote => f.write_str("REMOTE"),
             ReplicaOptionName::Size => f.write_str("SIZE"),
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
+            ReplicaOptionName::Workers => f.write_str("WORKERS"),
+            ReplicaOptionName::Compute => f.write_str("COMPUTE"),
         }
     }
 }
@@ -1237,6 +1249,26 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
 }
 
 impl_display_t!(AlterSecretStatement);
+
+/// `ALTER CONNECTION ... ROTATE KEYS`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterConnectionStatement {
+    pub name: UnresolvedObjectName,
+    pub if_exists: bool,
+}
+
+impl AstDisplay for AlterConnectionStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER CONNECTION ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" ROTATE KEYS");
+    }
+}
+
+impl_display!(AlterConnectionStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
@@ -1504,20 +1536,12 @@ impl_display_t!(ShowDatabasesStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowSchemasStatement<T: AstInfo> {
     pub from: Option<T::DatabaseName>,
-    pub extended: bool,
-    pub full: bool,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for ShowSchemasStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW");
-        if self.extended {
-            f.write_str(" EXTENDED");
-        }
-        if self.full {
-            f.write_str(" FULL");
-        }
         f.write_str(" SCHEMAS");
         if let Some(from) = &self.from {
             f.write_str(" FROM ");
@@ -1544,20 +1568,12 @@ pub struct ShowObjectsStatement<T: AstInfo> {
     pub object_type: ObjectType,
     pub from: Option<T::SchemaName>,
     pub in_cluster: Option<T::ClusterName>,
-    pub extended: bool,
-    pub full: bool,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW");
-        if self.extended {
-            f.write_str(" EXTENDED");
-        }
-        if self.full {
-            f.write_str(" FULL");
-        }
         f.write_str(" ");
         f.write_str(match &self.object_type {
             ObjectType::Table => "TABLES",
@@ -1593,22 +1609,23 @@ impl_display_t!(ShowObjectsStatement);
 /// `SHOW INDEX|INDEXES|KEYS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowIndexesStatement<T: AstInfo> {
-    pub table_name: Option<T::ObjectName>,
+    pub on_object: Option<T::ObjectName>,
+    pub from_schema: Option<T::SchemaName>,
     pub in_cluster: Option<T::ClusterName>,
-    pub extended: bool,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for ShowIndexesStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW ");
-        if self.extended {
-            f.write_str("EXTENDED ");
-        }
         f.write_str("INDEXES");
-        if let Some(table_name) = &self.table_name {
+        if let Some(on_object) = &self.on_object {
             f.write_str(" FROM ");
-            f.write_node(table_name);
+            f.write_node(on_object);
+        }
+        if let Some(from_schema) = &self.from_schema {
+            f.write_str(" FROM SCHEMA ");
+            f.write_node(from_schema);
         }
         if let Some(in_cluster) = &self.in_cluster {
             f.write_str(" IN CLUSTER ");
@@ -1627,8 +1644,6 @@ impl_display_t!(ShowIndexesStatement);
 /// Note: this is a MySQL-specific statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowColumnsStatement<T: AstInfo> {
-    pub extended: bool,
-    pub full: bool,
     pub table_name: T::ObjectName,
     pub filter: Option<ShowStatementFilter<T>>,
 }
@@ -1636,12 +1651,6 @@ pub struct ShowColumnsStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ShowColumnsStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW ");
-        if self.extended {
-            f.write_str("EXTENDED ");
-        }
-        if self.full {
-            f.write_str("FULL ");
-        }
         f.write_str("COLUMNS FROM ");
         f.write_node(&self.table_name);
         if let Some(filter) = &self.filter {
@@ -2062,6 +2071,7 @@ pub enum WithOptionValue<T: AstInfo> {
     // Temporary variant until we have support for connections, which will use
     // explicit fields for each secret reference.
     Secret(T::ObjectName),
+    Object(T::ObjectName),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -2074,6 +2084,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str("SECRET ");
                 f.write_node(name)
             }
+            WithOptionValue::Object(obj) => f.write_node(obj),
         }
     }
 }
@@ -2550,3 +2561,41 @@ impl<T: AstInfo> AstDisplay for AsOf<T> {
     }
 }
 impl_display_t!(AsOf);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ShowStatement<T: AstInfo> {
+    ShowDatabases(ShowDatabasesStatement<T>),
+    ShowSchemas(ShowSchemasStatement<T>),
+    ShowObjects(ShowObjectsStatement<T>),
+    ShowIndexes(ShowIndexesStatement<T>),
+    ShowColumns(ShowColumnsStatement<T>),
+    ShowCreateView(ShowCreateViewStatement<T>),
+    ShowCreateMaterializedView(ShowCreateMaterializedViewStatement<T>),
+    ShowCreateSource(ShowCreateSourceStatement<T>),
+    ShowCreateTable(ShowCreateTableStatement<T>),
+    ShowCreateSink(ShowCreateSinkStatement<T>),
+    ShowCreateIndex(ShowCreateIndexStatement<T>),
+    ShowCreateConnection(ShowCreateConnectionStatement<T>),
+    ShowVariable(ShowVariableStatement),
+}
+
+impl<T: AstInfo> AstDisplay for ShowStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ShowStatement::ShowDatabases(stmt) => f.write_node(stmt),
+            ShowStatement::ShowSchemas(stmt) => f.write_node(stmt),
+            ShowStatement::ShowObjects(stmt) => f.write_node(stmt),
+            ShowStatement::ShowIndexes(stmt) => f.write_node(stmt),
+            ShowStatement::ShowColumns(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateView(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateMaterializedView(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateSource(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateTable(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateSink(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
+            ShowStatement::ShowVariable(stmt) => f.write_node(stmt),
+        }
+    }
+}
+impl_display_t!(ShowStatement);

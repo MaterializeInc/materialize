@@ -16,10 +16,12 @@ use mz_repr::{Diff, GlobalId, Row};
 
 use super::metrics::SourceBaseMetrics;
 use super::{SourceMessage, SourceMessageType};
+use crate::source::commit::LogCommitter;
 use crate::source::{NextMessage, SourceReader, SourceReaderError};
 use crate::types::connections::ConnectionContext;
-use crate::types::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
-use crate::types::sources::{Generator, LoadGenerator};
+use crate::types::sources::{
+    encoding::SourceDataEncoding, Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
+};
 
 mod auction;
 mod counter;
@@ -40,6 +42,14 @@ pub struct LoadGeneratorSourceReader {
     tick: Duration,
     offset: MzOffset,
     pending: Vec<Row>,
+    // Load-generator sources support single-threaded ingestion only, so only
+    // one of the `LoadGeneratorSourceReader`s will actually produce data.
+    active_read_worker: bool,
+    // The non-active reader (see above `active_read_worker`) has to report back
+    // that is is not consuming from the one [`PartitionId:None`] partition.
+    // Before it can return a [`NextMessage::Finished`]. This is keeping track
+    // of that.
+    reported_unconsumed_partitions: bool,
 }
 
 impl SourceReader for LoadGeneratorSourceReader {
@@ -47,25 +57,23 @@ impl SourceReader for LoadGeneratorSourceReader {
     type Value = Row;
     // LoadGenerator can produce deletes that cause retractions
     type Diff = Diff;
+    type OffsetCommitter = LogCommitter;
+    type Connection = LoadGeneratorSourceConnection;
 
     fn new(
         _source_name: String,
-        _source_id: GlobalId,
-        _worker_id: usize,
-        _worker_count: usize,
+        source_id: GlobalId,
+        worker_id: usize,
+        worker_count: usize,
         _consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        connection: Self::Connection,
         start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         _metrics: SourceBaseMetrics,
         _connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
-        let connection = match connection {
-            SourceConnection::LoadGenerator(lg) => lg,
-            _ => {
-                panic!("LoadGenerator is the only legitimate SourceConnection for LoadGeneratorSourceReader")
-            }
-        };
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
+        let active_read_worker =
+            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
         let offset = start_offsets
             .into_iter()
@@ -86,18 +94,37 @@ impl SourceReader for LoadGeneratorSourceReader {
             rows.next();
         }
 
-        Ok(Self {
-            rows: Box::new(rows),
-            last: Instant::now(),
-            tick: Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000)),
-            offset,
-            pending: Vec::new(),
-        })
+        Ok((
+            Self {
+                rows: Box::new(rows),
+                last: Instant::now(),
+                tick: Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000)),
+                offset,
+                pending: Vec::new(),
+                active_read_worker,
+                reported_unconsumed_partitions: false,
+            },
+            LogCommitter {
+                source_id,
+                worker_id,
+                worker_count,
+            },
+        ))
     }
 
     fn get_next_message(
         &mut self,
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
+        if !self.active_read_worker {
+            if !self.reported_unconsumed_partitions {
+                self.reported_unconsumed_partitions = true;
+                return Ok(NextMessage::Ready(
+                    SourceMessageType::DropPartitionCapabilities(vec![PartitionId::None]),
+                ));
+            }
+            return Ok(NextMessage::Finished);
+        }
+
         if self.pending.is_empty() {
             // The batch is empty, but we need to wait for the next tick to refill.
             if self.last.elapsed() < self.tick {

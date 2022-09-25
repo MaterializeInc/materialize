@@ -1,6 +1,7 @@
 ---
 title: "CREATE SOURCE: PostgreSQL"
 description: "Connecting Materialize to a PostgreSQL database"
+pagerank: 10
 menu:
   main:
     parent: 'create-source'
@@ -30,11 +31,9 @@ _src_name_  | The name for the source.
 
 ### `WITH` options
 
-The following option is valid within the `WITH` clause.
-
-Field | Value type | Description
-------|------------|------------
-`timestamp_frequency_ms`  |  `int` |  Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently the source advances its timestamp. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
+Field                                | Value     | Description
+-------------------------------------|-----------|-------------------------------------
+`SIZE`                               | `text`    | Default: `3xsmall`. The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Features
 
@@ -175,6 +174,26 @@ FROM POSTGRES
   CONNECTION pg_connection
   PUBLICATION 'mz_source';
 ```
+
+### Sizing a source
+
+To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
+
+```sql
+CREATE SOURCE mz_source
+FROM POSTGRES
+  CONNECTION pg_connection
+  PUBLICATION 'mz_source'
+  WITH (SIZE = 'xsmall');
+```
+
+To resize the source after creation:
+
+```sql
+ALTER SOURCE mz_source SET (SIZE = 'large');
+```
+
+By default, sources are provisioned using the smallest size (`3xsmall`). For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
 
 ## Related pages
 

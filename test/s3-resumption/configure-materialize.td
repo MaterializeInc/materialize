@@ -18,7 +18,7 @@
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 's3/*.text'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -29,7 +29,7 @@
   DISCOVER OBJECTS MATCHING 's3/*.gzip'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
   COMPRESSION GZIP
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )

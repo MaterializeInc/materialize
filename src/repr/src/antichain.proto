@@ -9,11 +9,8 @@
 
 syntax = "proto3";
 
-import "expr/src/scalar.proto";
+package mz_repr.antichain;
 
-package mz_storage.types.transforms;
-
-message ProtoLinearOperator {
-    repeated mz_expr.scalar.ProtoMirScalarExpr predicates = 1;
-    repeated uint64 projection = 2;
+message ProtoU64Antichain {
+    repeated uint64 elements = 1;
 }

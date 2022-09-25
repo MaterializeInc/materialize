@@ -22,6 +22,7 @@ use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, Indeterminate};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
+use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
@@ -37,7 +38,8 @@ use crate::internal::state::{HollowBatch, Upper};
 use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct WriterId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for WriterId {
@@ -57,6 +59,20 @@ impl std::str::FromStr for WriterId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         parse_id('w', "WriterId", s).map(WriterId)
+    }
+}
+
+impl From<WriterId> for String {
+    fn from(writer_id: WriterId) -> Self {
+        writer_id.to_string()
+    }
+}
+
+impl TryFrom<String> for WriterId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -93,8 +109,8 @@ where
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
-    pub(crate) gc: GarbageCollector,
-    pub(crate) compact: Option<Compactor>,
+    pub(crate) gc: GarbageCollector<K, V, T, D>,
+    pub(crate) compact: Option<Compactor<T, D>>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) writer_id: WriterId,
@@ -432,13 +448,13 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        let (mut keys, mut num_updates) = (Vec::new(), 0);
+        let (mut parts, mut num_updates) = (Vec::new(), 0);
         for batch in batches.iter() {
-            if let Err(err) = validate_truncate_batch(&batch.desc, &desc) {
+            if let Err(err) = validate_truncate_batch(&batch.batch.desc, &desc) {
                 return Ok(Err(err));
             }
-            keys.extend_from_slice(&batch.blob_keys);
-            num_updates += batch.num_updates;
+            parts.extend_from_slice(&batch.batch.parts);
+            num_updates += batch.batch.len;
         }
 
         let heartbeat_timestamp = (self.cfg.now)();
@@ -447,8 +463,9 @@ where
             .compare_and_append(
                 &HollowBatch {
                     desc: desc.clone(),
-                    keys,
+                    parts,
                     len: num_updates,
+                    runs: vec![],
                 },
                 &self.writer_id,
                 heartbeat_timestamp,
@@ -473,7 +490,7 @@ where
             Err(err) => return Ok(Err(err)),
         };
 
-        maintenance.perform(&self.machine, &self.gc, self.compact.as_ref());
+        maintenance.start_performing(&self.machine, &self.gc, self.compact.as_ref());
 
         Ok(Ok(Ok(())))
     }
@@ -553,16 +570,16 @@ where
     /// "frequent" compared to PersistConfig::writer_lease_duration
     pub async fn maybe_heartbeat_writer(&mut self) {
         let min_elapsed = self.cfg.writer_lease_duration / 4;
+        let heartbeat_ts = (self.cfg.now)();
         let elapsed_since_last_heartbeat =
-            Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
+            Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            let heartbeat_timestamp = (self.cfg.now)();
             let (_, maintenance) = self
                 .machine
-                .heartbeat_writer(&self.writer_id, heartbeat_timestamp)
+                .heartbeat_writer(&self.writer_id, heartbeat_ts)
                 .await;
-            self.last_heartbeat = heartbeat_timestamp;
-            maintenance.perform(&self.machine, &self.gc);
+            self.last_heartbeat = heartbeat_ts;
+            maintenance.start_performing(&self.machine, &self.gc);
         }
     }
 
@@ -697,6 +714,8 @@ where
 #[cfg(test)]
 mod tests {
     use differential_dataflow::consolidation::consolidate_updates;
+    use serde_json::json;
+    use std::str::FromStr;
 
     use crate::tests::{all_ok, new_test_client};
     use crate::ShardId;
@@ -779,5 +798,37 @@ mod tests {
         let mut actual = read.expect_snapshot_and_fetch(3).await;
         consolidate_updates(&mut actual);
         assert_eq!(actual, all_ok(&expected, 3));
+    }
+
+    #[test]
+    fn writer_id_human_readable_serde() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct Container {
+            writer_id: WriterId,
+        }
+
+        // roundtrip through json
+        let id = WriterId::from_str("w00000000-1234-5678-0000-000000000000").expect("valid id");
+        assert_eq!(
+            id,
+            serde_json::from_value(serde_json::to_value(id.clone()).expect("serializable"))
+                .expect("deserializable")
+        );
+
+        // deserialize a serialized string directly
+        assert_eq!(
+            id,
+            serde_json::from_str("\"w00000000-1234-5678-0000-000000000000\"")
+                .expect("deserializable")
+        );
+
+        // roundtrip id through a container type
+        let json = json!({ "writer_id": id });
+        assert_eq!(
+            "{\"writer_id\":\"w00000000-1234-5678-0000-000000000000\"}",
+            &json.to_string()
+        );
+        let container: Container = serde_json::from_value(json).expect("deserializable");
+        assert_eq!(container.writer_id, id);
     }
 }

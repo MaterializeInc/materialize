@@ -31,3 +31,4 @@ indexes.
 - [`SHOW CREATE VIEW`](/sql/show-create-view)
 - [`SHOW VIEWS`](/sql/show-views)
 - [`SHOW SOURCES`](/sql/show-sources)
+- [`SHOW SINKS`](/sql/show-sinks)

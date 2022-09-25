@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 
@@ -81,6 +82,9 @@ impl TypeCategory {
             | ScalarType::Int16
             | ScalarType::Int32
             | ScalarType::Int64
+            | ScalarType::UInt16
+            | ScalarType::UInt32
+            | ScalarType::UInt64
             | ScalarType::Oid
             | ScalarType::RegClass
             | ScalarType::RegProc
@@ -100,6 +104,7 @@ impl TypeCategory {
                 }
             }
             ScalarType::Map { .. } => Self::Pseudo,
+            ScalarType::MzTimestamp => Self::Numeric,
         }
     }
 
@@ -141,6 +146,9 @@ impl TypeCategory {
             | CatalogType::Int16
             | CatalogType::Int32
             | CatalogType::Int64
+            | CatalogType::UInt16
+            | CatalogType::UInt32
+            | CatalogType::UInt64
             | CatalogType::Oid
             | CatalogType::RegClass
             | CatalogType::RegProc
@@ -154,6 +162,7 @@ impl TypeCategory {
             | CatalogType::VarChar { .. } => Self::String,
             CatalogType::Record { .. } => TypeCategory::Composite,
             CatalogType::Map { .. } | CatalogType::Pseudo => Self::Pseudo,
+            CatalogType::MzTimestamp => Self::String,
         }
     }
 
@@ -814,6 +823,9 @@ impl From<ScalarBaseType> for ParamType {
             Int16 => ScalarType::Int16,
             Int32 => ScalarType::Int32,
             Int64 => ScalarType::Int64,
+            UInt16 => ScalarType::UInt16,
+            UInt32 => ScalarType::UInt32,
+            UInt64 => ScalarType::UInt64,
             Float32 => ScalarType::Float32,
             Float64 => ScalarType::Float64,
             Numeric => ScalarType::Numeric { max_scale: None },
@@ -834,6 +846,7 @@ impl From<ScalarBaseType> for ParamType {
             RegProc => ScalarType::RegProc,
             RegType => ScalarType::RegType,
             Int2Vector => ScalarType::Int2Vector,
+            MzTimestamp => ScalarType::MzTimestamp,
         };
         ParamType::Plain(s)
     }
@@ -1620,7 +1633,7 @@ macro_rules! impl_def {
     // Return type can be automatically determined as a function of the
     // parameters.
     ($params:expr, $op:expr, $oid:expr) => {{
-        let pcx = crate::plan::PlanContext::new(chrono::MIN_DATETIME, false);
+        let pcx = crate::plan::PlanContext::new(DateTime::<Utc>::MIN_UTC, false);
         let scx = StatementContext::new(None, &crate::catalog::DummyCatalog);
         // This lifetime is compatible with more functions.
         let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(&pcx));
@@ -1770,6 +1783,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, 2100;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, 2101;
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, 2102;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, oid::FUNC_AVG_UINT64_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, oid::FUNC_AVG_UINT32_OID;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Numeric, oid::FUNC_AVG_UINT16_OID;
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Float64, 2104;
             params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Float64, 2105;
             params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Interval, 2106;
@@ -2018,6 +2034,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16, Int16) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => Int16, 940;
             params!(Int32, Int32) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => Int32, 941;
             params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => Int64, 947;
+            params!(UInt16, UInt16) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => UInt16, oid::FUNC_MOD_UINT16_OID;
+            params!(UInt32, UInt32) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => UInt32, oid::FUNC_MOD_UINT32_OID;
+            params!(UInt64, UInt64) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => UInt64, oid::FUNC_MOD_UINT64_OID;
         },
         "now" => Scalar {
             params!() => UnmaterializableFunc::CurrentTimestamp, 1299;
@@ -2250,13 +2269,19 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, 2156;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, 2155;
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, 2154;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, oid::FUNC_STDDEV_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, oid::FUNC_STDDEV_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")) => Numeric, oid::FUNC_STDDEV_UINT64_OID;
         },
         "stddev_pop" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Float64, 2727;
             params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Float64, 2728;
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, 2726;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, 2725;
-            params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric , 2724;
+            params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, 2724;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, oid::FUNC_STDDEV_POP_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, oid::FUNC_STDDEV_POP_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")) => Numeric, oid::FUNC_STDDEV_POP_UINT64_OID;
         },
         "stddev_samp" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Float64, 2715;
@@ -2264,6 +2289,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, 2714;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, 2713;
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, 2712;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, oid::FUNC_STDDEV_SAMP_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, oid::FUNC_STDDEV_SAMP_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")) => Numeric, oid::FUNC_STDDEV_SAMP_UINT64_OID;
         },
         "substr" => Scalar {
             params!(String, Int64) => VariadicFunc::Substr, 883;
@@ -2348,6 +2376,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, 2150;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, 2149;
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, 2148;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, oid::FUNC_VARIANCE_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, oid::FUNC_VARIANCE_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Numeric, oid::FUNC_VARIANCE_UINT64_OID;
         },
         "var_pop" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Float64, 2721;
@@ -2355,6 +2386,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, 2720;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, 2719;
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, 2718;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, oid::FUNC_VAR_POP_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, oid::FUNC_VAR_POP_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")) => Numeric, oid::FUNC_VAR_POP_UINT64_OID;
         },
         "var_samp" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Float64, 2644;
@@ -2362,6 +2396,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, 2643;
             params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, 2642;
             params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, 2641;
+            params!(UInt16) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, oid::FUNC_VAR_SAMP_UINT16_OID;
+            params!(UInt32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, oid::FUNC_VAR_SAMP_UINT32_OID;
+            params!(UInt64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")) => Numeric, oid::FUNC_VAR_SAMP_UINT64_OID;
         },
         "version" => Scalar {
             params!() => UnmaterializableFunc::Version, 89;
@@ -2402,6 +2439,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => AggregateFunc::MaxInt16, 2117;
             params!(Int32) => AggregateFunc::MaxInt32, 2116;
             params!(Int64) => AggregateFunc::MaxInt64, 2115;
+            params!(UInt16) => AggregateFunc::MaxUInt16, oid::FUNC_MAX_UINT16_OID;
+            params!(UInt32) => AggregateFunc::MaxUInt32, oid::FUNC_MAX_UINT32_OID;
+            params!(UInt64) => AggregateFunc::MaxUInt64, oid::FUNC_MAX_UINT64_OID;
+            params!(MzTimestamp) => AggregateFunc::MaxMzTimestamp, oid::FUNC_MAX_MZTIMESTAMP_OID;
             params!(Float32) => AggregateFunc::MaxFloat32, 2119;
             params!(Float64) => AggregateFunc::MaxFloat64, 2120;
             params!(String) => AggregateFunc::MaxString, 2129;
@@ -2417,6 +2458,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => AggregateFunc::MinInt32, 2133;
             params!(Int32) => AggregateFunc::MinInt32, 2132;
             params!(Int64) => AggregateFunc::MinInt64, 2131;
+            params!(UInt16) => AggregateFunc::MinUInt16, oid::FUNC_MIN_UINT16_OID;
+            params!(UInt32) => AggregateFunc::MinUInt32, oid::FUNC_MIN_UINT32_OID;
+            params!(UInt64) => AggregateFunc::MinUInt64, oid::FUNC_MIN_UINT64_OID;
+            params!(MzTimestamp) => AggregateFunc::MinMzTimestamp, oid::FUNC_MIN_MZTIMESTAMP_OID;
             params!(Float32) => AggregateFunc::MinFloat32, 2135;
             params!(Float64) => AggregateFunc::MinFloat64, 2136;
             params!(String) => AggregateFunc::MinString, 2145;
@@ -2489,6 +2534,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Int16) => AggregateFunc::SumInt16, 2109;
             params!(Int32) => AggregateFunc::SumInt32, 2108;
             params!(Int64) => AggregateFunc::SumInt64, 2107;
+            params!(UInt16) => AggregateFunc::SumUInt16, oid::FUNC_SUM_UINT16_OID;
+            params!(UInt32) => AggregateFunc::SumUInt32, oid::FUNC_SUM_UINT32_OID;
+            params!(UInt64) => AggregateFunc::SumUInt64, oid::FUNC_SUM_UINT64_OID;
             params!(Float32) => AggregateFunc::SumFloat32, 2110;
             params!(Float64) => AggregateFunc::SumFloat64, 2111;
             params!(Numeric) => AggregateFunc::SumNumeric, 2114;
@@ -2843,11 +2891,14 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         "map_length" => Scalar {
             params![MapAny] => UnaryFunc::MapLength(func::MapLength) => Int32, oid::FUNC_MAP_LENGTH_OID;
         },
-        "mz_cluster_id" => Scalar {
-            params!() => UnmaterializableFunc::MzClusterId, oid::FUNC_MZ_CLUSTER_ID_OID;
+        "mz_environment_id" => Scalar {
+            params!() => UnmaterializableFunc::MzEnvironmentId, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
         },
         "mz_logical_timestamp" => Scalar {
-            params!() => UnmaterializableFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
+            params!() => Operation::nullary(|_ecx| sql_bail!("mz_logical_timestamp() has been renamed to mz_now()")) => MzTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
+        },
+        "mz_now" => Scalar {
+            params!() => UnmaterializableFunc::MzNow, oid::FUNC_MZ_NOW_OID;
         },
         "mz_uptime" => Scalar {
             params!() => UnmaterializableFunc::MzUptime, oid::FUNC_MZ_UPTIME_OID;
@@ -2948,15 +2999,16 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }), oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
-        },
-        "mz_classify_object_id" => Scalar {
-            params!(String) => sql_impl_func(
-                "CASE
-                        WHEN $1 LIKE 'u%' THEN 'user'
-                        WHEN $1 LIKE 's%' THEN 'system'
-                        WHEN $1 like 't%' THEN 'temp'
-                    END"
-            ) => String, oid::FUNC_MZ_CLASSIFY_OBJECT_ID_OID;
+            params!(UInt16) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }), oid::FUNC_MZ_AVG_PROMOTION_U16_OID;
+            params!(UInt32) => Operation::unary(|ecx, e| {
+                typeconv::plan_cast(
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
+                )
+            }), oid::FUNC_MZ_AVG_PROMOTION_U32_OID;
         },
         "mz_error_if_null" => Scalar {
             // If the first argument is NULL, returns an EvalError::Internal whose error
@@ -3052,6 +3104,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => AddInt16, 550;
             params!(Int32, Int32) => AddInt32, 551;
             params!(Int64, Int64) => AddInt64, 684;
+            params!(UInt16, UInt16) => AddUInt16, oid::FUNC_ADD_UINT16;
+            params!(UInt32, UInt32) => AddUInt32, oid::FUNC_ADD_UINT32;
+            params!(UInt64, UInt64) => AddUInt64, oid::FUNC_ADD_UINT64;
             params!(Float32, Float32) => AddFloat32, 586;
             params!(Float64, Float64) => AddFloat64, 591;
             params!(Interval, Interval) => AddInterval, 1337;
@@ -3087,6 +3142,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Interval) => UnaryFunc::NegInterval(func::NegInterval), 1336;
             params!(Int32, Int32) => SubInt32, 555;
             params!(Int64, Int64) => SubInt64, 685;
+            params!(UInt16, UInt16) => SubUInt16, oid::FUNC_SUB_UINT16;
+            params!(UInt32, UInt32) => SubUInt32, oid::FUNC_SUB_UINT32;
+            params!(UInt64, UInt64) => SubUInt64, oid::FUNC_SUB_UINT64;
             params!(Float32, Float32) => SubFloat32, 587;
             params!(Float64, Float64) => SubFloat64, 592;
             params!(Numeric, Numeric) => SubNumeric, 17590;
@@ -3108,6 +3166,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => MulInt16, 526;
             params!(Int32, Int32) => MulInt32, 514;
             params!(Int64, Int64) => MulInt64, 686;
+            params!(UInt16, UInt16) => MulUInt16, oid::FUNC_MUL_UINT16;
+            params!(UInt32, UInt32) => MulUInt32, oid::FUNC_MUL_UINT32;
+            params!(UInt64, UInt64) => MulUInt64, oid::FUNC_MUL_UINT64;
             params!(Float32, Float32) => MulFloat32, 589;
             params!(Float64, Float64) => MulFloat64, 594;
             params!(Interval, Float64) => MulInterval, 1583;
@@ -3120,6 +3181,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => DivInt16, 527;
             params!(Int32, Int32) => DivInt32, 528;
             params!(Int64, Int64) => DivInt64, 687;
+            params!(UInt16, UInt16) => DivUInt16, oid::FUNC_DIV_UINT16;
+            params!(UInt32, UInt32) => DivUInt32, oid::FUNC_DIV_UINT32;
+            params!(UInt64, UInt64) => DivUInt64, oid::FUNC_DIV_UINT64;
             params!(Float32, Float32) => DivFloat32, 588;
             params!(Float64, Float64) => DivFloat64, 593;
             params!(Interval, Float64) => DivInterval, 1585;
@@ -3129,6 +3193,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => ModInt16, 529;
             params!(Int32, Int32) => ModInt32, 530;
             params!(Int64, Int64) => ModInt64, 439;
+            params!(UInt16, UInt16) => ModUInt16, oid::FUNC_MOD_UINT16;
+            params!(UInt32, UInt32) => ModUInt32, oid::FUNC_MOD_UINT32;
+            params!(UInt64, UInt64) => ModUInt64, oid::FUNC_MOD_UINT64;
             params!(Float32, Float32) => ModFloat32, oid::OP_MOD_F32_OID;
             params!(Float64, Float64) => ModFloat64, oid::OP_MOD_F64_OID;
             params!(Numeric, Numeric) => ModNumeric, 1762;
@@ -3137,26 +3204,41 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BitAndInt16, 1874;
             params!(Int32, Int32) => BitAndInt32, 1880;
             params!(Int64, Int64) => BitAndInt64, 1886;
+            params!(UInt16, UInt16) => BitAndUInt16, oid::FUNC_AND_UINT16;
+            params!(UInt32, UInt32) => BitAndUInt32, oid::FUNC_AND_UINT32;
+            params!(UInt64, UInt64) => BitAndUInt64, oid::FUNC_AND_UINT64;
         },
         "|" => Scalar {
             params!(Int16, Int16) => BitOrInt16, 1875;
             params!(Int32, Int32) => BitOrInt32, 1881;
             params!(Int64, Int64) => BitOrInt64, 1887;
+            params!(UInt16, UInt16) => BitOrUInt16, oid::FUNC_OR_UINT16;
+            params!(UInt32, UInt32) => BitOrUInt32, oid::FUNC_OR_UINT32;
+            params!(UInt64, UInt64) => BitOrUInt64, oid::FUNC_OR_UINT64;
         },
         "#" => Scalar {
             params!(Int16, Int16) => BitXorInt16, 1876;
             params!(Int32, Int32) => BitXorInt32, 1882;
             params!(Int64, Int64) => BitXorInt64, 1888;
+            params!(UInt16, UInt16) => BitXorUInt16, oid::FUNC_XOR_UINT16;
+            params!(UInt32, UInt32) => BitXorUInt32, oid::FUNC_XOR_UINT32;
+            params!(UInt64, UInt64) => BitXorUInt64, oid::FUNC_XOR_UINT64;
         },
         "<<" => Scalar {
             params!(Int16, Int32) => BitShiftLeftInt16, 1878;
             params!(Int32, Int32) => BitShiftLeftInt32, 1884;
             params!(Int64, Int32) => BitShiftLeftInt64, 1890;
+            params!(UInt16, UInt32) => BitShiftLeftUInt16, oid::FUNC_SHIFT_LEFT_UINT16;
+            params!(UInt32, UInt32) => BitShiftLeftUInt32, oid::FUNC_SHIFT_LEFT_UINT32;
+            params!(UInt64, UInt32) => BitShiftLeftUInt64, oid::FUNC_SHIFT_LEFT_UINT64;
         },
         ">>" => Scalar {
             params!(Int16, Int32) => BitShiftRightInt16, 1879;
             params!(Int32, Int32) => BitShiftRightInt32, 1885;
             params!(Int64, Int32) => BitShiftRightInt64, 1891;
+            params!(UInt16, UInt32) => BitShiftRightUInt16, oid::FUNC_SHIFT_RIGHT_UINT16;
+            params!(UInt32, UInt32) => BitShiftRightUInt32, oid::FUNC_SHIFT_RIGHT_UINT32;
+            params!(UInt64, UInt32) => BitShiftRightUInt64, oid::FUNC_SHIFT_RIGHT_UINT64;
         },
 
         // ILIKE
@@ -3215,6 +3297,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16) => UnaryFunc::BitNotInt16(func::BitNotInt16), 1877;
             params!(Int32) => UnaryFunc::BitNotInt32(func::BitNotInt32), 1883;
             params!(Int64) => UnaryFunc::BitNotInt64(func::BitNotInt64), 1889;
+            params!(UInt16) => UnaryFunc::BitNotUint16(func::BitNotUint16), oid::FUNC_BIT_NOT_UINT16_OID;
+            params!(UInt32) => UnaryFunc::BitNotUint32(func::BitNotUint32), oid::FUNC_BIT_NOT_UINT32_OID;
+            params!(UInt64) => UnaryFunc::BitNotUint64(func::BitNotUint64), oid::FUNC_BIT_NOT_UINT64_OID;
             params!(String, String) => IsRegexpMatch { case_insensitive: false }, 641;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
@@ -3360,6 +3445,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Lt, 94;
             params!(Int32, Int32) => BinaryFunc::Lt, 97;
             params!(Int64, Int64) => BinaryFunc::Lt, 412;
+            params!(UInt16, UInt16) => BinaryFunc::Lt, oid::FUNC_LT_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Lt, oid::FUNC_LT_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Lt, oid::FUNC_LT_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Lt, 622;
             params!(Float64, Float64) => BinaryFunc::Lt, 672;
             params!(Oid, Oid) => BinaryFunc::Lt, 609;
@@ -3376,6 +3464,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Lt, 3242;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lt => Bool, 1072;
             params!(RecordAny, RecordAny) => BinaryFunc::Lt => Bool, 2990;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lt =>Bool, oid::FUNC_MZTIMESTAMP_LT_MZTIMESTAMP_OID;
         },
         "<=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Lte, 1755;
@@ -3383,6 +3472,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Lte, 522;
             params!(Int32, Int32) => BinaryFunc::Lte, 523;
             params!(Int64, Int64) => BinaryFunc::Lte, 414;
+            params!(UInt16, UInt16) => BinaryFunc::Lte, oid::FUNC_LTE_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Lte, oid::FUNC_LTE_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Lte, oid::FUNC_LTE_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Lte, 624;
             params!(Float64, Float64) => BinaryFunc::Lte, 673;
             params!(Oid, Oid) => BinaryFunc::Lte, 611;
@@ -3399,6 +3491,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Lte, 3244;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lte => Bool, 1074;
             params!(RecordAny, RecordAny) => BinaryFunc::Lte => Bool, 2992;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lte =>Bool, oid::FUNC_MZTIMESTAMP_LTE_MZTIMESTAMP_OID;
         },
         ">" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gt, 1756;
@@ -3406,6 +3499,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Gt, 520;
             params!(Int32, Int32) => BinaryFunc::Gt, 521;
             params!(Int64, Int64) => BinaryFunc::Gt, 413;
+            params!(UInt16, UInt16) => BinaryFunc::Gt, oid::FUNC_GT_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Gt, oid::FUNC_GT_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Gt, oid::FUNC_GT_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Gt, 623;
             params!(Float64, Float64) => BinaryFunc::Gt, 674;
             params!(Oid, Oid) => BinaryFunc::Gt, 610;
@@ -3422,6 +3518,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Gt, 3243;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gt => Bool, 1073;
             params!(RecordAny, RecordAny) => BinaryFunc::Gt => Bool, 2991;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gt =>Bool, oid::FUNC_MZTIMESTAMP_GT_MZTIMESTAMP_OID;
         },
         ">=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gte, 1757;
@@ -3429,6 +3526,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Gte, 524;
             params!(Int32, Int32) => BinaryFunc::Gte, 525;
             params!(Int64, Int64) => BinaryFunc::Gte, 415;
+            params!(UInt16, UInt16) => BinaryFunc::Gte, oid::FUNC_GT_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Gte, oid::FUNC_GT_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Gte, oid::FUNC_GT_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Gte, 625;
             params!(Float64, Float64) => BinaryFunc::Gte, 675;
             params!(Oid, Oid) => BinaryFunc::Gte, 612;
@@ -3445,6 +3545,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Gte, 3245;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gte => Bool, 1075;
             params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gte =>Bool, oid::FUNC_MZTIMESTAMP_GTE_MZTIMESTAMP_OID;
         },
         // Warning! If you are writing functions here that do not simply use
         // `BinaryFunc::Eq`, you will break row equality (used e.g. DISTINCT
@@ -3455,6 +3556,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::Eq, 94;
             params!(Int32, Int32) => BinaryFunc::Eq, 96;
             params!(Int64, Int64) => BinaryFunc::Eq, 410;
+            params!(UInt16, UInt16) => BinaryFunc::Eq, oid::FUNC_EQ_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::Eq, oid::FUNC_EQ_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::Eq, oid::FUNC_EQ_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::Eq, 620;
             params!(Float64, Float64) => BinaryFunc::Eq, 670;
             params!(Oid, Oid) => BinaryFunc::Eq, 607;
@@ -3472,6 +3576,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ListAny, ListAny) => BinaryFunc::Eq => Bool, oid::FUNC_LIST_EQ_OID;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Eq => Bool, 1070;
             params!(RecordAny, RecordAny) => BinaryFunc::Eq => Bool, 2988;
+            params!(MzTimestamp, MzTimestamp) => BinaryFunc::Eq => Bool, oid::FUNC_MZTIMESTAMP_EQ_MZTIMESTAMP_OID;
         },
         "<>" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::NotEq, 1753;
@@ -3479,6 +3584,9 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Int16, Int16) => BinaryFunc::NotEq, 519;
             params!(Int32, Int32) => BinaryFunc::NotEq, 518;
             params!(Int64, Int64) => BinaryFunc::NotEq, 411;
+            params!(UInt16, UInt16) => BinaryFunc::NotEq, oid::FUNC_NOT_EQ_UINT16_OID;
+            params!(UInt32, UInt32) => BinaryFunc::NotEq, oid::FUNC_NOT_EQ_UINT32_OID;
+            params!(UInt64, UInt64) => BinaryFunc::NotEq, oid::FUNC_NOT_EQ_UINT64_OID;
             params!(Float32, Float32) => BinaryFunc::NotEq, 621;
             params!(Float64, Float64) => BinaryFunc::NotEq, 671;
             params!(Oid, Oid) => BinaryFunc::NotEq, 608;
@@ -3495,6 +3603,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
             params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq => Bool, 1071;
             params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;
+            params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq=>Bool, oid::FUNC_MZTIMESTAMP_NOT_EQ_MZTIMESTAMP_OID;
         }
     }
 });

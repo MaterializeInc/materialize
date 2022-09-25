@@ -30,27 +30,32 @@ $ set schema={
         ]
     }
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 $ kafka-create-topic topic=offset
 
-$ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count} timestamp=1
+$ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} repeat=${count} timestamp=1
 {"f1": "a${kafka-ingest.iteration}"} {"f2": "a${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count} timestamp=2
+$ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} repeat=${count} timestamp=2
 {"f1": "b${kafka-ingest.iteration}"} {"f2": "b${kafka-ingest.iteration}"}
 
-$ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count} timestamp=3
+$ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} repeat=${count} timestamp=3
 {"f1": "c${kafka-ingest.iteration}"} {"f2": "c${kafka-ingest.iteration}"}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE start_offset
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-offset-${testdrive.seed}'
-  WITH (start_offset = 100)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET = [100], TOPIC 'testdrive-offset-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE SOURCE kafka_time_offset
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-offset-${testdrive.seed}'
-  WITH (kafka_time_offset=2)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=2, TOPIC 'testdrive-offset-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > SELECT COUNT(*) FROM start_offset;

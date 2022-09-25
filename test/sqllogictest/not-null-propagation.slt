@@ -106,7 +106,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_null IS NULL, col_null IS NOT NULL FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -126,7 +127,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_null IS TRUE, col_null IS NOT TRUE FROM bool_table;
 ----
 Source materialize.public.bool_table (u2):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -146,7 +148,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_null IS UNKNOWN, col_null IS NOT UNKNOWN FROM bool_table;
 ----
 Source materialize.public.bool_table (u2):
-| Project (#0)
+| Map dummy
+| Project (#0, #2)
 
 Query:
 %0 =
@@ -170,7 +173,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null + col_not_null , col_not_null + 1 , col_not_null % col_not_null , col_not_null % 2 FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -284,7 +288,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null = 1 FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -304,7 +309,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null AND col_not_null , col_not_null OR col_not_null FROM bool_table;
 ----
 Source materialize.public.bool_table (u2):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -365,7 +371,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT ABS(col_not_null), LOG(col_not_null), ROUND(col_not_null), COS(col_not_null), col_not_null << col_not_null FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -389,7 +396,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 = Let l0 =
@@ -438,13 +446,13 @@ Query:
 %4 =
 | Union %0 %3
 | | types = (integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)
-| | keys = ()
+| | keys = (())
 | Map (bigint_to_double(#2) / bigint_to_double(if (#3 = 0) then {null} else {#3})), sqrtnumeric(((#4 - ((#5 * #5) / bigint_to_numeric(if (#6 = 0) then {null} else {#6}))) / bigint_to_numeric(if (0 = (#6 - 1)) then {null} else {(#6 - 1)})))
 | | types = (integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, double precision?, numeric?)
-| | keys = ()
+| | keys = (())
 | Project (#0, #1, #8, #9, #7)
 | | types = (integer?, integer?, double precision?, numeric?, integer list?)
-| | keys = ()
+| | keys = (())
 
 EOF
 
@@ -456,7 +464,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT COUNT(col_not_null), COUNT(DISTINCT col_not_null) FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 = Let l0 =
@@ -499,7 +508,7 @@ Query:
 %4 =
 | Union %0 %3
 | | types = (bigint, bigint)
-| | keys = ()
+| | keys = (())
 
 EOF
 
@@ -535,7 +544,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGEXP_MATCH('aaa', col_not_null) FROM str_table;
 ----
 Source materialize.public.str_table (u3):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -559,7 +569,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT SPLIT_PART(col_not_null, 'a', 100), SPLIT_PART('a', col_not_null, 100), SPLIT_PART('a', 'a', col_not_null::int) FROM str_table;
 ----
 Source materialize.public.str_table (u3):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -583,7 +594,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -603,7 +615,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =
@@ -711,7 +724,7 @@ Query:
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
-| ArrangeBy (#0)
+| ArrangeBy (#0, #1)
 | | types = (integer?, integer)
 | | keys = ()
 
@@ -737,7 +750,10 @@ Query:
 %13 =
 | Union %4 %12
 | | types = (integer?, boolean?)
-| | keys = ()
+| | keys = ((#0))
+| ArrangeBy (#0)
+| | types = (integer?, boolean?)
+| | keys = ((#0))
 
 %14 =
 | Get %5 (l2)
@@ -782,9 +798,6 @@ Query:
 | Union %14 %16
 | | types = (integer?, integer, boolean)
 | | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean)
-| | keys = ()
 
 %18 =
 | Get %9 (l3)
@@ -808,14 +821,14 @@ Query:
 %20 =
 | Union %9 %19
 | | types = (integer?, integer, boolean?)
-| | keys = ()
+| | keys = ((#0, #1))
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
-| | keys = ()
+| | keys = ((#0, #1))
 
 %21 =
 | Join %10 %13 %17 %20 (= #0 #2 #4 #7) (= #1 #5 #8)
-| | implementation = Differential %13 %10.(#0) %17.(#0, #1) %20.(#0, #1)
+| | implementation = Differential %17 %20.(#0, #1) %13.(#0) %10.(#0, #1)
 | | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?)
 | | keys = ()
 | Map null, null
@@ -929,7 +942,7 @@ Query:
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
-| ArrangeBy (#0)
+| ArrangeBy (#0, #1)
 | | types = (integer?, integer)
 | | keys = ()
 
@@ -955,7 +968,10 @@ Query:
 %15 =
 | Union %4 %14
 | | types = (integer?, boolean?)
-| | keys = ()
+| | keys = ((#0))
+| ArrangeBy (#0)
+| | types = (integer?, boolean?)
+| | keys = ((#0))
 
 %16 =
 | Get %5 (l2)
@@ -991,9 +1007,6 @@ Query:
 | Union %16 %18
 | | types = (integer?, integer, boolean)
 | | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean)
-| | keys = ()
 
 %20 =
 | Get %9 (l4)
@@ -1017,10 +1030,10 @@ Query:
 %22 =
 | Union %9 %21
 | | types = (integer?, integer, boolean?)
-| | keys = ()
+| | keys = ((#0, #1))
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
-| | keys = ()
+| | keys = ((#0, #1))
 
 %23 =
 | Get %11 (l5)
@@ -1044,14 +1057,14 @@ Query:
 %25 =
 | Union %11 %24
 | | types = (integer?, integer, boolean?)
-| | keys = ()
+| | keys = ((#0, #1))
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
-| | keys = ()
+| | keys = ((#0, #1))
 
 %26 =
 | Join %12 %15 %19 %22 %25 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
-| | implementation = Differential %15 %12.(#0) %19.(#0, #1) %22.(#0, #1) %25.(#0, #1)
+| | implementation = Differential %19 %22.(#0, #1) %25.(#0, #1) %15.(#0) %12.(#0, #1)
 | | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)
 | | keys = ()
 | Map null, null
@@ -1164,7 +1177,7 @@ Query:
 | Get materialize.public.int_table (u1)
 | | types = (integer?, integer)
 | | keys = ()
-| ArrangeBy (#0)
+| ArrangeBy (#0, #1)
 | | types = (integer?, integer)
 | | keys = ()
 
@@ -1190,7 +1203,10 @@ Query:
 %15 =
 | Union %4 %14
 | | types = (integer?, boolean?)
-| | keys = ()
+| | keys = ((#0))
+| ArrangeBy (#0)
+| | types = (integer?, boolean?)
+| | keys = ((#0))
 
 %16 =
 | Get %5 (l2)
@@ -1226,9 +1242,6 @@ Query:
 | Union %16 %18
 | | types = (integer?, integer, boolean)
 | | keys = ()
-| ArrangeBy (#0, #1)
-| | types = (integer?, integer, boolean)
-| | keys = ()
 
 %20 =
 | Get %9 (l4)
@@ -1252,10 +1265,10 @@ Query:
 %22 =
 | Union %9 %21
 | | types = (integer?, integer, boolean?)
-| | keys = ()
+| | keys = ((#0, #1))
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
-| | keys = ()
+| | keys = ((#0, #1))
 
 %23 =
 | Get %11 (l5)
@@ -1279,14 +1292,14 @@ Query:
 %25 =
 | Union %11 %24
 | | types = (integer?, integer, boolean?)
-| | keys = ()
+| | keys = ((#0, #1))
 | ArrangeBy (#0, #1)
 | | types = (integer?, integer, boolean?)
-| | keys = ()
+| | keys = ((#0, #1))
 
 %26 =
 | Join %12 %15 %19 %22 %25 (= #0 #2 #4 #7 #10) (= #1 #5 #8 #11)
-| | implementation = Differential %15 %12.(#0) %19.(#0, #1) %22.(#0, #1) %25.(#0, #1)
+| | implementation = Differential %19 %22.(#0, #1) %25.(#0, #1) %15.(#0) %12.(#0, #1)
 | | types = (integer?, integer, integer?, boolean?, integer?, integer, boolean, integer?, integer, boolean?, integer?, integer, boolean?)
 | | keys = ()
 | Map NOT(#6), null, null
@@ -1322,7 +1335,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT 1 = SOME(VALUES(col_not_null), (NULL::int)), 1 = ALL (VALUES(col_not_null), (NULL::int)) , 1 = ANY (VALUES(col_not_null), (NULL::int)) FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 = Let l0 =
@@ -1380,7 +1394,7 @@ Query:
 %6 = Let l4 =
 | Union %3 %5
 | | types = (integer, boolean?)
-| | keys = ()
+| | keys = ((#0))
 
 %7 = Let l5 =
 | Get %2 (l2)
@@ -1413,70 +1427,65 @@ Query:
 %10 = Let l6 =
 | Union %7 %9
 | | types = (integer, boolean?)
-| | keys = ()
+| | keys = ((#0))
 
 %11 =
-| Get %0 (l0)
+| Get %6 (l4)
+| | types = (integer, boolean?)
+| | keys = ((#0))
+| Project (#0)
 | | types = (integer)
-| | keys = ()
-| ArrangeBy (#0)
+| | keys = ((#0))
+| Negate
 | | types = (integer)
 | | keys = ()
 
 %12 =
-| Get %6 (l4)
+| Union %11 %1
+| | types = (integer)
+| | keys = ()
+| Map null
 | | types = (integer, boolean?)
-| | keys = ()
-| Project (#0)
-| | types = (integer)
-| | keys = ()
-| Negate
-| | types = (integer)
 | | keys = ()
 
 %13 =
-| Union %12 %1
-| | types = (integer)
-| | keys = ()
-| Map null
+| Union %6 %12
 | | types = (integer, boolean?)
-| | keys = ()
-
-%14 =
-| Union %6 %13
-| | types = (integer, boolean?)
-| | keys = ()
+| | keys = ((#0))
 | ArrangeBy (#0)
 | | types = (integer, boolean?)
-| | keys = ()
+| | keys = ((#0))
 
-%15 =
+%14 =
 | Get %10 (l6)
 | | types = (integer, boolean?)
-| | keys = ()
+| | keys = ((#0))
 | Project (#0)
 | | types = (integer)
-| | keys = ()
+| | keys = ((#0))
 | Negate
 | | types = (integer)
 | | keys = ()
 
-%16 =
-| Union %15 %1
+%15 =
+| Union %14 %1
 | | types = (integer)
 | | keys = ()
 | Map null
 | | types = (integer, boolean?)
 | | keys = ()
 
-%17 =
-| Union %10 %16
+%16 =
+| Union %10 %15
 | | types = (integer, boolean?)
-| | keys = ()
+| | keys = ((#0))
+| ArrangeBy (#0)
+| | types = (integer, boolean?)
+| | keys = ((#0))
 
-%18 =
-| Join %11 %14 %17 (= #0 #1 #3)
-| | implementation = Differential %17 %11.(#0) %14.(#0)
+%17 =
+| Join %0 %13 %16 (= #0 #1 #3)
+| | implementation = Differential %0 %13.(#0) %16.(#0)
 | | types = (integer, integer, boolean?, integer, boolean?)
 | | keys = ()
 | Project (#2, #4, #2)
@@ -1493,7 +1502,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT (SELECT col_not_null FROM int_table) FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 = Let l0 =
@@ -1591,7 +1601,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT 1 IN (SELECT col_not_null FROM int_table), 1 NOT IN (SELECT col_not_null FROM int_table) FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 = Let l0 =
@@ -1668,7 +1679,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT EXISTS (SELECT col_not_null FROM int_table), NOT EXISTS (SELECT col_not_null FROM int_table) FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project ()
+| Map dummy, dummy
+| Project (#2, #3)
 
 Query:
 %0 = Let l0 =
@@ -1828,7 +1840,7 @@ Query:
 %8 = Let l4 =
 | Union %5 %7
 | | types = (integer?, boolean?)
-| | keys = ()
+| | keys = ((#0))
 
 %9 =
 | Get materialize.public.int_table (u1)
@@ -1922,10 +1934,10 @@ Query:
 %19 =
 | Get %8 (l4)
 | | types = (integer?, boolean?)
-| | keys = ()
+| | keys = ((#0))
 | Project (#0)
 | | types = (integer?)
-| | keys = ()
+| | keys = ((#0))
 | Negate
 | | types = (integer?)
 | | keys = ()
@@ -1941,14 +1953,14 @@ Query:
 %21 =
 | Union %8 %20
 | | types = (integer?, boolean?)
-| | keys = ()
+| | keys = ((#0))
 | ArrangeBy (#0)
 | | types = (integer?, boolean?)
-| | keys = ()
+| | keys = ((#0))
 
 %22 =
 | Join %9 %14 %18 %21 (= #0 #3 #6) (= #1 #4)
-| | implementation = Differential %14 %9.() %18.(#0, #1) %21.(#0)
+| | implementation = Differential %14 %9.() %21.(#0) %18.(#0, #1)
 | | types = (integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)
 | | keys = ()
 | Project (#2, #5, #7)
@@ -2009,7 +2021,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 INNER JOIN int_table AS a2 ON TRUE;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 = Let l0 =
@@ -2267,7 +2280,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_not_null FROM int_table;
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 = Let l0 =
@@ -2323,7 +2337,8 @@ query T multiline
 EXPLAIN TYPED PLAN FOR SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS f1 FROM int_table);
 ----
 Source materialize.public.int_table (u1):
-| Project (#1)
+| Map dummy
+| Project (#2, #1)
 
 Query:
 %0 =

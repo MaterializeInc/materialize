@@ -11,23 +11,18 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::iter::once;
 use std::str::FromStr;
+use std::time::Duration;
 
-use bytes::BufMut;
 use itertools::{max, Itertools};
-use prost::{self, Message};
-use serde_json::json;
+use mz_ore::now::EpochMillis;
+use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use uuid::Uuid;
 
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_controller::ConcreteComputeInstanceReplicaConfig;
+use mz_compute_client::controller::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_persist_types::Codec;
-use mz_proto::{IntoRustIfSome, RustType};
-use mz_repr::global_id::ProtoGlobalId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::names::{
@@ -43,6 +38,11 @@ use crate::catalog::builtin::{BuiltinLog, BUILTIN_ROLES};
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::SerializedComputeInstanceReplicaConfig;
 use crate::catalog::SystemObjectMapping;
+
+use super::{
+    SerializedCatalogItem, SerializedComputeInstanceReplicaLocation,
+    SerializedComputeInstanceReplicaLogging,
+};
 
 const USER_VERSION: &str = "user_version";
 
@@ -74,7 +74,7 @@ async fn migrate<S: Append>(
     let migrations: &[for<'a> fn(
         &mut Transaction<'a, S>,
         &'a BootstrapArgs,
-    ) -> Result<(), StashError>] = &[
+    ) -> Result<(), catalog::error::Error>] = &[
         |txn: &mut Transaction<'_, S>, bootstrap_args| {
             txn.id_allocator.insert(
                 IdAllocKey {
@@ -215,37 +215,77 @@ async fn migrate<S: Append>(
                     name: "materialize".into(),
                 },
             )?;
+            let default_instance = ComputeInstanceValue {
+                name: "default".into(),
+                config: Some(ComputeInstanceIntrospectionConfig {
+                    debugging: false,
+                    interval: Duration::from_secs(1),
+                }),
+            };
+            let default_replica = ComputeInstanceReplicaValue {
+                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                name: "default_replica".into(),
+                config: SerializedComputeInstanceReplicaConfig {
+                    persisted_logs: SerializedComputeInstanceReplicaLogging::Default,
+                    location: SerializedComputeInstanceReplicaLocation::Managed {
+                        size: bootstrap_args.default_cluster_replica_size.clone(),
+                        availability_zone: bootstrap_args.default_availability_zone.clone(),
+                        az_user_specified: false,
+                    },
+                },
+            };
             txn.compute_instances.insert(
                 ComputeInstanceKey {
                     id: DEFAULT_COMPUTE_INSTANCE_ID,
                 },
-                ComputeInstanceValue {
-                    name: "default".into(),
-                    config: Some(
-                        "{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}".into(),
-                    ),
-                },
+                default_instance.clone(),
             )?;
             txn.compute_instance_replicas.insert(
                 ComputeInstanceReplicaKey {
                     id: DEFAULT_REPLICA_ID,
                 },
-                ComputeInstanceReplicaValue {
-                    compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
-                    name: "default_replica".into(),
-                    config: json!({
-                        "persisted_logs": "Default",
-                        "location": {
-                            "Managed": {
-                                "size": bootstrap_args.default_cluster_replica_size,
-                                "availability_zone": bootstrap_args.default_availability_zone.clone(),
-                                "az_user_specified": false,
-                            }
-                        }
-                    })
-                    .to_string(),
-                },
+                default_replica.clone(),
             )?;
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::Cluster,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: DEFAULT_COMPUTE_INSTANCE_ID,
+                            name: default_instance.name.clone(),
+                        }),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::ClusterReplica,
+                        EventDetails::CreateComputeInstanceReplicaV1(
+                            mz_audit_log::CreateComputeInstanceReplicaV1 {
+                                cluster_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                                cluster_name: default_instance.name,
+                                replica_name: default_replica.name,
+                                logical_size: bootstrap_args.default_cluster_replica_size.clone(),
+                            },
+                        ),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
             txn.timestamps.insert(
                 TimestampKey {
                     id: Timeline::EpochMilliseconds.to_string(),
@@ -291,6 +331,7 @@ async fn migrate<S: Append>(
 }
 
 pub struct BootstrapArgs {
+    pub now: EpochMillis,
     pub default_cluster_replica_size: String,
     pub default_availability_zone: String,
 }
@@ -298,7 +339,6 @@ pub struct BootstrapArgs {
 #[derive(Debug)]
 pub struct Connection<S> {
     stash: S,
-    cluster_id: Uuid,
 }
 
 impl<S: Append> Connection<S> {
@@ -324,10 +364,7 @@ impl<S: Append> Connection<S> {
         initialize_stash(&mut stash).await?;
         migrate(&mut stash, skip, bootstrap_args).await?;
 
-        let conn = Connection {
-            cluster_id: Self::set_or_get_cluster_id(&mut stash).await?,
-            stash,
-        };
+        let conn = Connection { stash };
 
         Ok(conn)
     }
@@ -370,22 +407,6 @@ impl<S: Append> Connection<S> {
             .upsert(stash, once((key, value)))
             .await
             .map_err(|e| e.into())
-    }
-
-    /// Sets catalog's `cluster_id` setting on initialization or gets that value.
-    async fn set_or_get_cluster_id(stash: &mut impl Append) -> Result<Uuid, Error> {
-        let current_setting = Self::get_setting_stash(stash, "cluster_id").await?;
-        match current_setting {
-            // Server init
-            None => {
-                // Generate a new version 4 UUID. These are generated from random input.
-                let cluster_id = Uuid::new_v4();
-                Self::set_setting_stash(stash, "cluster_id", cluster_id.to_string()).await?;
-                Ok(cluster_id)
-            }
-            // Server reboot
-            Some(cs) => Ok(Uuid::parse_str(&cs)?),
-        }
     }
 
     pub async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
@@ -463,19 +484,12 @@ impl<S: Append> Connection<S> {
         )>,
         Error,
     > {
-        COLLECTION_COMPUTE_INSTANCES
+        Ok(COLLECTION_COMPUTE_INSTANCES
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| {
-                let config: Option<ComputeInstanceIntrospectionConfig> = match v.config {
-                    None => None,
-                    Some(config) => serde_json::from_str(&config)
-                        .map_err(|err| Error::from(StashError::from(err.to_string())))?,
-                };
-                Ok((k.id, v.name, config))
-            })
-            .collect()
+            .map(|(k, v)| (k.id, v.name, v.config))
+            .collect())
     }
 
     pub async fn load_compute_instance_replicas(
@@ -489,19 +503,15 @@ impl<S: Append> Connection<S> {
         )>,
         Error,
     > {
-        COLLECTION_COMPUTE_INSTANCE_REPLICAS
+        Ok(COLLECTION_COMPUTE_INSTANCE_REPLICAS
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| {
-                let config = serde_json::from_str(&v.config)
-                    .map_err(|err| Error::from(StashError::from(err.to_string())))?;
-                Ok((v.compute_instance_id, k.id, v.name, config))
-            })
-            .collect()
+            .map(|(k, v)| (v.compute_instance_id, k.id, v.name, v.config))
+            .collect())
     }
 
-    pub async fn load_audit_log(&mut self) -> Result<impl Iterator<Item = Vec<u8>>, Error> {
+    pub async fn load_audit_log(&mut self) -> Result<impl Iterator<Item = VersionedEvent>, Error> {
         Ok(COLLECTION_AUDIT_LOG
             .peek_one(&mut self.stash)
             .await?
@@ -509,7 +519,9 @@ impl<S: Append> Connection<S> {
             .map(|ev| ev.event))
     }
 
-    pub async fn storage_usage(&mut self) -> Result<impl Iterator<Item = Vec<u8>>, Error> {
+    pub async fn storage_usage(
+        &mut self,
+    ) -> Result<impl Iterator<Item = VersionedStorageUsage>, Error> {
         Ok(COLLECTION_STORAGE_USAGE
             .peek_one(&mut self.stash)
             .await?
@@ -558,13 +570,7 @@ impl<S: Append> Connection<S> {
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| {
-                let name = k.name;
-                let value = std::str::from_utf8(&v.value)
-                    .expect("invalid persisted system configuration")
-                    .to_string();
-                Ok((name, value))
-            })
+            .map(|(k, v)| Ok((k.name, v.value)))
             .collect()
     }
 
@@ -645,12 +651,10 @@ impl<S: Append> Connection<S> {
         config: &ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), Error> {
         let key = ComputeInstanceReplicaKey { id: replica_id };
-        let config = serde_json::to_string(config)
-            .map_err(|err| Error::from(StashError::from(err.to_string())))?;
         let val = ComputeInstanceReplicaValue {
             compute_instance_id,
             name,
-            config,
+            config: config.clone().into(),
         };
         COLLECTION_COMPUTE_INSTANCE_REPLICAS
             .upsert_key(&mut self.stash, &key, &val)
@@ -746,10 +750,6 @@ impl<S: Append> Connection<S> {
     pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), Error> {
         Ok(self.stash.consolidate_batch(&collections).await?)
     }
-
-    pub fn cluster_id(&self) -> Uuid {
-        self.cluster_id
-    }
 }
 
 #[tracing::instrument(level = "trace", skip_all)]
@@ -818,7 +818,7 @@ pub struct Transaction<'a, S> {
 }
 
 impl<'a, S: Append> Transaction<'a, S> {
-    pub fn loaded_items(&self) -> Vec<(GlobalId, QualifiedObjectName, Vec<u8>)> {
+    pub fn loaded_items(&self) -> Vec<(GlobalId, QualifiedObjectName, SerializedCatalogItem)> {
         let databases = self.databases.items();
         let schemas = self.schemas.items();
         let mut items = Vec::new();
@@ -852,12 +852,10 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
-        let event = event.serialize();
         self.audit_log_updates.push((AuditLogKey { event }, (), 1));
     }
 
     pub fn insert_storage_usage_event(&mut self, metric: VersionedStorageUsage) {
-        let metric = metric.serialize();
         self.storage_usage_updates
             .push((StorageUsageKey { metric }, (), 1));
     }
@@ -937,13 +935,11 @@ impl<'a, S: Append> Transaction<'a, S> {
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
         let id = self.get_and_increment_id(COMPUTE_ID_ALLOC_KEY.to_string())?;
-        let config = serde_json::to_string(config)
-            .map_err(|err| Error::from(StashError::from(err.to_string())))?;
         if let Err(_) = self.compute_instances.insert(
             ComputeInstanceKey { id },
             ComputeInstanceValue {
                 name: cluster_name.to_string(),
-                config: Some(config),
+                config: config.clone(),
             },
         ) {
             return Err(Error::new(ErrorKind::ClusterAlreadyExists(
@@ -978,8 +974,6 @@ impl<'a, S: Append> Transaction<'a, S> {
         config: &SerializedComputeInstanceReplicaConfig,
     ) -> Result<ReplicaId, Error> {
         let id = self.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
-        let config = serde_json::to_string(config)
-            .map_err(|err| Error::from(StashError::from(err.to_string())))?;
         let mut compute_instance_id = None;
         for (
             ComputeInstanceKey { id },
@@ -999,7 +993,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             ComputeInstanceReplicaValue {
                 compute_instance_id: compute_instance_id.unwrap(),
                 name: replica_name.into(),
-                config,
+                config: config.clone(),
             },
         ) {
             return Err(Error::new(ErrorKind::DuplicateReplica(
@@ -1015,14 +1009,14 @@ impl<'a, S: Append> Transaction<'a, S> {
         id: GlobalId,
         schema_id: SchemaId,
         item_name: &str,
-        item: &[u8],
+        item: SerializedCatalogItem,
     ) -> Result<(), Error> {
         match self.items.insert(
             ItemKey { gid: id },
             ItemValue {
                 schema_id: schema_id.0,
                 name: item_name.to_string(),
-                definition: item.to_vec(),
+                definition: item,
             },
         ) {
             Ok(_) => Ok(()),
@@ -1042,11 +1036,6 @@ impl<'a, S: Append> Transaction<'a, S> {
         let next_id = id
             .checked_add(1)
             .ok_or_else(|| Error::new(ErrorKind::IdExhaustion))?;
-        // TODO(jkosh44) We currently don't support u64 Datums, so these eventually are converted to
-        //i64 to store in system tables
-        if next_id > u64::try_from(i64::MAX).expect("max i64 should fit in u64") {
-            return Err(Error::new(ErrorKind::IdExhaustion));
-        }
         let diff = self.id_allocator.update(|k, _v| {
             if k.name == key {
                 Some(IdAllocValue { next_id })
@@ -1092,7 +1081,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn remove_compute_instance(&mut self, name: &str) -> Result<Vec<GlobalId>, Error> {
+    pub fn remove_compute_instance(&mut self, name: &str) -> Result<(u64, Vec<GlobalId>), Error> {
         let deleted = self.compute_instances.delete(|_k, v| v.name == name);
         if deleted.is_empty() {
             Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
@@ -1105,10 +1094,13 @@ impl<'a, S: Append> Transaction<'a, S> {
             let introspection_source_indexes = self
                 .introspection_sources
                 .delete(|k, _v| k.compute_id == id);
-            Ok(introspection_source_indexes
-                .into_iter()
-                .map(|(_, v)| GlobalId::System(v.index_id))
-                .collect())
+            Ok((
+                id,
+                introspection_source_indexes
+                    .into_iter()
+                    .map(|(_, v)| GlobalId::System(v.index_id))
+                    .collect(),
+            ))
         }
     }
 
@@ -1138,13 +1130,18 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn update_item(&mut self, id: GlobalId, item_name: &str, item: &[u8]) -> Result<(), Error> {
+    pub fn update_item(
+        &mut self,
+        id: GlobalId,
+        item_name: &str,
+        item: &SerializedCatalogItem,
+    ) -> Result<(), Error> {
         let n = self.items.update(|k, v| {
             if k.gid == id {
                 Some(ItemValue {
                     schema_id: v.schema_id,
                     name: item_name.to_string(),
-                    definition: item.to_vec(),
+                    definition: item.clone(),
                 })
             } else {
                 None
@@ -1205,12 +1202,12 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Upserts persisted system configuration `name` to `value`.
-    pub async fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
+    pub fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
         let value = ServerConfigurationValue {
-            value: value.bytes().collect(),
+            value: value.to_string(),
         };
         self.system_configurations.delete(|k, _v| k == &key);
         self.system_configurations.insert(key, value)?;
@@ -1218,7 +1215,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Removes persisted system configuration `name`.
-    pub async fn remove_system_config(&mut self, name: &str) {
+    pub fn remove_system_config(&mut self, name: &str) {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
@@ -1226,7 +1223,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Removes all persisted system configurations.
-    pub async fn clear_system_configs(&mut self) {
+    pub fn clear_system_configs(&mut self) {
         self.system_configurations.delete(|_k, _v| true);
     }
 
@@ -1446,258 +1443,149 @@ pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
     stash.append(&batches).await.map_err(|e| e.into())
 }
 
-macro_rules! impl_codec {
-    ($ty:ty) => {
-        impl Codec for $ty {
-            fn codec_name() -> String {
-                "protobuf[$ty]".into()
-            }
-
-            fn encode<B: BufMut>(&self, buf: &mut B) {
-                Message::encode(self, buf).expect("provided buffer had sufficient capacity")
-            }
-
-            fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-                Message::decode(buf).map_err(|err| err.to_string())
-            }
-        }
-    };
-}
-
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct SettingKey {
-    #[prost(string)]
     name: String,
 }
-impl_codec!(SettingKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct SettingValue {
-    #[prost(string)]
     value: String,
 }
-impl_codec!(SettingValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct IdAllocKey {
-    #[prost(string)]
     name: String,
 }
-impl_codec!(IdAllocKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct IdAllocValue {
-    #[prost(uint64)]
     next_id: u64,
 }
-impl_codec!(IdAllocValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct GidMappingKey {
-    #[prost(string)]
     schema_name: String,
-    #[prost(string)]
     object_name: String,
 }
-impl_codec!(GidMappingKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct GidMappingValue {
-    #[prost(uint64)]
     id: u64,
-    #[prost(uint64)]
     fingerprint: u64,
 }
-impl_codec!(GidMappingValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeInstanceKey {
-    #[prost(uint64)]
     id: u64,
 }
-impl_codec!(ComputeInstanceKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeInstanceValue {
-    #[prost(string)]
     name: String,
-    #[prost(string, optional)]
-    config: Option<String>,
+    config: Option<ComputeInstanceIntrospectionConfig>,
 }
-impl_codec!(ComputeInstanceValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeIntrospectionSourceIndexKey {
-    #[prost(uint64)]
     compute_id: ComputeInstanceId,
-    #[prost(string)]
     name: String,
 }
-impl_codec!(ComputeIntrospectionSourceIndexKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeIntrospectionSourceIndexValue {
-    #[prost(uint64)]
     index_id: u64,
 }
-impl_codec!(ComputeIntrospectionSourceIndexValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct DatabaseKey {
-    #[prost(uint64)]
     id: u64,
 }
-impl_codec!(DatabaseKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeInstanceReplicaKey {
-    #[prost(uint64)]
     id: ReplicaId,
 }
-impl_codec!(ComputeInstanceReplicaKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeInstanceReplicaValue {
-    #[prost(uint64)]
     compute_instance_id: ComputeInstanceId,
-    #[prost(string)]
     name: String,
-    #[prost(string)]
-    config: String,
+    config: SerializedComputeInstanceReplicaConfig,
 }
-impl_codec!(ComputeInstanceReplicaValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct DatabaseValue {
-    #[prost(string)]
     name: String,
 }
-impl_codec!(DatabaseValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct SchemaKey {
-    #[prost(uint64)]
     id: u64,
 }
-impl_codec!(SchemaKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct SchemaValue {
-    #[prost(uint64, optional)]
     database_id: Option<u64>,
-    #[prost(string)]
     name: String,
 }
-impl_codec!(SchemaValue);
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ItemKey {
     gid: GlobalId,
 }
 
-#[derive(Clone, Message)]
-struct ProtoItemKey {
-    #[prost(message)]
-    gid: Option<ProtoGlobalId>,
-}
-
-// To pleasantly support GlobalId, use a custom impl.
-// TODO: Is there a better way to do this?
-impl Codec for ItemKey {
-    fn codec_name() -> String {
-        "protobuf[ItemKey]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        let proto = ProtoItemKey {
-            gid: Some(self.gid.into_proto()),
-        };
-        Message::encode(&proto, buf).expect("provided buffer had sufficient capacity")
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let proto: ProtoItemKey = Message::decode(buf).map_err(|err| err.to_string())?;
-        let gid = proto
-            .gid
-            .into_rust_if_some("ProtoItemKey.gid")
-            .map_err(|e| e.to_string())?;
-        Ok(Self { gid })
-    }
-}
-
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ItemValue {
-    #[prost(uint64)]
     schema_id: u64,
-    #[prost(string)]
     name: String,
-    #[prost(bytes)]
-    definition: Vec<u8>,
+    definition: SerializedCatalogItem,
 }
-impl_codec!(ItemValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct RoleKey {
-    #[prost(string)]
     id: String,
 }
-impl_codec!(RoleKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct RoleValue {
-    #[prost(string)]
     name: String,
 }
-impl_codec!(RoleValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ConfigValue {
-    #[prost(uint64)]
     value: u64,
 }
-impl_codec!(ConfigValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct AuditLogKey {
-    #[prost(bytes)]
-    event: Vec<u8>,
+    event: VersionedEvent,
 }
-impl_codec!(AuditLogKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct StorageUsageKey {
-    #[prost(bytes)]
-    metric: Vec<u8>,
+    metric: VersionedStorageUsage,
 }
-impl_codec!(StorageUsageKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct TimestampKey {
-    #[prost(string)]
     id: String,
 }
-impl_codec!(TimestampKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct TimestampValue {
-    #[prost(uint64)]
-    ts: u64,
+    ts: mz_repr::Timestamp,
 }
-impl_codec!(TimestampValue);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ServerConfigurationKey {
-    #[prost(string)]
     name: String,
 }
-impl_codec!(ServerConfigurationKey);
 
-#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ServerConfigurationValue {
-    #[prost(bytes)]
-    value: Vec<u8>,
+    value: String,
 }
-impl_codec!(ServerConfigurationValue);
 
 static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
 static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =

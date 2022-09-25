@@ -11,17 +11,20 @@
 # Make sure that data that was ingested during the lifetime of a SELECT cursor is *NOT* FETCH-ed
 #
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "type": "int"} ] }
 
 $ kafka-create-topic topic=tail-fetch-during-ingest
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE fetch_during_ingest
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tail-fetch-during-ingest-${testdrive.seed}'
-  WITH( timestamp_frequency_ms = 100 )
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-tail-fetch-during-ingest-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+  WITH (TIMESTAMP INTERVAL '100ms')
 
 $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestamp=1
 {"f1": 123}

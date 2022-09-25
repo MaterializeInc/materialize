@@ -12,20 +12,21 @@
 mode cockroach
 
 # Two columns here represent a validity interval [a, b].
+# These values must be castable to mztimestamp, otherwise the BETWEEN will error.
 statement ok
-CREATE VIEW intervals (a, b) AS VALUES (1, 10), (1, 2), (2, 13), (3, 1), (-3, 10), (5, 18446744073709551616)
+CREATE VIEW intervals (a, b) AS VALUES (1, 10), (1, 2), (2, 13), (3, 1), (0, 10), (5, 18446744073709551614)
 
 # Select out rows when each are valid.
 statement ok
 CREATE MATERIALIZED VIEW valid AS
 SELECT *
 FROM intervals
-WHERE mz_logical_timestamp() BETWEEN a AND b;
+WHERE mz_now() BETWEEN a AND b;
 
 query II rowsort
 select * from valid AS OF 2;
 ----
--3  10
+0  10
 1  10
 1  2
 2  13
@@ -33,7 +34,7 @@ select * from valid AS OF 2;
 query II rowsort
 select * from valid AS OF 3;
 ----
--3  10
+0  10
 1  10
 2  13
 
@@ -41,19 +42,34 @@ query II rowsort
 select * from valid AS OF 11;
 ----
 2  13
-5  18446744073709551616
+5  18446744073709551614
 
 query II rowsort
 select * from valid AS OF 14;
 ----
-5  18446744073709551616
+5  18446744073709551614
 
 # Test that rows are not dropped just before the end of time.
 # That big number there should be u64::MAX.
 query II rowsort
-select * from valid AS OF 18446744073709551615;
+select * from valid AS OF 18446744073709551614;
 ----
-5  18446744073709551616
+5  18446744073709551614
+
+
+# We don't currently support specifying the max timestamp due to a limitation in linear.rs and the step_mz_timestamp internal function.
+# That big number there should be u64::MAX.
+statement ok
+CREATE VIEW intervals_max (a, b) AS VALUES (0, 18446744073709551615)
+
+statement ok
+CREATE MATERIALIZED VIEW valid_max AS
+SELECT *
+FROM intervals_max
+WHERE mz_now() BETWEEN a AND b
+
+query error step mztimestamp overflow
+select * from valid_max AS OF 0
 
 #
 # Regression test for #6635
@@ -69,11 +85,14 @@ statement ok
 CREATE MATERIALIZED VIEW valid_events AS
 SELECT content, count(*)
 FROM events
-WHERE mz_logical_timestamp() >= insert_ts
-  AND mz_logical_timestamp()  < delete_ts
+WHERE mz_now() >= insert_ts
+  AND mz_now()  < delete_ts
 GROUP BY content;
 
 
 query TI rowsort
 select * from valid_events;
 ----
+
+statement error mz_logical_timestamp\(\) has been renamed to mz_now\(\)
+CREATE VIEW mlt AS SELECT 1 WHERE mz_logical_timestamp() = 0;

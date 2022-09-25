@@ -140,16 +140,16 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn try_group_commit(&mut self) {
         let timestamp = self.peek_local_write_ts();
-        let now = (self.catalog.config().now)();
+        let now = Timestamp::from((self.catalog.config().now)());
         if timestamp > now {
             // Cap retry time to 1s. In cases where the system clock has retreated by
             // some large amount of time, this prevents against then waiting for that
             // large amount of time in case the system clock then advances back to near
             // what it was.
-            let remaining_ms = std::cmp::min(timestamp.saturating_sub(now), 1_000);
+            let remaining_ms = std::cmp::min(timestamp.saturating_sub(now), 1_000.into());
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(|| "group_commit_initiate", async move {
-                tokio::time::sleep(Duration::from_millis(remaining_ms)).await;
+                tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
                 // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
                 let result = internal_cmd_tx.send(Message::GroupCommitInitiate);
                 if let Err(e) = result {
@@ -157,21 +157,32 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             });
         } else {
-            self.group_commit_initiate().await;
+            self.group_commit_initiate(None).await;
         }
     }
 
-    /// Tries to commit all pending writes transactions at the same timestamp. If the `write_lock`
-    /// is currently locked, then only writes to system tables and table advancements will be
-    /// applied. If the `write_lock` is not currently locked, then group commit will acquire it and
-    /// all writes will be applied.
+    /// Tries to commit all pending writes transactions at the same timestamp.
+    ///
+    /// If the caller of this function has the `write_lock` acquired, then they can optionally pass
+    /// it in to this method. If the caller does not have the `write_lock` acquired and the
+    /// `write_lock` is currently locked by another operation, then only writes to system tables
+    /// and table advancements will be applied. If the caller does not have the `write_lock`
+    /// acquired and the `write_lock` is not currently locked by another operation, then group
+    /// commit will acquire it and all writes will be applied.
     ///
     /// All applicable pending writes will be combined into a single Append command and sent to
     /// STORAGE as a single batch. All applicable writes will happen at the same timestamp and all
     /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn group_commit_initiate(&mut self) {
-        let (write_lock_guard, pending_writes): (_, Vec<_>) = if self
+    pub(crate) async fn group_commit_initiate(
+        &mut self,
+        write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    ) {
+        let (write_lock_guard, pending_writes): (_, Vec<_>) = if let Some(guard) = write_lock_guard
+        {
+            // If the caller passed in the write lock, then we can execute a group commit.
+            (Some(guard), self.pending_writes.drain(..).collect())
+        } else if self
             .pending_writes
             .iter()
             .all(|write| matches!(write, PendingWriteTxn::System { .. }))
@@ -294,7 +305,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let append_fut = self
             .controller
-            .storage_mut()
+            .storage
             .append(appends)
             .expect("invalid updates");
         if should_block {
@@ -409,7 +420,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 update,
                 source: source.clone(),
             }));
-        self.group_commit_initiate().await;
+        self.group_commit_initiate(None).await;
     }
 
     /// Defers executing `deferred` until the write lock becomes available; waiting

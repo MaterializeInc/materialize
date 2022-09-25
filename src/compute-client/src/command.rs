@@ -31,22 +31,51 @@ use mz_proto::{any_uuid, IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, Try
 use mz_repr::{GlobalId, RelationType, Row};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::protocol::client::ProtoAllowCompaction;
-use mz_storage::types::sinks::ComputeSinkDesc;
-use mz_storage::types::transforms::LinearOperator;
 
 use crate::command::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
 use crate::logging::LoggingConfig;
 use crate::plan::Plan;
+use crate::sinks::ComputeSinkDesc;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 
 /// Commands related to the computation and maintenance of views.
+///
+/// A replica can consist of multiple computed processes. Upon startup, a computed will listen for
+/// a connection from environmentd. The first command sent to computed must be a CreateTimely
+/// command, which will build the timely runtime.
+///
+/// CreateTimely is the only command that is sent to every process of the replica by environmentd.
+/// The other commands are sent only to the first process, which in turn will disseminate the
+/// command to other timely workers using the timely communication fabric.
+///
+/// After a timely runtime has been built with CreateTimely, a sequence of commands that have to be
+/// handled in the timely runtime can be sent: First a CreateInstance must be sent which activates
+/// logging sources. After this, any combination of CreateDataflows, AllowCompaction, Peek,
+/// UpdateMaxResultSize and CancelPeeks can be sent.
+///
+/// Within this sequence, exactly one InitializationComplete has to be sent. Commands sent before
+/// InitializationComplete are buffered and are compacted. For example a Peek followed by a
+/// CancelPeek will become a no-op if sent before InitializationComplete. After
+/// InitializationComplete, the computed is considered rehydrated and will immediately act upon the
+/// commands. If a new cluster is created, InitializationComplete will follow immediately after
+/// CreateInstance. If a replica is added to a cluster or environmentd restarts and rehydrates a
+/// computed, a potentially long command sequence will be sent before InitializationComplete.
+///
+/// DropInstance will undo both CreateTimely and CreateInstance.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
-    /// Indicates the creation of an instance, and is the first command for its compute instance.
+    /// Create the timely runtime according to the supplied CommunicationConfig. Must be the first
+    /// command sent to a computed. This is the only command that is broadcasted by
+    /// ActiveReplication to all computed processes within a replica.
+    CreateTimely(CommunicationConfig),
+
+    /// Setup and logging sources within a running timely instance. Must be the second command
+    /// after CreateTimely.
     CreateInstance(InstanceConfig),
+
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
 
@@ -63,6 +92,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// the dataflow runners are responsible for ensuring that they can
     /// correctly maintain the dataflows.
     CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>>),
+
     /// Enable compaction in compute-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -72,11 +102,13 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
 
     /// Peek at an arrangement.
     Peek(Peek<T>),
+
     /// Cancel the peeks associated with the given `uuids`.
     CancelPeeks {
         /// The identifiers of the peek requests to cancel.
         uuids: BTreeSet<Uuid>,
     },
+    UpdateMaxResultSize(u32),
 }
 
 impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
@@ -102,6 +134,10 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
                     uuids: uuids.into_proto(),
                 }),
+                ComputeCommand::UpdateMaxResultSize(max_result_size) => {
+                    UpdateMaxResultSize(max_result_size.into_proto())
+                }
+                ComputeCommand::CreateTimely(comm_config) => CreateTimely(comm_config.into_proto()),
             }),
         }
     }
@@ -123,6 +159,12 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
                 uuids: uuids.into_rust()?,
             }),
+            Some(UpdateMaxResultSize(ProtoUpdateMaxResultSize { max_result_size })) => {
+                Ok(ComputeCommand::UpdateMaxResultSize(max_result_size))
+            }
+            Some(CreateTimely(proto_comm_config)) => {
+                Ok(ComputeCommand::CreateTimely(proto_comm_config.into_rust()?))
+            }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeCommand::kind",
             )),
@@ -146,7 +188,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
-                    proptest::collection::vec(any::<u64>(), 1..4)
+                    proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4)
                 ),
                 1..4
             )
@@ -216,6 +258,19 @@ pub struct InstanceConfig {
     pub replica_id: ReplicaId,
     /// Optionally, request the installation of logging sources.
     pub logging: Option<LoggingConfig>,
+    /// Max size in bytes of any result.
+    pub max_result_size: u32,
+}
+
+/// Configuration of the cluster we will spin up
+#[derive(Arbitrary, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CommunicationConfig {
+    /// Number of per-process worker threads
+    pub workers: usize,
+    /// Identity of this process
+    pub process: usize,
+    /// Addresses of all processes
+    pub addresses: Vec<String>,
 }
 
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
@@ -223,6 +278,7 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
         ProtoInstanceConfig {
             replica_id: self.replica_id,
             logging: self.logging.into_proto(),
+            max_result_size: self.max_result_size,
         }
     }
 
@@ -230,6 +286,25 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
         Ok(Self {
             replica_id: proto.replica_id,
             logging: proto.logging.into_rust()?,
+            max_result_size: proto.max_result_size,
+        })
+    }
+}
+
+impl RustType<ProtoCommunicationConfig> for CommunicationConfig {
+    fn into_proto(&self) -> ProtoCommunicationConfig {
+        ProtoCommunicationConfig {
+            workers: self.workers.into_proto(),
+            addresses: self.addresses.into_proto(),
+            process: self.process.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoCommunicationConfig) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            process: proto.process.into_rust()?,
+            workers: proto.workers.into_rust()?,
+            addresses: proto.addresses.into_rust()?,
         })
     }
 }
@@ -302,8 +377,8 @@ impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata
 /// Per-source construction arguments.
 #[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceArguments {
-    /// Optional linear operators that can be applied record-by-record.
-    pub operators: Option<LinearOperator>,
+    /// Linear operators to be applied record-by-record.
+    pub operators: Option<mz_expr::MapFilterProject>,
 }
 
 impl RustType<ProtoSourceInstanceArguments> for SourceInstanceArguments {
@@ -347,10 +422,12 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     /// the upper bound of `since` frontiers contributing to the dataflow.
     /// It is an error for this to be set to a frontier not beyond that default.
     pub as_of: Option<Antichain<T>>,
+    /// Frontier beyond which the dataflow should not execute.
+    /// Specifically, updates at times greater or equal to this frontier are suppressed.
+    /// This is often set to `as_of + 1` to enable "batch" computations.
+    pub until: Antichain<T>,
     /// Human readable name
     pub debug_name: String,
-    /// Unique ID of the dataflow
-    pub id: uuid::Uuid,
 }
 
 fn any_source_import(
@@ -393,9 +470,8 @@ proptest::prop_compose! {
             1..3,
         ),
         as_of_some in any::<bool>(),
-        as_of in proptest::collection::vec(any::<u64>(), 1..5),
+        as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
         debug_name in ".*",
-        id in any_uuid(),
     ) -> DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
@@ -410,8 +486,8 @@ proptest::prop_compose! {
             } else {
                 None
             },
+            until: Antichain::new(),
             debug_name,
-            id,
         }
     }
 }
@@ -435,8 +511,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             index_exports: Default::default(),
             sink_exports: Default::default(),
             as_of: Default::default(),
+            until: Antichain::new(),
             debug_name: name,
-            id: uuid::Uuid::new_v4(),
         }
     }
 
@@ -625,18 +701,6 @@ where
             self.depends_on_into(id, out)
         }
     }
-
-    /// Determine a unique id for this dataflow based on the indexes it exports.
-    // TODO: The semantics of this function are only useful for command reconciliation at the moment.
-    pub fn global_id(&self) -> Option<GlobalId> {
-        let mut exports = self.export_ids();
-        let id = exports.next()?;
-        if exports.all(|other_id| other_id == id) {
-            Some(id)
-        } else {
-            None
-        }
-    }
 }
 
 impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P, S, T> {
@@ -671,9 +735,9 @@ impl RustType<ProtoDataflowDescription>
             objects_to_build: self.objects_to_build.into_proto(),
             index_exports: self.index_exports.into_proto(),
             sink_exports: self.sink_exports.into_proto(),
-            as_of: self.as_of.as_ref().map(Into::into),
+            as_of: self.as_of.into_proto(),
+            until: Some(self.until.into_proto()),
             debug_name: self.debug_name.clone(),
-            id: Some(self.id.into_proto()),
         }
     }
 
@@ -684,9 +748,13 @@ impl RustType<ProtoDataflowDescription>
             objects_to_build: proto.objects_to_build.into_rust()?,
             index_exports: proto.index_exports.into_rust()?,
             sink_exports: proto.sink_exports.into_rust()?,
-            as_of: proto.as_of.map(Into::into),
+            as_of: proto.as_of.map(|x| x.into_rust()).transpose()?,
+            until: proto
+                .until
+                .map(|x| x.into_rust())
+                .transpose()?
+                .unwrap_or_else(Antichain::new),
             debug_name: proto.debug_name,
-            id: proto.id.into_rust_if_some("ProtoDataflowDescription::id")?,
         })
     }
 }
@@ -831,8 +899,10 @@ impl RustType<ProtoIndexDesc> for IndexDesc {
 pub struct Peek<T = mz_repr::Timestamp> {
     /// The identifier of the arrangement.
     pub id: GlobalId,
-    /// An optional key that should be used for the arrangement.
-    pub key: Option<Row>,
+    /// If `Some`, then look up only the given keys from the arrangement (instead of a full scan).
+    /// The vector is never empty.
+    #[proptest(strategy = "proptest::option::of(proptest::collection::vec(any::<Row>(), 1..5))")]
+    pub literal_constraints: Option<Vec<Row>>,
     /// The identifier of this peek request.
     ///
     /// Used in responses and cancellation requests.
@@ -860,9 +930,17 @@ impl RustType<ProtoPeek> for Peek {
     fn into_proto(&self) -> ProtoPeek {
         ProtoPeek {
             id: Some(self.id.into_proto()),
-            key: self.key.into_proto(),
+            key: match &self.literal_constraints {
+                // In the Some case, the vector is never empty, so it's safe to encode None as an
+                // empty vector, and Some(vector) as just the vector.
+                Some(vec) => {
+                    assert!(!vec.is_empty());
+                    vec.into_proto()
+                }
+                None => Vec::<Row>::new().into_proto(),
+            },
             uuid: Some(self.uuid.into_proto()),
-            timestamp: self.timestamp,
+            timestamp: self.timestamp.into(),
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
             target_replica: self.target_replica,
@@ -873,9 +951,16 @@ impl RustType<ProtoPeek> for Peek {
     fn from_proto(x: ProtoPeek) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             id: x.id.into_rust_if_some("ProtoPeek::id")?,
-            key: x.key.into_rust()?,
+            literal_constraints: {
+                let vec: Vec<Row> = x.key.into_rust()?;
+                if vec.is_empty() {
+                    None
+                } else {
+                    Some(vec)
+                }
+            },
             uuid: x.uuid.into_rust_if_some("ProtoPeek::uuid")?,
-            timestamp: x.timestamp,
+            timestamp: x.timestamp.into(),
             finishing: x.finishing.into_rust_if_some("ProtoPeek::finishing")?,
             map_filter_project: x
                 .map_filter_project
@@ -886,8 +971,222 @@ impl RustType<ProtoPeek> for Peek {
     }
 }
 
+impl RustType<ProtoUpdateMaxResultSize> for u32 {
+    fn into_proto(&self) -> ProtoUpdateMaxResultSize {
+        ProtoUpdateMaxResultSize {
+            max_result_size: *self,
+        }
+    }
+
+    fn from_proto(proto: ProtoUpdateMaxResultSize) -> Result<Self, TryFromProtoError> {
+        Ok(proto.max_result_size)
+    }
+}
+
 fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
+}
+
+#[derive(Debug)]
+pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {
+    /// The number of commands at the last time we compacted the history.
+    reduced_count: usize,
+    /// The sequence of commands that should be applied.
+    ///
+    /// This list may not be "compact" in that there can be commands that could be optimized
+    /// or removed given the context of other commands, for example compaction commands that
+    /// can be unified, or dataflows that can be dropped due to allowed compaction.
+    commands: Vec<ComputeCommand<T>>,
+}
+
+impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
+    /// Add a command to the history.
+    pub fn push(&mut self, command: ComputeCommand<T>) {
+        self.commands.push(command);
+        if self.commands.len() > 2 * self.reduced_count {
+            self.reduce();
+        }
+    }
+
+    /// Reduces `self.history` to a minimal form.
+    ///
+    /// This action not only simplifies the issued history, but importantly reduces the instructions
+    /// to only reference inputs from times that are still certain to be valid. Commands that allow
+    /// compaction of a collection also remove certainty that the inputs will be available for times
+    /// not greater or equal to that compaction frontier.
+    pub fn reduce(&mut self) {
+        // First determine what the final compacted frontiers will be for each collection.
+        // These will determine for each collection whether the command that creates it is required,
+        // and if required what `as_of` frontier should be used for its updated command.
+        let mut final_frontiers = std::collections::BTreeMap::new();
+        let mut live_dataflows = Vec::new();
+        let mut live_peeks = Vec::new();
+        let mut live_cancels = std::collections::BTreeSet::new();
+
+        let mut create_inst_command = None;
+        let mut create_timely_command = None;
+        let mut drop_command = None;
+        let mut update_max_result_size_command = None;
+
+        let mut initialization_complete = false;
+
+        for command in self.commands.drain(..) {
+            match command {
+                create_timely @ ComputeCommand::CreateTimely(_) => {
+                    assert!(create_timely_command.is_none());
+                    create_timely_command = Some(create_timely);
+                }
+                // We should be able to handle the Create* commands, should this client need to be restartable.
+                create_inst @ ComputeCommand::CreateInstance(_) => {
+                    assert!(create_inst_command.is_none());
+                    create_inst_command = Some(create_inst);
+                }
+                cmd @ ComputeCommand::DropInstance => {
+                    assert!(drop_command.is_none());
+                    drop_command = Some(cmd);
+                }
+                ComputeCommand::InitializationComplete => {
+                    initialization_complete = true;
+                }
+                ComputeCommand::CreateDataflows(dataflows) => {
+                    live_dataflows.extend(dataflows);
+                }
+                ComputeCommand::AllowCompaction(frontiers) => {
+                    for (id, frontier) in frontiers {
+                        final_frontiers.insert(id, frontier.clone());
+                    }
+                }
+                ComputeCommand::Peek(peek) => {
+                    live_peeks.push(peek);
+                }
+                ComputeCommand::CancelPeeks { uuids } => {
+                    live_cancels.extend(uuids);
+                }
+                update @ ComputeCommand::UpdateMaxResultSize(_) => {
+                    update_max_result_size_command = Some(update);
+                }
+            }
+        }
+
+        // Determine the required antichains to support live peeks;
+        let mut live_peek_frontiers = std::collections::BTreeMap::new();
+        for Peek { id, timestamp, .. } in live_peeks.iter() {
+            // Introduce `time` as a constraint on the `as_of` frontier of `id`.
+            live_peek_frontiers
+                .entry(id)
+                .or_insert_with(Antichain::new)
+                .insert(timestamp.clone());
+        }
+
+        // Update dataflow `as_of` frontiers, constrained by live peeks and allowed compaction.
+        // One possible frontier is the empty frontier, indicating that the dataflow can be removed.
+        for dataflow in live_dataflows.iter_mut() {
+            let mut as_of = Antichain::new();
+            for id in dataflow.export_ids() {
+                // If compaction has been allowed use that; otherwise use the initial `as_of`.
+                if let Some(frontier) = final_frontiers.get(&id) {
+                    as_of.extend(frontier.clone());
+                } else {
+                    as_of.extend(dataflow.as_of.clone().unwrap());
+                }
+                // If we have requirements from peeks, apply them to hold `as_of` back.
+                if let Some(frontier) = live_peek_frontiers.get(&id) {
+                    as_of.extend(frontier.clone());
+                }
+            }
+
+            // Remove compaction for any collection that brought us to `as_of`.
+            for id in dataflow.export_ids() {
+                if let Some(frontier) = final_frontiers.get(&id) {
+                    if frontier == &as_of {
+                        final_frontiers.remove(&id);
+                    }
+                }
+            }
+
+            dataflow.as_of = Some(as_of);
+        }
+
+        // Discard dataflows whose outputs have all been allowed to compact away.
+        live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
+
+        // Record the volume of post-compaction commands.
+        let mut command_count = 1;
+        command_count += live_dataflows.len();
+        command_count += final_frontiers.len();
+        command_count += live_peeks.len();
+        command_count += live_cancels.len();
+        if drop_command.is_some() {
+            command_count += 1;
+        }
+        if update_max_result_size_command.is_some() {
+            command_count += 1;
+        }
+
+        // Reconstitute the commands as a compact history.
+        if let Some(create_timely_command) = create_timely_command {
+            self.commands.push(create_timely_command);
+        }
+        if let Some(create_inst_command) = create_inst_command {
+            self.commands.push(create_inst_command);
+        }
+        if !live_dataflows.is_empty() {
+            self.commands
+                .push(ComputeCommand::CreateDataflows(live_dataflows));
+        }
+        self.commands
+            .extend(live_peeks.into_iter().map(ComputeCommand::Peek));
+        if !live_cancels.is_empty() {
+            self.commands.push(ComputeCommand::CancelPeeks {
+                uuids: live_cancels,
+            });
+        }
+        // Allow compaction only after emmitting peek commands.
+        if !final_frontiers.is_empty() {
+            self.commands.push(ComputeCommand::AllowCompaction(
+                final_frontiers.into_iter().collect(),
+            ));
+        }
+        if initialization_complete {
+            self.commands.push(ComputeCommand::InitializationComplete);
+        }
+        if let Some(drop_command) = drop_command {
+            self.commands.push(drop_command);
+        }
+        if let Some(update_max_result_size_command) = update_max_result_size_command {
+            self.commands.push(update_max_result_size_command)
+        }
+
+        self.reduced_count = command_count;
+    }
+
+    /// Retain only those peeks present in `peeks` and discard the rest.
+    pub fn retain_peeks<V>(&mut self, peeks: &std::collections::HashMap<uuid::Uuid, V>) {
+        for command in self.commands.iter_mut() {
+            if let ComputeCommand::CancelPeeks { uuids } = command {
+                uuids.retain(|uuid| peeks.contains_key(uuid));
+            }
+        }
+        self.commands.retain(|command| match command {
+            ComputeCommand::Peek(peek) => peeks.contains_key(&peek.uuid),
+            ComputeCommand::CancelPeeks { uuids } => !uuids.is_empty(),
+            _ => true,
+        });
+    }
+
+    /// Iterate through the contained commands.
+    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
+        self.commands.iter()
+    }
+}
+
+impl<T> Default for ComputeCommandHistory<T> {
+    fn default() -> Self {
+        Self {
+            reduced_count: 0,
+            commands: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -909,14 +1208,18 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
 
+        // TODO: Unignore after fixing #14543.
         #[test]
+        #[ignore]
         fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
+        // TODO: Unignore after fixing #14543.
         #[test]
+        #[ignore]
         fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>()) {
             let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
             assert!(actual.is_ok());

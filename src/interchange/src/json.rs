@@ -27,18 +27,10 @@ pub struct JsonEncoder {
 }
 
 impl JsonEncoder {
-    pub fn new(
-        key_desc: Option<RelationDesc>,
-        value_desc: RelationDesc,
-        debezium: bool,
-        include_transaction: bool,
-    ) -> Self {
+    pub fn new(key_desc: Option<RelationDesc>, value_desc: RelationDesc, debezium: bool) -> Self {
         let mut value_columns = column_names_and_types(value_desc);
         if debezium {
             value_columns = envelopes::dbz_envelope(value_columns);
-        }
-        if include_transaction {
-            envelopes::txn_metadata(&mut value_columns);
         }
         JsonEncoder {
             key_columns: if let Some(desc) = key_desc {
@@ -124,12 +116,15 @@ impl ToJson for TypedDatum<'_> {
                 ScalarType::Int16 => json!(datum.unwrap_int16()),
                 ScalarType::Int32 => json!(datum.unwrap_int32()),
                 ScalarType::Int64 => json!(datum.unwrap_int64()),
-                ScalarType::Oid
+                ScalarType::UInt16 => json!(datum.unwrap_uint16()),
+                ScalarType::UInt32
+                | ScalarType::Oid
                 | ScalarType::RegClass
                 | ScalarType::RegProc
                 | ScalarType::RegType => {
                     json!(datum.unwrap_uint32())
                 }
+                ScalarType::UInt64 => json!(datum.unwrap_uint64()),
                 ScalarType::Float32 => json!(datum.unwrap_float32()),
                 ScalarType::Float64 => json!(datum.unwrap_float64()),
                 ScalarType::Numeric { .. } => {
@@ -137,7 +132,7 @@ impl ToJson for TypedDatum<'_> {
                 }
                 // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
                 ScalarType::Date => {
-                    serde_json::value::Value::String(format!("{:?}", datum.unwrap_date()))
+                    serde_json::value::Value::String(format!("{}", datum.unwrap_date()))
                 }
                 ScalarType::Time => {
                     serde_json::value::Value::String(format!("{:?}", datum.unwrap_time()))
@@ -216,6 +211,7 @@ impl ToJson for TypedDatum<'_> {
                         .collect();
                     serde_json::value::Value::Object(elements)
                 }
+                ScalarType::MzTimestamp => json!(datum.unwrap_mztimestamp().to_string()),
             }
         }
     }
@@ -237,12 +233,24 @@ fn build_row_schema_field<F: FnMut() -> String>(
             json!("int")
         }
         ScalarType::Int64 => json!("long"),
-        ScalarType::Oid | ScalarType::RegClass | ScalarType::RegProc | ScalarType::RegType => {
+        ScalarType::UInt16 => json!({
+            "type": "fixed",
+            "size": 2,
+        }),
+        ScalarType::UInt32
+        | ScalarType::Oid
+        | ScalarType::RegClass
+        | ScalarType::RegProc
+        | ScalarType::RegType => {
             json!({
                 "type": "fixed",
                 "size": 4,
             })
         }
+        ScalarType::UInt64 => json!({
+            "type": "fixed",
+            "size": 8,
+        }),
         ScalarType::Float32 => json!("float"),
         ScalarType::Float64 => json!("double"),
         ScalarType::Date => json!({
@@ -335,6 +343,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
                 "scale": s,
             })
         }
+        ScalarType::MzTimestamp => json!("string"),
     };
     if typ.nullable {
         field_type = json!(["null", field_type]);

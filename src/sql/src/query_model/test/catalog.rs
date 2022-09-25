@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use chrono::MIN_DATETIME;
+use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -40,14 +40,14 @@ use crate::plan::StatementDesc;
 use crate::DEFAULT_SCHEMA;
 
 static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
-    start_time: MIN_DATETIME,
+    start_time: DateTime::<Utc>::MIN_UTC,
     start_instant: Instant::now(),
     nonce: 0,
-    cluster_id: Uuid::from_u128(0),
+    environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
     session_id: Uuid::from_u128(0),
     unsafe_mode: false,
     build_info: &DUMMY_BUILD_INFO,
-    timestamp_frequency: Duration::from_secs(1),
+    timestamp_interval: Duration::from_secs(1),
     now: NOW_ZERO.clone(),
 });
 

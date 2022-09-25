@@ -42,6 +42,10 @@ SERVICES = [
             "KAFKA_SSL_CLIENT_AUTH=required",
             "KAFKA_SECURITY_INTER_BROKER_PROTOCOL=SASL_SSL",
             "KAFKA_OPTS=-Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config",
+            # Standard options we don't want to overwrite!
+            "KAFKA_MIN_INSYNC_REPLICAS=1",
+            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
+            "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
         ],
         listener_type="SASL_SSL",
         volumes=[
@@ -98,6 +102,7 @@ SERVICES = [
             "--kafka-option=sasl.password=sekurity "
             "--schema-registry-url=https://materialize:sekurity@schema-registry:8081 "
             "--materialize-url=postgres://materialize@materialized:6875 "
+            "--materialize-url-internal=postgres://materialize@materialized:6877 "
             "--cert=/share/secrets/producer.p12 "
             "--cert-password=mzmzmz "
             '--var=ca="$$(</share/secrets/ca.crt)" '

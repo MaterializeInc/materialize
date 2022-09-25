@@ -7,14 +7,25 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN` support for `Mir` structures.
+//! `EXPLAIN ... AS TEXT` support for MIR structures.
+//!
+//! The format adheres to the following conventions:
+//! 1. In general, every line corresponds to an [`MirRelationExpr`] node in the
+//!    plan.
+//! 2. Non-recursive parameters of each sub-plan are written as `$key=$val`
+//!    pairs on the same line.
+//! 3. A single non-recursive parameter can be written just as `$val`.
+//! 4. Exceptions in (1) can be made when virtual syntax is requested (done by
+//!    default, can be turned off with `WITH(raw_syntax)`).
+//! 5. Exceptions in (2) can be made when join implementations are rendered
+//!    explicitly `WITH(join_impls)`.
 
 use std::fmt;
 
 use mz_expr::{
     explain::Indices, AggregateExpr, Id, JoinImplementation, MirRelationExpr, MirScalarExpr,
 };
-use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
+use mz_ore::str::{bracketed, closure_to_display, separated, IndentLike, StrExt};
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText};
 
 use crate::explain_new::{Displayable, PlanRenderingContext};
@@ -192,20 +203,32 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                             }
                             ctx.indent -= 1;
                         }
-                        JoinImplementation::PredicateIndex(_, key, row) => {
-                            write!(f, "{}Lookup ", ctx.indent)?;
-
-                            debug_assert_eq!(inputs.len(), 1);
-
-                            for (i, (expr, lit)) in std::iter::zip(key, row.unpack()).enumerate() {
-                                Displayable::from(expr).fmt_text(f, &mut ())?;
-                                write!(f, " = ")?;
-                                write!(f, "{}", lit)?;
-                                if i < key.len() - 1 {
-                                    write!(f, " AND ")?;
-                                }
-                            }
-                            writeln!(f, "")?;
+                        JoinImplementation::IndexedFilter(_, key, rows) => {
+                            debug_assert_eq!(inputs.len(), 2);
+                            writeln!(
+                                f,
+                                "{}Lookup {}",
+                                ctx.indent,
+                                separated(
+                                    " OR ",
+                                    rows.iter().map(|row| {
+                                        bracketed(
+                                            "(",
+                                            ")",
+                                            separated(
+                                                " AND ",
+                                                std::iter::zip(key, row.unpack()).map(
+                                                    |(expr, lit)| {
+                                                        closure_to_display(move |fmt| {
+                                                            write!(fmt, "{} = {}", expr, lit)
+                                                        })
+                                                    },
+                                                ),
+                                            ),
+                                        )
+                                    })
+                                )
+                            )?;
                             ctx.indented(|ctx| Displayable::from(&inputs[0]).fmt_text(f, ctx))?;
                         }
                         JoinImplementation::Unimplemented => {

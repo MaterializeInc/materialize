@@ -16,7 +16,7 @@ sqlfunc!(
     #[preserves_uniqueness = true]
     fn cast_oid_to_string(a: Oid) -> String {
         let mut buf = String::new();
-        strconv::format_oid(&mut buf, a.0);
+        strconv::format_uint32(&mut buf, a.0);
         buf
     }
 );

@@ -36,6 +36,9 @@ use mz_storage::types::connections::ConnectionContext;
 // [0]: https://github.com/jemalloc/jemalloc/issues/26
 // [1]: https://github.com/jemalloc/jemalloc/issues/843
 // [2]: https://github.com/jemalloc/jemalloc/issues/1467
+//
+// Furthermore, as of Aug. 2022, some engineers are using profiling
+// tools, e.g. `heaptrack`, that only work with the system allocator.
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -124,7 +127,8 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-    let otel_enable_callback = mz_ore::tracing::configure("storaged", &args.tracing).await?;
+    let (otel_enable_callback, stderr_filter_callback) =
+        mz_ore::tracing::configure("storaged", &args.tracing).await?;
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
@@ -165,6 +169,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                             mz_http_util::handle_enable_otel(otel_enable_callback, payload).await
                         }),
                     )
+                    .route(
+                        "/api/stderr/config",
+                        routing::put(move |payload| async move {
+                            mz_http_util::handle_modify_stderr_filter(
+                                stderr_filter_callback,
+                                payload,
+                            )
+                            .await
+                        }),
+                    )
                     .into_make_service(),
             ),
         );
@@ -187,6 +201,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             secrets_reader,
         ),
     };
+
+    // Initialize fail crate for failpoint support
+    let _failpoint_scenario = fail::FailScenario::setup();
 
     let (_server, client) = mz_storage::serve(config)?;
     GrpcServer::serve(

@@ -447,7 +447,7 @@
     description: Specified time component from value
     url: date-part
 
-  - signature: mz_logical_timestamp() -> numeric
+  - signature: mz_now() -> mztimestamp
     description: |
       The logical time at which a query executes. Used for temporal filters and internal debugging.
       <br><br>
@@ -499,8 +499,8 @@
 
 - type: UUID
   functions:
-  - signature: mz_cluster_id() -> uuid
-    description: The `uuid` uniquely identifying this Materialize cluster.
+  - signature: mz_environment_id() -> uuid
+    description: The `uuid` uniquely identifying this Materialize environment.
     unmaterializable: true
 
 - type: JSON

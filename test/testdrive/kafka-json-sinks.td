@@ -7,20 +7,26 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
+
 > CREATE MATERIALIZED VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
 
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SINK simple_view_sink FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'unnamed-cols-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'unnamed-cols-sink-${testdrive.seed}')
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.simple_view_sink key=false
 {"before": null, "after": {"a": 1, "b": 2, "c": 3}}
 
 > CREATE SINK simple_view_upsert FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'unnamed-upsert'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-upsert-${testdrive.seed}')
   KEY (b)
   FORMAT JSON
   ENVELOPE UPSERT
@@ -47,7 +53,7 @@ $ kafka-verify format=json sink=materialize.public.simple_view_upsert key=true
   '{"a": 2}'::jsonb c14
 
 > CREATE SINK types_sink FROM types_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'types-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-types-sink-${testdrive.seed}')
   FORMAT JSON
 
 # Due to limitations in $ kafka-verify, the entire expected JSON output needs to be provided on a single line
@@ -60,7 +66,7 @@ $ kafka-verify format=json sink=materialize.public.types_sink key=false
   SELECT 'текст' c1, '"' c2, '''' c3, '\' c4, E'a\n\tb' c5
 
 > CREATE SINK special_characters_sink FROM special_characters_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'special-characters-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-special-characters-sink-${testdrive.seed}')
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.special_characters_sink key=false
@@ -71,7 +77,7 @@ $ kafka-verify format=json sink=materialize.public.special_characters_sink key=f
 > CREATE MATERIALIZED VIEW record_view AS SELECT simple_view FROM simple_view;
 
 > CREATE SINK record_sink FROM record_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'record-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-record-sink-${testdrive.seed}')
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.record_sink key=false
@@ -97,7 +103,7 @@ contains:column "a" specified more than once
 > CREATE MATERIALIZED VIEW complex_type_view AS SELECT '{{1,2},{3,4}}'::int4_list_list c1, '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2;
 
 > CREATE SINK complex_type_sink FROM complex_type_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'complex-type-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-complex-type-sink-${testdrive.seed}')
   FORMAT JSON
 
 $ kafka-verify format=json sink=materialize.public.complex_type_sink key=false

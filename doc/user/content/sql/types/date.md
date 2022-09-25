@@ -14,8 +14,8 @@ Detail | Info
 **Size** | 1 byte
 **Catalog name** | `pg_catalog.date`
 **OID** | 1082
-**Min value** | 4713 BC
-**Max value** | 5874897 AD
+**Min value** | 4714-11-24 BC
+**Max value** | 262143-12-31 AD
 **Resolution** | 1 day
 
 ## Syntax

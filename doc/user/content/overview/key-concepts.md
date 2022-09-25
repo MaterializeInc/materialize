@@ -24,6 +24,7 @@ Component | Use
 **Sources** | Sources describe an external system you want Materialize to read data from (e.g. Kafka).
 **Views** | Views represent queries of sources and other views that you want to save for repeated execution.
 **Indexes** | Indexes represent query results stored in memory.
+**Sinks** | Sinks represent output streams or files that Materialize sends data to.
 **Clusters** | Clusters represent a logical set of indexes that share physical resources.
 **Cluster replicas** | Cluster replicas provide physical resources for a cluster's indexes.
 
@@ -86,6 +87,16 @@ Envelope | Action
 **Debezium** | Treats data as wrapped in a "diff envelope" that indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Kafka&mdash;Using Debezium](/sql/create-source/kafka/#using-debezium).
 **Upsert** | Treats data as having a key and a value. New records with non-null value that have the same key as a preexisting record in the dataflow will replace the preexisting record. New records with null value that have the same key as preexisting record will cause the preexisting record to be deleted. <br/><br/>For more information, see [`CREATE SOURCE`: &mdash;Handling upserts](/sql/create-source/kafka/#handling-upserts)
 
+## Sinks
+
+Sinks are the inverse of sources and represent a connection to an external stream
+where Materialize outputs data. When a user defines a sink over a materialized view,
+source, or table, Materialize automatically generates the required schema and writes down
+the stream of changes to that view or source. In effect, Materialize sinks act as
+change data capture (CDC) producers for the given source or view.
+
+Currently, Materialize only supports sending sink data to Kafka.
+
 ## Views
 
 In SQL, views represent a query that you save with some given name. These are
@@ -97,7 +108,7 @@ Materialize offers the following types of views:
 
 Type | Use
 -----|-----
-**Materialized views** | Incrementally updated views whose results are maintained in memory
+**Materialized views** | Incrementally updated views whose results are persisted in durable storage
 **Non-materialized views** | Queries saved under a name for reference, like traditional SQL views
 
 All views in Materialize are built by reading data from sources and other views.
@@ -105,23 +116,23 @@ All views in Materialize are built by reading data from sources and other views.
 ### Materialized views
 
 Materialized views embed a query like a traditional SQL view, but&mdash;unlike a
-SQL view&mdash;compute and incrementally update the results of the embedded
-query. This lets users read from materialized views and receive fresh answers
-with incredibly low latencies.
+SQL view&mdash;compute and incrementally update the results of this embedded
+query. The results of a materialized view are persisted in durable storage,
+which allows you to effectively decouple the computational resources used for
+view maintenance from the resources used for query serving.
 
 Materialize accomplishes incremental updates by creating a set of persistent
 transformations&mdash;known as a "dataflow"&mdash;that represent the query's
 output. As new data comes in from sources, it's fed into materialized views that
 query the source. Materialize then incrementally updates the materialized view's
 output by understanding what has changed in the data, based on the source's
-envelope. Any changes to a view's output is then propagated to materialized
+envelope. Any changes to a view's output are then propagated to materialized
 views that query it, and the process repeats.
 
 When reading from a materialized view, Materialize simply returns the dataflow's
-current result set.
-
-You can find more information about how materialized views work in the
-[Indexes](#indexes) section below.
+current result set from durable storage. To improve the speed of queries on
+materialized views, we recommend creating [indexes](#indexes) based on
+common query patterns.
 
 ### Non-materialized views
 
@@ -129,37 +140,24 @@ Non-materialized views simply store a verbatim query and provide a shorthand
 for performing the query.
 
 Unlike materialized views, non-materialized views _do not_ store the results of
-their embedded queries. This means they take up very little memory, but also
-provide very little benefit in terms of reducing the latency and computation
-needed to answer queries.
-
-If you plan on repeatedly reading from a view, we recommend using a materialized
-view.
+their embedded queries. The results of a view can be incrementally
+maintained in memory within a [cluster](/overview/key-concepts/#clusters) by
+creating an index. This allows you to serve queries without
+the overhead of materializing the view.
 
 ## Indexes
 
-An index is the component that actually "materializes" a view by storing its
-results in memory, though, more generally, indexes can simply store any subset of
-a query's data.
+Indexes assemble and maintain a query's results in memory within a
+[cluster](/overview/key-concepts#clusters), which provides future queries
+the data they need in a format they can immediately use.
 
-Each materialized view contains at least one index, which both lets it maintain
-the result set as new data streams in and provides low-latency reads.
+These continually updated indexes are known as
+_arrangements_ within Materialize's dataflows. In the simplest case, the
+arrangement is the last operator and simply stores the query's output in
+memory. In more complex cases, arrangements let Materialize perform
+sophisticated operations like joins more efficiently.
 
-If you add an index to a non-materialized view, it becomes a
-materialized view, and starts incrementally updating the results of its embedded query.
-
-### Interaction with materialized views
-
-As mentioned before, each materialized view has at least one index that
-maintains the embedded query's result in memory; the continually updated indexes are known as
-"arrangements" within Materialize's dataflows.  In the simplest case, the arrangement is the
-last operator and simply stores the query's output in memory. In more complex
-cases, arrangements let Materialize perform more sophisticated aggregations like `JOIN`s more
-quickly.
-
-Creating additional indexes on materialized views lets you store some subset of a query's data in memory using a different structure, which can be useful if you want to perform a join over a view's data using non-primary keys (e.g. foreign keys).
-
-For a deeper dive into arrangements, see [Arrangements](/overview/arrangements/).
+For a deeper dive into how indexes work, see [Arrangements](/overview/arrangements/).
 
 ## Clusters
 
@@ -168,7 +166,7 @@ dataflow-powered objects, e.g. indexes. When creating dataflow-powered
 objects, you must specify which cluster you want to use. (Not explicitly naming
 a cluster uses your session's default cluster.)
 
-Importantly, clusters are strictly a logical component; they rely on  [cluster
+Importantly, clusters are strictly a logical component; they rely on [cluster
 replicas](#cluster-replicas) to run dataflows. Said a slightly different way, a
 cluster with no replicas does no computation. For example, if you create an
 index on a cluster with no replicas, you cannot select from that index because
@@ -228,6 +226,7 @@ Add replicas to a cluster | Greater tolerance to replica failure
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
 - [`CREATE VIEW`](/sql/create-view)
 - [`CREATE INDEX`](/sql/create-index)
+- [`CREATE SINK`](/sql/create-sink)
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 

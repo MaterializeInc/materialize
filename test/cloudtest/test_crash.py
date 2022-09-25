@@ -31,7 +31,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > CREATE SOURCE s1
               FROM KAFKA CONNECTION kafka
-              TOPIC 'testdrive-crash-${testdrive.seed}'
+              (TOPIC 'testdrive-crash-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
 

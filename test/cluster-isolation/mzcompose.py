@@ -120,6 +120,8 @@ def validate(c: Composition) -> None:
         """
 # Dataflows
 
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 > SET cluster=cluster2
 
 > SELECT * FROM v1;
@@ -172,14 +174,24 @@ t1
 
 # Sources
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+# Explicitly set a progress topic to ensure multiple runs (which the
+# mzcompose.py driver does) do not clash.
+# TODO: remove this once we add some form of nonce to the default progress
+# topic name.
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}',
+  PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}';
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 $ kafka-create-topic topic=source1 partitions=1
 $ kafka-ingest format=bytes topic=source1
 A
 
 > CREATE SOURCE source1
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-source1-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source1-${testdrive.seed}')
   FORMAT BYTES
 
 > SELECT * FROM source1
@@ -187,8 +199,8 @@ A
 
 # Sinks
 > CREATE SINK sink1 FROM v1mat
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'sink1'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink1')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
 {"before": null, "after": {"row":{"c1": 3}}}
@@ -204,22 +216,10 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     c.wait_for_materialized()
 
     nodes = [
-        Computed(
-            name="computed_1_1",
-            peers=["computed_1_1", "computed_1_2"],
-        ),
-        Computed(
-            name="computed_1_2",
-            peers=["computed_1_1", "computed_1_2"],
-        ),
-        Computed(
-            name="computed_2_1",
-            peers=["computed_2_1", "computed_2_2"],
-        ),
-        Computed(
-            name="computed_2_2",
-            peers=["computed_2_1", "computed_2_2"],
-        ),
+        Computed(name="computed_1_1"),
+        Computed(name="computed_1_2"),
+        Computed(name="computed_2_1"),
+        Computed(name="computed_2_2"),
     ]
 
     with c.override(*nodes):
@@ -228,14 +228,20 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.sql(
             """
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
-            CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1_1:2100', 'computed_1_2:2100']));
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                REMOTE ['computed_1_1:2100', 'computed_1_2:2100'],
+                COMPUTE ['computed_1_1:2102', 'computed_1_2:2102']
+            ));
             """
         )
 
         c.sql(
             """
             DROP CLUSTER IF EXISTS cluster2 CASCADE;
-            CREATE CLUSTER cluster2 REPLICAS (replica1 (REMOTE ['computed_2_1:2100', 'computed_2_2:2100']));
+            CREATE CLUSTER cluster2 REPLICAS (replica1 (
+                REMOTE ['computed_2_1:2100', 'computed_2_2:2100'],
+                COMPUTE ['computed_2_1:2102', 'computed_2_2:2102']
+            ));
             """
         )
 

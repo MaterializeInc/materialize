@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
@@ -24,7 +25,8 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
-use crate::internal::paths::PartialBlobKey;
+use crate::internal::gc::GcReq;
+use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
 use crate::write::WriterId;
@@ -41,6 +43,9 @@ pub struct ReaderState<T> {
     pub since: Antichain<T>,
     /// UNIX_EPOCH timestamp (in millis) of this reader's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
+    /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
+    /// after which this reader may be expired
+    pub lease_duration_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,28 +57,95 @@ pub struct WriterState {
     pub lease_duration_ms: u64,
 }
 
+/// A subset of a [HollowBatch] corresponding 1:1 to a blob.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HollowBatchPart {
+    /// Pointer usable to retrieve the updates.
+    pub key: PartialBatchKey,
+    /// The encoded size of this part.
+    pub encoded_size_bytes: usize,
+}
+
 /// A [Batch] but with the updates themselves stored externally.
 ///
 /// [Batch]: differential_dataflow::trace::BatchReader
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
     pub desc: Description<T>,
     /// Pointers usable to retrieve the updates.
-    pub keys: Vec<PartialBlobKey>,
+    pub parts: Vec<HollowBatchPart>,
     /// The number of updates in the batch.
     pub len: usize,
+    /// Runs of sequential sorted batch parts, stored as indices into `parts`.
+    /// ex.
+    /// ```text
+    ///     parts=[p1, p2, p3], runs=[]     --> run  is  [p1, p2, p2]
+    ///     parts=[p1, p2, p3], runs=[1]    --> runs are [p1] and [p2, p3]
+    ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
+    /// ```
+    pub runs: Vec<usize>,
+}
+
+impl<T: Ord> PartialOrd for HollowBatch<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Ord> Ord for HollowBatch<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Deconstruct self and other so we get a compile failure if new fields
+        // are added.
+        let HollowBatch {
+            desc: self_desc,
+            parts: self_parts,
+            len: self_len,
+            runs: self_runs,
+        } = self;
+        let HollowBatch {
+            desc: other_desc,
+            parts: other_parts,
+            len: other_len,
+            runs: other_runs,
+        } = other;
+        (
+            self_desc.lower().elements(),
+            self_desc.upper().elements(),
+            self_desc.since().elements(),
+            self_parts,
+            self_len,
+            self_runs,
+        )
+            .cmp(&(
+                other_desc.lower().elements(),
+                other_desc.upper().elements(),
+                other_desc.since().elements(),
+                other_parts,
+                other_len,
+                other_runs,
+            ))
+    }
 }
 
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct StateCollections<T> {
+    // - Invariant: `<= all reader.since`
+    // - Invariant: Doesn't regress across state versions.
     pub(crate) last_gc_req: SeqNo,
 
-    pub(crate) readers: HashMap<ReaderId, ReaderState<T>>,
-    pub(crate) writers: HashMap<WriterId, WriterState>,
+    // - Invariant: There is a rollup with `seqno <= self.seqno_since`.
+    pub(crate) rollups: BTreeMap<SeqNo, PartialRollupKey>,
 
+    pub(crate) readers: BTreeMap<ReaderId, ReaderState<T>>,
+    pub(crate) writers: BTreeMap<WriterId, WriterState>,
+
+    // - Invariant: `trace.since == meet(all reader.since)`
+    // - Invariant: `trace.since` doesn't regress across state versions.
+    // - Invariant: `trace.upper` doesn't regress across state versions.
+    // - Invariant: `trace` upholds its own invariants.
     pub(crate) trace: Trace<T>,
 }
 
@@ -81,10 +153,36 @@ impl<T> StateCollections<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
+    pub fn add_and_remove_rollups(
+        &mut self,
+        add_rollup: (SeqNo, &PartialRollupKey),
+        remove_rollups: &[(SeqNo, PartialRollupKey)],
+    ) -> ControlFlow<Infallible, bool> {
+        let (rollup_seqno, rollup_key) = add_rollup;
+        let applied = match self.rollups.get(&rollup_seqno) {
+            Some(x) => x == rollup_key,
+            None => {
+                self.rollups.insert(rollup_seqno, rollup_key.to_owned());
+                true
+            }
+        };
+        for (seqno, key) in remove_rollups {
+            let removed_key = self.rollups.remove(&seqno);
+            debug_assert!(
+                removed_key.as_ref().map_or(true, |x| x == key),
+                "{} vs {:?}",
+                key,
+                removed_key
+            );
+        }
+        Continue(applied)
+    }
+
     pub fn register_reader(
         &mut self,
         reader_id: &ReaderId,
         seqno: SeqNo,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, (Upper<T>, ReaderState<T>)> {
         // TODO: Handle if the reader or writer already exist (probably with a
@@ -93,6 +191,8 @@ where
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+            lease_duration_ms: u64::try_from(lease_duration.as_millis())
+                .expect("lease duration as millis should fit within u64"),
         };
         self.readers.insert(reader_id.clone(), read_cap.clone());
         Continue((Upper(self.trace.upper().clone()), read_cap))
@@ -117,6 +217,7 @@ where
         &mut self,
         new_reader_id: &ReaderId,
         seqno: SeqNo,
+        lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, ReaderState<T>> {
         // TODO: Handle if the reader already exists (probably with a retry).
@@ -124,6 +225,8 @@ where
             seqno,
             since: self.trace.since().clone(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
+            lease_duration_ms: u64::try_from(lease_duration.as_millis())
+                .expect("lease duration as millis should fit within u64"),
         };
         self.readers.insert(new_reader_id.clone(), read_cap.clone());
         Continue(read_cap)
@@ -148,11 +251,11 @@ where
 
         // If the time interval is empty, the list of updates must also be
         // empty.
-        if batch.desc.upper() == batch.desc.lower() && !batch.keys.is_empty() {
+        if batch.desc.upper() == batch.desc.lower() && !batch.parts.is_empty() {
             return Break(Err(InvalidUsage::InvalidEmptyTimeInterval {
                 lower: batch.desc.lower().clone(),
                 upper: batch.desc.upper().clone(),
-                keys: batch.keys.to_vec(),
+                keys: batch.parts.iter().map(|x| x.key.clone()).collect(),
             }));
         }
 
@@ -161,15 +264,17 @@ where
             return Break(Ok(Upper(shard_upper.clone())));
         }
 
-        if batch.desc.upper() != batch.desc.lower() {
-            self.trace.push_batch(batch.clone());
-        }
+        let merge_reqs = if batch.desc.upper() != batch.desc.lower() {
+            self.trace.push_batch(batch.clone())
+        } else {
+            Vec::new()
+        };
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
 
         // Also use this as an opportunity to heartbeat the writer
         self.writer(writer_id).last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
 
-        Continue(self.trace.take_merge_reqs())
+        Continue(merge_reqs)
     }
 
     pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ControlFlow<Infallible, bool> {
@@ -181,6 +286,7 @@ where
         &mut self,
         reader_id: &ReaderId,
         seqno: SeqNo,
+        outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<Infallible, Since<T>> {
@@ -189,6 +295,21 @@ where
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
         reader_state.last_heartbeat_timestamp_ms = heartbeat_timestamp_ms;
+
+        let seqno = match outstanding_seqno {
+            Some(outstanding_seqno) => {
+                assert!(
+                    outstanding_seqno >= reader_state.seqno,
+                    "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
+                    is behind current reader_state ({:?})",
+                    outstanding_seqno,
+                    reader_state.seqno,
+                );
+                std::cmp::min(outstanding_seqno, seqno)
+            }
+            None => seqno,
+        };
+
         reader_state.seqno = seqno;
 
         let reader_current_since = if PartialOrder::less_than(&reader_state.since, new_since) {
@@ -249,7 +370,12 @@ where
             // (1) is a gross mis-use and (2) may happen if a reader did not
             // get to heartbeat for a long time. Readers are expected to
             // heartbeat/downgrade their since regularly.
-            .unwrap_or_else(|| panic!("ReaderId({}) was expired due to inactivity", id))
+            .unwrap_or_else(|| {
+                panic!(
+                    "ReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
+                    id
+                )
+            })
     }
 
     fn writer(&mut self, id: &WriterId) -> &mut WriterState {
@@ -261,7 +387,12 @@ where
             // not get to heartbeat for a long time. Writers are expected to
             // append updates regularly, even empty batches to maintain their
             // lease.
-            .unwrap_or_else(|| panic!("WriterId({}) was expired due to inactivity", id))
+            .unwrap_or_else(|| {
+                panic!(
+                    "WriterId({}) was expired due to inactivity. Did the machine go to sleep?",
+                    id
+                )
+            })
     }
 
     fn update_since(&mut self) {
@@ -283,7 +414,6 @@ where
 
 // TODO: Document invariants.
 #[derive(Debug)]
-#[cfg_attr(test, derive(PartialEq))]
 pub struct State<K, V, T, D> {
     pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
@@ -313,28 +443,37 @@ impl<K, V, T: Clone, D> State<K, V, T, D> {
     }
 }
 
+// Impl PartialEq regardless of the type params.
+#[cfg(any(test, debug_assertions))]
+impl<K, V, T: PartialEq, D> PartialEq for State<K, V, T, D> {
+    fn eq(&self, other: &Self) -> bool {
+        // Deconstruct self and other so we get a compile failure if new fields
+        // are added.
+        let State {
+            applier_version: self_applier_version,
+            shard_id: self_shard_id,
+            seqno: self_seqno,
+            collections: self_collections,
+            _phantom: _,
+        } = self;
+        let State {
+            applier_version: other_applier_version,
+            shard_id: other_shard_id,
+            seqno: other_seqno,
+            collections: other_collections,
+            _phantom: _,
+        } = other;
+        self_applier_version == other_applier_version
+            && self_shard_id == other_shard_id
+            && self_seqno == other_seqno
+            && self_collections == other_collections
+    }
+}
+
 impl<K, V, T, D> State<K, V, T, D>
 where
-    K: Codec,
-    V: Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Codec64,
 {
-    pub fn new(applier_version: Version, shard_id: ShardId) -> Self {
-        State {
-            applier_version,
-            shard_id,
-            seqno: SeqNo::minimum(),
-            collections: StateCollections {
-                last_gc_req: SeqNo::minimum(),
-                readers: HashMap::new(),
-                writers: HashMap::new(),
-                trace: Trace::default(),
-            },
-            _phantom: PhantomData,
-        }
-    }
-
     pub fn shard_id(&self) -> ShardId {
         self.shard_id
     }
@@ -351,20 +490,59 @@ where
         self.collections.trace.upper()
     }
 
-    pub fn batch_count(&self) -> usize {
-        self.collections.trace.num_hollow_batches()
+    pub fn batch_part_count(&self) -> usize {
+        self.collections.trace.num_batch_parts()
     }
 
     pub fn num_updates(&self) -> usize {
         self.collections.trace.num_updates()
     }
 
-    fn seqno_since(&self) -> SeqNo {
+    pub fn encoded_batch_size(&self) -> usize {
+        self.collections.trace.encoded_batch_size()
+    }
+
+    pub fn latest_rollup(&self) -> (&SeqNo, &PartialRollupKey) {
+        // We maintain the invariant that every version of state has at least
+        // one rollup.
+        self.collections
+            .rollups
+            .iter()
+            .rev()
+            .next()
+            .expect("State should have at least one rollup if seqno > minimum")
+    }
+
+    pub(super) fn seqno_since(&self) -> SeqNo {
         let mut seqno_since = self.seqno;
         for cap in self.collections.readers.values() {
             seqno_since = std::cmp::min(seqno_since, cap.seqno);
         }
         seqno_since
+    }
+}
+
+impl<K, V, T, D> State<K, V, T, D>
+where
+    K: Codec,
+    V: Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Codec64,
+{
+    pub fn new(applier_version: Version, shard_id: ShardId) -> Self {
+        State {
+            applier_version,
+            shard_id,
+            seqno: SeqNo::minimum(),
+            collections: StateCollections {
+                last_gc_req: SeqNo::minimum(),
+                rollups: BTreeMap::new(),
+                readers: BTreeMap::new(),
+                writers: BTreeMap::new(),
+                trace: Trace::default(),
+            },
+            _phantom: PhantomData,
+        }
     }
 
     // Returns whether the cmd proposing this state has been selected to perform
@@ -378,7 +556,7 @@ where
     // them being executed in the order they are given. But it is expected that
     // gc assignments are best-effort respected. In practice, cmds like
     // register_foo or expire_foo, where it would be awkward, ignore gc.
-    pub fn maybe_gc(&mut self, is_write: bool) -> Option<(SeqNo, SeqNo)> {
+    pub fn maybe_gc(&mut self, is_write: bool) -> Option<GcReq> {
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
         // could use a tuning pass at some point.
@@ -386,16 +564,20 @@ where
             1,
             u64::from(self.seqno.0.next_power_of_two().trailing_zeros()),
         );
-        let seqno_since = self.seqno_since();
-        let should_gc =
-            seqno_since.0.saturating_sub(self.collections.last_gc_req.0) >= gc_threshold;
+        let new_seqno_since = self.seqno_since();
+        let should_gc = new_seqno_since
+            .0
+            .saturating_sub(self.collections.last_gc_req.0)
+            >= gc_threshold;
         // Assign GC traffic preferentially to writers, falling back to anyone
         // generating new state versions if there are no writers.
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
         if should_gc {
-            let req = (self.collections.last_gc_req, seqno_since);
-            self.collections.last_gc_req = seqno_since;
-            Some(req)
+            self.collections.last_gc_req = new_seqno_since;
+            Some(GcReq {
+                shard_id: self.shard_id,
+                new_seqno_since,
+            })
         } else {
             None
         }
@@ -483,18 +665,11 @@ where
         &self,
         now_ms: EpochMillis,
     ) -> (Vec<ReaderId>, Vec<WriterId>) {
-        // TODO: Give lots of extra leeway in this temporary hack version of
-        // automatic expiry.
-        let read_lease_duration = PersistConfig::FAKE_READ_LEASE_DURATION * 15;
-
         let mut readers = Vec::new();
         for (reader, state) in self.collections.readers.iter() {
-            // TODO: We likely want to store the lease duration in state, so the
-            // answer to which readers are considered expired doesn't depend on
-            // the version of the code running.
             let time_since_last_heartbeat_ms =
                 now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
-            if Duration::from_millis(time_since_last_heartbeat_ms) > read_lease_duration {
+            if time_since_last_heartbeat_ms > state.lease_duration_ms {
                 readers.push(reader.clone());
             }
         }
@@ -507,6 +682,16 @@ where
             }
         }
         (readers, writers)
+    }
+
+    pub fn need_rollup(&self) -> Option<SeqNo> {
+        let (latest_rollup_seqno, _) = self.latest_rollup();
+        if self.seqno.0.saturating_sub(latest_rollup_seqno.0) > PersistConfig::NEED_ROLLUP_THRESHOLD
+        {
+            Some(self.seqno)
+        } else {
+            None
+        }
     }
 }
 
@@ -544,11 +729,15 @@ mod tests {
                 Antichain::from_elem(upper),
                 Antichain::from_elem(T::minimum()),
             ),
-            keys: keys
+            parts: keys
                 .iter()
-                .map(|x| PartialBlobKey((*x).to_owned()))
+                .map(|x| HollowBatchPart {
+                    key: PartialBatchKey((*x).to_owned()),
+                    encoded_size_bytes: 0,
+                })
                 .collect(),
             len,
+            runs: vec![],
         }
     }
 
@@ -559,53 +748,77 @@ mod tests {
         let reader = ReaderId::new();
         let seqno = SeqNo::minimum();
         let now = SYSTEM_TIME.clone();
-        let _ = state.collections.register_reader(&reader, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader, seqno, Duration::from_secs(10), now());
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
 
         // Greater
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(2), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(2),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Equal (no-op)
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(2), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(2),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Less (no-op)
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(1), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(1),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(2)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
 
         // Create a second reader.
         let reader2 = ReaderId::new();
-        let _ = state.collections.register_reader(&reader2, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader2, seqno, Duration::from_secs(10), now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader2, seqno, &Antichain::from_elem(3), now()),
+            state.collections.downgrade_since(
+                &reader2,
+                seqno,
+                None,
+                &Antichain::from_elem(3),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(3)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Shard since == 3 when all readers have since >= 3.
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader, seqno, &Antichain::from_elem(5), now()),
+            state.collections.downgrade_since(
+                &reader,
+                seqno,
+                None,
+                &Antichain::from_elem(5),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(5)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
@@ -616,13 +829,19 @@ mod tests {
 
         // Create a third reader.
         let reader3 = ReaderId::new();
-        let _ = state.collections.register_reader(&reader3, seqno, now());
+        let _ = state
+            .collections
+            .register_reader(&reader3, seqno, Duration::from_secs(10), now());
 
         // Shard since doesn't change until the meet (min) of all reader sinces changes.
         assert_eq!(
-            state
-                .collections
-                .downgrade_since(&reader3, seqno, &Antichain::from_elem(10), now()),
+            state.collections.downgrade_since(
+                &reader3,
+                seqno,
+                None,
+                &Antichain::from_elem(10),
+                now()
+            ),
             Continue(Since(Antichain::from_elem(10)))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
@@ -680,7 +899,7 @@ mod tests {
             Break(Err(InvalidEmptyTimeInterval {
                 lower: Antichain::from_elem(5),
                 upper: Antichain::from_elem(5),
-                keys: vec![PartialBlobKey("key1".to_owned())],
+                keys: vec![PartialBatchKey("key1".to_owned())],
             }))
         );
 
@@ -746,13 +965,17 @@ mod tests {
 
         let reader = ReaderId::new();
         // Advance the since to 2.
-        let _ = state
-            .collections
-            .register_reader(&reader, SeqNo::minimum(), now());
+        let _ = state.collections.register_reader(
+            &reader,
+            SeqNo::minimum(),
+            Duration::from_secs(10),
+            now(),
+        );
         assert_eq!(
             state.collections.downgrade_since(
                 &reader,
                 SeqNo::minimum(),
+                None,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -956,7 +1179,13 @@ mod tests {
         assert_eq!(state.maybe_gc(false), None);
 
         // A write will gc though.
-        assert_eq!(state.maybe_gc(true), Some((SeqNo::minimum(), SeqNo(100))));
+        assert_eq!(
+            state.maybe_gc(true),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(100)
+            })
+        );
 
         // Artificially advance the seqno (again) so the seqno_since advances
         // past our internal gc_threshold (again).
@@ -965,6 +1194,12 @@ mod tests {
 
         // If there are no writers, even a non-write will gc.
         let _ = state.collections.expire_writer(&writer_id);
-        assert_eq!(state.maybe_gc(true), Some((SeqNo(100), SeqNo(200))));
+        assert_eq!(
+            state.maybe_gc(true),
+            Some(GcReq {
+                shard_id: state.shard_id,
+                new_seqno_since: SeqNo(200)
+            })
+        );
     }
 }

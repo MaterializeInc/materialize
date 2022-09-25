@@ -10,7 +10,6 @@
 use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
-use std::convert::Infallible;
 use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
@@ -30,12 +29,11 @@ use mz_expr::{EvalError, MirScalarExpr};
 use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::operator::StreamExt;
 
-use crate::source::DecodeResult;
+use crate::source::types::DecodeResult;
 use crate::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertValueError,
 };
 use crate::types::sources::{MzOffset, UpsertEnvelope, UpsertStyle};
-use crate::types::transforms::LinearOperator;
 
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 struct UpsertSourceData {
@@ -59,7 +57,6 @@ struct UpsertSourceData {
 pub(crate) fn upsert<G>(
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
-    operators: &mut Option<LinearOperator>,
     // Full arity, including the key columns
     source_arity: usize,
     upsert_envelope: UpsertEnvelope,
@@ -72,7 +69,7 @@ pub(crate) fn upsert<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    if as_of_frontier != Antichain::from_elem(0) {
+    if as_of_frontier != Antichain::from_elem(timely::progress::Timestamp::minimum()) {
         info!("upsert resuming from time {as_of_frontier:?}");
     }
     // Currently, the upsert-specific transformations run in the
@@ -114,38 +111,9 @@ where
     // as the non-temporal determine if a record is retained at all,
     // and the temporal indicate how we should transform its timestamps
     // when it is transmitted.
-    let mut temporal = Vec::new();
-    let mut predicates = Vec::new();
-    let mut position_or = (0..source_arity).map(Some).collect::<Vec<_>>();
-    if let Some(mut operators) = operators.take() {
-        for predicate in operators.predicates.drain(..) {
-            if predicate.contains_temporal() {
-                temporal.push(predicate);
-            } else {
-                predicates.push(predicate);
-            }
-        }
-        // Temporal predicates will be applied after blanking out column,
-        // so ensure that their support is preserved.
-        // TODO: consider blanking out columns added by this processes in
-        // the temporal filtering operator.
-        for predicate in temporal.iter() {
-            operators.projection.extend(predicate.support());
-        }
-        operators.projection.sort();
-        operators.projection.dedup();
-
-        // Overwrite `position_or` to reflect `operators.projection`.
-        position_or = (0..source_arity)
-            .map(|col| {
-                if operators.projection.contains(&col) {
-                    Some(col)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-    }
+    let temporal = Vec::new();
+    let predicates = Vec::new();
+    let position_or = (0..source_arity).map(Some).collect::<Vec<_>>();
     let temporal_plan = if !temporal.is_empty() {
         let temporal_mfp = mz_expr::MapFilterProject::new(source_arity).filter(temporal);
         Some(temporal_mfp.into_plan().unwrap_or_else(|e| panic!("{}", e)))
@@ -185,7 +153,14 @@ where
             move |(row, time, diff)| {
                 let arena = mz_repr::RowArena::new();
                 let mut datums_local = datum_vec.borrow_with(&row);
-                plan.evaluate(&mut datums_local, &arena, time, diff, &mut row_builder)
+                plan.evaluate(
+                    &mut datums_local,
+                    &arena,
+                    time,
+                    diff,
+                    |_time| true,
+                    &mut row_builder,
+                )
             }
         });
 
@@ -319,10 +294,34 @@ where
         key_indices_sorted.clone(),
         &upsert_envelope.key_indices,
     );
+
+    // It's very important to hash the right thing. We have nested `Option` and
+    // `Result` here. And, for example, `Some(key).hashed()` is not the same as
+    // `key.hashed()`.
+    //
+    // We make sure  to hash the same thing for both previous updates and new
+    // updates.
+    //
+    // Also: this problem was only showing up when trying to use upsert-style
+    // sources with multiple storaged workers.
     let result_stream = stream.binary_frontier(
         &previous_ok.inner,
-        Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
-        Exchange::new(|((key, _v), _t, _r)| Ok::<_, Infallible>(key).hashed()),
+        Exchange::new(move |DecodeResult { key, .. }| {
+            // N.B. We make the expected type explicit here to make sure it
+            // cannot change by accident.
+            let key: &Option<Result<Row, DecodeError>> = key;
+            // Another N.B. we use `as_ref()` here so that we're hashing a
+            // `Option<&Result<Row, DecodeError>`, like we do below. We don't
+            // stricly need it because the result is the same without but with
+            // this we are extra future safe.
+            key.as_ref().hashed()
+        }),
+        Exchange::new(|((key, _v), _t, _r)| {
+            // N.B.  We make the expected type explicit here to make sure it
+            // cannot change by accident.
+            let key: &Result<Row, DecodeError> = key;
+            Some(key).hashed()
+        }),
         "Upsert",
         move |_cap, _info| {
             // This is a map of (time) -> (capability, ((key) -> (value with max offset)))
@@ -545,7 +544,7 @@ fn process_new_data(
 fn process_pending_values_batch(
     // The time, capability, and map of data at that time we
     // are processing in this call.
-    time: &u64,
+    time: &Timestamp,
     cap: &mut Capability<Timestamp>,
     map: &mut HashMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
     // The current map of values we use to perform the upsert comparision
@@ -574,10 +573,10 @@ fn process_pending_values_batch(
     output: &mut timely::dataflow::operators::generic::OutputHandle<
         '_,
         Timestamp,
-        (Result<Row, DataflowError>, u64, Diff),
+        (Result<Row, DataflowError>, Timestamp, Diff),
         timely::dataflow::channels::pushers::tee::Tee<
             Timestamp,
-            (Result<Row, DataflowError>, u64, Diff),
+            (Result<Row, DataflowError>, Timestamp, Diff),
         >,
     >,
 ) {

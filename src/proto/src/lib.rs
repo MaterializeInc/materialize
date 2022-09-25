@@ -346,6 +346,16 @@ where
     }
 }
 
+impl RustType<()> for () {
+    fn into_proto(&self) -> () {
+        *self
+    }
+
+    fn from_proto(proto: ()) -> Result<Self, TryFromProtoError> {
+        Ok(proto)
+    }
+}
+
 impl RustType<u64> for usize {
     fn into_proto(&self) -> u64 {
         u64::cast_from(*self)

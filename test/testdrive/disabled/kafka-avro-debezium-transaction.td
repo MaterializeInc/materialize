@@ -166,7 +166,7 @@ $ kafka-create-topic topic=data-txdata
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE SOURCE data_txdata
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-txdata-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-txdata-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${txschema}'
   ENVELOPE NONE
 
@@ -188,14 +188,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 # Create a source using an inline schema.
 #
 > CREATE SOURCE data_schema_inline
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (SOURCE data_txdata, COLLECTION 'testdrive-data-${testdrive.seed}')
   )
 
 > CREATE SOURCE data2_schema_inline
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (SOURCE data_txdata, COLLECTION 'testdrive-data2-${testdrive.seed}')
@@ -220,11 +220,14 @@ $ kafka-ingest format=avro topic=data-txdata schema=${txschema} timestamp=2
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 8, "b": 9}}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c", "transaction": {"total_order": null, "id": "5"}}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 > CREATE SINK data_sink FROM data_schema_inline
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-sink-${testdrive.seed}'
-  WITH (reuse_topic=true) FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-sink-${testdrive.seed}')
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # Check that repeated Debezium messages are skipped.
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
@@ -251,12 +254,12 @@ a    b
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 2, "b": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 4, "b": 5}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 2, "b": 3}}}
+{"before": null, "after": {"row": {"a": 4, "b": 5}}}
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 8, "b": 9}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 8, "b": 9}}}
 
 #
 # Test reading from the source when tx and data don't match
@@ -334,8 +337,8 @@ $ unset-regex
 
 # Reingest to verify that we keep transactionality
 > CREATE SOURCE data_sink_reingest
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-sink-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 > SELECT after::text FROM data_sink_reingest ORDER BY transaction ASC
@@ -359,7 +362,7 @@ $ kafka-create-topic topic=data-txdata-bad-schema
 $ kafka-create-topic topic=data-bad-schema
 
 > CREATE SOURCE data_txdata_bad_schema
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-txdata-bad-schema-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-txdata-bad-schema-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${txschema-bad-schema}'
   ENVELOPE NONE
 
@@ -369,7 +372,7 @@ $ kafka-ingest format=avro topic=data-txdata-bad-schema schema=${txschema-bad-sc
 {"status": "END", "id": {"string": "1"}, "event_count": {"long": 3}, "data_collections": {"array": [{"event_count": 3, "data_collection": "testdrive-data-${testdrive.seed}"}]}}
 
 ! CREATE SOURCE data_schema_inline_with_bad_schema_tx_metadata
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-bad-schema-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-bad-schema-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (
@@ -380,7 +383,7 @@ $ kafka-ingest format=avro topic=data-txdata-bad-schema schema=${txschema-bad-sc
 contains:'id' column must be of type non-nullable string
 
 ! CREATE SOURCE data_schema_inline_with_sink
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM (
       TRANSACTION METADATA (SOURCE data_sink, COLLECTION 'testdrive-data-${testdrive.seed}')

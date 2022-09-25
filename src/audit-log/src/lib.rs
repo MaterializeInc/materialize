@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use mz_ore::now::EpochMillis;
 
 /// New version variants should be added if fields need to be added, changed, or removed.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub enum VersionedEvent {
     V1(EventV1),
 }
@@ -42,7 +42,7 @@ impl VersionedEvent {
         event_type: EventType,
         object_type: ObjectType,
         event_details: EventDetails,
-        user: String,
+        user: Option<String>,
         occurred_at: EpochMillis,
     ) -> Self {
         Self::V1(EventV1::new(
@@ -74,7 +74,7 @@ impl VersionedEvent {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum EventType {
     Create,
@@ -84,7 +84,7 @@ pub enum EventType {
 
 serde_plain::derive_display_from_serialize!(EventType);
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum ObjectType {
     Cluster,
@@ -98,41 +98,50 @@ pub enum ObjectType {
 
 serde_plain::derive_display_from_serialize!(ObjectType);
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub enum EventDetails {
     CreateComputeInstanceReplicaV1(CreateComputeInstanceReplicaV1),
     DropComputeInstanceReplicaV1(DropComputeInstanceReplicaV1),
     FullNameV1(FullNameV1),
     NameV1(NameV1),
     RenameItemV1(RenameItemV1),
+    IdNameV1(IdNameV1),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct FullNameV1 {
     pub database: String,
     pub schema: String,
     pub item: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct NameV1 {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct IdNameV1 {
+    pub id: u64,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct RenameItemV1 {
     pub previous_name: FullNameV1,
     pub new_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DropComputeInstanceReplicaV1 {
+    pub cluster_id: u64,
     pub cluster_name: String,
     pub replica_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct CreateComputeInstanceReplicaV1 {
+    pub cluster_id: u64,
     pub cluster_name: String,
     pub replica_name: String,
     pub logical_size: String,
@@ -149,18 +158,19 @@ impl EventDetails {
             }
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::NameV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::IdNameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::FullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct EventV1 {
     pub id: u64,
     pub event_type: EventType,
     pub object_type: ObjectType,
     pub event_details: EventDetails,
-    pub user: String,
+    pub user: Option<String>,
     pub occurred_at: EpochMillis,
 }
 
@@ -170,7 +180,7 @@ impl EventV1 {
         event_type: EventType,
         object_type: ObjectType,
         event_details: EventDetails,
-        user: String,
+        user: Option<String>,
         occurred_at: EpochMillis,
     ) -> EventV1 {
         EventV1 {
@@ -189,19 +199,35 @@ impl EventV1 {
 // failing. Instead of changing data structures, add new variants.
 #[test]
 fn test_audit_log() -> Result<(), anyhow::Error> {
-    let cases: Vec<(VersionedEvent, &'static str)> = vec![(
-        VersionedEvent::V1(EventV1::new(
-            1,
-            EventType::Create,
-            ObjectType::View,
-            EventDetails::NameV1(NameV1 {
-                name: "name".into(),
-            }),
-            "user".into(),
-            1,
-        )),
-        r#"{"V1":{"id":1,"event_type":"create","object_type":"view","event_details":{"NameV1":{"name":"name"}},"user":"user","occurred_at":1}}"#,
-    )];
+    let cases: Vec<(VersionedEvent, &'static str)> = vec![
+        (
+            VersionedEvent::V1(EventV1::new(
+                1,
+                EventType::Create,
+                ObjectType::View,
+                EventDetails::NameV1(NameV1 {
+                    name: "name".into(),
+                }),
+                Some("user".into()),
+                1,
+            )),
+            r#"{"V1":{"id":1,"event_type":"create","object_type":"view","event_details":{"NameV1":{"name":"name"}},"user":"user","occurred_at":1}}"#,
+        ),
+        (
+            VersionedEvent::V1(EventV1::new(
+                2,
+                EventType::Drop,
+                ObjectType::ClusterReplica,
+                EventDetails::IdNameV1(IdNameV1 {
+                    id: 0,
+                    name: "name".into(),
+                }),
+                None,
+                2,
+            )),
+            r#"{"V1":{"id":2,"event_type":"drop","object_type":"cluster-replica","event_details":{"IdNameV1":{"id":0,"name":"name"}},"user":null,"occurred_at":2}}"#,
+        ),
+    ];
 
     for (event, expected_bytes) in cases {
         let event_bytes = serde_json::to_vec(&event).unwrap();
@@ -221,12 +247,12 @@ fn test_audit_log() -> Result<(), anyhow::Error> {
 ///
 /// This type is persisted in the catalog across restarts, so any updates to the
 /// schema will require a new version.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub enum VersionedStorageUsage {
     V1(StorageUsageV1),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageUsageV1 {
     pub id: u64,
     pub object_id: Option<String>,
@@ -276,5 +302,14 @@ impl VersionedStorageUsage {
 
     pub fn serialize(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("must serialize")
+    }
+
+    pub fn timestamp(&self) -> EpochMillis {
+        match self {
+            VersionedStorageUsage::V1(StorageUsageV1 {
+                collection_timestamp,
+                ..
+            }) => *collection_timestamp,
+        }
     }
 }

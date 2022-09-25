@@ -118,6 +118,17 @@ message ProtoAggregateFunc {
         google.protobuf.Empty dummy = 40;
         ProtoWindowFrame first_value = 41;
         ProtoWindowFrame last_value = 42;
+        google.protobuf.Empty max_uint16 = 43;
+        google.protobuf.Empty max_uint32 = 44;
+        google.protobuf.Empty max_uint64 = 45;
+        google.protobuf.Empty min_uint16 = 46;
+        google.protobuf.Empty min_uint32 = 47;
+        google.protobuf.Empty min_uint64 = 48;
+        google.protobuf.Empty sum_uint16 = 49;
+        google.protobuf.Empty sum_uint32 = 50;
+        google.protobuf.Empty sum_uint64 = 51;
+        google.protobuf.Empty max_mz_timestamp = 52;
+        google.protobuf.Empty min_mz_timestamp = 53;
     }
 }
 

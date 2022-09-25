@@ -2,12 +2,12 @@
 name = "mz-repr-test-util"
 description = "Utilities for creating objects in the repr crate for testing"
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
+chrono = { version = "0.4.22", default-features = false, features = ["serde", "std"] }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }

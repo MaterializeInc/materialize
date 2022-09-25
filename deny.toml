@@ -1,14 +1,24 @@
 [bans]
 multiple-versions = "deny"
 # Do not add exemptions for duplicate dependencies! Duplicate dependencies slow
-# down compilation and bloat the binary. Submit PRs upstream to remove
-# duplicated transitive dependencies. If necessary, use patch directives in the
-# root Cargo.toml to point at a Materialize-maintained fork that avoids the
+# down compilation, bloat the binary, and tickle race conditions in `cargo doc`
+# (see rust-lang/cargo#3613). Submit PRs upstream to remove duplicated
+# transitive dependencies. If necessary, use patch directives in the root
+# Cargo.toml to point at a Materialize-maintained fork that avoids the
 # duplicated transitive dependencies.
 
 # Use `tracing` instead.
 [[bans.deny]]
 name = "env_logger"
+
+# Use `md-5` instead, which is part of the RustCrypto ecosystem.
+[[bans.deny]]
+name = "md5"
+
+# Use `sha1` instead, which the RustCrypto ecosystem recently took control of.
+# `sha-1` is the older and now deprecated name.
+[[bans.deny]]
+name = "sha-1"
 
 # Use `prost` or `protobuf-native` instead.
 [[bans.deny]]
@@ -75,6 +85,7 @@ wrappers = [
   "mysql_common",
   "native-tls",
   "opentelemetry",
+  "parse_duration",
   "procfs",
   "prometheus",
   "proptest",
@@ -130,18 +141,23 @@ allow-git = [
     # See: https://github.com/BurntSushi/rust-csv/issues/271
     "https://github.com/BurntSushi/rust-csv.git",
 
-    # Waiting on criterion v0.4, which upgrades to clap v3.
-    "https://github.com/MaterializeInc/criterion.rs.git",
+    # Waiting for an official release of criterion v0.4, which upgrades to clap v3.
+    "https://github.com/bheisler/criterion.rs.git",
 
-    # Waiting on https://github.com/open-telemetry/opentelemetry-rust/pull/783
-    # to make it into a release.
+    # Waiting on v0.18.
+    # See: https://github.com/open-telemetry/opentelemetry-rust/pull/779
     "https://github.com/MaterializeInc/opentelemetry-rust.git",
+
+    # Waiting on tracing-opentelemetry to upgrade to the as-yet unreleased
+    # v0.18 of opentelemetry.
+    "https://github.com/MaterializeInc/tracing.git",
+
+    # Waiting on https://github.com/tikv/pprof-rs/pull/158 to make it into a
+    # release.
+    "https://github.com/MaterializeInc/pprof-rs.git",
 
     # Waiting on https://github.com/AltSysrq/proptest/pull/264.
     "https://github.com/MaterializeInc/proptest.git",
-
-    # Works around https://github.com/tokio-rs/prost/issues/653.
-    "https://github.com/MaterializeInc/prost.git",
 
     # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
     "https://github.com/MaterializeInc/rust-postgres.git",
@@ -149,6 +165,18 @@ allow-git = [
 
     # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
     "https://github.com/MaterializeInc/serde-value.git",
+
+    # Waiting on https://github.com/hyperium/headers/pull/117 to make it into
+    # a release.
+    "https://github.com/hyperium/headers.git",
+
+    # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/71 to make
+    # it into a release.
+    "https://github.com/blackbeam/rust_mysql_common.git",
+
+    # Waiting on https://github.com/snapview/tungstenite-rs/pull/299 to make
+    # it into a release.
+    "https://github.com/snapview/tungstenite-rs.git",
 
     # Dependencies that we control upstream whose official releases we don't
     # care about.

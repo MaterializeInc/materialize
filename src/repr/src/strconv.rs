@@ -50,6 +50,7 @@ use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
+use crate::adt::date::Date;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
@@ -158,12 +159,73 @@ where
     Nestable::Yes
 }
 
-/// Writes an OID to `buf`.
-pub fn format_oid<F>(buf: &mut F, oid: u32) -> Nestable
+/// Parses an [`u16`] from `s`.
+///
+/// Valid values are whatever the [`std::str::FromStr`] implementation on `u16` accepts,
+/// plus leading and trailing whitespace.
+pub fn parse_uint16(s: &str) -> Result<u16, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("uint2", s).with_details(e))
+}
+
+/// Writes an `u16` to `buf`.
+pub fn format_uint16<F>(buf: &mut F, u: u16) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", oid);
+    write!(buf, "{}", u);
+    Nestable::Yes
+}
+
+/// Parses an [`u32`] from `s`.
+///
+/// Valid values are whatever the [`std::str::FromStr`] implementation on `u32` accepts,
+/// plus leading and trailing whitespace.
+pub fn parse_uint32(s: &str) -> Result<u32, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("uint4", s).with_details(e))
+}
+
+/// Writes an `u32` to `buf`.
+pub fn format_uint32<F>(buf: &mut F, u: u32) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", u);
+    Nestable::Yes
+}
+
+/// Parses an `u64` from `s`.
+pub fn parse_uint64(s: &str) -> Result<u64, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("uint8", s).with_details(e))
+}
+
+/// Writes an `u64` to `buf`.
+pub fn format_uint64<F>(buf: &mut F, u: u64) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", u);
+    Nestable::Yes
+}
+
+/// Parses an `mztimestamp` from `s`.
+pub fn parse_mztimestamp(s: &str) -> Result<crate::Timestamp, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("mztimestamp", s).with_details(e))
+}
+
+/// Writes an `mztimestamp` to `buf`.
+pub fn format_mztimestamp<F>(buf: &mut F, u: crate::Timestamp) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", u);
     Nestable::Yes
 }
 
@@ -334,19 +396,20 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, datetime::Ti
     Ok((d, t, offset))
 }
 
-/// Parses a [`NaiveDate`] from `s`.
-pub fn parse_date(s: &str) -> Result<NaiveDate, ParseError> {
+/// Parses a [`Date`] from `s`.
+pub fn parse_date(s: &str) -> Result<Date, ParseError> {
     match parse_timestamp_string(s) {
-        Ok((date, _, _)) => Ok(date),
+        Ok((date, _, _)) => Date::try_from(date).map_err(|_| ParseError::out_of_range("date", s)),
         Err(e) => Err(ParseError::invalid_input_syntax("date", s).with_details(e)),
     }
 }
 
-/// Writes a [`NaiveDate`] to `buf`.
-pub fn format_date<F>(buf: &mut F, d: NaiveDate) -> Nestable
+/// Writes a [`Date`] to `buf`.
+pub fn format_date<F>(buf: &mut F, d: Date) -> Nestable
 where
     F: FormatBuffer,
 {
+    let d: NaiveDate = d.into();
     let (year_ad, year) = d.year_ce();
     write!(buf, "{:04}-{}", year, d.format("%m-%d"));
     if !year_ad {

@@ -18,6 +18,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context};
 use futures::StreamExt;
@@ -36,7 +37,7 @@ use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
-use mz_ore::tracing::OpenTelemetryEnableCallback;
+use mz_ore::tracing::{OpenTelemetryEnableCallback, StderrFilterCallback};
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
@@ -91,6 +92,8 @@ pub struct Config {
     pub adapter_stash_url: String,
 
     // === Cloud options. ===
+    /// The cloud ID of this environment.
+    pub environment_id: String,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     pub availability_zones: Vec<String>,
@@ -102,12 +105,16 @@ pub struct Config {
     pub storage_host_sizes: StorageHostSizeMap,
     /// Default storage host size, should be a key from storage_host_sizes.
     pub default_storage_host_size: Option<String>,
+    /// The interval at which to collect storage usage information.
+    pub storage_usage_collection_interval: Duration,
 
     // === Tracing options. ===
     /// The metrics registry to use.
     pub metrics_registry: MetricsRegistry,
     /// A callback to enable or disable the OpenTelemetry tracing collector.
     pub otel_enable_callback: OpenTelemetryEnableCallback,
+    /// A callback to modify the stderr log filter
+    pub stderr_filter_callback: StderrFilterCallback,
 
     // === Testing options. ===
     /// A now generation function for mocking time.
@@ -203,7 +210,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Listen on the internal HTTP API port.
     let internal_http_local_addr = {
         let metrics_registry = config.metrics_registry.clone();
-        let server = http::InternalServer::new(metrics_registry, config.otel_enable_callback);
+        let server = http::InternalServer::new(
+            metrics_registry,
+            config.otel_enable_callback,
+            config.stderr_filter_callback,
+        );
         let bound_server = server.bind(config.internal_http_listen_addr);
         let internal_http_local_addr = bound_server.local_addr();
         task::spawn(|| "internal_http_server", {
@@ -227,6 +238,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let adapter_storage = mz_adapter::catalog::storage::Connection::open(
         stash,
         &BootstrapArgs {
+            now: (config.now)(),
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
             // TODO(benesch, brennan): remove this after v0.27.0-alpha.4 has
             // shipped to cloud since all clusters will have had a default
@@ -257,6 +269,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage: adapter_storage,
         unsafe_mode: config.unsafe_mode,
         build_info: &BUILD_INFO,
+        environment_id: config.environment_id,
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller: config.secrets_controller,
@@ -266,6 +279,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         availability_zones: config.availability_zones,
         connection_context: config.connection_context,
         storage_usage_client,
+        storage_usage_collection_interval: config.storage_usage_collection_interval,
     })
     .await?;
 

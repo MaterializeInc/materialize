@@ -147,12 +147,10 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 if let Some(timeline) = self.get_timeline(*id) {
                     let initial_frontier = self
                         .controller
-                        .compute(*compute_instance)
+                        .compute
+                        .collection(*compute_instance, *id)
                         .unwrap()
-                        .collection(*id)
-                        .unwrap()
-                        .read_capabilities
-                        .frontier()
+                        .read_frontier()
                         .to_owned();
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(timeline).await;
@@ -180,9 +178,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 compute_policy_updates.push((*id, self.read_capability[&id].policy()));
             }
             self.controller
-                .compute_mut(*compute_instance)
-                .unwrap()
-                .set_read_policy(compute_policy_updates)
+                .active_compute()
+                .set_read_policy(*compute_instance, compute_policy_updates)
                 .await
                 .unwrap();
         }
@@ -199,7 +196,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             if let Some(timeline) = self.get_timeline(*id) {
                 let initial_frontier = self
                     .controller
-                    .storage()
+                    .storage
                     .collection(*id)
                     .unwrap()
                     .read_capabilities
@@ -224,7 +221,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             storage_policy_updates.push((*id, self.read_capability[&id].policy()));
         }
         self.controller
-            .storage_mut()
+            .storage
             .set_read_policy(storage_policy_updates)
             .await
             .unwrap();
@@ -242,9 +239,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .expect("coord out of sync");
         capability.base_policy = base_policy;
         self.controller
-            .compute_mut(compute_instance)
-            .unwrap()
-            .set_read_policy(vec![(id, capability.policy())])
+            .active_compute()
+            .set_read_policy(compute_instance, vec![(id, capability.policy())])
             .await
             .unwrap();
     }
@@ -263,9 +259,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     pub(crate) async fn acquire_read_holds(&mut self, read_holds: &ReadHolds<mz_repr::Timestamp>) {
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
-        let storage = self.controller.storage_mut();
         for id in read_holds.id_bundle.storage_ids.iter() {
-            let collection = storage.collection(*id).unwrap();
+            let collection = self.controller.storage.collection(*id).unwrap();
             assert!(
                 collection
                     .read_capabilities
@@ -280,28 +275,34 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             read_needs.holds.update_iter(Some((read_holds.time, 1)));
             policy_changes.push((*id, read_needs.policy()));
         }
-        storage.set_read_policy(policy_changes).await.unwrap();
+        self.controller
+            .storage
+            .set_read_policy(policy_changes)
+            .await
+            .unwrap();
         // Update COMPUTE read policies
         for (compute_instance, compute_ids) in read_holds.id_bundle.compute_ids.iter() {
             let mut policy_changes = Vec::new();
-            let mut compute = self.controller.compute_mut(*compute_instance).unwrap();
+            let mut compute = self.controller.active_compute();
             for id in compute_ids.iter() {
-                let collection = compute.as_ref().collection(*id).unwrap();
+                let collection = compute.collection(*compute_instance, *id).unwrap();
                 assert!(collection
-                    .read_capabilities
-                    .frontier()
+                    .read_frontier()
                     .less_equal(&read_holds.time),
                     "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal desired time {:?}",
                     id,
                     compute_instance,
-                    collection.read_capabilities.frontier(),
+                    collection.read_frontier(),
                     read_holds.time,
                 );
                 let read_needs = self.read_capability.get_mut(id).unwrap();
                 read_needs.holds.update_iter(Some((read_holds.time, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
-            compute.set_read_policy(policy_changes).await.unwrap();
+            compute
+                .set_read_policy(*compute_instance, policy_changes)
+                .await
+                .unwrap();
         }
     }
     /// Update the timestamp of the read holds on the indicated collections from the
@@ -326,9 +327,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
-        let storage = self.controller.storage_mut();
         for id in storage_ids.iter() {
-            let collection = storage.collection(*id).unwrap();
+            let collection = self.controller.storage.collection(*id).unwrap();
             assert!(collection
                 .read_capabilities
                 .frontier()
@@ -344,21 +344,24 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             read_needs.holds.update_iter(Some((*old_time, -1)));
             policy_changes.push((*id, read_needs.policy()));
         }
-        storage.set_read_policy(policy_changes).await.unwrap();
+        self.controller
+            .storage
+            .set_read_policy(policy_changes)
+            .await
+            .unwrap();
         // Update COMPUTE read policies
+        let mut compute = self.controller.active_compute();
         for (compute_instance, compute_ids) in compute_ids.iter() {
             let mut policy_changes = Vec::new();
-            let mut compute = self.controller.compute_mut(*compute_instance).unwrap();
             for id in compute_ids.iter() {
-                let collection = compute.as_ref().collection(*id).unwrap();
+                let collection = compute.collection(*compute_instance, *id).unwrap();
                 assert!(collection
-                    .read_capabilities
-                    .frontier()
+                    .read_frontier()
                     .less_equal(&new_time),
                     "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                     id,
                     compute_instance,
-                    collection.read_capabilities.frontier(),
+                    collection.read_frontier(),
                     new_time,
                     old_time,
                 );
@@ -367,7 +370,10 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 read_needs.holds.update_iter(Some((*old_time, -1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
-            compute.set_read_policy(policy_changes).await.unwrap();
+            compute
+                .set_read_policy(*compute_instance, policy_changes)
+                .await
+                .unwrap();
         }
 
         read_holds.time = new_time;
@@ -398,11 +404,12 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             }
         }
         self.controller
-            .storage_mut()
+            .storage
             .set_read_policy(policy_changes)
             .await
             .unwrap();
         // Update COMPUTE read policies
+        let mut compute = self.controller.active_compute();
         for (compute_instance, compute_ids) in compute_ids.iter() {
             let mut policy_changes = Vec::new();
             for id in compute_ids.iter() {
@@ -412,8 +419,11 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     policy_changes.push((*id, read_needs.policy()));
                 }
             }
-            if let Some(mut compute) = self.controller.compute_mut(*compute_instance) {
-                compute.set_read_policy(policy_changes).await.unwrap();
+            if compute.instance_exists(*compute_instance) {
+                compute
+                    .set_read_policy(*compute_instance, policy_changes)
+                    .await
+                    .unwrap();
             }
         }
     }

@@ -39,3 +39,5 @@ fetch-batch input=b_empty_input
 ----
 <part 0>
 zero 0 1
+<run 0>
+part 0

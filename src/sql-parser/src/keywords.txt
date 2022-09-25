@@ -24,6 +24,7 @@
 # For details on the code that is generated, see keywords.rs.
 
 Access
+Acks
 All
 Alter
 And
@@ -36,6 +37,7 @@ Asc
 At
 Auction
 Authority
+Auto
 Availability
 Avro
 Aws
@@ -59,6 +61,7 @@ Char
 Character
 Characteristics
 Check
+Client
 Close
 Cluster
 Clusters
@@ -70,12 +73,13 @@ Commit
 Committed
 Compaction
 Compression
+Compute
 Confluent
 Connection
 Connections
-Consistency
 Constraint
 Copy
+Count
 Counter
 Create
 Cross
@@ -107,6 +111,7 @@ Dot
 Double
 Drop
 Else
+Enable
 End
 Enforced
 Envelope
@@ -115,8 +120,8 @@ Except
 Execute
 Exists
 Explain
-Extended
 Extract
+Factor
 False
 Fetch
 Fields
@@ -131,8 +136,8 @@ Format
 Forward
 From
 Full
+Fullname
 Generator
-Granularity
 Graph
 Greatest
 Group
@@ -146,7 +151,9 @@ Host
 Hour
 Hours
 Id
+Idempotence
 If
+Ignore
 Ilike
 In
 Include
@@ -177,6 +184,7 @@ Latest
 Leading
 Least
 Left
+Legacywith
 Level
 Like
 Limit
@@ -190,6 +198,7 @@ Map
 Matching
 Materialize
 Materialized
+Max
 Mechanisms
 Message
 Metadata
@@ -198,6 +207,7 @@ Minutes
 Mode
 Month
 Months
+Ms
 Names
 Natural
 Next
@@ -235,6 +245,7 @@ Position
 Postgres
 Preceding
 Precision
+Prefix
 Prepare
 Primary
 Progress
@@ -248,6 +259,7 @@ Raw
 Read
 Real
 References
+Refresh
 Regex
 Registry
 Remote
@@ -256,13 +268,16 @@ Repeatable
 Replace
 Replica
 Replicas
+Replication
 Reset
 Restrict
+Retention
 Returning
 Right
 Role
 Roles
 Rollback
+Rotate
 Row
 Rows
 S3
@@ -293,6 +308,7 @@ Sqs
 Ssh
 Ssl
 Start
+Statistics
 Stdin
 Stdout
 Strategy
@@ -310,6 +326,7 @@ Then
 Tick
 Ties
 Time
+Timeline
 Timeout
 Timestamp
 Timing
@@ -351,6 +368,7 @@ Wire
 With
 Without
 Work
+Workers
 Write
 Year
 Years

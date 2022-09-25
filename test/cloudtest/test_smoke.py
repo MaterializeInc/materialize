@@ -44,7 +44,7 @@ def test_testdrive(mz: MaterializeApplication) -> None:
 
                 > CREATE SOURCE s1
                   FROM KAFKA CONNECTION kafka
-                  TOPIC'testdrive-test-${testdrive.seed}'
+                  (TOPIC 'testdrive-test-${testdrive.seed}')
                   FORMAT BYTES
                   ENVELOPE NONE;
 

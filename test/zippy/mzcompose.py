@@ -11,8 +11,10 @@ import random
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
+    Debezium,
     Kafka,
     Materialized,
+    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -22,8 +24,10 @@ from materialize.zippy.scenarios import *  # noqa: F401 F403
 
 SERVICES = [
     Zookeeper(),
-    Kafka(),
+    Kafka(auto_create_topics=True),
     SchemaRegistry(),
+    Debezium(),
+    Postgres(),
     Materialized(),
     Testdrive(
         validate_data_dir=False,

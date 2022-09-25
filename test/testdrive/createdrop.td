@@ -20,8 +20,11 @@ $ set schema={
 
 $ kafka-create-topic topic=data
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE s
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 $ kafka-ingest format=avro topic=data schema=${schema}
@@ -80,12 +83,12 @@ $ set dummy={
   }
 
 ! CREATE SOURCE v2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${dummy}'
 contains:catalog item 'v2' already exists
 
 ! CREATE SOURCE i
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${dummy}'
 contains:catalog item 'i' already exists
 
@@ -146,7 +149,7 @@ contains:s is not of type VIEW
 > CREATE MATERIALIZED VIEW s AS SELECT 84 AS b
 
 > CREATE SOURCE i
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE INDEX v ON s(b)
@@ -182,7 +185,7 @@ contains:unknown catalog item 'nonexistent'
 > CREATE VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
 
 > SHOW CREATE VIEW test1
-View                      "Create View"
+name                      create_sql
 --------------------------------------------------------------------------------------------------
 materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT 42 AS \"a\""
 

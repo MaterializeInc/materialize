@@ -23,10 +23,10 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
 
+use mz_compute_client::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
-use mz_storage::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_storage::types::sources::SourceData;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -37,38 +37,21 @@ impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn uses_keys(&self) -> bool {
-        false
-    }
-
-    fn get_key_indices(&self) -> Option<&[usize]> {
-        None
-    }
-
-    fn get_relation_key_indices(&self) -> Option<&[usize]> {
-        None
-    }
-
     fn render_continuous_sink(
         &self,
         compute_state: &mut ComputeState,
         _sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
-        sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        let ok_collection = sinked_collection.map(|(key, value)| {
-            assert!(key.is_none(), "persist_source does not support keys");
-            value.expect("persist_source must have values")
-        });
-
         persist_sink(
             sink_id,
             &self.storage_metadata,
-            ok_collection,
+            sinked_collection,
             err_collection,
             compute_state,
             false,
@@ -243,7 +226,7 @@ async fn truncate_persist_shard(shard_id: ShardId, persist_client: &PersistClien
             .into_iter()
             .map(|((k, v), _ts, diff)| ((k.unwrap(), v.unwrap()), upper_ts, diff * -1));
 
-        let new_upper = Antichain::from_elem(upper_ts + 1);
+        let new_upper = Antichain::from_elem(upper_ts.step_forward());
         write
             .compare_and_append(retractions, upper, new_upper)
             .await

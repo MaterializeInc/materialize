@@ -332,10 +332,18 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 })
             })
             .transpose()?;
+        let pod_annotations = btreemap! {
+            // Prevent the cluster-autoscaler from evicting these pods in attempts to scale down
+            // and terminate nodes.
+            // This will cost us more money, but should give us better uptime.
+            // This does not prevent all evictions by Kubernetes, only the ones initiated by the
+            // cluster-autoscaler. Notably, eviction of pods for resource overuse is still enabled.
+            "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
+        };
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
-                annotations: Some(BTreeMap::new()), // Do not delete, we insert into it below.
+                annotations: Some(pod_annotations), // Do not delete, we insert into it below.
                 ..Default::default()
             }),
             spec: Some(PodSpec {
@@ -451,6 +459,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let name = format!("{}-{id}", self.namespace);
         let res = self
             .stateful_set_api
+            .delete(&name, &DeleteParams::default())
+            .await;
+        match res {
+            Ok(_) => (),
+            Err(Error::Api(e)) if e.code == 404 => (),
+            Err(e) => return Err(e.into()),
+        }
+
+        let res = self
+            .service_api
             .delete(&name, &DeleteParams::default())
             .await;
         match res {

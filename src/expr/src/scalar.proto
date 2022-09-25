@@ -75,14 +75,15 @@ message ProtoMirScalarExpr {
 
 
 message ProtoUnmaterializableFunc {
+    reserved "mz_cluster_id"; // The former name of mz_environment_id.
     oneof kind {
         google.protobuf.Empty current_database = 1;
         google.protobuf.Empty current_schemas_with_system = 2;
         google.protobuf.Empty current_schemas_without_system = 3;
         google.protobuf.Empty current_timestamp = 4;
         google.protobuf.Empty current_user = 5;
-        google.protobuf.Empty mz_cluster_id = 6;
-        google.protobuf.Empty mz_logical_timestamp = 7;
+        google.protobuf.Empty mz_environment_id = 6;
+        google.protobuf.Empty mz_now = 7;
         google.protobuf.Empty mz_session_id = 8;
         google.protobuf.Empty mz_uptime = 9;
         google.protobuf.Empty mz_version = 10;
@@ -337,6 +338,64 @@ message ProtoUnaryFunc {
         google.protobuf.Empty trunc_float32 = 216;
         google.protobuf.Empty trunc_float64 = 217;
         google.protobuf.Empty trunc_numeric = 218;
+        google.protobuf.Empty cast_int16_to_uint16 = 219;
+        google.protobuf.Empty cast_int16_to_uint32 = 220;
+        google.protobuf.Empty cast_int16_to_uint64 = 221;
+        google.protobuf.Empty cast_int32_to_uint16 = 222;
+        google.protobuf.Empty cast_int32_to_uint32 = 223;
+        google.protobuf.Empty cast_int32_to_uint64 = 224;
+        google.protobuf.Empty cast_int64_to_uint16 = 225;
+        google.protobuf.Empty cast_int64_to_uint32 = 226;
+        google.protobuf.Empty cast_int64_to_uint64 = 227;
+        google.protobuf.Empty cast_numeric_to_uint16 = 228;
+        google.protobuf.Empty cast_numeric_to_uint32 = 229;
+        google.protobuf.Empty cast_numeric_to_uint64 = 230;
+        google.protobuf.Empty cast_float32_to_uint16 = 231;
+        google.protobuf.Empty cast_float32_to_uint32 = 232;
+        google.protobuf.Empty cast_float32_to_uint64 = 233;
+        google.protobuf.Empty cast_float64_to_uint16 = 234;
+        google.protobuf.Empty cast_float64_to_uint32 = 235;
+        google.protobuf.Empty cast_float64_to_uint64 = 236;
+        google.protobuf.Empty cast_string_to_uint16 = 237;
+        google.protobuf.Empty cast_string_to_uint32 = 238;
+        google.protobuf.Empty cast_string_to_uint64 = 239;
+        google.protobuf.Empty cast_uint16_to_float32 = 240;
+        google.protobuf.Empty cast_uint16_to_float64 = 241;
+        google.protobuf.Empty cast_uint16_to_int32 = 242;
+        google.protobuf.Empty cast_uint16_to_uint32 = 243;
+        google.protobuf.Empty cast_uint16_to_int64 = 244;
+        google.protobuf.Empty cast_uint16_to_uint64 = 245;
+        google.protobuf.Empty cast_uint16_to_string = 246;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_uint16_to_numeric = 247;
+        google.protobuf.Empty cast_uint32_to_float32 = 248;
+        google.protobuf.Empty cast_uint32_to_float64 = 249;
+        google.protobuf.Empty cast_uint32_to_uint16 = 250;
+        google.protobuf.Empty cast_uint32_to_int32 = 251;
+        google.protobuf.Empty cast_uint32_to_int64 = 252;
+        google.protobuf.Empty cast_uint32_to_uint64 = 253;
+        google.protobuf.Empty cast_uint32_to_string = 254;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_uint32_to_numeric = 255;
+        google.protobuf.Empty cast_uint64_to_float32 = 256;
+        google.protobuf.Empty cast_uint64_to_float64 = 257;
+        google.protobuf.Empty cast_uint64_to_uint16 = 258;
+        google.protobuf.Empty cast_uint64_to_int32 = 259;
+        google.protobuf.Empty cast_uint64_to_uint32 = 260;
+        google.protobuf.Empty cast_uint64_to_int64 = 261;
+        google.protobuf.Empty cast_uint64_to_string = 262;
+        mz_repr.adt.numeric.ProtoOptionalNumericMaxScale cast_uint64_to_numeric = 263;
+        google.protobuf.Empty bit_not_uint16 = 264;
+        google.protobuf.Empty bit_not_uint32 = 265;
+        google.protobuf.Empty bit_not_uint64 = 266;
+        google.protobuf.Empty cast_mz_timestamp_to_string = 267;
+        google.protobuf.Empty cast_string_to_mz_timestamp = 268;
+        google.protobuf.Empty cast_uint64_to_mz_timestamp = 269;
+        google.protobuf.Empty cast_int64_to_mz_timestamp = 270;
+        google.protobuf.Empty cast_numeric_to_mz_timestamp = 271;
+        google.protobuf.Empty cast_timestamp_to_mz_timestamp = 272;
+        google.protobuf.Empty cast_timestamp_tz_to_mz_timestamp = 273;
+        google.protobuf.Empty cast_uint32_to_mz_timestamp = 274;
+        google.protobuf.Empty cast_int32_to_mz_timestamp = 275;
+        google.protobuf.Empty step_mz_timestamp = 276;
     }
 }
 
@@ -480,6 +539,36 @@ message ProtoBinaryFunc {
         google.protobuf.Empty power = 138;
         google.protobuf.Empty power_numeric = 139;
         google.protobuf.Empty get_byte = 140;
+        google.protobuf.Empty add_uint16 = 141;
+        google.protobuf.Empty add_uint32 = 142;
+        google.protobuf.Empty add_uint64 = 143;
+        google.protobuf.Empty bit_and_uint16 = 144;
+        google.protobuf.Empty bit_and_uint32 = 145;
+        google.protobuf.Empty bit_and_uint64 = 146;
+        google.protobuf.Empty bit_or_uint16 = 147;
+        google.protobuf.Empty bit_or_uint32 = 148;
+        google.protobuf.Empty bit_or_uint64 = 149;
+        google.protobuf.Empty bit_xor_uint16 = 150;
+        google.protobuf.Empty bit_xor_uint32 = 151;
+        google.protobuf.Empty bit_xor_uint64 = 152;
+        google.protobuf.Empty bit_shift_left_uint16 = 153;
+        google.protobuf.Empty bit_shift_left_uint32 = 154;
+        google.protobuf.Empty bit_shift_left_uint64 = 155;
+        google.protobuf.Empty bit_shift_right_uint16 = 156;
+        google.protobuf.Empty bit_shift_right_uint32 = 157;
+        google.protobuf.Empty bit_shift_right_uint64 = 158;
+        google.protobuf.Empty sub_uint16 = 159;
+        google.protobuf.Empty sub_uint32 = 160;
+        google.protobuf.Empty sub_uint64 = 162;
+        google.protobuf.Empty mul_uint16 = 163;
+        google.protobuf.Empty mul_uint32 =164;
+        google.protobuf.Empty mul_uint64 = 165;
+        google.protobuf.Empty div_uint16 = 166;
+        google.protobuf.Empty div_uint32 = 167;
+        google.protobuf.Empty div_uint64 = 168;
+        google.protobuf.Empty mod_uint16 = 169;
+        google.protobuf.Empty mod_uint32 = 170;
+        google.protobuf.Empty mod_uint64 = 171;
     }
 }
 
@@ -621,5 +710,11 @@ message ProtoEvalError {
         ProtoIncompatibleArrayDimensions incompatible_array_dimensions = 52;
         string type_from_oid = 53;
         ProtoIndexOutOfRange index_out_of_range = 54;
+        google.protobuf.Empty uint16_out_of_range = 55;
+        google.protobuf.Empty uint32_out_of_range = 56;
+        google.protobuf.Empty uint64_out_of_range = 57;
+        google.protobuf.Empty date_out_of_range = 58;
+        google.protobuf.Empty mz_timestamp_out_of_range = 59;
+        google.protobuf.Empty mz_timestamp_step_overflow = 60;
     }
 }

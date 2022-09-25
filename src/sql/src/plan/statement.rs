@@ -15,7 +15,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
-use mz_sql_parser::ast::{RawObjectName, UnresolvedDatabaseName, UnresolvedSchemaName};
+use mz_sql_parser::ast::{
+    RawObjectName, ShowStatement, UnresolvedDatabaseName, UnresolvedSchemaName,
+};
 
 use crate::ast::{Ident, ObjectType, Statement, UnresolvedObjectName};
 use crate::catalog::{
@@ -29,14 +31,14 @@ use crate::names::{
 };
 use crate::plan::error::PlanError;
 use crate::plan::query;
-use crate::plan::{Params, Plan, PlanContext};
+use crate::plan::{Params, Plan, PlanContext, PlanKind};
 use crate::{normalize, DEFAULT_SCHEMA};
 
 mod ddl;
 mod dml;
 mod raise;
 mod scl;
-mod show;
+pub(crate) mod show;
 mod tcl;
 
 /// Describes the output of a SQL statement.
@@ -104,6 +106,7 @@ pub fn describe(
 
     let desc = match stmt {
         // DDL statements.
+        Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
@@ -136,20 +139,42 @@ pub fn describe(
         Statement::DropSchema(stmt) => ddl::describe_drop_schema(&scx, stmt)?,
 
         // `SHOW` statements.
-        Statement::ShowColumns(stmt) => show::show_columns(&scx, stmt)?.describe()?,
-        Statement::ShowCreateConnection(stmt) => show::describe_show_create_connection(&scx, stmt)?,
-        Statement::ShowCreateIndex(stmt) => show::describe_show_create_index(&scx, stmt)?,
-        Statement::ShowCreateSink(stmt) => show::describe_show_create_sink(&scx, stmt)?,
-        Statement::ShowCreateSource(stmt) => show::describe_show_create_source(&scx, stmt)?,
-        Statement::ShowCreateTable(stmt) => show::describe_show_create_table(&scx, stmt)?,
-        Statement::ShowCreateView(stmt) => show::describe_show_create_view(&scx, stmt)?,
-        Statement::ShowCreateMaterializedView(stmt) => {
+        Statement::Show(ShowStatement::ShowColumns(stmt)) => {
+            show::show_columns(&scx, stmt)?.describe()?
+        }
+        Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
+            show::describe_show_create_connection(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
+            show::describe_show_create_index(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
+            show::describe_show_create_sink(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
+            show::describe_show_create_source(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateTable(stmt)) => {
+            show::describe_show_create_table(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateView(stmt)) => {
+            show::describe_show_create_view(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::describe_show_create_materialized_view(&scx, stmt)?
         }
-        Statement::ShowDatabases(stmt) => show::show_databases(&scx, stmt)?.describe()?,
-        Statement::ShowIndexes(stmt) => show::show_indexes(&scx, stmt)?.describe()?,
-        Statement::ShowObjects(stmt) => show::show_objects(&scx, stmt)?.describe()?,
-        Statement::ShowSchemas(stmt) => show::show_schemas(&scx, stmt)?.describe()?,
+        Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
+            show::show_databases(&scx, stmt)?.describe()?
+        }
+        Statement::Show(ShowStatement::ShowIndexes(stmt)) => {
+            show::show_indexes(&scx, stmt)?.describe()?
+        }
+        Statement::Show(ShowStatement::ShowObjects(stmt)) => {
+            show::show_objects(&scx, stmt)?.describe()?
+        }
+        Statement::Show(ShowStatement::ShowSchemas(stmt)) => {
+            show::show_schemas(&scx, stmt)?.describe()?
+        }
 
         // SCL statements.
         Statement::Close(stmt) => scl::describe_close(&scx, stmt)?,
@@ -161,7 +186,9 @@ pub fn describe(
         Statement::Prepare(stmt) => scl::describe_prepare(&scx, stmt)?,
         Statement::ResetVariable(stmt) => scl::describe_reset_variable(&scx, stmt)?,
         Statement::SetVariable(stmt) => scl::describe_set_variable(&scx, stmt)?,
-        Statement::ShowVariable(stmt) => scl::describe_show_variable(&scx, stmt)?,
+        Statement::Show(ShowStatement::ShowVariable(stmt)) => {
+            scl::describe_show_variable(&scx, stmt)?
+        }
 
         // DML statements.
         Statement::Copy(stmt) => dml::describe_copy(&scx, stmt)?,
@@ -209,14 +236,17 @@ pub fn plan(
         .map(|(i, ty)| (i + 1, ty.clone()))
         .collect();
 
+    let permitted_plans = Plan::generated_from((&stmt).into());
+
     let scx = &mut StatementContext {
         pcx,
         catalog,
         param_types: RefCell::new(param_types),
     };
 
-    match stmt {
+    let plan = match stmt {
         // DDL statements.
+        Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
@@ -258,20 +288,34 @@ pub fn plan(
         Statement::Update(stmt) => dml::plan_update(scx, stmt, params),
 
         // `SHOW` statements.
-        Statement::ShowColumns(stmt) => show::show_columns(scx, stmt)?.plan(),
-        Statement::ShowCreateConnection(stmt) => show::plan_show_create_connection(scx, stmt),
-        Statement::ShowCreateIndex(stmt) => show::plan_show_create_index(scx, stmt),
-        Statement::ShowCreateSink(stmt) => show::plan_show_create_sink(scx, stmt),
-        Statement::ShowCreateSource(stmt) => show::plan_show_create_source(scx, stmt),
-        Statement::ShowCreateTable(stmt) => show::plan_show_create_table(scx, stmt),
-        Statement::ShowCreateView(stmt) => show::plan_show_create_view(scx, stmt),
-        Statement::ShowCreateMaterializedView(stmt) => {
-            show::plan_show_create_materialized_view(scx, stmt)
+        Statement::Show(ShowStatement::ShowColumns(stmt)) => show::show_columns(scx, stmt)?.plan(),
+        Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
+            show::plan_show_create_connection(scx, stmt).map(Plan::SendRows)
         }
-        Statement::ShowDatabases(stmt) => show::show_databases(scx, stmt)?.plan(),
-        Statement::ShowIndexes(stmt) => show::show_indexes(scx, stmt)?.plan(),
-        Statement::ShowObjects(stmt) => show::show_objects(scx, stmt)?.plan(),
-        Statement::ShowSchemas(stmt) => show::show_schemas(scx, stmt)?.plan(),
+        Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
+            show::plan_show_create_index(scx, stmt).map(Plan::SendRows)
+        }
+        Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
+            show::plan_show_create_sink(scx, stmt).map(Plan::SendRows)
+        }
+        Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
+            show::plan_show_create_source(scx, stmt).map(Plan::SendRows)
+        }
+        Statement::Show(ShowStatement::ShowCreateTable(stmt)) => {
+            show::plan_show_create_table(scx, stmt).map(Plan::SendRows)
+        }
+        Statement::Show(ShowStatement::ShowCreateView(stmt)) => {
+            show::plan_show_create_view(scx, stmt).map(Plan::SendRows)
+        }
+        Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
+            show::plan_show_create_materialized_view(scx, stmt).map(Plan::SendRows)
+        }
+        Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
+            show::show_databases(scx, stmt)?.plan()
+        }
+        Statement::Show(ShowStatement::ShowIndexes(stmt)) => show::show_indexes(scx, stmt)?.plan(),
+        Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, stmt)?.plan(),
+        Statement::Show(ShowStatement::ShowSchemas(stmt)) => show::show_schemas(scx, stmt)?.plan(),
 
         // SCL statements.
         Statement::Close(stmt) => scl::plan_close(scx, stmt),
@@ -283,7 +327,7 @@ pub fn plan(
         Statement::Prepare(stmt) => scl::plan_prepare(scx, stmt),
         Statement::ResetVariable(stmt) => scl::plan_reset_variable(scx, stmt),
         Statement::SetVariable(stmt) => scl::plan_set_variable(scx, stmt),
-        Statement::ShowVariable(stmt) => scl::plan_show_variable(scx, stmt),
+        Statement::Show(ShowStatement::ShowVariable(stmt)) => scl::plan_show_variable(scx, stmt),
 
         // TCL statements.
         Statement::Commit(stmt) => tcl::plan_commit(scx, stmt),
@@ -293,7 +337,18 @@ pub fn plan(
 
         // Other statements.
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
+    };
+
+    if let Ok(plan) = &plan {
+        mz_ore::soft_assert!(
+            permitted_plans.contains(&PlanKind::from(plan)),
+            "plan {:?}, permitted plans {:?}",
+            plan,
+            permitted_plans
+        );
     }
+
+    plan
 }
 
 pub fn plan_copy_from(

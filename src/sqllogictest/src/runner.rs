@@ -37,14 +37,16 @@ use std::path::Path;
 use std::str;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use bytes::BytesMut;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use bytes::{Buf, BytesMut};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
 use mz_persist_client::cache::PersistClientCache;
+use mz_repr::adt::date::Date;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
@@ -67,11 +69,11 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_persist_client::{PersistConfig, PersistLocation};
-use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
+use mz_pgrepr::{oid, Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
-use mz_sql::ast::{Expr, Raw, Statement};
+use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
 use mz_sql_parser::{
     ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
     parser,
@@ -332,7 +334,9 @@ impl<'a> FromSql<'a> for Slt {
             ))),
             PgType::FLOAT4 => Self(Value::Float4(types::float4_from_sql(raw)?)),
             PgType::FLOAT8 => Self(Value::Float8(types::float8_from_sql(raw)?)),
-            PgType::DATE => Self(Value::Date(NaiveDate::from_sql(ty, raw)?)),
+            PgType::DATE => Self(Value::Date(Date::from_pg_epoch(types::int4_from_sql(
+                raw,
+            )?)?)),
             PgType::INT2 => Self(Value::Int2(types::int2_from_sql(raw)?)),
             PgType::INT4 => Self(Value::Int4(types::int4_from_sql(raw)?)),
             PgType::INT8 => Self(Value::Int8(types::int8_from_sql(raw)?)),
@@ -392,13 +396,48 @@ impl<'a> FromSql<'a> for Slt {
                         elements,
                     })
                 }
-                _ => unreachable!(),
+                _ => match ty.oid() {
+                    oid::TYPE_UINT2_OID => {
+                        let v = raw.get_u16();
+                        if !raw.is_empty() {
+                            return Err("invalid buffer size".into());
+                        }
+                        Self(Value::UInt2(v))
+                    }
+                    oid::TYPE_UINT4_OID => {
+                        let v = raw.get_u32();
+                        if !raw.is_empty() {
+                            return Err("invalid buffer size".into());
+                        }
+                        Self(Value::UInt4(v))
+                    }
+                    oid::TYPE_UINT8_OID => {
+                        let v = raw.get_u64();
+                        if !raw.is_empty() {
+                            return Err("invalid buffer size".into());
+                        }
+                        Self(Value::UInt8(v))
+                    }
+                    oid::TYPE_MZTIMESTAMP_OID => {
+                        let s = types::text_from_sql(raw)?;
+                        let t: mz_repr::Timestamp = s.parse()?;
+                        Self(Value::MzTimestamp(t))
+                    }
+                    _ => unreachable!(),
+                },
             },
         })
     }
     fn accepts(ty: &PgType) -> bool {
         match ty.kind() {
             PgKind::Array(_) | PgKind::Composite(_) => return true,
+            _ => {}
+        }
+        match ty.oid() {
+            oid::TYPE_UINT2_OID
+            | oid::TYPE_UINT4_OID
+            | oid::TYPE_UINT8_OID
+            | oid::TYPE_MZTIMESTAMP_OID => return true,
             _ => {}
         }
         matches!(
@@ -468,6 +507,9 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Int2(i)) => i.to_string(),
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
+        (Type::Integer, Value::UInt2(u)) => u.to_string(),
+        (Type::Integer, Value::UInt4(u)) => u.to_string(),
+        (Type::Integer, Value::UInt8(u)) => u.to_string(),
         (Type::Integer, Value::Oid(i)) => i.to_string(),
         (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
         (Type::Integer, Value::Float8(f)) => format!("{}", f as i64),
@@ -638,6 +680,7 @@ impl Runner {
             unsafe_mode: true,
             metrics_registry,
             now,
+            environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             storage_host_sizes: Default::default(),
@@ -647,6 +690,8 @@ impl Runner {
                 (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
             ),
             otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
+            stderr_filter_callback: mz_ore::tracing::StderrFilterCallback::none(),
+            storage_usage_collection_interval: Duration::from_secs(3600),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -849,7 +894,7 @@ impl Runner {
         match statement {
             Statement::CreateView { .. }
             | Statement::Select { .. }
-            | Statement::ShowIndexes { .. } => (),
+            | Statement::Show(ShowStatement::ShowIndexes { .. }) => (),
             _ => {
                 if output.is_err() {
                     // We're not interested in testing our hacky handling of INSERT etc

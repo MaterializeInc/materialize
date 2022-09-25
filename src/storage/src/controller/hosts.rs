@@ -29,7 +29,6 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
-use tracing::info;
 
 use mz_build_info::BuildInfo;
 use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
@@ -78,15 +77,14 @@ pub struct StorageHosts<T> {
     persist: Arc<Mutex<PersistClientCache>>,
 }
 
-/// Metadata about a single storage host.
+/// Metadata about a single storage host, effectively used for reference-counting
+/// the storage client.
 #[derive(Debug)]
 struct StorageHost<T> {
     /// The client to the storage host.
     client: RehydratingStorageClient<T>,
     /// The IDs of the storage objects installed on the storage host.
     objects: HashSet<GlobalId>,
-    /// Whether the storage host is orchestrated.
-    orchestrated: bool,
 }
 
 impl<T> StorageHosts<T>
@@ -125,9 +123,11 @@ where
     }
 
     /// Provisions a storage host for the storage object with the specified ID.
-    ///
-    /// If `remote_addr` is `Some`, then the specified storage host is used.
-    /// Otherwise, a storage host is assigned automatically.
+    /// If the storage host is managed, this will ensure that the backing orchestrator
+    /// allocates resources, either by creating or updating the existing service.
+    /// (For 'remote' storaged instances, the user is required to independently make
+    /// sure that any resources exist -- if the orchestrator had provisioned a service
+    /// for this host in the past, it will be dropped.)
     ///
     /// At present, the policy for storage host assignment creates a new storage
     /// host for each storage object. This policy is subject to change.
@@ -135,10 +135,6 @@ where
     /// Returns a client to the provisioned host. The client may be
     /// retrieved in the future via the [`client`](StorageHosts::client)
     /// method.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `id` is already provisioned.
     pub async fn provision(
         &mut self,
         id: GlobalId,
@@ -148,79 +144,64 @@ where
         StorageCommand<T>: RustType<ProtoStorageCommand>,
         StorageResponse<T>: RustType<ProtoStorageResponse>,
     {
-        let (host_addr, orchestrated) = match host_config {
-            StorageHostConfig::Remote { addr } => (addr, false),
+        let host_addr = match host_config {
+            StorageHostConfig::Remote { addr } => {
+                self.drop_storage_host(id).await?;
+                addr
+            }
             StorageHostConfig::Managed { allocation, .. } => {
-                (self.start_storage_host(id, allocation).await?, true)
+                self.ensure_storage_host(id, allocation).await?
             }
         };
-        let existed = self.objects.insert(id, host_addr.clone());
-        assert!(
-            existed.is_none(),
-            "StorageHosts::provision called for already-provisioned ID {id}"
-        );
-        info!("assigned storage object {id} to storage host {host_addr}");
-        match self.hosts.entry(host_addr.clone()) {
-            Entry::Vacant(entry) => {
-                let mut client = RehydratingStorageClient::new(
-                    host_addr,
-                    self.build_info,
-                    Arc::clone(&self.persist),
-                );
-                if self.initialized {
-                    client.send(StorageCommand::InitializationComplete);
-                }
-                let host = entry.insert(StorageHost {
-                    client,
-                    objects: HashSet::from_iter([id]),
-                    orchestrated,
-                });
-                Ok(&mut host.client)
+
+        if let Some(previous_address) = self.objects.insert(id, host_addr.clone()) {
+            if previous_address != host_addr {
+                self.remove_id_from_host(id, host_addr.clone());
             }
-            Entry::Occupied(entry) => {
-                let host = entry.into_mut();
-                let inserted = host.objects.insert(id);
-                assert!(
-                    inserted,
-                    "StorageHosts internally inconsistent: ID {id} partially tracked"
-                );
-                Ok(&mut host.client)
+        };
+
+        let host = self.hosts.entry(host_addr.clone()).or_insert_with(|| {
+            let mut client = RehydratingStorageClient::new(
+                host_addr,
+                self.build_info,
+                Arc::clone(&self.persist),
+            );
+            if self.initialized {
+                client.send(StorageCommand::InitializationComplete);
             }
-        }
+            StorageHost {
+                client,
+                objects: HashSet::with_capacity(1),
+            }
+        });
+
+        host.objects.insert(id);
+
+        Ok(&mut host.client)
     }
 
     /// Deprovisions the storage host for the storage object with the specified
-    /// ID.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the provided `id` has not been provisioned.
+    /// ID: ensures we're not orchestrating any resources for this id, and cleans
+    /// up any internal state.
     pub async fn deprovision(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
-        let host_addr = self.objects.remove(&id).unwrap_or_else(|| {
-            panic!("StorageHosts::deprovision called with unprovisioned ID {id}")
-        });
-        match self.hosts.entry(host_addr.clone()) {
-            Entry::Vacant(_) => panic!(
-                "StorageHosts internally inconsistent: \
-                 ingestion {id} referenced missing storage host {host_addr:?}"
-            ),
-            Entry::Occupied(mut entry) => {
-                let host = entry.get_mut();
-                let removed = host.objects.remove(&id);
-                assert!(
-                    removed,
-                    "StorageHosts internally inconsistent: ingestion {id} backreference missing"
-                );
-                if host.objects.is_empty() {
-                    let orchestrated = host.orchestrated;
-                    entry.remove_entry();
-                    if orchestrated {
-                        self.stop_storage_host(id).await?;
-                    }
-                }
+        self.drop_storage_host(id).await?;
+        if let Some(host_addr) = self.objects.remove(&id) {
+            self.remove_id_from_host(id, host_addr);
+        }
+
+        Ok(())
+    }
+
+    /// If a id no longer maps to a particular host_addr, this removes the id from the host's
+    /// set -- and, if the set is empty, shuts down the client.
+    fn remove_id_from_host(&mut self, id: GlobalId, host_addr: StorageHostAddr) {
+        if let Entry::Occupied(mut entry) = self.hosts.entry(host_addr) {
+            let objects = &mut entry.get_mut().objects;
+            objects.remove(&id);
+            if objects.is_empty() {
+                entry.remove();
             }
         }
-        Ok(())
     }
 
     /// Retrives the client for the storage host for the given ID, if the
@@ -242,7 +223,7 @@ where
     }
 
     /// Starts a orchestrated storage host for the specified ID.
-    async fn start_storage_host(
+    async fn ensure_storage_host(
         &self,
         id: GlobalId,
         allocation: StorageHostResourceAllocation,
@@ -280,7 +261,10 @@ where
                     cpu_limit: allocation.cpu_limit,
                     memory_limit: allocation.memory_limit,
                     scale: NonZeroUsize::new(1).unwrap(),
-                    labels: HashMap::new(),
+                    labels: HashMap::from_iter([(
+                        "size".to_string(),
+                        allocation.workers.to_string(),
+                    )]),
                     availability_zone: None,
                     // TODO: Decide on an A-A policy for storage hosts
                     anti_affinity: None,
@@ -290,8 +274,8 @@ where
         Ok(storage_service.addresses("controller").into_element())
     }
 
-    /// Stops an orchestrated storage host for the specified ID.
-    async fn stop_storage_host(&self, id: GlobalId) -> Result<(), anyhow::Error> {
+    /// Drops an orchestrated storage host for the specified ID.
+    async fn drop_storage_host(&self, id: GlobalId) -> Result<(), anyhow::Error> {
         self.orchestrator.drop_service(&id.to_string()).await
     }
 }

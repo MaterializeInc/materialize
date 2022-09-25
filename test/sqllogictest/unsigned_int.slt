@@ -1,0 +1,1438 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+query I
+SELECT 42::uint2
+----
+42
+
+query I
+SELECT 32768::uint2
+----
+32768
+
+query T
+SELECT pg_typeof(42::uint2)
+----
+uint2
+
+query error uint2 out of range
+SELECT -666::uint2
+
+query error uint2 out of range
+SELECT 65536::uint2
+
+query I
+SELECT 42::uint4
+----
+42
+
+query I
+SELECT 65536::uint4
+----
+65536
+
+query I
+SELECT 2147483648::uint4
+----
+2147483648
+
+query T
+SELECT pg_typeof(42::uint4)
+----
+uint4
+
+query error uint4 out of range
+SELECT -666::uint4
+
+query error uint4 out of range
+SELECT 4294967296::uint4
+
+query I
+SELECT 42::uint8
+----
+42
+
+query I
+SELECT 65536::uint8
+----
+65536
+
+query I
+SELECT 4294967296::uint8
+----
+4294967296
+
+query I
+SELECT 9223372036854775808::uint8
+----
+9223372036854775808
+
+query T
+SELECT pg_typeof(42::uint8)
+----
+uint8
+
+query error uint8 out of range
+SELECT -666::uint8
+
+query error uint8 out of range
+SELECT 18446744073709551616::uint8
+
+statement ok
+CREATE TABLE t2 (a uint2)
+
+statement ok
+INSERT INTO t2 VALUES (13)
+
+statement ok
+INSERT INTO t2 VALUES (32768)
+
+statement error uint2 out of range
+INSERT INTO t2 VALUES (65536)
+
+statement error uint2 out of range
+INSERT INTO t2 VALUES (-13)
+
+query I rowsort
+SELECT a from t2
+----
+13
+32768
+
+statement ok
+CREATE TABLE t4 (a uint4)
+
+statement ok
+INSERT INTO t4 VALUES (13), (65536), (2147483648)
+
+statement error uint4 out of range
+INSERT INTO t4 VALUES (4294967296)
+
+statement error uint4 out of range
+INSERT INTO t4 VALUES (-13)
+
+query I rowsort
+SELECT a FROM t4
+----
+13
+2147483648
+65536
+
+statement ok
+CREATE TABLE t8 (a uint8)
+
+statement ok
+INSERT INTO t8 VALUES (13), (65536), (4294967296), (9223372036854775808)
+
+statement error uint8 out of range
+INSERT INTO t8 VALUES (18446744073709551616)
+
+statement error uint8 out of range
+INSERT INTO t8 VALUES (-13)
+
+query I rowsort
+SELECT a FROM t8
+----
+13
+4294967296
+65536
+9223372036854775808
+
+
+# Test casts to/from unsigned integers
+
+
+# From int2
+
+query I
+SELECT 21::int2::uint2
+----
+21
+
+query error uint2 out of range
+SELECT -21::int2::uint2
+
+query I
+SELECT 47::int2::uint4
+----
+47
+
+query error uint4 out of range
+SELECT -47::int2::uint4
+
+query I
+SELECT 99::int2::uint8
+----
+99
+
+query error uint8 out of range
+SELECT -99::int2::uint8
+
+# From int4
+
+query I
+SELECT 21::int4::uint2
+----
+21
+
+query error uint2 out of range
+SELECT -21::int4::uint2
+
+query error uint2 out of range
+SELECT 65536::int4::uint2
+
+query I
+SELECT 47::int4::uint4
+----
+47
+
+query I
+SELECT 65536::int4::uint4
+----
+65536
+
+query error uint4 out of range
+SELECT -47::int4::uint4
+
+query I
+SELECT 99::int4::uint8
+----
+99
+
+query I
+SELECT 65536::int4::uint8
+----
+65536
+
+query error uint8 out of range
+SELECT -99::int4::uint8
+
+# From int8
+
+query I
+SELECT 21::int8::uint2
+----
+21
+
+query error uint2 out of range
+SELECT -21::int8::uint2
+
+query error uint2 out of range
+SELECT 65536::int8::uint2
+
+query I
+SELECT 47::int8::uint4
+----
+47
+
+query I
+SELECT 65536::int8::uint4
+----
+65536
+
+query error uint4 out of range
+SELECT -47::int8::uint4
+
+query error uint4 out of range
+SELECT 4294967296::int8::uint4
+
+query I
+SELECT 99::int8::uint8
+----
+99
+
+query I
+SELECT 65536::int8::uint8
+----
+65536
+
+query I
+SELECT 4294967296::int8::uint8
+----
+4294967296
+
+query error uint8 out of range
+SELECT -99::int8::uint8
+
+# From numeric
+
+query I
+SELECT 12.0::numeric::uint2
+----
+12
+
+query I
+SELECT 12.4::numeric::uint2
+----
+12
+
+query I
+SELECT 12.6::numeric::uint2
+----
+13
+
+query error uint2 out of range
+SELECT -12.0::numeric::uint2
+
+query error uint2 out of range
+SELECT 65536.0::numeric::uint2
+
+query I
+SELECT 65535.4::numeric::uint2
+----
+65535
+
+query error uint2 out of range
+SELECT 65535.5::numeric::uint2
+
+query I
+SELECT 12.0::numeric::uint4
+----
+12
+
+query I
+SELECT 12.4::numeric::uint4
+----
+12
+
+query I
+SELECT 12.6::numeric::uint4
+----
+13
+
+query I
+SELECT 65536.0::numeric::uint4
+----
+65536
+
+query error uint4 out of range
+SELECT -12.0::numeric::uint4
+
+query error uint4 out of range
+SELECT 4294967296::numeric::uint4
+
+query I
+SELECT 4294967295.4::numeric::uint4
+----
+4294967295
+
+query error uint4 out of range
+SELECT 4294967295.5::numeric::uint4
+
+query I
+SELECT 12.0::numeric::uint8
+----
+12
+
+query I
+SELECT 12.4::numeric::uint8
+----
+12
+
+query I
+SELECT 12.6::numeric::uint8
+----
+13
+
+query I
+SELECT 65536.0::numeric::uint8
+----
+65536
+
+query I
+SELECT 4294967296.0::numeric::uint8
+----
+4294967296
+
+query error uint8 out of range
+SELECT -12.0::numeric::uint8
+
+query error uint8 out of range
+SELECT 18446744073709551616::numeric::uint8
+
+query I
+SELECT 18446744073709551615.4::numeric::uint8
+----
+18446744073709551615
+
+query error uint8 out of range
+SELECT 18446744073709551615.5::numeric::uint8
+
+# From float32
+
+query I
+SELECT 12.0::float::uint2
+----
+12
+
+query I
+SELECT 12.4::float::uint2
+----
+12
+
+query I
+SELECT 12.6::float::uint2
+----
+13
+
+query error uint2 out of range
+SELECT -12.0::float::uint2
+
+query error uint2 out of range
+SELECT 65536.0::float::uint2
+
+query I
+SELECT 65535.4::float::uint2
+----
+65535
+
+query error uint2 out of range
+SELECT 65535.5::float::uint2
+
+query I
+SELECT 12.0::float::uint4
+----
+12
+
+query I
+SELECT 12.4::float::uint4
+----
+12
+
+query I
+SELECT 12.6::float::uint4
+----
+13
+
+query I
+SELECT 65536.0::float::uint4
+----
+65536
+
+query error uint4 out of range
+SELECT -12.0::float::uint4
+
+query error uint4 out of range
+SELECT 4294967296::float::uint4
+
+query I
+SELECT 4294967295.4::float::uint4
+----
+4294967295
+
+query error uint4 out of range
+SELECT 4294967295.5::float::uint4
+
+query I
+SELECT 12.0::float::uint8
+----
+12
+
+query I
+SELECT 12.4::float::uint8
+----
+12
+
+query I
+SELECT 12.6::float::uint8
+----
+13
+
+query I
+SELECT 65536.0::float::uint8
+----
+65536
+
+query I
+SELECT 4294967296.0::float::uint8
+----
+4294967296
+
+query error uint8 out of range
+SELECT -12.0::float::uint8
+
+query error uint8 out of range
+SELECT 18446744073709553665::float::uint8
+
+query I
+SELECT 18446744073709553664.0::float::uint8
+----
+18446744073709551615
+
+query error uint8 out of range
+SELECT 18446744073709553664.5::float::uint8
+
+# From float64
+
+query I
+SELECT 12.0::double::uint2
+----
+12
+
+query I
+SELECT 12.4::double::uint2
+----
+12
+
+query I
+SELECT 12.6::double::uint2
+----
+13
+
+query error uint2 out of range
+SELECT -12.0::double::uint2
+
+query error uint2 out of range
+SELECT 65536.0::double::uint2
+
+query I
+SELECT 65535.4::double::uint2
+----
+65535
+
+query error uint2 out of range
+SELECT 65535.5::double::uint2
+
+query I
+SELECT 12.0::double::uint4
+----
+12
+
+query I
+SELECT 12.4::double::uint4
+----
+12
+
+query I
+SELECT 12.6::double::uint4
+----
+13
+
+query I
+SELECT 65536.0::double::uint4
+----
+65536
+
+query error uint4 out of range
+SELECT -12.0::double::uint4
+
+query error uint4 out of range
+SELECT 4294967296::double::uint4
+
+query I
+SELECT 4294967295.4::double::uint4
+----
+4294967295
+
+query error uint4 out of range
+SELECT 4294967295.5::double::uint4
+
+query I
+SELECT 12.0::double::uint8
+----
+12
+
+query I
+SELECT 12.4::double::uint8
+----
+12
+
+query I
+SELECT 12.6::double::uint8
+----
+13
+
+query I
+SELECT 65536.0::double::uint8
+----
+65536
+
+query I
+SELECT 4294967296.0::double::uint8
+----
+4294967296
+
+query error uint8 out of range
+SELECT -12.0::double::uint8
+
+query error uint8 out of range
+SELECT 18446744073709553665::double::uint8
+
+query I
+SELECT 18446744073709553664.0::double::uint8
+----
+18446744073709551615
+
+query error uint8 out of range
+SELECT 18446744073709553664.5::double::uint8
+
+# From text
+
+query I
+SELECT '44'::uint2
+----
+44
+
+query error invalid input syntax for type uint2: invalid digit found in string: "-44"
+SELECT '-44'::uint2
+
+query error invalid input syntax for type uint2: number too large to fit in target type: "65536"
+SELECT '65536'::uint2
+
+query I
+SELECT '44'::uint4
+----
+44
+
+query error invalid input syntax for type uint4: invalid digit found in string: "-44"
+SELECT '-44'::uint4
+
+query error invalid input syntax for type uint4: number too large to fit in target type: "4294967296"
+SELECT '4294967296'::uint4
+
+query I
+SELECT '44'::uint8
+----
+44
+
+query error invalid input syntax for type uint8: invalid digit found in string: "-44"
+SELECT '-44'::uint8
+
+query error invalid input syntax for type uint8: number too large to fit in target type: "18446744073709551616"
+SELECT '18446744073709551616'::uint8
+
+# From uint2
+
+query I
+SELECT 124::uint2::uint4
+----
+124
+
+query I
+SELECT 124::uint2::uint8
+----
+124
+
+query I
+SELECT 124::uint2::int4
+----
+124
+
+query I
+SELECT 124::uint2::int8
+----
+124
+
+query I
+SELECT 124::uint2::numeric
+----
+124
+
+query I
+SELECT 124::uint2::real
+----
+124
+
+query I
+SELECT 124::uint2::double
+----
+124
+
+query T
+SELECT 124::uint2::text
+----
+124
+
+# From uint4
+
+query I
+SELECT 6789::uint4::uint2
+----
+6789
+
+query error uint2 out of range
+SELECT 65536::uint4::uint2
+
+query I
+SELECT 6789::uint4::uint8
+----
+6789
+
+query I
+SELECT 6789::uint4::int4
+----
+6789
+
+query error integer out of range
+SELECT 2147483648::uint4::int4
+
+query I
+SELECT 6789::uint4::int8
+----
+6789
+
+query I
+SELECT 6789::uint4::numeric
+----
+6789
+
+query I
+SELECT 6789::uint4::real
+----
+6789
+
+query I
+SELECT 6789::uint4::double
+----
+6789
+
+query T
+SELECT 6789::uint4::text
+----
+6789
+
+# From uint8
+
+query I
+SELECT 15445::uint8::uint2
+----
+15445
+
+query error uint2 out of range
+SELECT 65536::uint8::uint2
+
+query I
+SELECT 15445::uint8::uint4
+----
+15445
+
+query error uint4 out of range
+SELECT 4294967296::uint8::uint4
+
+query I
+SELECT 15445::uint8::int4
+----
+15445
+
+query error integer out of range
+SELECT 2147483648::uint8::int4
+
+query I
+SELECT 15445::uint8::int8
+----
+15445
+
+query error bigint out of range
+SELECT 9223372036854775808::uint8::int8
+
+query I
+SELECT 15445::uint8::numeric
+----
+15445
+
+query I
+SELECT 15445::uint8::real
+----
+15445
+
+query I
+SELECT 15445::uint8::double
+----
+15445
+
+query T
+SELECT 15445::uint8::text
+----
+15445
+
+
+# Test arithmetic
+
+
+# Addition
+
+query I
+SELECT 10::uint2 + 3::uint2
+----
+13
+
+query error uint2 out of range
+SELECT 65535::uint2 + 1::uint2
+
+query I
+SELECT 10::uint4 + 3::uint4
+----
+13
+
+query I
+SELECT 32767::uint4 + 1::uint4
+----
+32768
+
+query error uint4 out of range
+SELECT 4294967295::uint4 + 1::uint4
+
+query I
+SELECT 10::uint8 + 3::uint8
+----
+13
+
+query I
+SELECT 32767::uint8 + 1::uint8
+----
+32768
+
+query I
+SELECT 4294967295::uint8 + 1::uint8
+----
+4294967296
+
+query error uint8 out of range
+SELECT 18446744073709551615::uint8 + 1::uint8
+
+# Subtraction
+
+query I
+SELECT 45::uint2 - 3::uint2
+----
+42
+
+query error uint2 out of range
+SELECT 45::uint2 - 50::uint2
+
+query I
+SELECT 45::uint4 - 3::uint4
+----
+42
+
+query error uint4 out of range
+SELECT 45::uint4 - 50::uint4
+
+query I
+SELECT 45::uint8 - 3::uint8
+----
+42
+
+query error uint8 out of range
+SELECT 45::uint8 - 50::uint8
+
+# Multiplication
+
+query I
+SELECT 10::uint2 * 3::uint2
+----
+30
+
+query error uint2 out of range
+SELECT 65535::uint2 * 2::uint2
+
+query I
+SELECT 10::uint4 * 3::uint4
+----
+30
+
+query I
+SELECT 32767::uint4 * 2::uint4
+----
+65534
+
+query error uint4 out of range
+SELECT 4294967295::uint4 * 2::uint4
+
+query I
+SELECT 10::uint8 * 3::uint8
+----
+30
+
+query I
+SELECT 32767::uint8 * 2::uint8
+----
+65534
+
+query I
+SELECT 4294967295::uint8 * 2::uint8
+----
+8589934590
+
+query error uint8 out of range
+SELECT 18446744073709551615::uint8 * 2::uint8
+
+# Division
+
+query I
+SELECT 20::uint2 / 2::uint2
+----
+10
+
+query error division by zero
+SELECT 20::uint2 / 0::uint2
+
+query I
+SELECT 20::uint4 / 2::uint4
+----
+10
+
+query error division by zero
+SELECT 20::uint4 / 0::uint4
+
+query I
+SELECT 20::uint8 / 2::uint8
+----
+10
+
+query error division by zero
+SELECT 20::uint8 / 0::uint8
+
+# Modulo
+
+query I
+SELECT 13::uint2 % 5::uint2
+----
+3
+
+query error division by zero
+SELECT 66::uint2 % 0::uint2
+
+query I
+SELECT 13::uint4 % 5::uint4
+----
+3
+
+query error division by zero
+SELECT 66::uint4 % 0::uint4
+
+query I
+SELECT 13::uint8 % 5::uint8
+----
+3
+
+query error division by zero
+SELECT 66::uint8 % 0::uint8
+
+query I
+SELECT MOD(13::uint2, 5::uint2)
+----
+3
+
+query error division by zero
+SELECT MOD(66::uint2, 0::uint2)
+
+query I
+SELECT MOD(13::uint4, 5::uint4)
+----
+3
+
+query error division by zero
+SELECT MOD(66::uint4, 0::uint4)
+
+query I
+SELECT MOD(13::uint8, 5::uint8)
+----
+3
+
+query error division by zero
+SELECT MOD(66::uint8, 0::uint8)
+
+# And
+
+query I
+SELECT 4::uint2 & 5::uint2
+----
+4
+
+query I
+SELECT 4::uint4 & 5::uint4
+----
+4
+
+query I
+SELECT 4::uint8 & 5::uint8
+----
+4
+
+# Or
+
+query I
+SELECT 4::uint2 | 5::uint2
+----
+5
+
+query I
+SELECT 4::uint4 | 5::uint4
+----
+5
+
+query I
+SELECT 4::uint8 | 5::uint8
+----
+5
+
+# Xor
+
+query I
+SELECT 4::uint2 # 5::uint2
+----
+1
+
+query I
+SELECT 4::uint4 # 5::uint4
+----
+1
+
+query I
+SELECT 4::uint8 # 5::uint8
+----
+1
+
+# Shift Left
+
+query I
+SELECT 64::uint2 << 1::uint4
+----
+128
+
+query I
+SELECT 64::uint4 << 1::uint4
+----
+128
+
+query I
+SELECT 64::uint8 << 1::uint4
+----
+128
+
+# Shift Right
+
+query I
+SELECT 64::uint2 >> 1::uint4
+----
+32
+
+query I
+SELECT 64::uint4 >> 1::uint4
+----
+32
+
+query I
+SELECT 64::uint8 >> 1::uint4
+----
+32
+
+# Not
+
+query I
+SELECT ~42::uint2
+----
+65493
+
+query I
+SELECT ~42::uint4
+----
+4294967253
+
+query I
+SELECT ~42::uint8
+----
+18446744073709551573
+
+# LT
+
+query B
+SELECT 1::uint2 < 2::uint2
+----
+true
+
+query B
+SELECT 5::uint2 < 2::uint2
+----
+false
+
+query B
+SELECT 1::uint4 < 2::uint4
+----
+true
+
+query B
+SELECT 5::uint4 < 2::uint4
+----
+false
+
+query B
+SELECT 1::uint8 < 2::uint8
+----
+true
+
+query B
+SELECT 5::uint8 < 2::uint8
+----
+false
+
+# LTE
+
+query B
+SELECT 1::uint2 <= 2::uint2
+----
+true
+
+query B
+SELECT 5::uint2 <= 2::uint2
+----
+false
+
+query B
+SELECT 23::uint2 <= 23::uint2
+----
+true
+
+query B
+SELECT 1::uint4 <= 2::uint4
+----
+true
+
+query B
+SELECT 5::uint4 <= 2::uint4
+----
+false
+
+query B
+SELECT 23::uint4 <= 23::uint4
+----
+true
+
+query B
+SELECT 1::uint8 <= 2::uint8
+----
+true
+
+query B
+SELECT 5::uint8 <= 2::uint8
+----
+false
+
+query B
+SELECT 23::uint8 <= 23::uint8
+----
+true
+
+# GT
+
+query B
+SELECT 1::uint2 > 2::uint2
+----
+false
+
+query B
+SELECT 5::uint2 > 2::uint2
+----
+true
+
+query B
+SELECT 1::uint4 > 2::uint4
+----
+false
+
+query B
+SELECT 5::uint4 > 2::uint4
+----
+true
+
+query B
+SELECT 1::uint8 > 2::uint8
+----
+false
+
+query B
+SELECT 5::uint8 > 2::uint8
+----
+true
+
+# GTE
+
+query B
+SELECT 1::uint2 >= 2::uint2
+----
+false
+
+query B
+SELECT 5::uint2 >= 2::uint2
+----
+true
+
+query B
+SELECT 23::uint2 >= 23::uint2
+----
+true
+
+query B
+SELECT 1::uint4 >= 2::uint4
+----
+false
+
+query B
+SELECT 5::uint4 >= 2::uint4
+----
+true
+
+query B
+SELECT 23::uint4 >= 23::uint4
+----
+true
+
+query B
+SELECT 1::uint8 >= 2::uint8
+----
+false
+
+query B
+SELECT 5::uint8 >= 2::uint8
+----
+true
+
+query B
+SELECT 23::uint8 >= 23::uint8
+----
+true
+
+# EQ
+
+query B
+SELECT 18::uint2 = 18::uint2
+----
+true
+
+query B
+SELECT 18::uint2 = 36::uint2
+----
+false
+
+query B
+SELECT 18::uint4 = 18::uint4
+----
+true
+
+query B
+SELECT 18::uint8 = 36::uint8
+----
+false
+
+query B
+SELECT 18::uint8 = 18::uint8
+----
+true
+
+query B
+SELECT 18::uint8 = 36::uint8
+----
+false
+
+# Not EQ
+
+query B
+SELECT 18::uint2 <> 18::uint2
+----
+false
+
+query B
+SELECT 18::uint2 <> 36::uint2
+----
+true
+
+query B
+SELECT 18::uint4 <> 18::uint4
+----
+false
+
+query B
+SELECT 18::uint8 <> 36::uint8
+----
+true
+
+query B
+SELECT 18::uint8 <> 18::uint8
+----
+false
+
+query B
+SELECT 18::uint8 <> 36::uint8
+----
+true
+
+# Max
+
+query I
+SELECT MAX(a) FROM t2
+----
+32768
+
+query I
+SELECT MAX(a) FROM t4
+----
+2147483648
+
+query I
+SELECT MAX(a) FROM t8
+----
+9223372036854775808
+
+# Min
+
+query I
+SELECT MIN(a) FROM t2
+----
+13
+
+query I
+SELECT MIN(a) FROM t4
+----
+13
+
+query I
+SELECT MIN(a) FROM t8
+----
+13
+
+# Avg
+
+query R
+SELECT AVG(a) FROM t2
+----
+16390.500
+
+query R
+SELECT AVG(a) FROM t4
+----
+715849732.333
+
+query R
+SELECT AVG(a) FROM t8
+----
+2305843010287452160.000
+
+# Stddev
+
+query R
+SELECT STDDEV(a) FROM t2
+----
+23161.283
+
+query R
+SELECT STDDEV(a) FROM t4
+----
+1239831340.320
+
+# Avoid overflow (known issue https://github.com/MaterializeInc/materialize/issues/14695)
+statement ok
+DROP TABLE t8
+
+statement ok
+CREATE TABLE t8 (a uint8)
+
+statement ok
+INSERT INTO t8 VALUES (23), (55)
+
+query R
+SELECT STDDEV(a) FROM t8
+----
+22.627
+
+# Stddev Pop
+
+query R
+SELECT STDDEV_POP(a) FROM t2
+----
+16377.5
+
+query R
+SELECT STDDEV_POP(a) FROM t4
+----
+1012318050.298
+
+query R
+SELECT STDDEV_POP(a) FROM t8
+----
+16.000
+
+# Stddev Samp
+
+query R
+SELECT STDDEV_SAMP(a) FROM t2
+----
+23161.283
+
+query R
+SELECT STDDEV_SAMP(a) FROM t4
+----
+1239831340.320
+
+query R
+SELECT STDDEV_SAMP(a) FROM t8
+----
+22.627
+
+# Variance
+
+query R
+SELECT VARIANCE(a) FROM t2
+----
+536445012.5
+
+query R
+SELECT VARIANCE(a) FROM t4
+----
+1537181752438620216.333
+
+query R
+SELECT VARIANCE(a) FROM t8
+----
+512.000
+
+# Var Pop
+
+query R
+SELECT VAR_POP(a) FROM t2
+----
+268222506.25
+
+query R
+SELECT VAR_POP(a) FROM t4
+----
+1024787834959080144.222
+
+query R
+SELECT VAR_POP(a) FROM t8
+----
+256.000
+
+# Var Samp
+
+query R
+SELECT VAR_SAMP(a) FROM t2
+----
+536445012.5
+
+query R
+SELECT VAR_SAMP(a) FROM t4
+----
+1537181752438620216.333
+
+query R
+SELECT VAR_SAMP(a) FROM t8
+----
+512.000
+
+# Dropping rows
+
+statement ok
+DELETE FROM t2 WHERE a = 13
+
+query I
+SELECT SUM(a) FROM t2;
+----
+32768

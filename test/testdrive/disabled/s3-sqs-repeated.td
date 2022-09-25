@@ -36,7 +36,7 @@ $ s3-delete-objects bucket=sqs-repeated
   FROM S3
   DISCOVER OBJECTS USING
   SQS NOTIFICATIONS 'testdrive-sqs-repeated-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
     access_key_id = '${testdrive.aws-access-key-id}',

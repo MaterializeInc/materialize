@@ -9,152 +9,315 @@
 
 //! An interactive dataflow server.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::fmt::{Debug, Formatter};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Error};
+use async_trait::async_trait;
 use crossbeam_channel::{RecvError, TryRecvError};
-use mz_build_info::BuildInfo;
-use mz_persist_client::PersistConfig;
+use futures::future;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::generic::source;
+use timely::dataflow::operators::Operator;
 use timely::execute::execute_from;
+use timely::progress::Timestamp;
+use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use timely::WorkerConfig;
 use tokio::sync::mpsc;
 
-use mz_compute_client::command::ComputeCommand;
-use mz_compute_client::controller::replicated::ComputeCommandHistory;
+use mz_build_info::BuildInfo;
+use mz_compute_client::command::CommunicationConfig;
+use mz_compute_client::command::{
+    BuildDesc, ComputeCommand, ComputeCommandHistory, DataflowDescription,
+};
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::PersistConfig;
+use mz_service::client::{GenericClient, Partitioned};
 use mz_service::local::LocalClient;
-use mz_storage::types::connections::ConnectionContext;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;
 use crate::{TraceManager, TraceMetrics};
 
-/// Configuration of the cluster we will spin up
-pub struct CommunicationConfig {
-    /// Number of per-process worker threads
-    pub threads: usize,
-    /// Identity of this process
-    pub process: usize,
-    /// Addresses of all processes
-    pub addresses: Vec<String>,
-}
-
 /// Configures a dataflow server.
+#[derive(Debug)]
 pub struct Config {
     /// Build information.
     pub build_info: &'static BuildInfo,
-    /// The number of worker threads to spawn.
-    pub workers: usize,
-    /// Configuration for the communication mesh
-    pub comm_config: CommunicationConfig,
     /// Function to get wall time now.
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// Configuration for sink connections.
-    // TODO: remove when sinks move to storage.
-    pub connection_context: ConnectionContext,
 }
 
-/// A handle to a running dataflow server.
-///
-/// Dropping this object will block until the dataflow computation ceases.
-pub struct Server {
-    _worker_guards: WorkerGuards<()>,
+/// A client managing access to the local portion of a Timely cluster
+struct ClusterClient<C> {
+    /// The actual client to talk to the cluster
+    inner: Option<C>,
+    /// The running timely instance
+    timely_container: TimelyContainerRef,
+    /// The dataflow trace metrics.
+    trace_metrics: TraceMetrics,
+    /// Handle to the persist infrastructure.
+    persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+    /// The handle to the Tokio runtime.
+    tokio_handle: tokio::runtime::Handle,
 }
+
+/// Metadata about timely workers in this process.
+pub struct TimelyContainer {
+    /// The current communication config in use
+    comm_config: CommunicationConfig,
+    /// Channels over which to send endpoints for wiring up a new Client
+    client_txs: Vec<
+        crossbeam_channel::Sender<(
+            crossbeam_channel::Receiver<ComputeCommand>,
+            mpsc::UnboundedSender<ComputeResponse>,
+            crossbeam_channel::Sender<SyncActivator>,
+        )>,
+    >,
+    /// Thread guards that keep worker threads alive
+    worker_guards: WorkerGuards<()>,
+}
+
+/// Threadsafe reference to an optional TimelyContainer
+pub type TimelyContainerRef = Arc<Mutex<Option<TimelyContainer>>>;
 
 /// Initiates a timely dataflow computation, processing compute commands.
 pub fn serve(
     config: Config,
-) -> Result<(Server, impl Fn() -> Box<dyn ComputeClient>), anyhow::Error> {
-    assert!(config.workers > 0);
-
+) -> Result<(TimelyContainerRef, impl Fn() -> Box<dyn ComputeClient>), Error> {
     // Various metrics related things.
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
-
-    let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-        .map(|_| crossbeam_channel::unbounded())
-        .unzip();
-    let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
-
-    let tokio_executor = tokio::runtime::Handle::current();
-    let has_networked_workers = config.comm_config.addresses.len() > 1;
-
-    let (builders, other) =
-        initialize_networking(config.comm_config).map_err(|e| anyhow!("{e}"))?;
 
     let persist_clients = PersistClientCache::new(
         PersistConfig::new(config.build_info, config.now.clone()),
         &config.metrics_registry,
     );
     let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
+    let tokio_executor = tokio::runtime::Handle::current();
+    let timely_container = Arc::new(Mutex::new(None));
+    let client_builder = {
+        let timely_container = Arc::clone(&timely_container);
+        move || {
+            let client = ClusterClient::new(
+                Arc::clone(&timely_container),
+                trace_metrics.clone(),
+                Arc::clone(&persist_clients),
+                tokio_executor.clone(),
+            );
+            Box::new(client) as Box<dyn ComputeClient>
+        }
+    };
 
-    let worker_guards = execute_from(
-        builders,
-        other,
-        WorkerConfig::default(),
-        move |timely_worker| {
-            let timely_worker_index = timely_worker.index();
-            let _tokio_guard = tokio_executor.enter();
-            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
-                .take()
-                .unwrap();
-            let _trace_metrics = trace_metrics.clone();
-            let persist_clients = Arc::clone(&persist_clients);
-            Worker {
-                timely_worker,
-                client_rx,
-                compute_state: None,
-                trace_metrics: trace_metrics.clone(),
-                connection_context: config.connection_context.clone(),
-                persist_clients,
-                has_networked_workers,
-            }
-            .run()
-        },
-    )
-    .map_err(|e| anyhow!("{e}"))?;
-    let worker_threads = worker_guards
-        .guards()
-        .iter()
-        .map(|g| g.thread().clone())
-        .collect::<Vec<_>>();
-    let client_builder = move || {
-        let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+    Ok((timely_container, client_builder))
+}
+
+impl ClusterClient<PartitionedClient> {
+    fn new(
+        timely_container: TimelyContainerRef,
+        trace_metrics: TraceMetrics,
+        persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+        tokio_handle: tokio::runtime::Handle,
+    ) -> Self {
+        Self {
+            timely_container,
+            inner: None,
+            trace_metrics,
+            persist_clients,
+            tokio_handle,
+        }
+    }
+
+    fn build_timely(&mut self, comm_config: CommunicationConfig) -> Result<TimelyContainer, Error> {
+        let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..comm_config.workers)
             .map(|_| crossbeam_channel::unbounded())
             .unzip();
-        let (response_txs, response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-            .map(|_| mpsc::unbounded_channel())
-            .unzip();
-        for (client_tx, channels) in client_txs
+        let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
+
+        let (builders, other) = initialize_networking(&comm_config).map_err(|e| anyhow!("{e}"))?;
+
+        let workers = comm_config.workers;
+        let trace_metrics = self.trace_metrics.clone();
+        let persist_clients = Arc::clone(&self.persist_clients);
+        let tokio_executor = self.tokio_handle.clone();
+        let worker_guards = execute_from(
+            builders,
+            other,
+            WorkerConfig::default(),
+            move |timely_worker| {
+                let timely_worker_index = timely_worker.index();
+                let _tokio_guard = tokio_executor.enter();
+                let client_rx = client_rxs.lock().unwrap()[timely_worker_index % workers]
+                    .take()
+                    .unwrap();
+                let _trace_metrics = trace_metrics.clone();
+                let persist_clients = Arc::clone(&persist_clients);
+                Worker {
+                    timely_worker,
+                    client_rx,
+                    compute_state: None,
+                    trace_metrics: trace_metrics.clone(),
+                    persist_clients,
+                }
+                .run()
+            },
+        )
+        .map_err(|e| anyhow!("{e}"))?;
+
+        return Ok(TimelyContainer {
+            comm_config,
+            client_txs,
+            worker_guards,
+        });
+    }
+
+    fn build(&mut self, comm_config: CommunicationConfig) -> Result<(), Error> {
+        let workers = comm_config.workers;
+
+        // Check if we can reuse the existing timely instance.
+        // We currently do not support reinstantiating timely, we simply panic
+        // if another communication config is requested. This
+        // code must panic before dropping the worker guards contained in timely_container.
+        // As we don't terminate timely workers, the thread join would hang forever, possibly
+        // creating a fair share of confusion in the orchestrator.
+
+        let timely = self.timely_container.lock().unwrap().take();
+        let timely = match timely {
+            Some(existing) => {
+                assert_eq!(existing.comm_config, comm_config);
+                existing
+            }
+            None => self.build_timely(comm_config)?,
+        };
+
+        let (command_txs, command_rxs): (Vec<_>, Vec<_>) =
+            (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
+        let (response_txs, response_rxs): (Vec<_>, Vec<_>) =
+            (0..workers).map(|_| mpsc::unbounded_channel()).unzip();
+        let activators = timely
+            .client_txs
             .iter()
-            .zip(command_rxs.into_iter().zip(response_txs))
-        {
-            client_tx
-                .send(channels)
-                .expect("worker should not drop first");
+            .zip(command_rxs)
+            .zip(response_txs)
+            .map(|((client_tx, cmd_rx), resp_tx)| {
+                let (activator_tx, activator_rx) = crossbeam_channel::unbounded();
+                client_tx
+                    .send((cmd_rx, resp_tx, activator_tx))
+                    .expect("worker should not drop first");
+
+                activator_rx.recv().unwrap()
+            })
+            .collect();
+
+        self.inner = Some(LocalClient::new_partitioned(
+            response_rxs,
+            command_txs,
+            activators,
+        ));
+
+        *self.timely_container.lock().unwrap() = Some(timely);
+        Ok(())
+    }
+}
+
+impl<C: Debug> Debug for ClusterClient<C> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClusterClient")
+            .field("trace_metrics", &self.trace_metrics)
+            .field("persist_clients", &self.persist_clients)
+            .field("inner", &self.inner)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl GenericClient<ComputeCommand, ComputeResponse> for ClusterClient<PartitionedClient> {
+    async fn send(&mut self, cmd: ComputeCommand) -> Result<(), Error> {
+        match cmd {
+            ComputeCommand::CreateTimely(comm_config) => self.build(comm_config),
+            ComputeCommand::DropInstance => {
+                self.inner.as_mut().expect("intialized").send(cmd).await?;
+                self.inner = None;
+                let _ = self
+                    .timely_container
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("Running instance") // Maybe better to send an error back in this case?
+                    .worker_guards
+                    .join();
+                Ok(())
+            }
+            _ => self.inner.as_mut().expect("intialized").send(cmd).await,
         }
-        let client =
-            LocalClient::new_partitioned(response_rxs, command_txs, worker_threads.clone());
-        Box::new(client) as Box<dyn ComputeClient>
-    };
-    let server = Server {
-        _worker_guards: worker_guards,
-    };
-    Ok((server, client_builder))
+    }
+
+    async fn recv(&mut self) -> Result<Option<ComputeResponse>, Error> {
+        if let Some(client) = self.inner.as_mut() {
+            client.recv().await
+        } else {
+            future::pending().await
+        }
+    }
 }
 
 type CommandReceiver = crossbeam_channel::Receiver<ComputeCommand>;
 type ResponseSender = mpsc::UnboundedSender<ComputeResponse>;
+type ActivatorSender = crossbeam_channel::Sender<SyncActivator>;
+
+struct CommandReceiverQueue {
+    queue: Rc<RefCell<VecDeque<Result<ComputeCommand, TryRecvError>>>>,
+}
+
+impl CommandReceiverQueue {
+    fn try_recv(&mut self) -> Result<ComputeCommand, TryRecvError> {
+        match self.queue.borrow_mut().pop_front() {
+            Some(Ok(cmd)) => Ok(cmd),
+            Some(Err(e)) => Err(e),
+            None => Err(TryRecvError::Empty),
+        }
+    }
+
+    /// Block until a command is available.
+    /// This method takes the worker as an argument such that it can step timely while no result
+    /// is available.
+    fn recv<A: Allocate>(&mut self, worker: &mut Worker<A>) -> Result<ComputeCommand, RecvError> {
+        while self.is_empty() {
+            worker.timely_worker.step_or_park(None);
+        }
+        match self
+            .queue
+            .borrow_mut()
+            .pop_front()
+            .expect("Must contain element")
+        {
+            Ok(cmd) => Ok(cmd),
+            Err(TryRecvError::Disconnected) => Err(RecvError),
+            Err(TryRecvError::Empty) => panic!("Must not be empty"),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.queue.borrow().is_empty()
+    }
+}
+type PartitionedClient = Partitioned<
+    LocalClient<ComputeCommand, ComputeResponse, SyncActivator>,
+    ComputeCommand,
+    ComputeResponse,
+>;
 
 /// State maintained for each worker thread.
 ///
@@ -165,18 +328,13 @@ struct Worker<'w, A: Allocate> {
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
+    client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender, ActivatorSender)>,
     compute_state: Option<ComputeState>,
     /// Trace metrics.
     trace_metrics: TraceMetrics,
-    /// Configuration for sink connections.
-    // TODO: remove when sinks move to storage.
-    pub connection_context: ConnectionContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
-    /// Indicates if the timely instance has workers connected via network
-    has_networked_workers: bool,
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -185,14 +343,156 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut shutdown = false;
         while !shutdown {
             match self.client_rx.recv() {
-                Ok((rx, tx)) => self.run_client(rx, tx),
+                Ok((rx, tx, activator_tx)) => {
+                    self.setup_channel_and_run_client(rx, tx, activator_tx)
+                }
                 Err(_) => shutdown = true,
             }
         }
     }
 
+    fn split_command<T: Timestamp>(
+        command: ComputeCommand<T>,
+        parts: usize,
+    ) -> Vec<ComputeCommand<T>> {
+        match command {
+            ComputeCommand::CreateDataflows(dataflows) => {
+                let mut dataflows_parts = vec![Vec::new(); parts];
+
+                for dataflow in dataflows {
+                    // A list of descriptions of objects for each part to build.
+                    let mut builds_parts = vec![Vec::new(); parts];
+                    // Partition each build description among `parts`.
+                    for build_desc in dataflow.objects_to_build {
+                        let build_part = build_desc.plan.partition_among(parts);
+                        for (plan, objects_to_build) in
+                            build_part.into_iter().zip(builds_parts.iter_mut())
+                        {
+                            objects_to_build.push(BuildDesc {
+                                id: build_desc.id,
+                                plan,
+                            });
+                        }
+                    }
+                    // Each list of build descriptions results in a dataflow description.
+                    for (dataflows_part, objects_to_build) in
+                        dataflows_parts.iter_mut().zip(builds_parts)
+                    {
+                        dataflows_part.push(DataflowDescription {
+                            source_imports: dataflow.source_imports.clone(),
+                            index_imports: dataflow.index_imports.clone(),
+                            objects_to_build,
+                            index_exports: dataflow.index_exports.clone(),
+                            sink_exports: dataflow.sink_exports.clone(),
+                            as_of: dataflow.as_of.clone(),
+                            until: dataflow.until.clone(),
+                            debug_name: dataflow.debug_name.clone(),
+                        });
+                    }
+                }
+                dataflows_parts
+                    .into_iter()
+                    .map(ComputeCommand::CreateDataflows)
+                    .collect()
+            }
+            command => vec![command; parts],
+        }
+    }
+
+    fn setup_channel_and_run_client(
+        &mut self,
+        command_rx: CommandReceiver,
+        response_tx: ResponseSender,
+        activator_tx: ActivatorSender,
+    ) {
+        let cmd_queue = Rc::new(RefCell::new(
+            VecDeque::<Result<ComputeCommand, TryRecvError>>::new(),
+        ));
+        let peers = self.timely_worker.peers();
+        let idx = self.timely_worker.index();
+
+        {
+            let cmd_queue = Rc::clone(&cmd_queue);
+
+            self.timely_worker.dataflow::<u64, _, _>(move |scope| {
+                source(scope, "CmdSource", |capability, info| {
+                    // Send activator for this operator back
+                    let activator = scope.sync_activator_for(&info.address[..]);
+                    activator_tx.send(activator).expect("activator_tx working");
+
+                    //Hold onto capbility until we receive a disconnected error
+                    let mut cap_opt = Some(capability);
+
+                    move |output| {
+                        let mut disconnected = false;
+                        if let Some(cap) = cap_opt.as_mut() {
+                            let time = cap.time().clone();
+                            let mut session = output.session(&cap);
+
+                            loop {
+                                match command_rx.try_recv() {
+                                    Ok(cmd) => {
+                                        // Commands must never be sent to another worker. This
+                                        // implementation does not guarantee an ordering of events
+                                        // sent to different workers.
+                                        assert_eq!(idx, 0);
+                                        session.give_iterator(
+                                            Self::split_command(cmd, peers).into_iter().enumerate(),
+                                        );
+                                    }
+                                    Err(TryRecvError::Disconnected) => {
+                                        disconnected = true;
+                                        break;
+                                    }
+                                    Err(TryRecvError::Empty) => {
+                                        break;
+                                    }
+                                };
+                            }
+                            cap.downgrade(&(time + 1));
+                        }
+
+                        if disconnected {
+                            cap_opt = None;
+                        }
+                    }
+                })
+                .unary_frontier::<Vec<()>, _, _, _>(
+                    Exchange::new(|(idx, _)| *idx as u64),
+                    "CmdReceiver",
+                    |_, _| {
+                        let mut container = Default::default();
+                        move |input, _| {
+                            let mut queue = cmd_queue.borrow_mut();
+                            if input.frontier().is_empty() {
+                                queue.push_back(Err(TryRecvError::Disconnected))
+                            }
+                            while let Some((_, data)) = input.next() {
+                                data.swap(&mut container);
+                                for (_, cmd) in container.drain(..) {
+                                    queue.push_back(Ok(cmd));
+                                }
+                            }
+                        }
+                    },
+                );
+            });
+        }
+
+        self.run_client(
+            CommandReceiverQueue {
+                queue: Rc::clone(&cmd_queue),
+            },
+            response_tx,
+        )
+    }
+
     /// Draws commands from a single client until disconnected.
-    fn run_client(&mut self, mut command_rx: CommandReceiver, mut response_tx: ResponseSender) {
+    fn run_client(
+        &mut self,
+        mut command_rx: CommandReceiverQueue,
+        mut response_tx: ResponseSender,
+    ) {
         if let Err(_) = self.reconcile(&mut command_rx, &mut response_tx) {
             return;
         }
@@ -205,23 +505,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 compute_state.traces.maintenance();
             }
 
-            // Ask Timely to execute a unit of work.
-            //
-            // If there are no pending commands, we ask Timely to park the
-            // thread if there's nothing to do. We rely on another thread
-            // unparking us when there's new work to be done, e.g., when sending
-            // a command or when new Kafka messages have arrived.
-            //
-            // It is critical that we allow Timely to park iff there are no
-            // pending commands. The unpark token associated with any pending
-            // commands may have already been consumed by the call to
-            // `client_rx.recv`. For details, see:
-            // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
-            if command_rx.is_empty() {
-                self.timely_worker.step_or_park(None);
-            } else {
-                self.timely_worker.step();
-            }
+            self.timely_worker.step_or_park(None);
 
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
@@ -276,9 +560,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     pending_peeks: Vec::new(),
                     reported_frontiers: HashMap::new(),
                     compute_logger: None,
-                    connection_context: self.connection_context.clone(),
                     persist_clients: Arc::clone(&self.persist_clients),
                     command_history: ComputeCommandHistory::default(),
+                    max_result_size: config.max_result_size,
                 });
             }
             ComputeCommand::DropInstance => {
@@ -330,22 +614,18 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// line up changes there with clean resets here.
     fn reconcile(
         &mut self,
-        command_rx: &mut CommandReceiver,
+        command_rx: &mut CommandReceiverQueue,
         mut response_tx: &mut ResponseSender,
     ) -> Result<(), RecvError> {
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
         loop {
-            match command_rx.recv()? {
+            match command_rx.recv(self)? {
                 ComputeCommand::InitializationComplete => break,
                 command => new_commands.push(command),
             }
         }
-
-        if self.compute_state.is_some() && self.has_networked_workers {
-            panic!("Reconciliation is supported only in process local timely instances");
-        };
 
         // Commands we will need to apply before entering normal service.
         // These commands may include dropping existing dataflows, compacting existing dataflows,
@@ -456,6 +736,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     ComputeCommand::CreateInstance(new_config) => {
                         // Cluster creation should not be performed again!
                         assert_eq!(old_config, Some(new_config));
+
+                        // Ensure we retain the logging sink dataflows.
+                        if let Some(logging) = &new_config.logging {
+                            for (id, _) in logging.sink_logs.values() {
+                                retain_ids.insert(*id);
+                            }
+                        }
                     }
                     // All other commands we apply as requested.
                     command => {
@@ -493,7 +780,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
             compute_state.pending_peeks.clear();
             // We compact away removed frontiers, and so only need to reset ids we continue to use.
             for (_, frontier) in compute_state.reported_frontiers.iter_mut() {
-                use timely::progress::Timestamp;
                 *frontier = timely::progress::Antichain::from_elem(<_>::minimum());
             }
             // Sink tokens should be retained for retained dataflows, and dropped for dropped dataflows.

@@ -2,21 +2,21 @@
 name = "mz-orchestrator-kubernetes"
 description = "Service orchestration via Kubernetes."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
-async-trait = "0.1.56"
-chrono = { version = "0.4.19", default_features = false }
-clap = { version = "3.2.14", features = ["derive"] }
-futures = "0.3.21"
+anyhow = "1.0.65"
+async-trait = "0.1.57"
+chrono = { version = "0.4.22", default-features = false }
+clap = { version = "3.2.20", features = ["derive"] }
+futures = "0.3.24"
 maplit = "1.0.2"
 mz-orchestrator = { path = "../orchestrator" }
 mz-secrets = { path = "../secrets" }
 mz-repr = { path = "../repr" }
 k8s-openapi = { version = "0.15.0", features = ["v1_22"] }
 kube = { version = "0.74.0", features = ["runtime", "ws"] }
-serde_json = "1.0.82"
-sha2 = "0.10.2"
+serde_json = "1.0.85"
+sha2 = "0.10.6"

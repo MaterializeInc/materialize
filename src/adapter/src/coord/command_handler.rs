@@ -123,14 +123,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx,
             } => {
                 let now = self.now_datetime();
-                let session = match implicit {
+                let (session, result) = match implicit {
                     None => session.start_transaction(now, None, None),
-                    Some(stmts) => session.start_transaction_implicit(now, stmts),
+                    Some(stmts) => (session.start_transaction_implicit(now, stmts), Ok(())),
                 };
-                let _ = tx.send(Response {
-                    result: Ok(()),
-                    session,
-                });
+                let _ = tx.send(Response { result, session });
             }
 
             Command::Commit {
@@ -160,11 +157,7 @@ impl<S: Append + 'static> Coordinator<S> {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
-        if let Err(e) = self
-            .catalog
-            .create_temporary_schema(session.conn_id())
-            .await
-        {
+        if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
             let _ = tx.send(Response {
                 result: Err(e.into()),
                 session,
@@ -322,19 +315,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::Rollback(_)
                     | Statement::Select(_)
                     | Statement::SetTransaction(_)
-                    | Statement::ShowColumns(_)
-                    | Statement::ShowCreateIndex(_)
-                    | Statement::ShowCreateSink(_)
-                    | Statement::ShowCreateSource(_)
-                    | Statement::ShowCreateTable(_)
-                    | Statement::ShowCreateView(_)
-                    | Statement::ShowCreateMaterializedView(_)
-                    | Statement::ShowCreateConnection(_)
-                    | Statement::ShowDatabases(_)
-                    | Statement::ShowSchemas(_)
-                    | Statement::ShowIndexes(_)
-                    | Statement::ShowObjects(_)
-                    | Statement::ShowVariable(_)
+                    | Statement::Show(_)
                     | Statement::SetVariable(_)
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
@@ -357,7 +338,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
 
                     // Statements below must by run singly (in Started).
-                    Statement::AlterIndex(_)
+                    Statement::AlterConnection(_)
+                    | Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
                     | Statement::AlterSource(_)
                     | Statement::AlterObjectRename(_)
@@ -446,7 +428,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(&mut session, stmt, &params).await {
+            _ => match self.plan_statement(&mut session, stmt, &params) {
                 Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
                 Err(e) => tx.send(Err(e), session),
             },

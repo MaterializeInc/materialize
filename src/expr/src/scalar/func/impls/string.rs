@@ -10,7 +10,8 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
+use mz_repr::adt::date::Date;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -98,6 +99,27 @@ sqlfunc!(
     }
 );
 
+sqlfunc!(
+    #[sqlname = "text_to_uint2"]
+    fn cast_string_to_uint16(a: &'a str) -> Result<u16, EvalError> {
+        strconv::parse_uint16(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "text_to_uint4"]
+    fn cast_string_to_uint32(a: &'a str) -> Result<u32, EvalError> {
+        strconv::parse_uint32(a).err_into()
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "text_to_uint8"]
+    fn cast_string_to_uint64(a: &'a str) -> Result<u64, EvalError> {
+        strconv::parse_uint64(a).err_into()
+    }
+);
+
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
@@ -130,7 +152,7 @@ impl fmt::Display for CastStringToNumeric {
 
 sqlfunc!(
     #[sqlname = "text_to_date"]
-    fn cast_string_to_date<'a>(a: &'a str) -> Result<NaiveDate, EvalError> {
+    fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
         strconv::parse_date(a).err_into()
     }
 );

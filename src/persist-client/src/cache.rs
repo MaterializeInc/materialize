@@ -43,9 +43,10 @@ pub struct PersistClientCache {
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].
     pub fn new(cfg: PersistConfig, registry: &MetricsRegistry) -> Self {
+        let metrics = Metrics::new(&cfg, registry);
         PersistClientCache {
             cfg,
-            metrics: Arc::new(Metrics::new(registry)),
+            metrics: Arc::new(metrics),
             blob_by_uri: HashMap::new(),
             consensus_by_uri: HashMap::new(),
             cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
@@ -82,8 +83,7 @@ impl PersistClientCache {
                     x.key(),
                     self.cfg.consensus_connection_pool_max_size,
                     self.metrics.postgres_consensus.clone(),
-                )
-                .await?;
+                )?;
                 let consensus =
                     retry_external(&self.metrics.retries.external.consensus_open, || {
                         consensus.clone().open()
@@ -101,7 +101,6 @@ impl PersistClientCache {
             Arc::clone(&self.metrics),
             Arc::clone(&self.cpu_heavy_runtime),
         )
-        .await
     }
 
     pub(crate) async fn open_blob(

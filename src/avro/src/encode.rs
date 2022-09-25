@@ -69,15 +69,7 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
         Value::Int(i) => encode_int(*i, buffer),
         Value::Long(i) => encode_long(*i, buffer),
         Value::Float(x) => buffer.extend_from_slice(&x.to_le_bytes()),
-        Value::Date(d) => {
-            let span = (*d) - chrono::NaiveDate::from_ymd(1970, 1, 1);
-            encode_int(
-                span.num_days()
-                    .try_into()
-                    .expect("Num days is too large to encode as i32"),
-                buffer,
-            )
-        }
+        Value::Date(d) => encode_int(*d, buffer),
         Value::Timestamp(d) => {
             let mult = match schema.inner {
                 SchemaPiece::TimestampMilli => 1_000,

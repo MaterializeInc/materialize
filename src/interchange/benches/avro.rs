@@ -7,11 +7,11 @@
 // by the Apache License, Version 2.0.
 
 use byteorder::{NetworkEndian, WriteBytesExt};
-use chrono::{Duration, NaiveDate};
 use criterion::{black_box, Criterion, Throughput};
 
 use mz_avro::types::Value as AvroValue;
 use mz_interchange::avro::{parse_schema, Decoder};
+use mz_repr::adt::date::Date;
 use tokio::runtime::Runtime;
 
 pub fn bench_avro(c: &mut Criterion) {
@@ -244,8 +244,10 @@ pub fn bench_avro(c: &mut Criterion) {
 "#;
     let schema = parse_schema(schema_str).unwrap();
 
-    fn since_epoch(days: i64) -> NaiveDate {
-        NaiveDate::from_ymd(1970, 1, 1) + Duration::days(days)
+    fn since_epoch(days: i64) -> i32 {
+        Date::from_unix_epoch(days.try_into().unwrap())
+            .unwrap()
+            .unix_epoch_days()
     }
     let record = AvroValue::Record(vec![
         (

@@ -17,9 +17,16 @@ INSERT INTO decimal_handling_mode_precise VALUES (1234567.890);
 
 $ schema-registry-wait-schema schema=postgres.public.decimal_handling_mode_precise-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE decimal_handling_mode_precise
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.decimal_handling_mode_precise'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_precise')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_precise
@@ -58,8 +65,8 @@ INSERT INTO decimal_handling_mode_double VALUES (2234567.890);
 $ schema-registry-wait-schema schema=postgres.public.decimal_handling_mode_double-value
 
 > CREATE SOURCE decimal_handling_mode_double
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.decimal_handling_mode_double'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_double')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_double;
@@ -97,8 +104,8 @@ INSERT INTO decimal_handling_mode_string VALUES (3234567.890);
 $ schema-registry-wait-schema schema=postgres.public.decimal_handling_mode_string-value
 
 > CREATE SOURCE decimal_handling_mode_string
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.decimal_handling_mode_string'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_string')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_string;

@@ -14,7 +14,7 @@ const hpccWasm = window['@hpcc-js/wasm'];
 async function query(sql) {
   const response = await fetch('/api/sql', {
     method: 'POST',
-    body: JSON.stringify({sql: sql}),
+    body: JSON.stringify({ sql: sql }),
     headers: { 'Content-Type': 'application/json' },
   });
   if (!response.ok) {
@@ -221,11 +221,11 @@ function View(props) {
             );
 
         SELECT
-          id, source_node, target_node, sum(sent) as sent
+          id, from_index, to_index, sum(sent) as sent
         FROM
           mz_catalog.mz_dataflow_channels AS channels
           LEFT JOIN mz_catalog.mz_message_counts AS counts
-              ON channels.id = counts.channel AND channels.worker = counts.source_worker
+              ON channels.id = counts.channel_id AND channels.worker_id = counts.from_worker_id
         WHERE
           id
           IN (
@@ -244,7 +244,7 @@ function View(props) {
                         id = ${props.dataflow_id}
                     )
             )
-        GROUP BY id, source_node, target_node
+        GROUP BY id, from_index, to_index
         ;
 
         SELECT

@@ -33,7 +33,8 @@ use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics};
-use crate::internal::paths::{PartId, PartialBlobKey};
+use crate::internal::paths::{PartId, PartialBatchKey};
+use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::{PersistConfig, ShardId, WriterId};
 
 /// A handle to a batch of updates that has been written to blob storage but
@@ -46,16 +47,10 @@ pub struct Batch<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    /// [Description] of updates contained in this batch.
-    pub(crate) desc: Description<T>,
-
     shard_id: ShardId,
 
-    /// Keys to blobs that make up this batch of updates.
-    pub(crate) blob_keys: Vec<PartialBlobKey>,
-
-    /// The number of updates in this batch.
-    pub(crate) num_updates: usize,
+    /// A handle to the data represented by this batch.
+    pub(crate) batch: HollowBatch<T>,
 
     /// Handle to the [Blob] that the blobs of this batch were uploaded to.
     _blob: Arc<dyn Blob + Send + Sync>,
@@ -70,11 +65,15 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     fn drop(&mut self) {
-        if self.blob_keys.len() > 0 {
+        if self.batch.parts.len() > 0 {
             warn!(
                 "un-consumed Batch, with {} dangling blob keys: {:?}",
-                self.blob_keys.len(),
-                self.blob_keys
+                self.batch.parts.len(),
+                self.batch
+                    .parts
+                    .iter()
+                    .map(|x| &x.key.0)
+                    .collect::<Vec<_>>(),
             );
         }
     }
@@ -90,15 +89,11 @@ where
     pub(crate) fn new(
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
-        desc: Description<T>,
-        blob_keys: Vec<PartialBlobKey>,
-        num_updates: usize,
+        batch: HollowBatch<T>,
     ) -> Self {
         Self {
-            desc,
-            blob_keys,
             shard_id,
-            num_updates,
+            batch,
             _blob: blob,
             _phantom: PhantomData,
         }
@@ -111,12 +106,12 @@ where
 
     /// The `upper` of this [Batch].
     pub fn upper(&self) -> &Antichain<T> {
-        self.desc.upper()
+        self.batch.desc.upper()
     }
 
     /// The `lower` of this [Batch].
     pub fn lower(&self) -> &Antichain<T> {
-        self.desc.lower()
+        self.batch.desc.lower()
     }
 
     /// Marks the blobs that this batch handle points to as consumed, likely
@@ -125,7 +120,7 @@ where
     /// Consumers of a blob need to make this explicit, so that we can log
     /// warnings in case a batch is not used.
     pub(crate) fn mark_consumed(&mut self) {
-        self.blob_keys.clear();
+        self.batch.parts.clear();
     }
 
     /// Deletes the blobs that make up this batch from the given blob store and
@@ -143,16 +138,12 @@ where
         //     })
         //     .await;
         // }
-        self.blob_keys.clear();
+        self.batch.parts.clear();
     }
 
     #[cfg(test)]
-    pub fn into_hollow_batch(mut self) -> crate::internal::state::HollowBatch<T> {
-        let ret = crate::internal::state::HollowBatch {
-            desc: self.desc.clone(),
-            keys: self.blob_keys.clone(),
-            len: self.num_updates,
-        };
+    pub fn into_hollow_batch(mut self) -> HollowBatch<T> {
+        let ret = self.batch.clone();
         self.mark_consumed();
         ret
     }
@@ -271,15 +262,18 @@ where
             assert!(part.len() > 0);
             self.parts.write(part, upper.clone(), since.clone()).await;
         }
-        let keys = self.parts.finish().await;
+        let parts = self.parts.finish().await;
 
         let desc = Description::new(self.lower, upper, since);
         let batch = Batch::new(
             self.blob,
             self.shard_id.clone(),
-            desc,
-            keys,
-            self.num_updates,
+            HollowBatch {
+                desc,
+                parts,
+                len: self.num_updates,
+                runs: vec![],
+            },
         );
 
         Ok(batch)
@@ -332,6 +326,12 @@ where
         // If we've filled up a chunk of ColumnarRecords, flush it out now to
         // blob storage to keep our memory usage capped.
         let mut part_written = false;
+        // TODO: we need to ensure batch parts don't exceed [crate::PersistConfig::blob_target_size].
+        // currently our logic undercounts batch part sizes by separately checking key and value
+        // size against the target size, rather than their sum. a template for how to do this lives
+        // in [crate::internal::compact::Compactor].
+        //
+        // Related issue: https://github.com/MaterializeInc/materialize/issues/14579
         for part in self.records.take_filled() {
             // TODO: This upper would ideally be `[self.max_ts+1]` but
             // there's nothing that lets us increment a timestamp. An empty
@@ -364,8 +364,8 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-    writing_parts: VecDeque<(PartialBlobKey, JoinHandle<()>)>,
-    finished_parts: Vec<PartialBlobKey>,
+    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<usize>)>,
+    finished_parts: Vec<HollowBatchPart>,
     batch_metrics: BatchWriteMetrics,
 }
 
@@ -405,7 +405,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let blob = Arc::clone(&self.blob);
         let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
         let batch_metrics = self.batch_metrics.clone();
-        let partial_key = PartialBlobKey::new(&self.writer_id, &PartId::new());
+        let partial_key = PartialBatchKey::new(&self.writer_id, &PartId::new());
         let key = partial_key.complete(&self.shard_id);
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
 
@@ -413,34 +413,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let handle = mz_ore::task::spawn(
             || "batch::write_part",
             async move {
-                // TODO: Get rid of the from_le_bytes.
-                let encoded_desc = Description::new(
-                    Antichain::from(
-                        desc.lower()
-                            .elements()
-                            .iter()
-                            .map(|x| u64::from_le_bytes(T::encode(x)))
-                            .collect::<Vec<_>>(),
-                    ),
-                    Antichain::from(
-                        desc.upper()
-                            .elements()
-                            .iter()
-                            .map(|x| u64::from_le_bytes(T::encode(x)))
-                            .collect::<Vec<_>>(),
-                    ),
-                    Antichain::from(
-                        desc.since()
-                            .elements()
-                            .iter()
-                            .map(|x| u64::from_le_bytes(T::encode(x)))
-                            .collect::<Vec<_>>(),
-                    ),
-                );
-
                 let goodbytes = updates.goodbytes();
                 let batch = BlobTraceBatchPart {
-                    desc: encoded_desc.clone(),
+                    desc,
                     updates: vec![updates],
                     index,
                 };
@@ -475,6 +450,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .await;
                 batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
                 batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
+                payload_len
             }
             .instrument(write_span),
         );
@@ -485,30 +461,36 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .writing_parts
                 .pop_front()
                 .expect("pop failed when len was just > some usize");
-            let () = match handle
+            let encoded_size_bytes = match handle
                 .instrument(debug_span!("batch::max_outstanding"))
                 .await
             {
-                Ok(()) => (),
-                Err(err) if err.is_cancelled() => (),
+                Ok(x) => x,
+                Err(err) if err.is_cancelled() => 0,
                 Err(err) => panic!("part upload task failed: {}", err),
             };
-            self.finished_parts.push(key);
+            self.finished_parts.push(HollowBatchPart {
+                key,
+                encoded_size_bytes,
+            });
         }
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", skip_all, fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<PartialBlobKey> {
-        let mut keys = self.finished_parts;
+    pub(crate) async fn finish(self) -> Vec<HollowBatchPart> {
+        let mut parts = self.finished_parts;
         for (key, handle) in self.writing_parts {
-            let () = match handle.await {
-                Ok(()) => (),
-                Err(err) if err.is_cancelled() => (),
+            let encoded_size_bytes = match handle.await {
+                Ok(x) => x,
+                Err(err) if err.is_cancelled() => 0,
                 Err(err) => panic!("part upload task failed: {}", err),
             };
-            keys.push(key);
+            parts.push(HollowBatchPart {
+                key,
+                encoded_size_bytes,
+            });
         }
-        keys
+        parts
     }
 }
 
@@ -532,7 +514,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 #[cfg(test)]
 mod tests {
     use crate::cache::PersistClientCache;
-    use crate::internal::paths::BlobKey;
+    use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::tests::all_ok;
     use crate::PersistLocation;
 
@@ -602,7 +584,7 @@ mod tests {
             .finish(Antichain::from_elem(4))
             .await
             .expect("invalid usage");
-        assert_eq!(batch.blob_keys.len(), 3);
+        assert_eq!(batch.batch.parts.len(), 3);
         write
             .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(4))
             .await
@@ -642,10 +624,10 @@ mod tests {
             )
             .await;
 
-        assert_eq!(batch.blob_keys.len(), 3);
-        for key in &batch.blob_keys {
-            match BlobKey::parse_ids(&key.complete(&shard_id)) {
-                Ok((Some((shard, writer)), _)) => {
+        assert_eq!(batch.batch.parts.len(), 3);
+        for part in &batch.batch.parts {
+            match BlobKey::parse_ids(&part.key.complete(&shard_id)) {
+                Ok((shard, PartialBlobKey::Batch(writer, _))) => {
                     assert_eq!(shard.to_string(), shard_id.to_string());
                     assert_eq!(writer.to_string(), write.writer_id.to_string());
                 }

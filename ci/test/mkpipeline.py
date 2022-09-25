@@ -31,7 +31,7 @@ import yaml
 
 from materialize import mzbuild, mzcompose, spawn
 
-from ..deploy.deploy_util import environmentd_rust_version
+from ..deploy.deploy_util import rust_version
 
 # These paths contain "CI glue code", i.e., the code that powers CI itself,
 # including this very script! All of CI implicitly depends on this code, so
@@ -55,7 +55,7 @@ def main() -> int:
 
     with open(Path(__file__).parent / "pipeline.template.yml") as f:
         raw = f.read()
-    raw = raw.replace("$ENVIRONMENTD_RUST_VERSION", environmentd_rust_version())
+    raw = raw.replace("$RUST_VERSION", rust_version())
     pipeline = yaml.safe_load(raw)
 
     if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
@@ -120,6 +120,7 @@ def trim_pipeline(pipeline: Any) -> None:
     no other untrimmed steps that depend on it.
     """
     repo = mzbuild.Repository(Path("."))
+    deps = repo.resolve_dependencies(image for image in repo)
 
     steps = OrderedDict()
     for config in pipeline["steps"]:
@@ -146,6 +147,10 @@ def trim_pipeline(pipeline: Any) -> None:
                         for dep in composition.dependencies:
                             step.image_dependencies.add(dep)
                         step.extra_inputs.add(str(repo.compositions[name]))
+                    elif plugin_name == "./ci/plugins/cloudtest":
+                        step.image_dependencies.add(deps["environmentd"])
+                        step.image_dependencies.add(deps["computed"])
+                        step.image_dependencies.add(deps["storaged"])
         steps[step.id] = step
 
     # Find all the steps whose inputs have changed with respect to main.

@@ -81,14 +81,20 @@ contains:unknown catalog item 'UID'
 
 # kafka-verify sort-messages
 
+
+
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
 
 > CREATE MATERIALIZED VIEW sort_messages (a) AS VALUES (2),(1),(3);
 
 > CREATE SINK sort_messages_sink FROM sort_messages
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'sort-messages-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sort-messages-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.sort_messages_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1}}}
@@ -120,13 +126,12 @@ $ set kafka-ingest-repeat={
 
 $ kafka-create-topic topic=kafka-ingest-repeat
 
-$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} publish=true repeat=2
+$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} repeat=2
 {"f1": "fish"}
 
 > CREATE SOURCE kafka_ingest_repeat_input
-  FROM KAFKA CONNECTION kafka_conn TOPIC
-  'testdrive-kafka-ingest-repeat-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-ingest-repeat-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 > SELECT * FROM kafka_ingest_repeat_input;
@@ -135,7 +140,7 @@ fish
 
 # kafka-ingest repeat with ${kafka-ingest.iteration}
 
-$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} publish=true repeat=2
+$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} repeat=2
 {"f1": "${kafka-ingest.iteration}"}
 
 > SELECT * FROM kafka_ingest_repeat_input;
@@ -151,7 +156,7 @@ $ set kafka-ingest-no-partition-value={"type": "record", "name": "r", "fields": 
 
 $ kafka-create-topic topic=kafka-ingest-no-partition partitions=2
 
-$ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-schema=${kafka-ingest-no-partition-key} schema=${kafka-ingest-no-partition-value} publish=true
+$ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-schema=${kafka-ingest-no-partition-key} schema=${kafka-ingest-no-partition-value}
 "a" {"a": "a"}
 "b" {"a": "b"}
 "c" {"a": "c"}
@@ -162,8 +167,8 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 "h" {"a": "h"}
 
 > CREATE SOURCE kafka_ingest_no_partition
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-kafka-ingest-no-partition-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-ingest-no-partition-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 > SELECT COUNT(*) FROM kafka_ingest_no_partition;
@@ -174,8 +179,8 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 > CREATE MATERIALIZED VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
 
 > CREATE SINK kafka_verify_regexp_sink FROM kafka_verify_regexp
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'kafka-verify-regexp-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-verify-regexp-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort-messages=true
 {"before": null, "after": {"row": {"a": "UID"}}}

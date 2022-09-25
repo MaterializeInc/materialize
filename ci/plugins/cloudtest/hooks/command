@@ -48,6 +48,11 @@ echo "--- KinD: Make sure KinD is running ..."
 
 bin/ci-builder run stable kind create cluster --config misc/kind/cluster.yaml --wait 30s || true
 
+# Make sure a kubeconfig file is generated and placed in $KUBECONFIG
+# of the ci-builder container, as defined in its Dockerfile
+
+bin/ci-builder run stable kind export kubeconfig
+
 # Sometimes build cancellations prevent us from properly cleaning up the last
 # cloudtest run, so force a cleanup just in case
 

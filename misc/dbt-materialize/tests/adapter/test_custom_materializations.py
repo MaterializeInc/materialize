@@ -15,10 +15,9 @@
 
 import pytest
 from dbt.tests.util import check_relations_equal, run_dbt
-from fixtures import (  # test_sink, todo: re-enable once #14195 lands
+from fixtures import (  # test_sink,
     actual_indexes,
     expected_indexes,
-    test_index,
     test_materialized_view,
     test_materialized_view_index,
     test_source,
@@ -28,6 +27,10 @@ from fixtures import (  # test_sink, todo: re-enable once #14195 lands
 
 
 class TestCustomMaterializations:
+    @pytest.fixture(autouse=True, scope="class")
+    def _pass_profile_value(self, profile):
+        self._profile = profile
+
     @pytest.fixture(scope="class")
     def project_config_update(self):
         return {"name": "custom_materializations"}
@@ -35,7 +38,7 @@ class TestCustomMaterializations:
     @pytest.fixture(scope="class")
     def seeds(self):
         return {
-            "expected_indexes.csv": expected_indexes,
+            "expected_indexes.csv": expected_indexes[self._profile],
         }
 
     @pytest.fixture(scope="class")
@@ -44,10 +47,9 @@ class TestCustomMaterializations:
             "test_materialized_view.sql": test_materialized_view,
             "test_materialized_view_index.sql": test_materialized_view_index,
             "test_view_index.sql": test_view_index,
-            "test_source.sql": test_source,
-            "test_index.sql": test_index,
-            "test_source_index.sql": test_source_index,
-            # "test_sink.sql": test_sink, todo: re-enable once #14195 lands
+            "test_source.sql": test_source[self._profile],
+            "test_source_index.sql": test_source_index[self._profile],
+            # "test_sink.sql": test_sink[self._profile],
             "actual_indexes.sql": actual_indexes,
         }
 
@@ -59,9 +61,7 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        # assert len(results) == 8 todo: re-enable once #14195 lands
-        assert len(results) == 7
-
+        assert len(results) == 6
         # relations_equal
         check_relations_equal(
             project.adapter, ["test_materialized_view", "test_view_index"]

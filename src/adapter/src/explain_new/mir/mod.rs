@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN` support for `Mir` structures.
+//! `EXPLAIN` support for MIR structures.
 
 pub(crate) mod text;
 
@@ -15,13 +15,12 @@ use std::collections::HashMap;
 use std::iter::once;
 
 use mz_compute_client::command::DataflowDescription;
-use mz_expr::{
-    visit::{Visit, Visitor},
-    MirRelationExpr, OptimizedMirRelationExpr,
-};
-use mz_ore::stack::RecursionLimitError;
+use mz_expr::{visit::Visit, MirRelationExpr, OptimizedMirRelationExpr};
+use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
-use mz_transform::attribute::{non_negative::NonNegative, subtree_size::SubtreeSize, Attribute};
+use mz_transform::attribute::{
+    Arity, DerivedAttributes, NonNegative, RelationType, SubtreeSize, UniqueKeys,
+};
 
 use super::{
     AnnotatedPlan, Attributes, ExplainContext, ExplainMultiPlan, ExplainSinglePlan, Explainable,
@@ -32,23 +31,40 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
 
     type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
-    type Json = UnsupportedFormat;
+    type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
-    #[allow(unused_variables)] // TODO (#13299)
     fn explain_text(
         &'a mut self,
         config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(config, context)
+    }
+
+    fn explain_json(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a Self::Context,
+    ) -> Result<Self::Json, ExplainError> {
+        self.as_explain_single_plan(config, context)
+    }
+}
+
+impl<'a> Explainable<'a, MirRelationExpr> {
+    fn as_explain_single_plan(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a ExplainContext<'a>,
+    ) -> Result<ExplainSinglePlan<'a, MirRelationExpr>, ExplainError> {
         // unless raw plans are explicitly requested
         // normalize the representation of nested Let bindings
         if !config.raw_plans {
             normalize_lets_in_tree(self.0)?;
         }
 
-        let plan = AnnotatedPlan::try_from(config, self.0)?;
+        let plan = AnnotatedPlan::try_from(context, self.0)?;
         Ok(ExplainSinglePlan { context, plan })
     }
 }
@@ -58,16 +74,33 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
 
     type Text = ExplainMultiPlan<'a, MirRelationExpr>;
 
-    type Json = UnsupportedFormat;
+    type Json = ExplainMultiPlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
-    #[allow(unused_variables)] // TODO (#13299)
     fn explain_text(
         &'a mut self,
         config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(config, context)
+    }
+
+    fn explain_json(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a Self::Context,
+    ) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(config, context)
+    }
+}
+
+impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
+    fn as_explain_multi_plan(
+        &'a mut self,
+        config: &'a ExplainConfig,
+        context: &'a ExplainContext<'a>,
+    ) -> Result<ExplainMultiPlan<'a, MirRelationExpr>, ExplainError> {
         let plans = self
             .0
             .objects_to_build
@@ -84,7 +117,7 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
                     .humanizer
                     .humanize_id(build_desc.id)
                     .unwrap_or_else(|| build_desc.id.to_string());
-                let plan = AnnotatedPlan::try_from(config, build_desc.plan.as_inner())?;
+                let plan = AnnotatedPlan::try_from(context, build_desc.plan.as_inner())?;
                 Ok((id, plan))
             })
             .collect::<Result<Vec<_>, RecursionLimitError>>()?;
@@ -111,40 +144,26 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
         })
     }
 }
-struct ExplainAttributes<'a> {
-    config: &'a ExplainConfig,
-    non_negative: NonNegative,
-    subtree_size: SubtreeSize,
-}
-
-impl<'a> From<&'a ExplainConfig> for ExplainAttributes<'a> {
-    fn from(config: &'a ExplainConfig) -> ExplainAttributes<'a> {
-        ExplainAttributes {
-            config,
-            non_negative: NonNegative::default(),
-            subtree_size: SubtreeSize::default(),
-        }
-    }
-}
 
 impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
     fn try_from(
-        config: &'a ExplainConfig,
+        context: &'a ExplainContext,
         plan: &'a MirRelationExpr,
     ) -> Result<Self, RecursionLimitError> {
         let mut annotations = HashMap::<&MirRelationExpr, Attributes>::default();
+        let config = context.config;
 
         if config.requires_attributes() {
             // get the annotation keys
             let subtree_refs = plan.post_order_vec();
             // get the annotation values
-            let mut explain_attrs = ExplainAttributes::from(config);
+            let mut explain_attrs = DerivedAttributes::from(config);
             plan.visit(&mut explain_attrs)?;
 
             if config.subtree_size {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    explain_attrs.subtree_size.results.into_iter(),
+                    explain_attrs.remove_results::<SubtreeSize>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.subtree_size = Some(attr);
@@ -153,40 +172,54 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
             if config.non_negative {
                 for (expr, attr) in std::iter::zip(
                     subtree_refs.iter(),
-                    explain_attrs.non_negative.results.into_iter(),
+                    explain_attrs.remove_results::<NonNegative>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.non_negative = Some(attr);
                 }
             }
+
+            if config.arity {
+                for (expr, attr) in std::iter::zip(
+                    subtree_refs.iter(),
+                    explain_attrs.remove_results::<Arity>().into_iter(),
+                ) {
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.arity = Some(attr);
+                }
+            }
+
+            if config.types {
+                for (expr, types) in std::iter::zip(
+                    subtree_refs.iter(),
+                    explain_attrs.remove_results::<RelationType>().into_iter(),
+                ) {
+                    let humanized_columns = types
+                        .into_iter()
+                        .map(|c| context.humanizer.humanize_column_type(&c))
+                        .collect::<Vec<_>>();
+                    let attr = bracketed("(", ")", separated(", ", humanized_columns)).to_string();
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.types = Some(attr);
+                }
+            }
+
+            if config.keys {
+                for (expr, keys) in std::iter::zip(
+                    subtree_refs.iter(),
+                    explain_attrs.remove_results::<UniqueKeys>().into_iter(),
+                ) {
+                    let formatted_keys = keys
+                        .into_iter()
+                        .map(|key_set| bracketed("[", "]", separated(", ", key_set)).to_string());
+                    let attr = bracketed("(", ")", separated(", ", formatted_keys)).to_string();
+                    let attrs = annotations.entry(expr).or_default();
+                    attrs.keys = Some(attr);
+                }
+            }
         }
 
         Ok(AnnotatedPlan { plan, annotations })
-    }
-}
-
-// TODO: Model dependencies as part of the core attributes framework.
-impl<'a> Visitor<MirRelationExpr> for ExplainAttributes<'a> {
-    fn pre_visit(&mut self, expr: &MirRelationExpr) {
-        if self.config.subtree_size || self.config.non_negative {
-            self.subtree_size.schedule_env_tasks(expr);
-        }
-        if self.config.non_negative {
-            self.non_negative.schedule_env_tasks(expr);
-        }
-    }
-
-    fn post_visit(&mut self, expr: &MirRelationExpr) {
-        // Derive attributes and handle environment maintenance tasks
-        // in reverse dependency order.
-        if self.config.subtree_size || self.config.non_negative {
-            self.subtree_size.derive(expr, &());
-            self.subtree_size.handle_env_tasks();
-        }
-        if self.config.non_negative {
-            self.non_negative.derive(expr, &self.subtree_size);
-            self.non_negative.handle_env_tasks();
-        }
     }
 }
 

@@ -13,8 +13,8 @@ since-upper
 [0][0]
 
 # A [0,1) batch advances the upper to [1]
-insert
-0 1 0 0
+push-batch
+[0][1][0] 0
 ----
 ok
 
@@ -23,8 +23,7 @@ since-upper
 [0][1]
 
 # Downgrade the since to [1]
-downgrade-since
-1
+downgrade-since since=1
 ----
 ok
 
@@ -33,8 +32,7 @@ since-upper
 [1][1]
 
 # It's legal (though of unclear benefit) to advance the since past the upper
-downgrade-since
-2
+downgrade-since since=2
 ----
 ok
 
@@ -44,8 +42,8 @@ since-upper
 
 
 # Advance the upper again
-insert
-1 3 0 0
+push-batch
+[1][3][0] 0
 ----
 ok
 

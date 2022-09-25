@@ -31,18 +31,21 @@ message Fixed64 {
 
 $ protobuf-compile-descriptors inputs=unsigned.proto output=unsigned.pb
 
-! CREATE SOURCE unsigned FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unsigned'
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+! CREATE SOURCE unsigned FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unsigned-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.UInt32' USING SCHEMA FILE '${testdrive.temp-dir}/unsigned.pb'
 contains:Protobuf unsigned integer types are not supported
 
-! CREATE SOURCE unsigned FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unsigned'
+! CREATE SOURCE unsigned FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unsigned-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.UInt64' USING SCHEMA FILE '${testdrive.temp-dir}/unsigned.pb'
 contains:Protobuf unsigned integer types are not supported
 
-! CREATE SOURCE unsigned FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unsigned'
+! CREATE SOURCE unsigned FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unsigned-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Fixed32' USING SCHEMA FILE '${testdrive.temp-dir}/unsigned.pb'
 contains:Protobuf unsigned integer types are not supported
 
-! CREATE SOURCE unsigned FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unsigned'
+! CREATE SOURCE unsigned FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unsigned-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Fixed64' USING SCHEMA FILE '${testdrive.temp-dir}/unsigned.pb'
 contains:Protobuf unsigned integer types are not supported

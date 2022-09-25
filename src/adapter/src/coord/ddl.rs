@@ -18,7 +18,7 @@ use timely::progress::Antichain;
 use tracing::Level;
 use tracing::{event, warn};
 
-use mz_compute_client::controller::{ComputeInstanceId, ComputeSinkId};
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
@@ -36,6 +36,7 @@ use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::vars::SystemVars;
 use crate::session::Session;
+use crate::util::ComputeSinkId;
 use crate::{catalog, AdapterError};
 
 /// State provided to a catalog transaction closure.
@@ -72,7 +73,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut storage_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
-        let mut replication_slots_to_drop: Vec<(tokio_postgres::Config, String)> = vec![];
+        let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
         let mut timelines_to_drop = vec![];
 
@@ -120,6 +121,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Secret(_) => {
                         secrets_to_drop.push(*id);
+                    }
+                    CatalogItem::Connection(catalog::Connection { connection, .. }) => {
+                        // SSH connections have an associated secret that should be dropped
+                        match connection {
+                            mz_storage::types::connections::Connection::Ssh(_) => {
+                                secrets_to_drop.push(*id);
+                            }
+                            _ => {}
+                        }
                     }
                     _ => (),
                 }
@@ -241,11 +251,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for id in &sources {
             self.drop_read_policy(id);
         }
-        self.controller
-            .storage_mut()
-            .drop_sources(sources)
-            .await
-            .unwrap();
+        self.controller.storage.drop_sources(sources).await.unwrap();
     }
 
     pub(crate) async fn drop_compute_sinks(&mut self, sinks: Vec<ComputeSinkId>) {
@@ -258,10 +264,14 @@ impl<S: Append + 'static> Coordinator<S> {
                  }| (compute_instance, global_id),
             )
             .into_group_map();
+        let mut compute = self.controller.active_compute();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
-                compute.drop_sinks(ids).await.unwrap();
+            if compute.instance_exists(compute_instance) {
+                compute
+                    .drop_collections(compute_instance, ids)
+                    .await
+                    .unwrap();
             }
         }
     }
@@ -270,11 +280,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for id in &sinks {
             self.drop_read_policy(id);
         }
-        self.controller
-            .storage_mut()
-            .drop_sinks(sinks)
-            .await
-            .unwrap();
+        self.controller.storage.drop_sinks(sinks).await.unwrap();
     }
 
     pub(crate) async fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
@@ -291,9 +297,8 @@ impl<S: Append + 'static> Coordinator<S> {
         }
         for (compute_instance, ids) in by_compute_instance {
             self.controller
-                .compute_mut(compute_instance)
-                .unwrap()
-                .drop_indexes(ids)
+                .active_compute()
+                .drop_collections(compute_instance, ids)
                 .await
                 .unwrap();
         }
@@ -316,16 +321,20 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Drop compute sinks.
         // TODO(chae): Drop storage sinks when they're moved over
+        let mut compute = self.controller.active_compute();
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
-            if let Some(mut compute) = self.controller.compute_mut(compute_instance) {
-                compute.drop_sinks(ids).await.unwrap();
+            if compute.instance_exists(compute_instance) {
+                compute
+                    .drop_collections(compute_instance, ids)
+                    .await
+                    .unwrap();
             }
         }
 
         // Drop storage sources.
         self.controller
-            .storage_mut()
+            .storage
             .drop_sources(source_ids)
             .await
             .unwrap();
@@ -358,7 +367,7 @@ impl<S: Append + 'static> Coordinator<S> {
         connection: StorageSinkConnection,
     ) -> Result<(), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
-        self.controller.storage().collection(sink.from)?;
+        self.controller.storage.collection(sink.from)?;
 
         // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
@@ -391,7 +400,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         Ok(self
             .controller
-            .storage_mut()
+            .storage
             .create_exports(vec![(
                 id,
                 ExportDescription {
@@ -566,62 +575,45 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::StorageCollection(_) => {}
                     }
                 }
-                Op::DropTimeline(_)
+                Op::AlterSource { .. }
+                | Op::DropTimeline(_)
                 | Op::RenameItem { .. }
                 | Op::UpdateComputeInstanceStatus { .. }
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
-                | Op::ResetAllSystemConfiguration { .. } => {}
+                | Op::ResetAllSystemConfiguration { .. }
+                | Op::UpdateItem { .. }
+                | Op::UpdateRotatedKeys { .. } => {}
             }
         }
 
         self.validate_resource_limit(
-            self.catalog
-                .user_tables()
-                .count()
-                .try_into()
-                .expect("number of tables should fit into i32"),
+            self.catalog.user_tables().count(),
             new_tables,
             SystemVars::max_tables,
             "Table",
         )?;
         self.validate_resource_limit(
-            self.catalog
-                .user_sources()
-                .count()
-                .try_into()
-                .expect("number of sources should fit into i32"),
+            self.catalog.user_sources().count(),
             new_sources,
             SystemVars::max_sources,
             "Source",
         )?;
         self.validate_resource_limit(
-            self.catalog
-                .user_sinks()
-                .count()
-                .try_into()
-                .expect("number of sinks should fit into i32"),
+            self.catalog.user_sinks().count(),
             new_sinks,
             SystemVars::max_sinks,
             "Sink",
         )?;
         self.validate_resource_limit(
-            self.catalog
-                .user_materialized_views()
-                .count()
-                .try_into()
-                .expect("number of materialized views should fit into i32"),
+            self.catalog.user_materialized_views().count(),
             new_materialized_views,
             SystemVars::max_materialized_views,
             "Materialized view",
         )?;
         self.validate_resource_limit(
-            self.catalog
-                .compute_instances()
-                .count()
-                .try_into()
-                .expect("number of compute instances should fit into i32"),
+            self.catalog.compute_instances().count(),
             new_clusters,
             SystemVars::max_clusters,
             "Cluster",
@@ -631,13 +623,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let current_amount = self
                 .catalog
                 .resolve_compute_instance(cluster_name)
-                .map(|instance| {
-                    instance
-                        .replicas_by_id
-                        .len()
-                        .try_into()
-                        .expect("number of replicas should fit into i32")
-                })
+                .map(|instance| instance.replicas_by_id.len())
                 .unwrap_or(0);
             self.validate_resource_limit(
                 current_amount,
@@ -647,23 +633,14 @@ impl<S: Append + 'static> Coordinator<S> {
             )?;
         }
         self.validate_resource_limit(
-            self.catalog
-                .databases()
-                .count()
-                .try_into()
-                .expect("number of databases should fit into i32"),
+            self.catalog.databases().count(),
             new_databases,
             SystemVars::max_databases,
             "Database",
         )?;
         for (database_id, new_schemas) in new_schemas_per_database {
             self.validate_resource_limit(
-                self.catalog
-                    .get_database(database_id)
-                    .schemas_by_id
-                    .len()
-                    .try_into()
-                    .expect("number of schemas should fit into i32"),
+                self.catalog.get_database(database_id).schemas_by_id.len(),
                 new_schemas,
                 SystemVars::max_schemas_per_database,
                 "Schemas per database",
@@ -674,30 +651,20 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.catalog
                     .get_schema(&database_spec, &schema_spec, conn_id)
                     .items
-                    .len()
-                    .try_into()
-                    .expect("number of items should fit into i32"),
+                    .len(),
                 new_objects,
                 SystemVars::max_objects_per_schema,
                 "Objects per schema",
             )?;
         }
         self.validate_resource_limit(
-            self.catalog
-                .user_secrets()
-                .count()
-                .try_into()
-                .expect("number of secrets should fit into i32"),
+            self.catalog.user_secrets().count(),
             new_secrets,
             SystemVars::max_secrets,
             "Secret",
         )?;
         self.validate_resource_limit(
-            self.catalog
-                .user_roles()
-                .count()
-                .try_into()
-                .expect("number of secrets should fit into i32"),
+            self.catalog.user_roles().count(),
             new_roles,
             SystemVars::max_roles,
             "Role",
@@ -708,16 +675,30 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Validate a specific type of resource limit and return an error if that limit is exceeded.
     fn validate_resource_limit<F>(
         &self,
-        current_amount: i32,
+        current_amount: usize,
         new_instances: i32,
         resource_limit: F,
         resource_type: &str,
     ) -> Result<(), AdapterError>
     where
-        F: Fn(&SystemVars) -> i32,
+        F: Fn(&SystemVars) -> u32,
     {
-        let limit = resource_limit(self.catalog.state().system_config());
-        if new_instances > 0 && current_amount + new_instances > limit {
+        let limit = resource_limit(self.catalog.system_config());
+        let exceeds_limit = match (u32::try_from(current_amount), u32::try_from(new_instances)) {
+            // 0 new instances are always ok.
+            (_, Ok(new_instances)) if new_instances == 0 => false,
+            // negative instances are always ok.
+            (_, Err(_)) => false,
+            // more than u32 for the current amount is too much.
+            (Err(_), _) => true,
+            (Ok(current_amount), Ok(new_instances)) => {
+                match current_amount.checked_add(new_instances) {
+                    Some(new_amount) => new_amount > limit,
+                    None => true,
+                }
+            }
+        };
+        if exceeds_limit {
             Err(AdapterError::ResourceExhaustion {
                 resource_type: resource_type.to_string(),
                 limit,

@@ -2,8 +2,8 @@
 name = "mz-expr-test-util"
 description = "Utilities for creating objects in the expr crate for testing"
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -13,8 +13,8 @@ mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-repr-test-util = { path = "../repr-test-util" }
 proc-macro2 = "1.0.43"
-serde = { version = "1.0.140", features = ["derive"] }
-serde_json = "1.0.82"
+serde = { version = "1.0.144", features = ["derive"] }
+serde_json = "1.0.85"
 
 [dev-dependencies]
 datadriven = "0.6.0"

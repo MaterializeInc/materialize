@@ -9,8 +9,8 @@
 
 use std::cmp::Ordering;
 
-use chrono::NaiveDate;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
+use mz_repr::adt::date::Date;
 use mz_repr::{Datum, Row};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -217,13 +217,8 @@ pub fn bench_pack(c: &mut Criterion) {
 fn bench_filter(c: &mut Criterion) {
     let num_rows = 10_000;
     let mut rng = seeded_rng();
-    let mut random_date = || {
-        NaiveDate::from_isoywd(
-            rng.gen_range(2000..2020),
-            rng.gen_range(1..52),
-            chrono::Weekday::Mon,
-        )
-    };
+    let mut random_date =
+        || Date::from_pg_epoch(rng.gen_range(Date::LOW_DAYS..=Date::HIGH_DAYS)).unwrap();
     let mut rng = seeded_rng();
     let date_rows = (0..num_rows)
         .map(|_| {

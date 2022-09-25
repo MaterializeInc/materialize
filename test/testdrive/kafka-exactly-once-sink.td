@@ -8,6 +8,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
+
 $ set cdcv2-schema=[
   {
     "type": "array",
@@ -144,12 +146,16 @@ $ kafka-create-topic topic=input_cdcv2
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE input_kafka_cdcv2
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input_cdcv2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
 > CREATE SOURCE input_kafka_dbz
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input_dbz-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_dbz-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
 
 > CREATE TABLE input_table (a bigint, b bigint)
@@ -178,77 +184,58 @@ New York,NY,10004
 "bad,place""",CA,92679
 
 > CREATE SOURCE input_csv
-  FROM KAFKA CONNECTION kafka_conn
-  TOPIC 'testdrive-static-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-static-${testdrive.seed}')
   FORMAT CSV WITH 3 COLUMNS
 
 > CREATE SINK output1 FROM input_kafka_cdcv2
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output1-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output1-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output2 FROM input_kafka_dbz
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output2-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output2-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output3 FROM input_table
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output3-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output3-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output4 FROM input_kafka_cdcv2_mview
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output4-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output4-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output4_view FROM input_kafka_cdcv2_mview_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output4b-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output4b-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 ! CREATE SINK output5 FROM input_kafka_dbz_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output5-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output5-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:input_kafka_dbz_view is a view, which cannot be exported as a sink
 
 > CREATE SINK output5_view FROM input_kafka_dbz_view_mview
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output5b-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output5b-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output6 FROM input_table_mview
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output6-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output6-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 ! CREATE SINK output7 FROM input_values_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output7-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output7-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:input_values_view is a view, which cannot be exported as a sink
 
 > CREATE SINK output8 FROM input_values_mview
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output8-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output8-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output12 FROM input_kafka_dbz_derived_table
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output12-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output12-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK output13 FROM input_csv
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output13-view-${testdrive.seed}'
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-> CREATE SINK output14_custom_consistency_topic FROM input_kafka_cdcv2
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'output14-view-${testdrive.seed}'
-  CONSISTENCY (TOPIC 'output14-custom-consistency-${testdrive.seed}')
-  WITH (reuse_topic=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output13-view-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # We need some data -- any data -- to start creating timestamp bindings
 $ kafka-ingest format=avro topic=input_cdcv2 schema=${cdcv2-schema}
@@ -258,149 +245,51 @@ $ kafka-ingest format=avro topic=input_cdcv2 schema=${cdcv2-schema}
 $ kafka-ingest format=avro topic=input_dbz schema=${dbz-schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
-# ensure that the sink works with log compaction enabled on the consistency topic
+# verify output of progress topic with fixed timestamps
+$ kafka-create-topic topic=progress-test-input
 
-$ kafka-create-topic topic=compaction-test-input
-
-# create topic with known compaction settings, instead of letting
-# Materialize create it when creating the sink
-$ kafka-create-topic topic=compaction-test-output-consistency compaction=true
+> CREATE CONNECTION kafka_fixed
+  FOR KAFKA BROKER '${testdrive.kafka-addr}',
+  PROGRESS TOPIC 'testdrive-progress-fixed-${testdrive.seed}';
 
 > CREATE SOURCE compaction_test_input
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-compaction-test-input-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-test-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK compaction_test_sink FROM compaction_test_input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'compaction-test-output-${testdrive.seed}'
-  WITH (reuse_topic=true) FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+  INTO KAFKA CONNECTION kafka_fixed (TOPIC 'compaction-test-output-${testdrive.seed}')
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
 
-$ kafka-ingest format=avro topic=compaction-test-input schema=${cdcv2-schema}
+# NB: the final timestamp is incomplete and should be present in neither output nor progress topic
+$ kafka-ingest format=avro topic=progress-test-input schema=${cdcv2-schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
 {"array":[{"data":{"a":2,"b":2},"time":1,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":2}]}}
+{"array":[{"data":{"a":2,"b":2},"time":3,"diff":1}]}
 
-# We cannot observe the consistency topic, because compaction is not deterministic.
-# We indirectly test this by verifying that the data output is correct. If this
-# output were not here, something must have gone wrong with comitting to the
-# consistency topic.
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.compaction_test_sink sort-messages=true
+1	{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
-$ kafka-verify format=avro sink=materialize.public.compaction_test_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+$ kafka-verify format=json key=false topic=testdrive-progress-fixed-${testdrive.seed}
+{"timestamp": 1}
 
-# verify output of consistency topic with real-time timestamp bindings
+# verify output with real-time timestamps
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+$ kafka-create-topic topic=rt-binding-progress-test-input
 
-$ kafka-create-topic topic=rt-binding-consistency-test-input
-
-> CREATE SOURCE rt_binding_consistency_test_source
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-rt-binding-consistency-test-input-${testdrive.seed}'
+> CREATE SOURCE rt_binding_progress_test_source
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rt-binding-progress-test-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
 
-> CREATE SINK rt_binding_consistency_test_sink FROM rt_binding_consistency_test_source
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'rt-binding-consistency-test-output-${testdrive.seed}'
-  WITH (reuse_topic=true) FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+> CREATE SINK rt_binding_progress_test_sink FROM rt_binding_progress_test_source
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'rt-binding-progress-test-output-${testdrive.seed}')
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
 
-$ kafka-ingest format=avro topic=rt-binding-consistency-test-input schema=${dbz-schema} timestamp=1
+$ kafka-ingest format=avro topic=rt-binding-progress-test-input schema=${dbz-schema} timestamp=1
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
-$ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-
-# Because the consistency topic produces a new end record every second, parital-search will wait
-# for 10 seconds before continuing rather than the per-record timeout. Be wary of copy/pasting the
-# `partial-search` arg.
-$ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink consistency=debezium partial-search=10
-{"id": "<TIMESTAMP>", "status": "BEGIN", "event_count": null, "data_collections": null}
-{"id": "<TIMESTAMP>", "status": "END", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "rt-binding-consistency-test-output-${testdrive.seed}"}]}}
-
-# Test the CONSISTENCY TOPIC and FORMAT options
-
-> CREATE MATERIALIZED VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
-
-# Can't create sinks with JSON-encoded consistency topics
-! CREATE SINK double_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'double-avro'
-    CONSISTENCY (TOPIC 'consistency-double-avro' FORMAT JSON)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:CONSISTENCY FORMAT JSON not yet supported
-
-# Providing CONSISTENCY without a FORMAT will default to the sink's FORMAT
-# of the sink, if valid
-> CREATE SINK default_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'default-avro'
-    CONSISTENCY (TOPIC 'consistency-default-avro')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-# Fail to default to JSON
-! CREATE SINK default_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'default-avro'
-    CONSISTENCY (TOPIC 'consistency-default-avro')
-  FORMAT JSON
-contains:CONSISTENCY FORMAT JSON not yet supported
-
-> CREATE SINK double_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'double-avro'
-    CONSISTENCY (TOPIC 'consistency-double-avro' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-$ kafka-verify format=avro sink=materialize.public.double_avro sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
-
-> CREATE SINK json_avro FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'json-avro'
-    CONSISTENCY (TOPIC 'consistency-json-avro' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
-  FORMAT JSON
-
-$ kafka-verify format=json sink=materialize.public.json_avro sort-messages=true key=false
-{"before": null, "after": {"a": 1, "b": 2, "c": 3}, "transaction": {"id": "<TIMESTAMP>"}}
-
-! CREATE SINK json_reuse_topic_no_parens FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'json-reuse-topic'
-    WITH (reuse_topic=true)
-  FORMAT JSON
-contains:For FORMAT JSON, you need to manually specify an Avro consistency topic using 'CONSISTENCY (TOPIC consistency_topic FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY url)'. The default of using a JSON consistency topic is not supported.
-
-> CREATE SINK json_reuse_topic_with_parens FROM rt_binding_consistency_test_source
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'json-reuse-topic-2'
-    CONSISTENCY (TOPIC 'consistency-json-avro-2' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
-    WITH (reuse_topic=true)
-  FORMAT JSON
-
-# Same as above!
-> CREATE SINK json_reuse_topic_with_parens_and_with FROM rt_binding_consistency_test_source
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'json-reuse-topic-3'
-    CONSISTENCY (TOPIC 'consistency-json-avro-3' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' WITH (dummy='unused'))
-    WITH (reuse_topic=true)
-  FORMAT JSON
-
-# Default consistency format is Avro if consistency_topic is used
-> CREATE SINK default_avro_2 FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'default-avro-2'
-  CONSISTENCY (TOPIC 'default-consistency-avro')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-$ kafka-verify format=avro sink=materialize.public.default_avro sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 2, "c": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
-
-> CREATE SINK json_avro_upsert_key FROM simple_view
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'json-avro-upsert-key'
-  KEY (b)
-    CONSISTENCY (TOPIC 'consistency-json-avro-upsert-key' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}')
-  FORMAT JSON
-  ENVELOPE UPSERT
-
-$ kafka-verify format=json sink=materialize.public.json_avro_upsert_key key=true
-{"b": 2} {"a": 1, "b": 2, "c": 3, "transaction": {"id": "<TIMESTAMP>"}}
-
-# Verify compaction of exactly once sinks.
-
-# TODO: we've disabled this after observing it be flaky in CI. Re-enable once we've
-# fixed the issue.
-# $ verify-timestamp-compaction source=input_csv max-size=3 permit-progress=true
-# $ verify-timestamp-compaction source=rt_binding_consistency_test_source max-size=3 permit-progress=true
-# $ verify-timestamp-compaction source=input_kafka_dbz max-size=3 permit-progress=true
-# $ verify-timestamp-compaction source=input_kafka_cdcv2 max-size=3 permit-progress=true
+$ kafka-verify format=avro sink=materialize.public.rt_binding_progress_test_sink
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}

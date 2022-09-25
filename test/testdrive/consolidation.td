@@ -95,7 +95,7 @@ $ kafka-create-topic topic=nums
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE SOURCE nums
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-nums-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE MATERIALIZE
 
@@ -105,10 +105,14 @@ $ kafka-create-topic topic=nums
 > ALTER INDEX materialize.public.nums_primary_idx
   SET (LOGICAL COMPACTION WINDOW = 0)
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 # Create a sink before we ingest any data, to ensure the sink starts AS OF 0
 > CREATE SINK nums_sink FROM nums
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'nums-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'nums-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 # ==> Test consolidation.
 
@@ -129,27 +133,27 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 # verify each transaction separately and sort within each transaction to get
 # deterministic results.
 
-$ kafka-verify format=avro sink=materialize.public.nums_sink
-{"before": null, "after": {"row": {"num": 3}}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.nums_sink
+1	{"before": null, "after": {"row": {"num": 3}}}
 
-$ kafka-verify format=avro sink=materialize.public.nums_sink sort-messages=true
-{"before": null, "after": {"row": {"num": 4}}}
-{"before": {"row": {"num": 3}}, "after": null}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.nums_sink sort-messages=true
+2	{"before": null, "after": {"row": {"num": 4}}}
+2	{"before": {"row": {"num": 3}}, "after": null}
 
-$ kafka-verify format=avro sink=materialize.public.nums_sink sort-messages=true
-{"before": null, "after": {"row": {"num": 5}}}
-{"before": {"row": {"num": 4}}, "after": null}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.nums_sink sort-messages=true
+3	{"before": null, "after": {"row": {"num": 5}}}
+3	{"before": {"row": {"num": 4}}, "after": null}
 
 # TODO(benesch): re-enable when we support `CREATE SINK ... AS OF`.
 # # Test that a Debezium sink created `AS OF 3` (the latest completed timestamp)
 # # is fully consolidated.
 # > CREATE SINK nums_sink FROM nums
-#   INTO KAFKA CONNECTION kafka_conn TOPIC 'nums-sink'
-#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-sink-${testdrive.seed}')
+#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   AS OF 3
 #
-# $ kafka-verify format=avro sink=materialize.public.nums_sink
-# {"before": null, "after": {"row": {"num": 5}}}
+# $ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.nums_sink
+# 6 {"before": null, "after": {"row": {"num": 5}}}
 
 # Validate that `TAIL` is similarly consolidated.
 # This protects against regression of #5421.

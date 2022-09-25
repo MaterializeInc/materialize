@@ -22,7 +22,7 @@ use crate::util::describe;
 use crate::AdapterError;
 
 impl<S: Append + 'static> Coordinator<S> {
-    pub(crate) async fn plan_statement(
+    pub(crate) fn plan_statement(
         &mut self,
         session: &mut Session,
         stmt: mz_sql::ast::Statement<Aug>,

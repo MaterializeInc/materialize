@@ -41,3 +41,32 @@ RowDescription {"fields":[{"name":"?column?"}]}
 DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
+
+# Empty queries in extended protocol
+send
+Parse {"query": ""}
+Bind
+Execute
+Parse {"query": "SELECT 1"}
+Bind
+Execute
+Parse {"query": ""}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+EmptyQueryResponse
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ParseComplete
+BindComplete
+EmptyQueryResponse
+ReadyForQuery {"status":"I"}
