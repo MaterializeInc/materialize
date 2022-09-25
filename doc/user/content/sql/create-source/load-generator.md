@@ -7,7 +7,7 @@ menu:
     parent: 'create-source'
     identifier: load-generator
     name: Load generator
-    weight: 20
+    weight: 40
 ---
 
 {{% create-source/intro %}}
@@ -35,7 +35,7 @@ _src_name_  | The name for the source.
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | The size for the source. For valid sizes, see [source sizes](/sql/create-source#sizes).
+`SIZE`                               | `text`    | Default: `3xsmall`. The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Description
 
@@ -167,8 +167,26 @@ SELECT * from bids;
 (3 rows)
 ```
 
+### Sizing a source
+
+To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
+
+```sql
+CREATE SOURCE auction_load FROM LOAD GENERATOR AUCTION
+WITH (SIZE = 'xsmall');
+```
+
+To resize the source after creation:
+
+```sql
+ALTER SOURCE auction_load SET (SIZE = 'large');
+```
+
+By default, sources are provisioned using the smallest size (`3xsmall`). For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
+
 ## Related pages
 
+- [`CREATE SOURCE`](../)
 - [`CREATE VIEWS`](/sql/create-views/)
 
 [`bigint`]: /sql/types/bigint

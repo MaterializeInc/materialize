@@ -220,31 +220,22 @@ The envelope exposes the `before` and `after` value fields from change events. I
 
 Debezium may produce duplicate records if the connector is interrupted. Materialize makes a best-effort attempt to detect and filter out duplicates.
 
-## Sizes
+## Best practices
 
-The `SIZE` option controls the amount of CPU and memory available to the source.
+### Sizing a source
 
-Valid sizes are:
+Some sources are low traffic and require relatively few resources to handle data ingestion, while others are high traffic and require hefty resource allocations. You can provision a specific amount of CPU and memory to a source using the `SIZE` option, and adjust the provisioned size after source creation using the [`ALTER SOURCE`](/sql/alter-source) command.
 
-- `3xsmall`
-- `2xsmall`
-- `xsmall`
-- `small`
-- `medium`
-- `large`
+By default, Materialize provisions sources using the smallest size (`3xsmall`). It's a good idea to increase the size of a source when:
 
-The default source size is `3xsmall`.
+  * You want to **increase throughput**. Larger sources will typically ingest data
+    faster, as there is more CPU available to read and decode data from the
+    upstream external system.
 
-Consider increasing the size of your source when:
-
-  * You want to increase throughput. Larger sources will typically ingest data
-    faster, as they have more CPU available to read and decode data from your
-    external system.
-
-  * You are using the [upsert envelope](#upsert-envelope) and your source
-    contains many unique keys. The upsert envelope must keep in-memory state
-    proportional to the number of unique keys in your upstream source. Larger
-    sizes can store more unique keys.
+  * You are using the [upsert envelope](#upsert-envelope), and your source
+    contains **many unique keys**. This envelope must keep in-memory state
+    proportional to the number of unique keys in the upstream external system.
+    Larger sizes can store more unique keys.
 
 ## Related pages
 
