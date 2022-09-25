@@ -2618,6 +2618,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     global_timestamp: self.get_local_read_ts(),
                     respond_immediately,
                     sources,
+                    timeline,
                 };
                 explanation.to_string()
             }
