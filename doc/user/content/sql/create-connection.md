@@ -148,6 +148,13 @@ Field                       | Value            | Required | Description
 `PORT`                      | `int4`           | ✓        | Port for the connection.
 `USER`                      | `text`           | ✓        | Username for the connection.
 
+#### Public key retrieval
+
+Once a connection is created, you can find and retrieve the public keys to be used in the bastion server by running:
+
+`SELECT * FROM mz_ssh_tunnel_connections;`
+
+
 ##### Example
 
 ```sql
