@@ -28,7 +28,7 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
 
 2. #### Create an API Key
     ##### API Key
-    a. Navigate to the [Confluent Cloud](https://confluent.cloud/)
+    a. Navigate to the [Confluent Cloud dashboard](https://confluent.cloud/)
 
     b. Choose the Confluent Cloud Kafka cluster you just created in Step 1
 
