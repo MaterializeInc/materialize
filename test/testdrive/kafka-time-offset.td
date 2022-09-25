@@ -417,7 +417,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE SOURCE upsert_time_skip
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=6, TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM UPSERT
+  ENVELOPE DEBEZIUM
 
 > SELECT * FROM upsert_time_skip
 id creature

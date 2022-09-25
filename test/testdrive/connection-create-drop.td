@@ -126,7 +126,7 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
     FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-    ENVELOPE DEBEZIUM UPSERT
+    ENVELOPE DEBEZIUM
 
 > SELECT * from csr_source
 id creature
@@ -139,7 +139,7 @@ id creature
 > CREATE SOURCE two_connection_source
   FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM UPSERT
+  ENVELOPE DEBEZIUM
 
 > SELECT * from two_connection_source
 id creature
@@ -160,7 +160,7 @@ contains: unknown catalog item 'does_not_exist'
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-csr_test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION does_not_exist
-  ENVELOPE DEBEZIUM UPSERT
+  ENVELOPE DEBEZIUM
 contains: unknown catalog item 'does_not_exist'
 
 # Test protobuf CSR connection

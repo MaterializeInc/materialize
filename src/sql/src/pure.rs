@@ -389,7 +389,7 @@ async fn purify_csr_connection_proto(
                 .ok();
 
             if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key.is_none() {
-                bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+                bail!("Key schema is required for ENVELOPE DEBEZIUM");
             }
 
             *seed = Some(CsrSeedProtobuf { value, key });
@@ -448,7 +448,7 @@ async fn purify_csr_connection_avro(
         )
         .await?;
         if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key_schema.is_none() {
-            bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+            bail!("Key schema is required for ENVELOPE DEBEZIUM");
         }
 
         *seed = Some(CsrSeedAvro {
