@@ -10,9 +10,7 @@
 from materialize import ROOT, cargo
 
 
-def environmentd_rust_version() -> str:
-    rust_version = cargo.Workspace(ROOT).crates["mz-environmentd"].rust_version
-    assert (
-        rust_version is not None
-    ), "environmentd crate missing rust version configuration"
+def rust_version() -> str:
+    rust_version = cargo.Workspace(ROOT).rust_version
+    assert rust_version is not None, "workspace missing rust version configuration"
     return rust_version
