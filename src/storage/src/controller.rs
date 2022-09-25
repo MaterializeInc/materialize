@@ -20,7 +20,7 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
@@ -94,7 +94,7 @@ impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub enum IntrospectionType {
     ShardMapping,
 }
@@ -181,13 +181,6 @@ pub trait StorageController: Debug + Send {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
-    /// Like `create_collections`, but the implementor must also assume
-    /// responsibility for managing/advancing the collection's timestamps.
-    async fn create_managed_collections(
-        &mut self,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
-
     async fn alter_collections(
         &mut self,
         collections: Vec<(GlobalId, StorageHostConfig)>,
@@ -262,8 +255,6 @@ pub trait StorageController: Debug + Send {
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError>;
 
-    async fn set_shard_id(&mut self, id: GlobalId);
-
     /// Assigns a read policy to specific identifiers.
     ///
     /// The policies are assigned in the order presented, and repeated identifiers should
@@ -313,11 +304,6 @@ pub trait StorageController: Debug + Send {
 
 #[async_trait(?Send)]
 pub trait CollectionManager: Debug + Send + StorageController {
-    /// Registers the collection correlated with `global_id` as one that the
-    /// implementor manages, namely that they will assume responsibility for
-    /// controlling the collection's timestamps.
-    async fn register_managed_collection(&mut self, global_id: GlobalId);
-
     /// Appends `updates` to the collection correlated with `global_id` at a
     /// timestamp decided on by the implementor.
     async fn append_to_managed_collection(
@@ -749,7 +735,6 @@ pub struct StorageControllerState<
     /// Behind an `Arc` to provide the `Controller`'s automatic timestamper
     /// access.
     pub(super) persist_write_handles: Arc<persist_write_handles::PersistWorker<T>>,
-    pub(super) shard_collection_global_id: Option<GlobalId>,
     /// Read handles for persist shards.
     ///
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
@@ -771,7 +756,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64> {
     /// A persist client used to write to storage collections
     persist: Arc<Mutex<PersistClientCache>>,
     now: NowFn,
-    managed_collections: Arc<Mutex<HashSet<GlobalId>>>,
+    introspection_collections: Arc<Mutex<HashMap<IntrospectionType, GlobalId>>>,
     managed_collection_tx: Option<mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>>,
 }
 
@@ -894,7 +879,6 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
             persist_write_handles: Arc::new(persist_write_handles::PersistWorker::new(tx)),
             persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
-            shard_collection_global_id: None,
         }
     }
 }
@@ -932,26 +916,6 @@ where
             .collections
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn create_managed_collections(
-        &mut self,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError> {
-        let ids: Vec<GlobalId> = collections.iter().map(|(id, _)| id.clone()).collect();
-
-        self.create_collections(collections).await?;
-
-        // for id in ids {
-        //     self.register_managed_collection(id).await;
-        //     if Some(id) == self.state.shard_collection_global_id {
-
-        //         self.initialize_shard_mapping().await;
-        //     }
-        // }
-
-        Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -1083,7 +1047,7 @@ where
                         if self.managed_collection_tx.is_none() {
                             // Set up automatic timestamp advancer
                             let now = self.now.clone();
-                            let collections = Arc::clone(&self.managed_collections);
+                            let collections = Arc::clone(&self.introspection_collections);
                             let write_handle = Arc::clone(&self.state.persist_write_handles);
                             let (tx, mut rx) = mpsc::channel(1);
                             self.managed_collection_tx = Some(tx);
@@ -1101,7 +1065,7 @@ where
                                                 let updates = collections
                                                     .lock()
                                                     .await
-                                                    .iter()
+                                                    .values()
                                                     .map(|id| (*id, vec![], upper.clone()))
                                                     .collect::<Vec<_>>();
                                                 // When advancing timestamps, errors don't matter
@@ -1121,7 +1085,7 @@ where
                                                     updates.append(&mut collections
                                                         .lock()
                                                         .await
-                                                        .iter()
+                                                        .values()
                                                         .filter_map(|inner_id| if id == *inner_id {
                                                             None
                                                         } else {
@@ -1137,10 +1101,16 @@ where
                                 },
                             );
                         }
+                        let curr = self.introspection_collections.lock().await.insert(i, id);
+                        assert!(
+                            curr.is_none(),
+                            "IntrospectionType {:?} previously assigned to GlobalId {:?}",
+                            i,
+                            curr
+                        );
+
                         match i {
                             IntrospectionType::ShardMapping => {
-                                self.state.shard_collection_global_id = Some(id);
-                                self.managed_collections.lock().await.insert(id);
                                 self.truncate_managed_collection(id).await;
                                 self.initialize_shard_mapping().await;
                             }
@@ -1340,10 +1310,6 @@ where
             .unwrap()
     }
 
-    async fn set_shard_id(&mut self, id: GlobalId) {
-        self.state.shard_collection_global_id = Some(id);
-    }
-
     #[tracing::instrument(level = "debug", skip(self))]
     async fn set_read_policy(
         &mut self,
@@ -1514,10 +1480,6 @@ where
     MetadataExportFetcher: MetadataExport<T>,
     DurableExportMetadata<T>: mz_stash::Data,
 {
-    async fn register_managed_collection(&mut self, global_id: GlobalId) {
-        self.managed_collections.lock().await.insert(global_id);
-    }
-
     /// Effectively truncates the `data_shard` correlated with `global_id`
     /// effective as of the system time.
     ///
@@ -1528,7 +1490,11 @@ where
     /// - If any fetched key or value from the collection is an error.
     async fn truncate_managed_collection(&mut self, global_id: GlobalId) {
         assert!(
-            self.managed_collections.lock().await.contains(&global_id),
+            self.introspection_collections
+                .lock()
+                .await
+                .values()
+                .contains(&global_id),
             "cannot truncate collection before it's managed"
         );
 
@@ -1552,7 +1518,7 @@ where
     }
 
     async fn initialize_shard_mapping(&mut self) {
-        let id = self.state.shard_collection_global_id.unwrap();
+        let id = self.introspection_collections.lock().await[&IntrospectionType::ShardMapping];
 
         // Pack updates into rows
         let mut row_buf = Row::default();
@@ -1582,8 +1548,13 @@ where
     /// In these cases, the data is later written by
     /// [`Self::initialize_shard_mapping`].
     async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId) {
-        let id = match self.state.shard_collection_global_id {
-            Some(id) if self.managed_collections.lock().await.contains(&id) => id,
+        let id = match self
+            .introspection_collections
+            .lock()
+            .await
+            .get(&IntrospectionType::ShardMapping)
+        {
+            Some(id) => *id,
             _ => return,
         };
 
@@ -1606,7 +1577,11 @@ where
     ///   managed.
     async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         assert!(
-            self.managed_collections.lock().await.contains(&id),
+            self.introspection_collections
+                .lock()
+                .await
+                .values()
+                .contains(&id),
             "cannot append collection before it's managed"
         );
 
@@ -1655,7 +1630,7 @@ where
             persist_location,
             persist: persist_clients,
             now,
-            managed_collections: Arc::new(Mutex::new(HashSet::new())),
+            introspection_collections: Arc::new(Mutex::new(HashMap::new())),
             managed_collection_tx: None,
         };
         c
@@ -1795,6 +1770,13 @@ impl<T: Timestamp> CollectionState<T> {
             write_frontier: Antichain::from_elem(Timestamp::minimum()),
             collection_metadata: metadata,
         }
+    }
+
+    pub fn is_introspection_collection(&self) -> bool {
+        matches!(
+            self.description.data_source,
+            Some(DataSource::Introspection(_))
+        )
     }
 }
 

@@ -452,12 +452,6 @@ impl<S: Append + 'static> Coordinator<S> {
             None
         };
 
-        let shard_map_id = self
-            .catalog
-            .resolve_builtin_storage_collection(&crate::catalog::builtin::MZ_STORAGE_SHARDS);
-
-        self.controller.storage.set_shard_id(shard_map_id).await;
-
         for entry in &entries {
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
@@ -600,7 +594,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     self.controller
                         .storage
-                        .create_managed_collections(vec![(entry.id(), collection_desc)])
+                        .create_collections(vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap();
 
