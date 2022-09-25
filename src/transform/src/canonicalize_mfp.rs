@@ -443,21 +443,14 @@ impl CanonicalizeMfp {
     /// reconstruct literal constraints.
     fn inline_literal_constraints(mfp: &mut MapFilterProject) -> Result<(), RecursionLimitError> {
         let mut should_inline = vec![false; mfp.input_arity + mfp.expressions.len()];
-        // Mark those expressions for inlining that are of the form
+        // Mark those expressions for inlining that contain a subexpression of the form
         // `<xxx> = <lit>` or `<lit> = <xxx>`.
         for (i, e) in mfp.expressions.iter().enumerate() {
-            if let MirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
-                expr1,
-                expr2,
-            } = e
-            {
-                if matches!(**expr1, MirScalarExpr::Literal(..))
-                    || matches!(**expr2, MirScalarExpr::Literal(..))
-                {
+            e.visit_post(&mut |s| {
+                if s.any_expr_eq_literal().is_some() {
                     should_inline[i + mfp.input_arity] = true;
                 }
-            }
+            })?;
         }
         // Whenever
         // `<Column(i)> = <lit>` or `<lit> = <Column(i)>`
