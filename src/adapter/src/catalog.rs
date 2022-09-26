@@ -1985,7 +1985,7 @@ impl<S: Append> Catalog<S> {
                 let AllocatedBuiltinSystemIds {
                     all_builtins: all_indexes,
                     new_builtins: new_indexes,
-                    migrated_builtins: migrated_indexes,
+                    ..
                 } = catalog
                     .allocate_system_ids(BUILTINS::logs().collect(), |log| {
                         introspection_source_index_gids
@@ -1995,12 +1995,6 @@ impl<S: Append> Catalog<S> {
                             .map(|id| (id, 0))
                     })
                     .await?;
-
-                // TODO(jkosh44) Implement log migration
-                assert!(
-                    migrated_indexes.is_empty(),
-                    "Log migration is unimplemented"
-                );
 
                 catalog
                     .storage()
@@ -2337,7 +2331,7 @@ impl<S: Append> Catalog<S> {
     ///
     /// Objects need to be dropped starting from the leafs of the DAG going up towards the roots,
     /// and they need to be recreated starting at the root of the DAG and going towards the leafs.
-    async fn generate_builtin_migration_metadata(
+    pub async fn generate_builtin_migration_metadata(
         &mut self,
         migrated_ids: Vec<(GlobalId, u64)>,
     ) -> Result<BuiltinMigrationMetadata, Error> {
@@ -2386,7 +2380,7 @@ impl<S: Append> Catalog<S> {
                 );
             }
 
-            // Defer adding the create/drops ops until we know more about the dependency graph.
+            // Defer adding the create/drop ops until we know more about the dependency graph.
             topological_sort.push((entry, new_id));
 
             ancestor_ids.insert(id, new_id);
@@ -2444,7 +2438,7 @@ impl<S: Append> Catalog<S> {
 
             // Push create commands.
             let name = entry.name.clone();
-            if new_id.is_user() {
+            if id.is_user() {
                 let schema_id = name.qualifiers.schema_spec.clone().into();
                 migration_metadata
                     .user_create_ops
