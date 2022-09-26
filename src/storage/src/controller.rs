@@ -998,8 +998,12 @@ where
                 read.downgrade_since(&since).await;
             }
 
-            let collection_state =
-                CollectionState::new(description.clone(), read.since().clone(), metadata);
+            let collection_state = CollectionState::new(
+                description.clone(),
+                read.since().clone(),
+                write.upper().clone(),
+                metadata,
+            );
 
             self.state.persist_write_handles.register(id, write);
             self.state.persist_read_handles.register(id, read);
@@ -1071,7 +1075,7 @@ where
                                     macro_rules! max_now_write_frontier {
                                         ($write_frontier:expr) => {{
                                             let upper = T::from(now());
-                                            dbg!(if $write_frontier.less_than(&upper) {
+                                            if $write_frontier.less_than(&upper) {
                                                 upper
                                             } else {
                                                 match $write_frontier.elements().iter().min() {
@@ -1079,7 +1083,7 @@ where
                                                     // Closed collection
                                                     None => continue,
                                                 }
-                                            })
+                                            }
                                         }};
                                     }
                                     loop {
@@ -1799,6 +1803,7 @@ impl<T: Timestamp> CollectionState<T> {
     pub fn new(
         description: CollectionDescription<T>,
         since: Antichain<T>,
+        writer_frontier: Antichain<T>,
         metadata: CollectionMetadata,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -1808,7 +1813,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
-            write_frontier: Arc::new(Mutex::new(Antichain::from_elem(Timestamp::minimum()))),
+            write_frontier: Arc::new(Mutex::new(writer_frontier)),
             collection_metadata: metadata,
         }
     }
