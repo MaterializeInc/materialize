@@ -597,12 +597,23 @@ pub struct CompactionMetrics {
     pub(crate) noop: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) memory_violations: IntCounter,
+    pub(crate) runs_compacted: IntCounter,
+    pub(crate) chunks_compacted: IntCounter,
 
     pub(crate) batch: BatchWriteMetrics,
+    pub(crate) step_timings: CompactionRunTimings,
+
+    pub(crate) _step_timings_vec: CounterVec,
 }
 
 impl CompactionMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
+        let step_timings: CounterVec = registry.register(metric!(
+                name: "mz_persist_compaction_step_seconds",
+                help: "time spent on individual steps of compaction",
+                var_labels: ["step"],
+        ));
+
         CompactionMetrics {
             requested: registry.register(metric!(
                 name: "mz_persist_compaction_requested",
@@ -636,7 +647,40 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_memory_violations",
                 help: "count of compaction memory requirement violations",
             )),
+            runs_compacted: registry.register(metric!(
+                name: "mz_persist_compaction_runs_compacted",
+                help: "count of runs compacted",
+            )),
+            chunks_compacted: registry.register(metric!(
+                name: "mz_persist_compaction_chunks_compacted",
+                help: "count of run chunks compacted",
+            )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
+            step_timings: CompactionRunTimings::new(step_timings.clone()),
+            _step_timings_vec: step_timings,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CompactionRunTimings {
+    pub(crate) part_fetch_seconds: Counter,
+    pub(crate) heap_population_seconds: Counter,
+    pub(crate) consolidation_seconds: Counter,
+    pub(crate) part_columnar_encoding_seconds: Counter,
+    pub(crate) part_write_seconds: Counter,
+    pub(crate) total_seconds: Counter,
+}
+
+impl CompactionRunTimings {
+    fn new(step_timings: CounterVec) -> CompactionRunTimings {
+        CompactionRunTimings {
+            part_fetch_seconds: step_timings.with_label_values(&["part_fetch"]),
+            heap_population_seconds: step_timings.with_label_values(&["heap_population"]),
+            consolidation_seconds: step_timings.with_label_values(&["consolidation"]),
+            part_columnar_encoding_seconds: step_timings.with_label_values(&["part_columnar_encoding"]),
+            part_write_seconds: step_timings.with_label_values(&["part_write_seconds"]),
+            total_seconds: step_timings.with_label_values(&["total"]),
         }
     }
 }

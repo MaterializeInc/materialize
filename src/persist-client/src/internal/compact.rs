@@ -14,7 +14,7 @@ use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::slice::Iter;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use differential_dataflow::consolidation::consolidate_updates;
@@ -31,6 +31,7 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, debug_span, info, Instrument, Span};
+use mz_ore::cast::CastFrom;
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
@@ -262,6 +263,9 @@ where
         for (runs, run_chunk_max_memory_usage) in
             Self::chunk_runs(&req, &cfg, metrics.as_ref(), run_reserved_memory_bytes)
         {
+            metrics.compaction.chunks_compacted.inc();
+            metrics.compaction.runs_compacted.inc_by(u64::cast_from(runs.len()));
+
             // given the runs we actually have in our batch, we might have extra memory
             // available. we reserved enough space to always have 1 in-progress part in
             // flight, but if we have excess, we can use it to increase our write parallelism
@@ -445,6 +449,8 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
     ) -> Result<(Vec<HollowBatchPart>, Vec<usize>, usize), anyhow::Error> {
+        let compaction_start = Instant::now();
+
         let mut compaction_runs = vec![];
         let mut compaction_parts_count = 0;
         let mut total_updates = 0;
@@ -460,9 +466,17 @@ where
             .map(|(part_desc, parts)| (part_desc, parts.into_iter()))
             .collect();
 
+        let mut timings = Timings::default();
+
         // populate our heap with the updates from the first part of each run
         for (index, (part_desc, parts)) in runs.iter_mut().enumerate() {
             if let Some(part) = parts.next() {
+                let start = Instant::now();
+                let mut part =
+                    fetch_batch_part(&shard_id, blob.as_ref(), &metrics, &part.key, part_desc)
+                        .await?;
+                timings.part_fetching += start.elapsed();
+                let start = Instant::now();
                 let mut part = fetch_batch_part(
                     &shard_id,
                     blob.as_ref(),
@@ -481,6 +495,7 @@ where
                     sorted_updates.push(Reverse((((k, v), t, d), index)));
                     remaining_updates_by_run[index] += 1;
                 }
+                timings.heap_population += start.elapsed();
             }
         }
 
@@ -493,6 +508,13 @@ where
                 // repopulate from the originating run, if any parts remain
                 let (part_desc, parts) = &mut runs[index];
                 if let Some(part) = parts.next() {
+                    let start = Instant::now();
+                    let mut part =
+                        fetch_batch_part(&shard_id, blob.as_ref(), &metrics, &part.key, part_desc)
+                            .await?;
+                    timings.part_fetching += start.elapsed();
+
+                    let start = Instant::now();
                     let mut part = fetch_batch_part(
                         &shard_id,
                         blob.as_ref(),
@@ -511,6 +533,7 @@ where
                         sorted_updates.push(Reverse((((k, v), t, d), index)));
                         remaining_updates_by_run[index] += 1;
                     }
+                    timings.heap_population += start.elapsed();
                 }
             }
 
@@ -523,12 +546,14 @@ where
                     &mut compaction_runs,
                     compaction_parts_count,
                     &mut greatest_kv,
+                    &mut timings,
                 );
                 Self::write_run(
                     &mut batch_parts,
                     &mut update_buffer,
                     &mut compaction_parts_count,
                     desc.clone(),
+                    &mut timings,
                 )
                 .await;
                 update_buffer_size_bytes = 0;
@@ -544,18 +569,26 @@ where
                 &mut compaction_runs,
                 compaction_parts_count,
                 &mut greatest_kv,
+                &mut timings,
             );
             Self::write_run(
                 &mut batch_parts,
                 &mut update_buffer,
                 &mut compaction_parts_count,
                 desc.clone(),
+                &mut timings,
             )
             .await;
         }
 
+        let start = Instant::now();
         let compaction_parts = batch_parts.finish().await;
+        timings.part_writing += start.elapsed();
         assert_eq!(compaction_parts.len(), compaction_parts_count);
+
+        timings.total = compaction_start.elapsed();
+        timings.record(&metrics);
+
         Ok((compaction_parts, compaction_runs, total_updates))
     }
 
@@ -567,7 +600,9 @@ where
         compaction_runs: &mut Vec<usize>,
         number_of_compacted_runs: usize,
         greatest_kv: &mut Option<(Vec<u8>, Vec<u8>)>,
+        timings: &mut Timings,
     ) -> usize {
+        let start = Instant::now();
         consolidate_updates(updates);
 
         match (&greatest_kv, updates.last()) {
@@ -583,6 +618,7 @@ where
             (Some(_), None) | (None, None) => {}
         };
 
+        timings.consolidation += start.elapsed();
         updates.len()
     }
 
@@ -594,6 +630,7 @@ where
         updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
         compaction_parts_count: &mut usize,
         desc: Description<T>,
+        timings: &mut Timings,
     ) {
         if updates.is_empty() {
             return;
@@ -601,16 +638,21 @@ where
         *compaction_parts_count += 1;
 
         let mut builder = ColumnarRecordsVecBuilder::new_with_len(KEY_VAL_DATA_MAX_LEN);
+        let start = Instant::now();
         for ((k, v), t, d) in updates.drain(..) {
             builder.push(((&k, &v), T::encode(&t), D::encode(&d)));
         }
         let chunks = builder.finish();
+        timings.part_columnar_encoding += start.elapsed();
         debug_assert_eq!(chunks.len(), 1);
+
+        let start = Instant::now();
         for chunk in chunks {
             batch_parts
                 .write(chunk, desc.upper().clone(), desc.since().clone())
                 .await;
         }
+        timings.part_writing += start.elapsed();
     }
 
     fn validate_req(req: &CompactReq<T>) -> Result<(), anyhow::Error> {
@@ -640,6 +682,37 @@ where
             ));
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+struct Timings {
+    part_fetching: Duration,
+    heap_population: Duration,
+    consolidation: Duration,
+    part_columnar_encoding: Duration,
+    part_writing: Duration,
+    total: Duration,
+}
+
+impl Timings {
+    fn record(self, metrics: &Metrics) {
+        // intentionally deconstruct so we don't forget to consider each field
+        let Timings {
+            part_fetching,
+            heap_population,
+            consolidation,
+            part_columnar_encoding,
+            part_writing,
+            total,
+        } = self;
+
+        metrics.compaction.step_timings.part_fetch_seconds.inc_by(part_fetching.as_secs_f64());
+        metrics.compaction.step_timings.heap_population_seconds.inc_by(heap_population.as_secs_f64());
+        metrics.compaction.step_timings.consolidation_seconds.inc_by(consolidation.as_secs_f64());
+        metrics.compaction.step_timings.part_columnar_encoding_seconds.inc_by(part_columnar_encoding.as_secs_f64());
+        metrics.compaction.step_timings.part_write_seconds.inc_by(part_writing.as_secs_f64());
+        metrics.compaction.step_timings.total_seconds.inc_by(total.as_secs_f64());
     }
 }
 
