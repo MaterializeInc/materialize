@@ -5775,8 +5775,9 @@ dependencies = [
 
 [[package]]
 name = "segment"
-version = "0.2.0"
-source = "git+https://github.com/MaterializeInc/segment.git#d8ad043a0f4ef907293a2e4a4c9c312e26092fa6"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24fc91c898e0487ff3e471d0849bbaf7d38a00ff5e3531009d386b0bab9b6b12"
 dependencies = [
  "async-trait",
  "reqwest",
