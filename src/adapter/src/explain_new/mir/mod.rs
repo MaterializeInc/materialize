@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use std::iter::once;
 
 use mz_compute_client::command::DataflowDescription;
-use mz_expr::{visit::Visit, MirRelationExpr, OptimizedMirRelationExpr};
-use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
+use mz_expr::{visit::Visit, Id, LocalId, MirRelationExpr, OptimizedMirRelationExpr};
+use mz_ore::{cast::CastFrom, stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::{
     Arity, DerivedAttributes, NonNegative, RelationType, SubtreeSize, UniqueKeys,
@@ -58,10 +58,17 @@ impl<'a> Explainable<'a, MirRelationExpr> {
         config: &'a ExplainConfig,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainSinglePlan<'a, MirRelationExpr>, ExplainError> {
+        // normalize the representation as linear chains
+        // (this implies !config.raw_plans by construction)
+        if config.linear_chains {
+            enforce_linear_chains(self.0)?;
+        };
         // unless raw plans are explicitly requested
         // normalize the representation of nested Let bindings
+        // and enforce sequential Let binding IDs
         if !config.raw_plans {
             normalize_lets_in_tree(self.0)?;
+            enforce_let_id_sequence(self.0)?;
         }
 
         let plan = AnnotatedPlan::try_from(context, self.0)?;
@@ -107,10 +114,17 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
             .iter_mut()
             .rev()
             .map(|build_desc| {
+                // normalize the representation as linear chains
+                // (this implies !config.raw_plans by construction)
+                if config.linear_chains {
+                    enforce_linear_chains(build_desc.plan.as_inner_mut())?;
+                };
                 // unless raw plans are explicitly requested
                 // normalize the representation of nested Let bindings
+                // and enforce sequential Let binding IDs
                 if !config.raw_plans {
                     normalize_lets_in_tree(build_desc.plan.as_inner_mut())?;
+                    enforce_let_id_sequence(build_desc.plan.as_inner_mut())?;
                 }
 
                 let id = context
@@ -223,11 +237,112 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
     }
 }
 
+/// Normalize the way inputs of multi-input variants are rendered.
+///
+/// After the transform is applied, non-trival inputs `$input` of variants with
+/// more than one input are wrapped in a `let $x = $input in $x` blocks.
+///
+/// If these blocks are subsequently pulled up by [`normalize_lets_in_tree`],
+/// the rendered version of the resulting tree will only have linear chains.
+fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), RecursionLimitError> {
+    use MirRelationExpr::{Constant, Get, Join, Union};
+
+    // helper struct: a generator of fresh local ids
+    let mut id_gen = id_gen(expr)?.peekable();
+
+    let mut wrap_in_let = |input: &mut MirRelationExpr| {
+        match input {
+            Constant { .. } | Get { .. } => (),
+            input => {
+                // generate fresh local id
+                // let id = id_cnt
+                //     .next()
+                //     .map(|id| LocalId::new(1000_u64 + u64::cast_from(id_map.len()) + id))
+                //     .unwrap();
+                let id = id_gen.next().unwrap();
+                let value = input.take_safely();
+                // generate a `let $fresh_id = $body in $fresh_id` to replace this input
+                let mut binding = MirRelationExpr::Let {
+                    id,
+                    value: Box::new(value),
+                    body: Box::new(Get {
+                        id: Id::Local(id.clone()),
+                        typ: input.typ(),
+                    }),
+                };
+                // swap the current body with the replacement
+                std::mem::swap(input, &mut binding);
+            }
+        }
+    };
+
+    expr.try_visit_mut_post(&mut |expr: &mut MirRelationExpr| {
+        match expr {
+            Join { inputs, .. } => {
+                for input in inputs {
+                    wrap_in_let(input);
+                }
+            }
+            Union { base, inputs } => {
+                wrap_in_let(base);
+                for input in inputs {
+                    wrap_in_let(input);
+                }
+            }
+            _ => (),
+        }
+        Ok(())
+    })
+}
+
+// Create an [`Iterator`] for [`LocalId`] values that are guaranteed to be
+// fresh within the scope of the given [`MirRelationExpr`].
+fn id_gen(expr: &MirRelationExpr) -> Result<impl Iterator<Item = LocalId>, RecursionLimitError> {
+    let mut max_id = 0_u64;
+
+    expr.visit_post(&mut |expr| {
+        match expr {
+            MirRelationExpr::Let { id, .. } => max_id = std::cmp::max(max_id, id.into()),
+            _ => (),
+        };
+    })?;
+
+    Ok((max_id + 1..).map(LocalId::new))
+}
+
+/// Reset local IDs top-down as a 0-based sequence.
+fn enforce_let_id_sequence(expr: &mut MirRelationExpr) -> Result<(), RecursionLimitError> {
+    // helper struct: a map of old to new IDs
+    let mut id_map = HashMap::<LocalId, LocalId>::new();
+
+    expr.try_visit_mut_pre(&mut |expr: &mut MirRelationExpr| {
+        match expr {
+            MirRelationExpr::Let { id, .. } => {
+                let id_old = id.clone();
+                let id_new = u64::cast_from(id_map.len());
+                id_map.insert(id_old, LocalId::new(id_new));
+                std::mem::swap(id, &mut LocalId::new(id_new));
+            }
+            MirRelationExpr::Get {
+                id: Id::Local(id_old),
+                ..
+            } => {
+                let mut id_new = id_map.get(id_old).unwrap_or(id_old).clone();
+                std::mem::swap(id_old, &mut id_new);
+            }
+            _ => (),
+        }
+        Ok(())
+    })?;
+
+    Ok(())
+}
+
 /// Normalizes occurrences of nested `Let` bindings in the entire tree
 /// rooted at the given `expr`.
 ///
 /// This just applies [`normalize_lets_at_root`] bottom up once.
-fn normalize_lets_in_tree<'a>(expr: &'a mut MirRelationExpr) -> Result<(), RecursionLimitError> {
+fn normalize_lets_in_tree(expr: &mut MirRelationExpr) -> Result<(), RecursionLimitError> {
     expr.visit_mut_post(&mut normalize_lets_at_root)
 }
 
