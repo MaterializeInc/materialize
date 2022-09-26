@@ -220,19 +220,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal_1) EXC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active) EXCEPT (SELECT * FROM mz_internal.mz_peek_active_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active_1) EXCEPT (SELECT * FROM mz_internal.mz_peek_active));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_peek_durationss_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_1) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations_1) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations));
 ----
 
 query T
@@ -292,11 +292,11 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_1) EXCEPT (SELE
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes_1) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes));
 ----
 
 query T
@@ -340,11 +340,11 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers_1) EXCEPT 
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_1) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_1) EXCEPT (SELECT * FROM mz_internal.mz_message_counts));
 ----
 
 query T
@@ -481,19 +481,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal) E
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_received_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_2) EXCEPT (SELECT * FROMmz_internal.mz_worker_compute_dependencies));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal) EXCEPT (SELECT * FROMmz_internal.mz_message_counts_sent_internal_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal_2) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_sent_internal));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_2) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active) EXCEPT (SELECT * FROM mz_internal.mz_peek_active_2));
 ----
 
 query T
@@ -557,7 +557,7 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (S
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sharing_2));
 ----
 
 query T
@@ -601,11 +601,11 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT *
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers_2));
 ----
 
 query T
@@ -776,19 +776,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal_3) EXC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active) EXCEPT (SELECT * FROM mz_internal.mz_peek_active_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active_3) EXCEPT (SELECT * FROM mz_internal.mz_peek_active));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_3) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations_3) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations));
 ----
 
 query T
@@ -848,11 +848,11 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sharing_3) EXCEPT (SELE
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_arrangement_sizes_3) EXCEPT (SELECT * FROM mz_internal.mz_arrangement_sizes));
 ----
 
 query T
@@ -896,11 +896,11 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers_3) EXCEPT 
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_3) EXCEPT (SELECT * FROM mz_internal.mz_message_counts));
 ----
 
 query T
