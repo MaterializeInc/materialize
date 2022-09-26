@@ -152,6 +152,8 @@ discard ::=
   'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
 drop_connection ::=
     'DROP' 'CONNECTION' ('IF EXISTS')? connection_name ('CASCADE' | 'RESTRICT')?
+drop_cluster ::=
+  'DROP' 'CLUSTER' ('IF EXISTS')? cluster_name ('CASCADE' | 'RESTRICT')?
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_index ::=
@@ -299,6 +301,9 @@ show_columns ::=
 show_connections ::=
   'SHOW' 'CONNECTIONS'
   ('FROM' schema_name)?
+  ('LIKE' 'pattern' | 'WHERE' expr)?
+show_clusters ::=
+  'SHOW' 'CLUSTERS'
   ('LIKE' 'pattern' | 'WHERE' expr)?
 show_create_connection ::=
   'SHOW' 'CREATE' 'CONNECTION' connection_name
