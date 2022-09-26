@@ -154,6 +154,8 @@ drop_connection ::=
     'DROP' 'CONNECTION' ('IF EXISTS')? connection_name ('CASCADE' | 'RESTRICT')?
 drop_cluster ::=
   'DROP' 'CLUSTER' ('IF EXISTS')? cluster_name ('CASCADE' | 'RESTRICT')?
+drop_cluster_replica ::=
+  'DROP' 'CLUSTER' 'REPLICA' ('IF EXISTS')? cluster_name.replica_name ('CASCADE' | 'RESTRICT')?
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_index ::=
@@ -304,6 +306,9 @@ show_connections ::=
   ('LIKE' 'pattern' | 'WHERE' expr)?
 show_clusters ::=
   'SHOW' 'CLUSTERS'
+  ('LIKE' 'pattern' | 'WHERE' expr)?
+show_cluster_replicas ::=
+  'SHOW' 'CLUSTER' 'REPLICAS'
   ('LIKE' 'pattern' | 'WHERE' expr)?
 show_create_connection ::=
   'SHOW' 'CREATE' 'CONNECTION' connection_name
