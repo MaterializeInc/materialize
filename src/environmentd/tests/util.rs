@@ -217,6 +217,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
         stderr_filter_callback: mz_ore::tracing::StderrFilterCallback::none(),
         storage_usage_collection_interval: config.storage_usage_collection_interval,
+        segment_api_key: None,
     }))?;
     let server = Server {
         inner,
