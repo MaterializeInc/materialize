@@ -511,16 +511,27 @@ Field      | Type       | Meaning
 `index_id` | [`text`]   | The ID of the index the peek is targeting.
 `time`     | [`mztimestamp`] | The timestamp the peek has requested.
 
-### `mz_peek_durations`
+### `mz_raw_peek_duration_histogram`
 
-The `mz_peek_durations` source describes a histogram of the duration of read
-queries ("peeks") in the dataflow layer.
+The `mz_raw_peek_duration_historam` source describes a histogram of the duration in nanoseconds
+of read queries ("peeks") in the dataflow layer.
 
 Field         | Type       | Meaning
 --------------|------------|--------
 `worker_id`   | [`bigint`] | The ID of the worker thread servicing the peek.
 `duration_ns` | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`       | [`bigint`] | The (noncumulative) count of peeks in this bucket.
+
+### `mz_peek_duration_histogram`
+
+The `mz_peek_duration_historam` source describes a histogram of the duration as an interval
+of read queries ("peeks") in the dataflow layer.
+
+Field         | Type         | Meaning
+--------------|--------------|--------
+`worker_id`   | [`bigint`]   | The ID of the worker thread servicing the peek.
+`duration`    | [`interval`] | The upper bound of the bucket in as an interval.
+`count`       | [`bigint`]   | The (noncumulative) count of peeks in this bucket.
 
 ### `mz_records_per_dataflow`
 
@@ -575,17 +586,29 @@ Field        | Type       | Meaning
 `worker_id`  | [`bigint`] | The ID of the worker thread hosting the operator.
 `elapsed_ns` | [`bigint`] | The total elapsed time spent in the operator in nanoseconds.
 
-### `mz_scheduling_histogram`
+### `mz_raw_scheduling_histogram`
 
-The `mz_scheduling_histogram` source stores a histogram describing the
-duration of each invocation for each [dataflow] operator.
+The `mz_raw_scheduling_histogram` source stores a histogram describing the
+duration of each invocation for each [dataflow] operator in nanoseconds.
 
 Field         | Type       | Meaning
 --------------|------------|--------
 `id`          | [`bigint`] | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
 `worker_id`   | [`bigint`] | The ID of the worker thread hosting the operator.
-`duration_ns` | [`bigint`] | The upper bound of the bucket.
+`duration_ns` | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`       | [`bigint`] | The number of recordings in the bucket.
+
+### `mz_scheduling_histogram`
+
+The `mz_scheduling_histogram` source stores a histogram describing the
+duration of each invocation for each [dataflow] operator as an interval.
+
+Field         | Type          | Meaning
+--------------|---------------|--------
+`id`          | [`bigint`]    | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+`worker_id`   | [`bigint`]    | The ID of the worker thread hosting the operator.
+`duration`    | [`interval`]  | The upper bound of the bucket.
+`count`       | [`bigint`]    | The number of recordings in the bucket.
 
 ### `mz_scheduling_parks`
 
@@ -599,9 +622,9 @@ Field       | Type       | Meaning
 `requested` | [`bigint`] | The requested length of the park event.
 `count`     | [`bigint`] | The number of park events in this bucket.
 
-### `mz_worker_compute_delays`
+### `mz_raw_worker_compute_delay_histogram`
 
-The `mz_worker_compute_delays` source provides, for each worker,
+The `mz_raw_worker_compute_delay_histogram` source provides, for each worker,
 a histogram of wall-clock delays between observations of source object frontier
 advancements at the dataflow layer and the advancements of the corresponding
 [dataflow] frontiers.
@@ -613,6 +636,21 @@ Field       | Type       | Meaning
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `delay_ns`  | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`     | [`bigint`] | The (noncumulative) count of delay measurements in this bucket.
+
+### `mz_worker_compute_delay_histogram`
+
+The `mz_worker_compute_delay_histogram` source provides, for each worker,
+a histogram of wall-clock delays (as an interval) between observations of storage source frontier
+advancements at the dataflow layer and the advancements of the corresponding
+[dataflow] frontiers.
+
+Field       | Type          | Meaning
+------------|---------------|--------
+`export_id` | [`text`]      | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`import_id` | [`text`]      | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`worker_id` | [`bigint`]    | The ID of the worker thread hosting the dataflow.
+`delay`     | [`interval`]  | The upper bound of the bucket in nanoseconds.
+`count`     | [`bigint`]    | The (noncumulative) count of delay measurements in this bucket.
 
 ### `mz_worker_compute_dependencies`
 
@@ -655,7 +693,7 @@ For frontier information aggregated across all workers, see
 Field       | Type       | Meaning
 ------------|------------|--------
 `export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
-`source_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mztimestamp`] | The next timestamp at which the dataflow may change.
 

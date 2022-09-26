@@ -28,7 +28,7 @@ SELECT ${arg.replica-size} > 1 OR ${arg.replicas} > 1;
         FROM
             mz_materialized_views AS views,
             mz_internal.mz_compute_exports as compute_exports,
-            mz_internal.mz_worker_compute_delays AS delays
+            mz_internal.mz_raw_worker_compute_delay_histogram AS delays
         WHERE
             views.name = 'mv' AND
             views.id = compute_exports.export_id AND
@@ -51,7 +51,7 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_internal.mz_worker_compute_delays AS delays)
+            mz_internal.mz_raw_worker_compute_delay_histogram AS delays)
 1
 
 > SELECT COUNT(*)
@@ -65,7 +65,7 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_internal.mz_worker_compute_delays AS delays)
+            mz_internal.mz_raw_worker_compute_delay_histogram AS delays)
 2
 
 > SELECT COUNT(*)
@@ -80,7 +80,7 @@ true
             mz_views AS views,
             mz_indexes AS indexes,
             mz_internal.mz_compute_exports AS compute_exports,
-            mz_internal.mz_worker_compute_delays AS delays
+            mz_internal.mz_raw_worker_compute_delay_histogram AS delays
         WHERE
             views.name = 'vv' AND
             views.id = indexes.on_id AND
@@ -106,7 +106,7 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_internal.mz_worker_compute_delays AS delays)
+            mz_internal.mz_raw_worker_compute_delay_histogram AS delays)
 1
 
 > SELECT COUNT(*)
@@ -120,7 +120,7 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_internal.mz_worker_compute_delays AS delays)
+            mz_internal.mz_raw_worker_compute_delay_histogram AS delays)
 0
 
 > SELECT COUNT(*)

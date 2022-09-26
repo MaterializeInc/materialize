@@ -47,7 +47,7 @@ statement ok
 SET cluster_replica = replica_b
 
 query I
-SELECT sum(count) FROM mz_internal.mz_peek_durations
+SELECT sum(count) FROM mz_internal.mz_raw_peek_duration_histogram
 ----
 NULL
 

@@ -77,24 +77,24 @@ and incriminate the subject.
 ```sql
 -- Extract raw scheduling histogram information, by worker.
 select mdo.id, mdo.name, mdo.worker_id, msh.duration_ns, count
-from mz_internal.mz_scheduling_histogram as msh,
+from mz_internal.mz_raw_scheduling_histogram as mrsh,
      mz_internal.mz_dataflow_operators as mdo
 where
-    msh.id = mdo.id and
-    msh.worker_id = mdo.worker_id
-order by msh.duration_ns desc;
+    mrsh.id = mdo.id and
+    mrsh.worker_id = mdo.worker_id
+order by mrsh.duration_ns desc;
 ```
 
 ```sql
 -- Extract raw scheduling histogram information, summed across workers.
 select mdo.id, mdo.name, msh.duration_ns, sum(msh.count) count
-from mz_internal.mz_scheduling_histogram as msh,
+from mz_internal.mz_raw_scheduling_histogram as mrsh,
      mz_internal.mz_dataflow_operators as mdo
 where
-    msh.id = mdo.id and
-    msh.worker_id = mdo.worker_id
-group by mdo.id, mdo.name, msh.duration_ns
-order by msh.duration_ns desc;
+    mrsh.id = mdo.id and
+    mrsh.worker_id = mdo.worker_id
+group by mdo.id, mdo.name, mrsh.duration_ns
+order by mrsh.duration_ns desc;
 ```
 
 ### Why is Materialize using so much memory?

@@ -563,6 +563,10 @@ mz_compute_import_frontiers
 mz_compute_import_frontiers_1
 mz_message_counts
 mz_message_counts_1
+mz_peek_duration_histogram
+mz_peek_duration_histogram_1
+mz_raw_scheduling_histogram
+mz_raw_scheduling_histogram_1
 mz_records_per_dataflow
 mz_records_per_dataflow_1
 mz_records_per_dataflow_global
@@ -575,23 +579,14 @@ mz_scheduling_histogram
 mz_scheduling_histogram_1
 mz_scheduling_parks
 mz_scheduling_parks_1
+mz_worker_materialization_delay_histogram
+mz_worker_materialization_delay_histogram_1
 
-> CREATE SCHEMA tester
-
-> SHOW TABLES FROM tester
-
-> CREATE TABLE tester.test_table (a int)
-
-> SHOW TABLES FROM tester
-test_table
-
-# `SHOW TABLES` and `mz_tables` should agree.
-> SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-30
-
-# There is one entry in mz_indexes for each field_number/expression of the index.
-> SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-19
+> SHOW SOURCES FROM mz_internal LIKE '%peek%';
+mz_peek_active                   log
+mz_peek_active_1                 log
+mz_raw_peek_duration_histogram   log
+mz_raw_peek_duration_histogram_1 log
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

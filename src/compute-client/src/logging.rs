@@ -299,6 +299,7 @@ pub enum LogView {
     MzRecordsPerDataflow,
     MzRecordsPerDataflowGlobal,
     MzSchedulingElapsed,
+    MzRawSchedulingHistogram,
     MzSchedulingHistogram,
     MzSchedulingParks,
 }
@@ -318,6 +319,7 @@ pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
         LogView::MzRecordsPerDataflow,
         LogView::MzRecordsPerDataflowGlobal,
         LogView::MzSchedulingElapsed,
+        LogView::MzRawSchedulingHistogram,
         LogView::MzSchedulingHistogram,
         LogView::MzSchedulingParks,
     ]
@@ -531,13 +533,26 @@ impl LogView {
                 "mz_scheduling_elapsed_{}",
             ),
 
-            LogView::MzSchedulingHistogram => (
+            LogView::MzRawSchedulingHistogram => (
                 "SELECT
                     id, worker_id, duration_ns, pg_catalog.count(*) AS count
                 FROM
                     mz_internal.mz_scheduling_histogram_internal_{}
                 GROUP BY
                     id, worker_id, duration_ns",
+                "mz_raw_scheduling_histogram_{}",
+            ),
+
+            LogView::MzSchedulingHistogram => (
+                "SELECT
+                id,
+                worker_id,
+                duration_ns/1000 * '1 microsecond'::interval AS duration,
+                pg_catalog.count(*) AS count
+                FROM
+                    mz_internal.mz_scheduling_histogram_internal_{}
+                GROUP BY
+                    id, worker_id, duration",
                 "mz_scheduling_histogram_{}",
             ),
 
