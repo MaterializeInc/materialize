@@ -43,7 +43,18 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR VIEW test1
 ----
 Explained Query:
-  Let // { arity: 4 }
+  With
+    cte l0 =
+      FlatMap generate_series(#0, #1, 1) // { arity: 3 }
+        Get materialize.public.t // { arity: 2 }
+    cte l1 =
+      Project (#0..=#3) // { arity: 4 }
+        Join on=(#0 = #4) type=differential // { arity: 5 }
+          Filter (#0) IS NOT NULL // { arity: 3 }
+            Get l0 // { arity: 3 }
+          ArrangeBy keys=[[#1]] // { arity: 2 }
+            Get materialize.public.u // { arity: 2 }
+  Return // { arity: 4 }
     Threshold // { arity: 4 }
       Union // { arity: 4 }
         Negate // { arity: 4 }
@@ -66,17 +77,6 @@ Explained Query:
                     Get l1 // { arity: 4 }
         Constant // { arity: 4 }
           - (1, 2, 11, 12)
-    Where
-      l1 =
-        Project (#0..=#3) // { arity: 4 }
-          Join on=(#0 = #4) type=differential // { arity: 5 }
-            Filter (#0) IS NOT NULL // { arity: 3 }
-              Get l0 // { arity: 3 }
-            ArrangeBy keys=[[#1]] // { arity: 2 }
-              Get materialize.public.u // { arity: 2 }
-      l0 =
-        FlatMap generate_series(#0, #1, 1) // { arity: 3 }
-          Get materialize.public.t // { arity: 2 }
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -105,18 +105,18 @@ WITH u AS (select u.c + 1 as g from u)
 SELECT u.g as g, w.g as h FROM u, u as w WHERE u.g = w.g
 ----
 Explained Query:
-  Let // { arity: 2 }
+  With
+    cte l0 =
+      Project (#2) // { arity: 1 }
+        Filter (#0) IS NOT NULL // { arity: 3 }
+          Map ((#0 + 1)) // { arity: 3 }
+            Get materialize.public.u // { arity: 2 }
+  Return // { arity: 2 }
     Project (#0, #0) // { arity: 2 }
       Join on=(#0 = #1) type=differential // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Get l0 // { arity: 1 }
         Get l0 // { arity: 1 }
-    Where
-      l0 =
-        Project (#2) // { arity: 1 }
-          Filter (#0) IS NOT NULL // { arity: 3 }
-            Map ((#0 + 1)) // { arity: 3 }
-              Get materialize.public.u // { arity: 2 }
 
 Used Indexes:
   - materialize.public.u_d_idx
@@ -130,7 +130,18 @@ EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
 SELECT * FROM u WHERE (SELECT f FROM v WHERE v.e = u.d) = 1
 ----
 Explained Query:
-  Let // { arity: 2 }
+  With
+    cte l0 =
+      Project (#0, #2) // { arity: 2 }
+        Join on=(#0 = #1) type=differential // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Distinct group_by=[#0] // { arity: 1 }
+              Project (#1) // { arity: 1 }
+                Filter (#1) IS NOT NULL // { arity: 2 }
+                  Get materialize.public.u // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 2 }
+            Get materialize.public.v // { arity: 2 }
+  Return // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
       Join on=(#1 = #2) type=differential // { arity: 3 }
         ArrangeBy keys=[[#1]] // { arity: 2 }
@@ -144,17 +155,6 @@ Explained Query:
               Reduce group_by=[#0] aggregates=[count(true)] // { arity: 2 }
                 Project (#0) // { arity: 1 }
                   Get l0 // { arity: 2 }
-    Where
-      l0 =
-        Project (#0, #2) // { arity: 2 }
-          Join on=(#0 = #1) type=differential // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Distinct group_by=[#0] // { arity: 1 }
-                Project (#1) // { arity: 1 }
-                  Filter (#1) IS NOT NULL // { arity: 2 }
-                    Get materialize.public.u // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
-              Get materialize.public.v // { arity: 2 }
 
 Source materialize.public.v
   filter=((#0) IS NOT NULL)

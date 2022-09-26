@@ -196,7 +196,12 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Reduce aggregates=[min(#0), max(#0)]
+        Project (#0)
+          Get materialize.public.t
+  Return
     Project (#2)
       Map (abs((#0 - #1)))
         Union
@@ -208,11 +213,6 @@ Explained Query:
                   Get l0
               Constant
                 - ()
-    Where
-      l0 =
-        Reduce aggregates=[min(#0), max(#0)]
-          Project (#0)
-            Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -241,7 +241,24 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Project (#0, #1)
+        Join on=(#0 = #2) type=delta
+          ArrangeBy keys=[[#0]]
+            Get materialize.public.t
+          ArrangeBy keys=[[#0]]
+            Distinct group_by=[#0]
+              Project (#0)
+                Filter (#0 < #1)
+                  CrossJoin type=differential
+                    ArrangeBy keys=[[]]
+                      Distinct group_by=[#0]
+                        Project (#0)
+                          Get materialize.public.t
+                    Project (#0)
+                      Get materialize.public.mv
+  Return
     Project (#0, #1)
       Join on=(#1 = #2) type=differential
         Get l0
@@ -256,23 +273,6 @@ Explained Query:
                         Get l0
                   Project (#1)
                     Get materialize.public.mv
-    Where
-      l0 =
-        Project (#0, #1)
-          Join on=(#0 = #2) type=delta
-            ArrangeBy keys=[[#0]]
-              Get materialize.public.t
-            ArrangeBy keys=[[#0]]
-              Distinct group_by=[#0]
-                Project (#0)
-                  Filter (#0 < #1)
-                    CrossJoin type=differential
-                      ArrangeBy keys=[[]]
-                        Distinct group_by=[#0]
-                          Project (#0)
-                            Get materialize.public.t
-                      Project (#0)
-                        Get materialize.public.mv
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -285,7 +285,31 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Project (#1)
+        Get materialize.public.t
+    cte l1 =
+      Distinct group_by=[#0]
+        Get l0
+    cte l2 =
+      ArrangeBy keys=[[#0]]
+        Get l1
+    cte l3 =
+      TopK group_by=[#0] limit=1 monotonic=false
+        Project (#0, #1)
+          Join on=(#0 = #2) type=differential
+            Get l2
+            Filter (#1) IS NOT NULL
+              Get materialize.public.iv
+    cte l4 =
+      TopK group_by=[#0] limit=1 monotonic=false
+        Project (#0, #1)
+          Join on=(#0 = #2) type=differential
+            Get l2
+            Filter (#1) IS NOT NULL
+              Get materialize.public.mv
+  Return
     Project (#2, #4)
       Join on=(eq(#0, #1, #3)) type=differential
         Get l0
@@ -307,30 +331,6 @@ Explained Query:
                   Project (#0)
                     Get l4
                 Get l1
-    Where
-      l4 =
-        TopK group_by=[#0] limit=1 monotonic=false
-          Project (#0, #1)
-            Join on=(#0 = #2) type=differential
-              Get l2
-              Filter (#1) IS NOT NULL
-                Get materialize.public.mv
-      l3 =
-        TopK group_by=[#0] limit=1 monotonic=false
-          Project (#0, #1)
-            Join on=(#0 = #2) type=differential
-              Get l2
-              Filter (#1) IS NOT NULL
-                Get materialize.public.iv
-      l2 =
-        ArrangeBy keys=[[#0]]
-          Get l1
-      l1 =
-        Distinct group_by=[#0]
-          Get l0
-      l0 =
-        Project (#1)
-          Get materialize.public.t
 
 Source materialize.public.mv
   filter=((#1) IS NOT NULL)
@@ -350,7 +350,21 @@ LEFT JOIN t as t2 ON t1.b = t2.b
 RIGHT JOIN t as t3 ON t2.b = t3.b
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Filter (#1) IS NOT NULL
+        Get materialize.public.t
+    cte l1 =
+      ArrangeBy keys=[[#1]]
+        Get l0
+    cte l2 =
+      Project (#0..=#2)
+        Join on=(eq(#1, #3, #4)) type=differential
+          Get l1
+          Get l1
+          Project (#1)
+            Get l0
+  Return
     Union
       Map (null, null)
         Union
@@ -367,20 +381,6 @@ Explained Query:
             Get materialize.public.t
       Project (#0, #2)
         Get l2
-    Where
-      l2 =
-        Project (#0..=#2)
-          Join on=(eq(#1, #3, #4)) type=differential
-            Get l1
-            Get l1
-            Project (#1)
-              Get l0
-      l1 =
-        ArrangeBy keys=[[#1]]
-          Get l0
-      l0 =
-        Filter (#1) IS NOT NULL
-          Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -393,18 +393,18 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Project (#2)
+        Map ((#0 * #1))
+          Get materialize.public.t
+  Return
     Project (#2)
       Map ((#0 + #1))
         CrossJoin type=differential
           ArrangeBy keys=[[]]
             Get l0
           Get l0
-    Where
-      l0 =
-        Project (#2)
-          Map ((#0 * #1))
-            Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -435,7 +435,24 @@ FROM
   ) as r5;
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Project (#0)
+        Get materialize.public.t
+    cte l1 =
+      Project (#0, #1, #3)
+        Filter (#0 != #3)
+          Join on=(#0 = #2) type=delta
+            ArrangeBy keys=[[#0]]
+              Get materialize.public.t
+            ArrangeBy keys=[[#0]]
+              Reduce group_by=[#0] aggregates=[max((#0 * #1))]
+                CrossJoin type=differential
+                  ArrangeBy keys=[[]]
+                    Distinct group_by=[#0]
+                      Get l0
+                  Get l0
+  Return
     Project (#0..=#2, #4)
       Filter ((#0 != #4) OR ((#4) IS NOT NULL AND (#0) IS NULL))
         Join on=(#0 = #3) type=differential
@@ -448,23 +465,6 @@ Explained Query:
                     Project (#0)
                       Get l1
                 Get l0
-    Where
-      l1 =
-        Project (#0, #1, #3)
-          Filter (#0 != #3)
-            Join on=(#0 = #2) type=delta
-              ArrangeBy keys=[[#0]]
-                Get materialize.public.t
-              ArrangeBy keys=[[#0]]
-                Reduce group_by=[#0] aggregates=[max((#0 * #1))]
-                  CrossJoin type=differential
-                    ArrangeBy keys=[[]]
-                      Distinct group_by=[#0]
-                        Get l0
-                    Get l0
-      l0 =
-        Project (#0)
-          Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -477,15 +477,15 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT t1.a, t2.a FROM t as t1, t as t2
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Project (#0)
+        Get materialize.public.t
+  Return
     CrossJoin type=differential
       ArrangeBy keys=[[]]
         Get l0
       Get l0
-    Where
-      l0 =
-        Project (#0)
-          Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -503,20 +503,20 @@ FROM
 WHERE t1.b = t2.b AND t2.b = t3.b
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Filter (#1) IS NOT NULL
+        Get materialize.public.t
+    cte l1 =
+      ArrangeBy keys=[[#1]]
+        Get l0
+  Return
     Project (#0, #2)
       Join on=(eq(#1, #3, #4)) type=differential
         Get l1
         Get l1
         Project (#1)
           Get l0
-    Where
-      l1 =
-        ArrangeBy keys=[[#1]]
-          Get l0
-      l0 =
-        Filter (#1) IS NOT NULL
-          Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -570,16 +570,16 @@ WHERE a = c and d = e and b = f
 Explained Query:
   Project (#0, #1, #0, #3, #3, #1)
     Filter (#0) IS NOT NULL
-      Filter #0 = #2 AND #1 = #5 AND #3 = #4
-        LinearJoin using=[#0, #1]
-          ArrangeBy keys=[[#0, #1]]
-            Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-              Get materialize.public.v
-          LinearJoin using=[#0]
-            ArrangeBy keys=[[#0]]
-              Get materialize.public.t
-            ArrangeBy keys=[[#0]]
-              Get materialize.public.u
+      Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
+        implementation
+          %1 » %0 using [#0] » %2 using [#0, #1]
+        ArrangeBy keys=[[#0]]
+          Get materialize.public.t
+        ArrangeBy keys=[[#0]]
+          Get materialize.public.u
+        ArrangeBy keys=[[#0, #1]]
+          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+            Get materialize.public.v
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -629,32 +629,17 @@ WHERE b = c and d = e
 Explained Query:
   Project (#0, #1, #1, #3, #3, #5)
     Filter (#1) IS NOT NULL AND (#3) IS NOT NULL
-      Filter #1 = #2 AND #3 = #4
-        Union
-          HalfJoin using=[#0]
-            ArrangeBy keys=[[#0]]
-              Get materialize.public.v
-            HalfJoin using=[#0]
-              ArrangeBy keys=[[#0], [#1]]
-                Get materialize.public.u
-              ArrangeBy keys=[[#1]]
-                Get materialize.public.t
-          HalfJoin using=[#0]
-            ArrangeBy keys=[[#0]]
-              Get materialize.public.v
-            HalfJoin using=[#1]
-              ArrangeBy keys=[[#1]]
-                Get materialize.public.t
-              ArrangeBy keys=[[#0], [#1]]
-                Get materialize.public.u
-          HalfJoin using=[#1]
-            ArrangeBy keys=[[#1]]
-              Get materialize.public.t
-            HalfJoin using=[#1]
-              ArrangeBy keys=[[#0], [#1]]
-                Get materialize.public.u
-              ArrangeBy keys=[[#0]]
-                Get materialize.public.v
+      Join on=(#1 = #2 AND #3 = #4) type=delta
+        implementation
+          %0 » %1 using [#0] » %2 using [#0]
+          %1 » %0 using [#1] » %2 using [#0]
+          %2 » %1 using [#1] » %0 using [#1]
+        ArrangeBy keys=[[#1]]
+          Get materialize.public.t
+        ArrangeBy keys=[[#0], [#1]]
+          Get materialize.public.u
+        ArrangeBy keys=[[#0]]
+          Get materialize.public.v
 
 Used Indexes:
   - materialize.public.u_c_idx
@@ -704,9 +689,13 @@ GROUP BY a
 Explained Query:
   Reduce group_by=[#0] aggregates=[max(#1)]
     Project (#0, #1)
-      Lookup (#0 = 0 AND #1 = 1) OR (#0 = 3 AND #1 = 4) OR (#0 = 7 AND #1 = 8)
+      Join on=(#0 = #2 AND #1 = #3) type=indexed_filter
         ArrangeBy keys=[[#0, #1]]
           Get materialize.public.t
+        Constant
+          - (0, 1)
+          - (3, 4)
+          - (7, 8)
 
 Used Indexes:
   - materialize.public.t_a_b_idx

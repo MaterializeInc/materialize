@@ -79,7 +79,16 @@ EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR
 SELECT t.* FROM u LEFT OUTER JOIN t on t.a = u.d
 ----
 Explained Query:
-  Let // { types: "(integer?, text?, date?)" }
+  With
+    cte l0 =
+      Project (#0, #2, #3) // { types: "(integer, text?, date?)" }
+        Join on=(#0 = #1) type=differential // { types: "(integer, integer, text?, date?)" }
+          ArrangeBy keys=[[#0]] // { types: "(integer)" }
+            Filter (#0) IS NOT NULL // { types: "(integer)" }
+              Get materialize.public.u // { types: "(integer?)" }
+          Filter (#0) IS NOT NULL // { types: "(integer, text?, date?)" }
+            Get materialize.public.t // { types: "(integer?, text?, date?)" }
+  Return // { types: "(integer?, text?, date?)" }
     Union // { types: "(integer?, text?, date?)" }
       Map (null, null, null) // { types: "(integer?, text?, date?)" }
         Union // { types: "()" }
@@ -94,15 +103,6 @@ Explained Query:
           Project () // { types: "()" }
             Get materialize.public.u // { types: "(integer?)" }
       Get l0 // { types: "(integer, text?, date?)" }
-    Where
-      l0 =
-        Project (#0, #2, #3) // { types: "(integer, text?, date?)" }
-          Join on=(#0 = #1) type=differential // { types: "(integer, integer, text?, date?)" }
-            ArrangeBy keys=[[#0]] // { types: "(integer)" }
-              Filter (#0) IS NOT NULL // { types: "(integer)" }
-                Get materialize.public.u // { types: "(integer?)" }
-            Filter (#0) IS NOT NULL // { types: "(integer, text?, date?)" }
-              Get materialize.public.t // { types: "(integer?, text?, date?)" }
 
 Source materialize.public.t
   filter=((#0) IS NOT NULL)

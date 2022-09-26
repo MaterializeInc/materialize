@@ -179,7 +179,22 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
 (SELECT x + 1 FROM cte UNION ALL SELECT x - 1 FROM cte)
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+        ArrangeBy
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=() }
+          Union
+            Get::Arrangement materialize.public.t
+              project=(#0)
+              key=#0
+              raw=false
+              arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+            Negate
+              Get::Collection materialize.public.mv
+                raw=true
+  Return
     Union
       Get::Arrangement l0
         project=(#1)
@@ -193,21 +208,6 @@ Explained Query:
         key=#0
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
-    Where
-      l0 =
-        Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
-          ArrangeBy
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=() }
-            Union
-              Get::Arrangement materialize.public.t
-                project=(#0)
-                key=#0
-                raw=false
-                arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-              Negate
-                Get::Collection materialize.public.mv
-                  raw=true
 
 Source materialize.public.mv
   project=(#1)
@@ -327,7 +327,21 @@ SELECT
 FROM t
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Reduce::Accumulable
+        simple_aggrs[0]=(0, 0, sum(#0))
+        distinct_aggrs[0]=(1, 1, count(distinct #0))
+        val_plan
+          project=(#0, #0)
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#1)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+  Return
     Union
       ArrangeBy
         input_key=[]
@@ -347,20 +361,6 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-    Where
-      l0 =
-        Reduce::Accumulable
-          simple_aggrs[0]=(0, 0, sum(#0))
-          distinct_aggrs[0]=(1, 1, count(distinct #0))
-          val_plan
-            project=(#0, #0)
-          key_plan
-            project=()
-          Get::Arrangement materialize.public.t
-            project=(#1)
-            key=#0
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -405,7 +405,22 @@ SELECT
 FROM t
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        skips=[0, 0]
+        buckets=[0, 0]
+        val_plan
+          project=(#0, #0)
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#1)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+  Return
     Union
       ArrangeBy
         input_key=[]
@@ -425,21 +440,6 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-    Where
-      l0 =
-        Reduce::Hierarchical
-          aggr_funcs=[min, max]
-          skips=[0, 0]
-          buckets=[0, 0]
-          val_plan
-            project=(#0, #0)
-          key_plan
-            project=()
-          Get::Arrangement materialize.public.t
-            project=(#1)
-            key=#0
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -484,7 +484,22 @@ SELECT
 FROM t
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Reduce::Basic
+        aggrs[0]=(0, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
+        aggrs[1]=(1, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
+        val_plan
+          project=(#2, #3)
+          map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#1)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+  Return
     Union
       ArrangeBy
         input_key=[]
@@ -504,21 +519,6 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-    Where
-      l0 =
-        Reduce::Basic
-          aggrs[0]=(0, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
-          aggrs[1]=(1, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
-          val_plan
-            project=(#2, #3)
-            map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
-          key_plan
-            project=()
-          Get::Arrangement materialize.public.t
-            project=(#1)
-            key=#0
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -580,7 +580,31 @@ SELECT
 FROM t
 ----
 Explained Query:
-  Let
+  With
+    cte l0 =
+      Reduce::Collation
+        aggregate_types=[a, b, h, h, a, b]
+        accumulable
+          simple_aggrs[0]=(1, 4, sum(#0))
+          distinct_aggrs[0]=(0, 0, count(distinct #0))
+        hierarchical
+          aggr_funcs=[min, max]
+          skips=[2, 0]
+          buckets=[2, 0]
+        basic
+          aggrs[0]=(1, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
+          aggrs[1]=(5, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
+        val_plan
+          project=(#0, #2, #0, #0, #0, #3)
+          map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#1)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+  Return
     Union
       ArrangeBy
         input_key=[]
@@ -600,30 +624,6 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
           Constant
             - ()
-    Where
-      l0 =
-        Reduce::Collation
-          aggregate_types=[a, b, h, h, a, b]
-          accumulable
-            simple_aggrs[0]=(1, 4, sum(#0))
-            distinct_aggrs[0]=(0, 0, count(distinct #0))
-          hierarchical
-            aggr_funcs=[min, max]
-            skips=[2, 0]
-            buckets=[2, 0]
-          basic
-            aggrs[0]=(1, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
-            aggrs[1]=(5, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
-          val_plan
-            project=(#0, #2, #0, #0, #0, #3)
-            map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
-          key_plan
-            project=()
-          Get::Arrangement materialize.public.t
-            project=(#1)
-            key=#0
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t_a_idx

@@ -47,7 +47,7 @@ mode cockroach
 
 # Test constant error.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT 1 / 0
 ----
 {
@@ -78,7 +78,7 @@ EOF
 
 # Test constant with two elements.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
 {
@@ -148,7 +148,7 @@ EOF
 
 # Test basic linear chains (fast path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
 ----
 {
@@ -316,7 +316,7 @@ EOF
 
 # Test basic linear chains (slow path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
 ----
 {
@@ -596,7 +596,7 @@ EOF
 
 # Test table functions in the select clause (FlatMap).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT generate_series(a, b) from t
 ----
 {
@@ -672,7 +672,7 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
 {
@@ -812,7 +812,7 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT a FROM t EXCEPT ALL SELECT b FROM mv
 ----
 {
@@ -928,7 +928,7 @@ EOF
 
 # Test TopK.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 VIEW ov
 ----
 {
@@ -985,7 +985,7 @@ EOF
 
 # Test Finish.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
 {
@@ -1022,7 +1022,7 @@ EOF
 
 # Test Reduce (global).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
 {
@@ -1244,7 +1244,7 @@ EOF
 
 # Test Reduce (local).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
 {
@@ -1339,7 +1339,7 @@ EOF
 
 # Test EXISTS subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
 {
@@ -1803,7 +1803,7 @@ EOF
 
 # Test SELECT subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 {
@@ -2516,7 +2516,7 @@ EOF
 
 # Test outer joins (ON syntax).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT t1.a, t2.a
 FROM t as t1
 LEFT JOIN t as t2 ON t1.b = t2.b
@@ -2980,7 +2980,7 @@ EOF
 # Test multiple CTEs: a case where we cannot pull the let statement up through
 # the join because the local l0 is correlated against the lhs of the enclosing join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT
   *
 FROM
@@ -3513,7 +3513,7 @@ EOF
 
 # Test cross join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT t1.a, t2.a FROM t as t1, t as t2
 ----
 {
@@ -3622,7 +3622,7 @@ EOF
 
 # Test cyclic join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT t1.a, t2.a
 FROM
   t as t1,
@@ -3859,7 +3859,7 @@ CREATE INDEX v_e_idx ON V(e);
 
 # Test a differential join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and d = e and b = f
@@ -4123,7 +4123,7 @@ CREATE INDEX t_b_idx ON T(b);
 
 # Test a delta join WITH.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS JSON FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE b = c and d = e
