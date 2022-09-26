@@ -1436,7 +1436,7 @@ LEFT OUTER JOIN counts
 pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_compute_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_compute_frontiers AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_compute_frontiers AS SELECT
     export_id, pg_catalog.min(time) AS time
 FROM mz_internal.mz_worker_compute_frontiers
 GROUP BY export_id",
@@ -1445,7 +1445,7 @@ GROUP BY export_id",
 pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_compute_import_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_compute_import_frontiers AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_compute_import_frontiers AS SELECT
     export_id, import_id, pg_catalog.min(time) AS time
 FROM mz_internal.mz_worker_compute_import_frontiers
 GROUP BY export_id, import_id",

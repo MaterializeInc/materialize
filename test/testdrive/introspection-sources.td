@@ -39,11 +39,11 @@ true
   FROM
     mz_materialized_views AS views,
     mz_internal.mz_compute_exports AS compute_exports,
-    mz_internal.mz_compute_import_frontiers AS sf
+    mz_internal.mz_compute_import_frontiers AS import_frontiers,
   WHERE
     views.name = 'mv' AND
     views.id = compute_exports.export_id AND
-    compute_exports.export_id = sf.export_id
+    compute_exports.export_id = import_frontiers.export_id
 true
 
 > CREATE VIEW vv AS SELECT * FROM t
@@ -55,9 +55,9 @@ true
 1
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.export_id, sf.import_id
+  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_worker_compute_import_frontiers AS sf)
+            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
 1
 
 > CREATE DEFAULT INDEX ON vv
@@ -69,9 +69,9 @@ true
 2
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.export_id, sf.import_id
+  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_worker_compute_import_frontiers AS sf)
+            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
 2
 
 > SELECT count_all > 0
@@ -93,12 +93,12 @@ true
     mz_views AS views,
     mz_indexes AS indexes,
    mz_internal. mz_compute_exports compute_exports,
-    mz_internal.mz_compute_import_frontiers AS sf
+    mz_internal.mz_compute_import_frontiers AS import_frontiers
   WHERE
     views.name = 'vv' AND
     views.id = indexes.on_id AND
     indexes.id = compute_exports.export_id AND
-    compute_exports.export_id = sf.export_id
+    compute_exports.export_id = import_frontiers.export_id
 true
 
 > DROP INDEX vv_primary_idx
@@ -110,9 +110,9 @@ true
 1
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.export_id, sf.import_id
+  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_worker_compute_import_frontiers AS sf)
+            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
 1
 
 > DROP MATERIALIZED VIEW mv
@@ -124,7 +124,7 @@ true
 0
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT sf.export_id, sf.import_id
+  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_worker_compute_import_frontiers AS sf)
+            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
 0
