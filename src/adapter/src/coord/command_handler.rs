@@ -168,18 +168,18 @@ impl<S: Append + 'static> Coordinator<S> {
         if self
             .catalog
             .for_session(&session)
-            .resolve_role(session.user())
+            .resolve_role(&session.user().name)
             .is_err()
         {
             if !create_user_if_not_exists {
                 let _ = tx.send(Response {
-                    result: Err(AdapterError::UnknownLoginRole(session.user().into())),
+                    result: Err(AdapterError::UnknownLoginRole(session.user().name.clone())),
                     session,
                 });
                 return;
             }
             let plan = CreateRolePlan {
-                name: session.user().to_string(),
+                name: session.user().name.to_string(),
             };
             if let Err(err) = self.sequence_create_role(&session, plan).await {
                 let _ = tx.send(Response {

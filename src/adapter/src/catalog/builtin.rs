@@ -116,6 +116,7 @@ pub struct BuiltinFunc {
 
 pub static BUILTIN_ROLE_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
 
+#[derive(Clone)]
 pub struct BuiltinRole {
     /// Name of the builtin role.
     ///
@@ -2157,7 +2158,9 @@ FROM mz_catalog.mz_roles r
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 
-pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: SYSTEM_USER };
+pub static MZ_SYSTEM: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+    name: &*SYSTEM_USER.name,
+});
 
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     let mut builtins = vec![
@@ -2347,7 +2350,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> = Lazy::new(|| vec![MZ_SYSTEM]);
+pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> = Lazy::new(|| vec![&*MZ_SYSTEM]);
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {

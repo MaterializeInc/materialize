@@ -1419,12 +1419,12 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
 
     assert!(server
         .pg_config()
-        .user(SYSTEM_USER)
+        .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)
         .is_err());
     assert!(server
         .pg_config_internal()
-        .user(SYSTEM_USER)
+        .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)
         .is_ok());
 
@@ -1444,7 +1444,7 @@ fn test_internal_ports() -> Result<(), Box<dyn Error>> {
         let mut external_client = server.connect(postgres::NoTls)?;
         let mut internal_client = server
             .pg_config_internal()
-            .user(SYSTEM_USER)
+            .user(&SYSTEM_USER.name)
             .connect(postgres::NoTls)?;
 
         assert_eq!(
@@ -1465,7 +1465,7 @@ fn test_internal_ports() -> Result<(), Box<dyn Error>> {
         let mut external_client = server.connect(postgres::NoTls)?;
         let mut internal_client = server
             .pg_config_internal()
-            .user(SYSTEM_USER)
+            .user(&SYSTEM_USER.name)
             .connect(postgres::NoTls)?;
 
         assert_eq!(
@@ -1498,7 +1498,7 @@ fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
 
     let mut mz_client = server
         .pg_config_internal()
-        .user(SYSTEM_USER)
+        .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)?;
 
     mz_client.batch_execute(&"ALTER SYSTEM SET max_tables TO 2")?;

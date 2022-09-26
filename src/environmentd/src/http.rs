@@ -50,7 +50,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_adapter::catalog::HTTP_DEFAULT_USER;
-use mz_adapter::session::{EndTransactionAction, Session, TransactionStatus};
+use mz_adapter::session::{EndTransactionAction, Session, TransactionStatus, User};
 use mz_adapter::{
     ExecuteResponse, ExecuteResponseKind, ExecuteResponsePartialError, PeekResponseUnary,
     SessionClient,
@@ -189,7 +189,7 @@ enum ConnProtocol {
 }
 
 struct AuthedUser {
-    user: String,
+    user: User,
     create_if_not_exists: bool,
 }
 
@@ -656,7 +656,10 @@ async fn auth<B>(
     let user = match frontegg {
         // If no Frontegg authentication, we can use the cert's username if
         // present, otherwise the default HTTP user.
-        None => user.unwrap_or_else(|| HTTP_DEFAULT_USER.to_string()),
+        None => User {
+            name: user.unwrap_or_else(|| HTTP_DEFAULT_USER.name.to_string()),
+            external_id: None,
+        },
         // If we require Frontegg auth, fetch credentials from the HTTP auth
         // header. Basic auth comes with a username/password, where the password
         // is the client+secret pair. Bearer auth is an existing JWT that must
@@ -682,12 +685,15 @@ async fn auth<B>(
                 return Err(AuthError::MissingHttpAuthentication);
             };
             let claims = frontegg.validate_access_token(&token, user.as_deref())?;
-            claims.email
+            User {
+                name: claims.email,
+                external_id: Some(claims.user_id),
+            }
         }
     };
 
-    if mz_adapter::catalog::is_reserved_name(user.as_str()) {
-        return Err(AuthError::InvalidLogin(user));
+    if mz_adapter::catalog::is_reserved_name(user.name.as_str()) {
+        return Err(AuthError::InvalidLogin(user.name));
     }
 
     // Add the authenticated user as an extension so downstream handlers can
