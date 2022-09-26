@@ -33,6 +33,10 @@ name   create_sql
 ---------------------------------
 materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER = '${testdrive.kafka-addr}'"
 
+> SELECT progress_topic FROM mz_kafka_connections
+progress_topic
+--------------
+<null>
 
 > DROP CONNECTION testconn
 

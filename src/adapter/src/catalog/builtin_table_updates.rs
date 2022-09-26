@@ -24,15 +24,16 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_storage::types::connections::KafkaConnection;
 use mz_storage::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
-    MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE, MZ_TABLES, MZ_TYPES,
-    MZ_VIEWS,
+    MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
+    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS,
+    MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE, MZ_TABLES,
+    MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, MaterializedView, Sink,
@@ -314,18 +315,26 @@ impl CatalogState {
             ]),
             diff,
         }];
-        if let mz_storage::types::connections::Connection::Ssh(ssh) = &connection.connection {
-            if let Some(public_keypair) = ssh.public_keys.as_ref() {
-                updates.extend(self.pack_ssh_tunnel_connection_update(
-                    id,
-                    name,
-                    public_keypair,
-                    diff,
-                ));
-            } else {
-                tracing::error!("does this even happen?");
+        match connection.connection {
+            mz_storage::types::connections::Connection::Ssh(ref ssh) => {
+                if let Some(public_keypair) = ssh.public_keys.as_ref() {
+                    updates.extend(self.pack_ssh_tunnel_connection_update(
+                        id,
+                        name,
+                        public_keypair,
+                        diff,
+                    ));
+                } else {
+                    tracing::error!("does this even happen?");
+                }
             }
-        }
+            mz_storage::types::connections::Connection::Kafka(ref kafka) => {
+                updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
+            }
+            mz_storage::types::connections::Connection::Csr(_)
+            | mz_storage::types::connections::Connection::Postgres(_)
+            | mz_storage::types::connections::Connection::Aws(_) => {}
+        };
         updates
     }
 
@@ -344,6 +353,23 @@ impl CatalogState {
                 Datum::String(&public_key_primary),
                 Datum::String(&public_key_secondary),
             ]),
+            diff,
+        }]
+    }
+
+    fn pack_kafka_connection_update(
+        &self,
+        id: GlobalId,
+        kafka: &KafkaConnection,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        let progress_topic = match kafka.progress_topic {
+            Some(ref topic) => Datum::String(&topic),
+            None => Datum::Null,
+        };
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_KAFKA_CONNECTIONS),
+            row: Row::pack_slice(&[Datum::String(&id.to_string()), progress_topic]),
             diff,
         }]
     }

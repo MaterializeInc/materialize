@@ -467,6 +467,7 @@ mz_databases
 mz_functions
 mz_index_columns
 mz_indexes
+mz_kafka_connections
 mz_kafka_sinks
 mz_list_types
 mz_map_types
