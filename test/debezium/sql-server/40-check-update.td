@@ -17,16 +17,16 @@ $ schema-registry-wait-schema schema=sql-server.dbo.update_table_pk-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-$ schema-registry-wait-schema schema=sql-server.dbo.update_table_nopk-value
+# $ schema-registry-wait-schema schema=sql-server.dbo.update_table_nopk-value
 
-> CREATE CONNECTION IF NOT EXISTS csr_conn
-  FOR CONFLUENT SCHEMA REGISTRY
-  URL '${testdrive.schema-registry-url}';
+# > CREATE CONNECTION IF NOT EXISTS csr_conn
+#   FOR CONFLUENT SCHEMA REGISTRY
+#   URL '${testdrive.schema-registry-url}';
 
-> CREATE SOURCE update_table_nopk
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.update_table_nopk')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM;
+# > CREATE SOURCE update_table_nopk
+#   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.update_table_nopk')
+#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+#   ENVELOPE DEBEZIUM;
 
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
