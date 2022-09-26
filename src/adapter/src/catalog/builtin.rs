@@ -149,9 +149,9 @@ impl Fingerprint for BuiltinFunc {
 impl<T: TypeReference> Fingerprint for &Builtin<T> {
     fn fingerprint(&self) -> u64 {
         match self {
-            Builtin::Log(log) => log.desc().fingerprint(),
+            Builtin::Log(log) => log.variant.desc().fingerprint(),
             Builtin::Table(table) => table.desc.fingerprint(),
-            Builtin::View(view) => view.sql.fingerprint(),
+            Builtin::View(view) => view.sql.hashed(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
             Builtin::StorageCollection(coll) => coll.desc.fingerprint(),

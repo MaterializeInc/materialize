@@ -1985,7 +1985,7 @@ impl<S: Append> Catalog<S> {
                 let AllocatedBuiltinSystemIds {
                     all_builtins: all_indexes,
                     new_builtins: new_indexes,
-                    ..
+                    migrated_builtins: migrated_indexes,
                 } = catalog
                     .allocate_system_ids(BUILTINS::logs().collect(), |log| {
                         introspection_source_index_gids
@@ -1995,6 +1995,12 @@ impl<S: Append> Catalog<S> {
                             .map(|id| (id, 0))
                     })
                     .await?;
+
+                // TODO(jkosh44) Implement log migration
+                assert!(
+                    migrated_indexes.is_empty(),
+                    "Log migration is unimplemented"
+                );
 
                 catalog
                     .storage()
@@ -2181,7 +2187,7 @@ impl<S: Append> Catalog<S> {
         let AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
-            ..
+            migrated_builtins,
         } = self
             .allocate_system_ids(BUILTINS::types().collect(), |typ| {
                 persisted_builtin_ids
@@ -2189,6 +2195,7 @@ impl<S: Append> Catalog<S> {
                     .cloned()
             })
             .await?;
+        assert!(migrated_builtins.is_empty(), "types cannot be migrated");
         let name_to_id_map: HashMap<&str, GlobalId> = all_builtins
             .into_iter()
             .map(|(typ, id)| (typ.name, id))
@@ -2338,7 +2345,7 @@ impl<S: Append> Catalog<S> {
 
         let mut object_queue: VecDeque<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
         let mut visited_set: HashSet<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
-        let mut create_ops = Vec::new();
+        let mut topological_sort = Vec::new();
         let mut ancestor_ids = HashMap::new();
 
         let id_fingerprint_map: HashMap<GlobalId, u64> = migrated_ids.into_iter().collect();
@@ -2379,6 +2386,29 @@ impl<S: Append> Catalog<S> {
                 );
             }
 
+            // Defer adding the create/drops ops until we know more about the dependency graph.
+            topological_sort.push((entry, new_id));
+
+            ancestor_ids.insert(id, new_id);
+
+            // Add children to queue.
+            for dependant in &entry.used_by {
+                if !visited_set.contains(&dependant) {
+                    object_queue.push_back(*dependant);
+                    visited_set.insert(*dependant);
+                } else {
+                    // If dependant is a child of the current node, then we need to make sure that
+                    // it appears later in the topologically sorted list.
+                    if let Some(idx) = topological_sort.iter().position(|(_, id)| id == dependant) {
+                        let dependant = topological_sort.remove(idx);
+                        topological_sort.push(dependant);
+                    }
+                }
+            }
+        }
+
+        for (entry, new_id) in topological_sort {
+            let id = entry.id();
             // Push drop commands.
             match entry.item() {
                 CatalogItem::Table(_) | CatalogItem::Source(_) => {
@@ -2412,42 +2442,7 @@ impl<S: Append> Catalog<S> {
             }
             migration_metadata.all_drop_ops.push(id);
 
-            // Defer adding the create ops until we know more about the dependency graph.
-            create_ops.push((entry, new_id));
-
-            ancestor_ids.insert(id, new_id);
-
-            // Add children to queue.
-            for dependant in &entry.used_by {
-                if !visited_set.contains(&dependant) {
-                    object_queue.push_back(*dependant);
-                    visited_set.insert(*dependant);
-                } else {
-                    // If dependant is a child of the current node, then we need to make sure that
-                    // it appears later in the list of create ops.
-                    if let Some(idx) = create_ops.iter().position(|(_, id)| id == dependant) {
-                        let create_op = create_ops.remove(idx);
-                        create_ops.push(create_op);
-                    }
-                }
-            }
-        }
-
-        // The dependency graph of builtin objects may have changed in between restarts, so we need
-        // to reorder the builtin objects for their new topological sorting.
-        let mut create_ops_builtin = Vec::new();
-        for builtin in BUILTINS::iter() {
-            if let Some(idx) = create_ops
-                .iter()
-                .position(|(entry, _)| entry.name.item == builtin.name())
-            {
-                let create_op = create_ops.remove(idx);
-                create_ops_builtin.push(create_op);
-            }
-        }
-        let create_ops = create_ops_builtin.into_iter().chain(create_ops.into_iter());
-
-        for (entry, new_id) in create_ops {
+            // Push create commands.
             let name = entry.name.clone();
             if new_id.is_user() {
                 let schema_id = name.qualifiers.schema_spec.clone().into();
