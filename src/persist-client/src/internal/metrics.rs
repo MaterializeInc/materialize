@@ -581,7 +581,10 @@ impl BatchWriteMetrics {
             )),
             write_stalls: registry.register(metric!(
                 name: format!("mz_persist_{}_write_stall_count", name),
-                help: format!("count of {} writes stalling to await max outstanding reqs", name),
+                help: format!(
+                    "count of {} writes stalling to await max outstanding reqs",
+                    name
+                ),
             )),
         }
     }
@@ -601,9 +604,9 @@ pub struct CompactionMetrics {
     pub(crate) chunks_compacted: IntCounter,
 
     pub(crate) batch: BatchWriteMetrics,
-    pub(crate) step_timings: CompactionRunTimings,
+    pub(crate) steps: CompactionStepTimings,
 
-    pub(crate) _step_timings_vec: CounterVec,
+    pub(crate) _steps_vec: CounterVec,
 }
 
 impl CompactionMetrics {
@@ -656,14 +659,14 @@ impl CompactionMetrics {
                 help: "count of run chunks compacted",
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
-            step_timings: CompactionRunTimings::new(step_timings.clone()),
-            _step_timings_vec: step_timings,
+            steps: CompactionStepTimings::new(step_timings.clone()),
+            _steps_vec: step_timings,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct CompactionRunTimings {
+pub struct CompactionStepTimings {
     pub(crate) part_fetch_seconds: Counter,
     pub(crate) heap_population_seconds: Counter,
     pub(crate) consolidation_seconds: Counter,
@@ -672,13 +675,14 @@ pub struct CompactionRunTimings {
     pub(crate) total_seconds: Counter,
 }
 
-impl CompactionRunTimings {
-    fn new(step_timings: CounterVec) -> CompactionRunTimings {
-        CompactionRunTimings {
+impl CompactionStepTimings {
+    fn new(step_timings: CounterVec) -> CompactionStepTimings {
+        CompactionStepTimings {
             part_fetch_seconds: step_timings.with_label_values(&["part_fetch"]),
             heap_population_seconds: step_timings.with_label_values(&["heap_population"]),
             consolidation_seconds: step_timings.with_label_values(&["consolidation"]),
-            part_columnar_encoding_seconds: step_timings.with_label_values(&["part_columnar_encoding"]),
+            part_columnar_encoding_seconds: step_timings
+                .with_label_values(&["part_columnar_encoding"]),
             part_write_seconds: step_timings.with_label_values(&["part_write_seconds"]),
             total_seconds: step_timings.with_label_values(&["total"]),
         }

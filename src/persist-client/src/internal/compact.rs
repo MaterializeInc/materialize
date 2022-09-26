@@ -21,6 +21,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::{
     ColumnarRecordsBuilder, ColumnarRecordsVecBuilder, KEY_VAL_DATA_MAX_LEN,
 };
@@ -31,7 +32,6 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, debug_span, info, Instrument, Span};
-use mz_ore::cast::CastFrom;
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::batch::BatchParts;
@@ -264,7 +264,10 @@ where
             Self::chunk_runs(&req, &cfg, metrics.as_ref(), run_reserved_memory_bytes)
         {
             metrics.compaction.chunks_compacted.inc();
-            metrics.compaction.runs_compacted.inc_by(u64::cast_from(runs.len()));
+            metrics
+                .compaction
+                .runs_compacted
+                .inc_by(u64::cast_from(runs.len()));
 
             // given the runs we actually have in our batch, we might have extra memory
             // available. we reserved enough space to always have 1 in-progress part in
@@ -707,12 +710,36 @@ impl Timings {
             total,
         } = self;
 
-        metrics.compaction.step_timings.part_fetch_seconds.inc_by(part_fetching.as_secs_f64());
-        metrics.compaction.step_timings.heap_population_seconds.inc_by(heap_population.as_secs_f64());
-        metrics.compaction.step_timings.consolidation_seconds.inc_by(consolidation.as_secs_f64());
-        metrics.compaction.step_timings.part_columnar_encoding_seconds.inc_by(part_columnar_encoding.as_secs_f64());
-        metrics.compaction.step_timings.part_write_seconds.inc_by(part_writing.as_secs_f64());
-        metrics.compaction.step_timings.total_seconds.inc_by(total.as_secs_f64());
+        metrics
+            .compaction
+            .steps
+            .part_fetch_seconds
+            .inc_by(part_fetching.as_secs_f64());
+        metrics
+            .compaction
+            .steps
+            .heap_population_seconds
+            .inc_by(heap_population.as_secs_f64());
+        metrics
+            .compaction
+            .steps
+            .consolidation_seconds
+            .inc_by(consolidation.as_secs_f64());
+        metrics
+            .compaction
+            .steps
+            .part_columnar_encoding_seconds
+            .inc_by(part_columnar_encoding.as_secs_f64());
+        metrics
+            .compaction
+            .steps
+            .part_write_seconds
+            .inc_by(part_writing.as_secs_f64());
+        metrics
+            .compaction
+            .steps
+            .total_seconds
+            .inc_by(total.as_secs_f64());
     }
 }
 
