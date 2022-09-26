@@ -21,7 +21,7 @@ use timely::PartialOrder;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::CollectionPlan;
 use mz_ore::now::{to_datetime, EpochMillis};
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_stash::Append;
 use mz_storage::types::sources::Timeline;
@@ -30,7 +30,6 @@ use crate::catalog::CatalogItem;
 use crate::client::ConnectionId;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
-use crate::coord::CoordTimestamp;
 use crate::coord::Coordinator;
 use crate::AdapterError;
 
@@ -70,7 +69,7 @@ struct TimestampOracle<T> {
     next: Box<dyn Fn() -> T>,
 }
 
-impl<T: CoordTimestamp> TimestampOracle<T> {
+impl<T: TimestampManipulation> TimestampOracle<T> {
     /// Create a new timeline, starting at the indicated time. `next` generates
     /// new timestamps when invoked. The timestamps have no requirements, and can
     /// retreat from previous invocations.
@@ -159,7 +158,7 @@ pub struct DurableTimestampOracle<T> {
     persist_interval: T,
 }
 
-impl<T: CoordTimestamp> DurableTimestampOracle<T> {
+impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     /// Create a new durable timeline, starting at the indicated time. Timestamps will be
     /// allocated in groups of size `persist_interval`. Also returns the new timestamp that
     /// needs to be persisted to disk.
