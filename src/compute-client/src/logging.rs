@@ -427,7 +427,7 @@ impl LogView {
                     export_id, import_id, pg_catalog.min(time) AS time
                 FROM mz_internal.mz_worker_compute_import_frontiers_{}
                 GROUP BY export_id, import_id",
-                "mz_worker_compute_import_frontiers_{}",
+                "mz_compute_import_frontiers_{}",
             ),
 
             LogView::MzMessageCounts => (

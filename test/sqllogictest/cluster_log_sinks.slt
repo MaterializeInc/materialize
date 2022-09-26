@@ -228,7 +228,7 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_active_1) EXCEPT (SELECT * FRO
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_peek_durationss_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_peek_durations) EXCEPT (SELECT * FROM mz_internal.mz_peek_durations_1));
 ----
 
 query T
@@ -485,7 +485,7 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_received_internal_2)
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal) EXCEPT (SELECT * FROMmz_internal.mz_message_counts_sent_internal_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_message_counts_sent_internal) EXCEPT (SELECT * FROM mz_internal.mz_message_counts_sent_internal_2));
 ----
 
 query T
