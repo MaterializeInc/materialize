@@ -1946,10 +1946,10 @@ impl<S: Append> Catalog<S> {
                                     {:?}\n\n\
                                     make sure that the schema name is specified in the builtin view's create sql statement.",
                                 view.name, e
-                            );
+                            )
                         });
                     let oid = catalog.allocate_oid().await?;
-                    catalog.state.insert_item(id, oid, name, item)
+                    catalog.state.insert_item(id, oid, name, item);
                 }
 
                 Builtin::Type(_) => unreachable!("loaded separately"),
@@ -1973,7 +1973,7 @@ impl<S: Append> Catalog<S> {
                         CatalogItem::StorageCollection(coll),
                     );
                 }
-            };
+            }
         }
         let new_system_id_mappings = new_builtins
             .iter()
