@@ -24,6 +24,7 @@ Component | Use
 **Sources** | Sources describe an external system you want Materialize to read data from (e.g. Kafka).
 **Views** | Views represent queries of sources and other views that you want to save for repeated execution.
 **Indexes** | Indexes represent query results stored in memory.
+**Sinks** | Sinks represent output streams or files that Materialize sends data to.
 **Clusters** | Clusters represent a logical set of indexes that share physical resources.
 **Cluster replicas** | Cluster replicas provide physical resources for a cluster's indexes.
 
@@ -85,6 +86,16 @@ Envelope | Action
 **Append-only** | Inserts all received data; does not support updates or deletes.
 **Debezium** | Treats data as wrapped in a "diff envelope" that indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Kafka&mdash;Using Debezium](/sql/create-source/kafka/#using-debezium).
 **Upsert** | Treats data as having a key and a value. New records with non-null value that have the same key as a preexisting record in the dataflow will replace the preexisting record. New records with null value that have the same key as preexisting record will cause the preexisting record to be deleted. <br/><br/>For more information, see [`CREATE SOURCE`: &mdash;Handling upserts](/sql/create-source/kafka/#handling-upserts)
+
+## Sinks
+
+Sinks are the inverse of sources and represent a connection to an external stream
+where Materialize outputs data. When a user defines a sink over a materialized view,
+source, or table, Materialize automatically generates the required schema and writes down
+the stream of changes to that view or source. In effect, Materialize sinks act as
+change data capture (CDC) producers for the given source or view.
+
+Currently, Materialize only supports sending sink data to Kafka.
 
 ## Views
 
@@ -215,6 +226,7 @@ Add replicas to a cluster | Greater tolerance to replica failure
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
 - [`CREATE VIEW`](/sql/create-view)
 - [`CREATE INDEX`](/sql/create-index)
+- [`CREATE SINK`](/sql/create-sink)
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 

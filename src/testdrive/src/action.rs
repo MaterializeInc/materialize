@@ -562,6 +562,9 @@ pub(crate) async fn build(
                     "kafka-verify-schema" => {
                         Box::new(kafka::build_verify_schema(builtin).map_err(wrap_err)?)
                     }
+                    "kafka-verify-commit" => {
+                        Box::new(kafka::build_verify_commit(builtin).map_err(wrap_err)?)
+                    }
                     "kinesis-create-stream" => {
                         Box::new(kinesis::build_create_stream(builtin).map_err(wrap_err)?)
                     }

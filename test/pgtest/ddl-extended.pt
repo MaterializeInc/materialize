@@ -3,16 +3,13 @@ send
 Parse {"query": "CREATE TABLE a (a int)"}
 Bind
 Execute
-Parse {"query": "ROLLBACK"}
-Bind
-Execute
 Parse {"query": "CREATE TABLE b (a int)"}
 Bind
 Execute
-Parse {"query": "SELECT * FROM a"}
+Parse {"query": "INSERT INTO a VALUES (1)"}
 Bind
 Execute
-Parse {"query": "SELECT * FROM b"}
+Parse {"query": "SELECT 1/0"}
 Bind
 Execute
 Sync
@@ -26,14 +23,25 @@ BindComplete
 CommandComplete {"tag":"CREATE TABLE"}
 ParseComplete
 BindComplete
-NoticeResponse {"fields":[{"typ":"S","value":"WARNING"},{"typ":"C","value":"25P01"},{"typ":"M","value":"there is no transaction in progress"}]}
-CommandComplete {"tag":"ROLLBACK"}
-ParseComplete
-BindComplete
 CommandComplete {"tag":"CREATE TABLE"}
 ParseComplete
 BindComplete
-CommandComplete {"tag":"SELECT 0"}
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "SELECT * FROM a"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
 ParseComplete
 BindComplete
 CommandComplete {"tag":"SELECT 0"}

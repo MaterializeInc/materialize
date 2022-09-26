@@ -2,8 +2,8 @@
 name = "mz-expr"
 description = "The core expression language for Materialize."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [[bench]]
@@ -51,7 +51,7 @@ proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-fea
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 
 [dev-dependencies]
-criterion = { git = "https://github.com/bheisler/criterion.rs.git", branch = "version-0.4" }
+criterion = { version = "0.4.0" }
 datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }

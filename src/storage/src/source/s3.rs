@@ -56,6 +56,7 @@ use mz_repr::GlobalId;
 
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
+use crate::source::commit::LogCommitter;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -811,6 +812,7 @@ impl SourceReader for S3SourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
     type Diff = ();
+    type OffsetCommitter = LogCommitter;
     type Connection = S3SourceConnection;
 
     fn new(
@@ -824,7 +826,7 @@ impl SourceReader for S3SourceReader {
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
@@ -903,15 +905,22 @@ impl SourceReader for S3SourceReader {
             (dataflow_rx, shutdowner)
         };
 
-        Ok(S3SourceReader {
-            source_name,
-            id: source_id,
-            receiver_stream: receiver,
-            dataflow_status: shutdowner,
-            offset: S3Offset(0),
-            active_read_worker,
-            reported_unconsumed_partitions: false,
-        })
+        Ok((
+            S3SourceReader {
+                source_name,
+                id: source_id,
+                receiver_stream: receiver,
+                dataflow_status: shutdowner,
+                offset: S3Offset(0),
+                active_read_worker,
+                reported_unconsumed_partitions: false,
+            },
+            LogCommitter {
+                source_id,
+                worker_id,
+                worker_count,
+            },
+        ))
     }
 
     fn get_next_message(

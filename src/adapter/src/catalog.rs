@@ -364,7 +364,7 @@ impl CatalogState {
             let source_name = QualifiedObjectName {
                 qualifiers: ObjectQualifiers {
                     database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+                    schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
                 },
                 item: format!("{}_{}", log.name, replica_id),
             };
@@ -377,7 +377,7 @@ impl CatalogState {
             assert!(name_template.find("{}").is_some());
             let name = name_template.replace("{}", &replica_id.to_string());
             let sql = "CREATE VIEW ".to_string()
-                + MZ_CATALOG_SCHEMA
+                + MZ_INTERNAL_SCHEMA
                 + "."
                 + &name
                 + " AS "
@@ -392,7 +392,7 @@ impl CatalogState {
                         qualifiers: ObjectQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
-                                self.get_mz_catalog_schema_id().clone(),
+                                self.get_mz_internal_schema_id().clone(),
                             ),
                         },
                         item: name,
@@ -597,7 +597,7 @@ impl CatalogState {
         &self.database_by_id[database_id]
     }
 
-    async fn insert_compute_instance(
+    fn insert_compute_instance(
         &mut self,
         id: ComputeInstanceId,
         name: String,
@@ -619,7 +619,7 @@ impl CatalogState {
                         qualifiers: ObjectQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
-                                self.get_mz_catalog_schema_id().clone(),
+                                self.get_mz_internal_schema_id().clone(),
                             ),
                         },
                         item: index_name.clone(),
@@ -848,6 +848,10 @@ impl CatalogState {
 
     pub fn get_information_schema_id(&self) -> &SchemaId {
         &self.ambient_schemas_by_name[INFORMATION_SCHEMA]
+    }
+
+    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
+        &self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
     }
 
     pub fn is_system_schema(&self, schema: &str) -> bool {
@@ -1803,11 +1807,11 @@ impl<S: Append> Catalog<S> {
             storage: Arc::new(Mutex::new(config.storage)),
         };
 
-        catalog.create_temporary_schema(SYSTEM_CONN_ID).await?;
+        catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
 
         let databases = catalog.storage().await.load_databases().await?;
         for (id, name) in databases {
-            let oid = catalog.allocate_oid().await?;
+            let oid = catalog.allocate_oid()?;
             catalog.state.database_by_id.insert(
                 id.clone(),
                 Database {
@@ -1826,7 +1830,7 @@ impl<S: Append> Catalog<S> {
 
         let schemas = catalog.storage().await.load_schemas().await?;
         for (schema_id, schema_name, database_id) in schemas {
-            let oid = catalog.allocate_oid().await?;
+            let oid = catalog.allocate_oid()?;
             let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
                 Some(database_id) => {
                     let db = catalog
@@ -1864,7 +1868,7 @@ impl<S: Append> Catalog<S> {
 
         let roles = catalog.storage().await.load_roles().await?;
         for (id, name) in roles {
-            let oid = catalog.allocate_oid().await?;
+            let oid = catalog.allocate_oid()?;
             catalog.state.roles.insert(
                 name.clone(),
                 Role {
@@ -1910,14 +1914,14 @@ impl<S: Append> Catalog<S> {
             };
             match builtin {
                 Builtin::Log(log) => {
-                    let oid = catalog.allocate_oid().await?;
+                    let oid = catalog.allocate_oid()?;
                     catalog
                         .state
                         .insert_item(id, oid, name.clone(), CatalogItem::Log(log));
                 }
 
                 Builtin::Table(table) => {
-                    let oid = catalog.allocate_oid().await?;
+                    let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -1948,14 +1952,14 @@ impl<S: Append> Catalog<S> {
                                 view.name, e
                             )
                         });
-                    let oid = catalog.allocate_oid().await?;
+                    let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(id, oid, name, item);
                 }
 
                 Builtin::Type(_) => unreachable!("loaded separately"),
 
                 Builtin::Func(func) => {
-                    let oid = catalog.allocate_oid().await?;
+                    let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -1965,7 +1969,7 @@ impl<S: Append> Catalog<S> {
                 }
 
                 Builtin::StorageCollection(coll) => {
-                    let oid = catalog.allocate_oid().await?;
+                    let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -2031,8 +2035,7 @@ impl<S: Append> Catalog<S> {
             };
             catalog
                 .state
-                .insert_compute_instance(id, name, introspection, introspection_sources)
-                .await;
+                .insert_compute_instance(id, name, introspection, introspection_sources);
         }
 
         let replicas = catalog
@@ -2109,7 +2112,7 @@ impl<S: Append> Catalog<S> {
         let mut catalog = {
             let mut storage = catalog.storage().await;
             let mut tx = storage.transaction().await?;
-            let catalog = Self::load_catalog_items(&mut tx, &catalog).await?;
+            let catalog = Self::load_catalog_items(&mut tx, &catalog)?;
             tx.commit().await?;
             catalog
         };
@@ -2547,7 +2550,7 @@ impl<S: Append> Catalog<S> {
     /// objects, which is necessary for at least one catalog migration.
     ///
     /// TODO(justin): it might be nice if these were two different types.
-    pub async fn load_catalog_items<'a>(
+    pub fn load_catalog_items<'a>(
         tx: &mut storage::Transaction<'a, S>,
         c: &Catalog<S>,
     ) -> Result<Catalog<S>, Error> {
@@ -2573,7 +2576,7 @@ impl<S: Append> Catalog<S> {
                     }))
                 }
             };
-            let oid = c.allocate_oid().await?;
+            let oid = c.allocate_oid()?;
             c.state.insert_item(id, oid, name, item);
         }
         c.transient_revision = 1;
@@ -2727,7 +2730,7 @@ impl<S: Append> Catalog<S> {
         self.storage().await.allocate_user_id().await
     }
 
-    pub async fn allocate_oid(&mut self) -> Result<u32, Error> {
+    pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         self.state.allocate_oid()
     }
 
@@ -2886,14 +2889,18 @@ impl<S: Append> Catalog<S> {
         self.state.get_information_schema_id()
     }
 
+    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
+        self.state.get_mz_internal_schema_id()
+    }
+
     pub fn get_database(&self, id: &DatabaseId) -> &Database {
         self.state.get_database(id)
     }
 
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
-    pub async fn create_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
-        let oid = self.allocate_oid().await?;
+    pub fn create_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
+        let oid = self.allocate_oid()?;
         self.state.temporary_schemas.insert(
             conn_id,
             Schema {
@@ -3864,15 +3871,15 @@ impl<S: Append> Catalog<S> {
                     vec![]
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
-                    tx.upsert_system_config(&name, &value).await?;
+                    tx.upsert_system_config(&name, &value)?;
                     vec![Action::UpdateSysytemConfiguration { name, value }]
                 }
                 Op::ResetSystemConfiguration { name } => {
-                    tx.remove_system_config(&name).await;
+                    tx.remove_system_config(&name);
                     vec![Action::ResetSystemConfiguration { name }]
                 }
                 Op::ResetAllSystemConfiguration {} => {
-                    tx.clear_system_configs().await;
+                    tx.clear_system_configs();
                     vec![Action::ResetAllSystemConfiguration]
                 }
                 Op::UpdateRotatedKeys {
@@ -3989,14 +3996,12 @@ impl<S: Append> Catalog<S> {
                             .iter()
                             .map(|(_, id)| *id)
                             .collect();
-                    state
-                        .insert_compute_instance(
-                            id,
-                            name.clone(),
-                            config,
-                            arranged_introspection_sources,
-                        )
-                        .await;
+                    state.insert_compute_instance(
+                        id,
+                        name.clone(),
+                        config,
+                        arranged_introspection_sources,
+                    );
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
                     for id in arranged_introspection_source_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));

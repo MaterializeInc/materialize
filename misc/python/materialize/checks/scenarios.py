@@ -17,7 +17,7 @@
 
 from typing import List, Type
 
-from materialize.checks.actions import Action, AlterSystem
+from materialize.checks.actions import Action
 from materialize.checks.actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
@@ -63,7 +63,6 @@ class RestartEntireMz(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            AlterSystem("max_tables", "1000"),
             Initialize(self.checks),
             RestartMzAction(),
             Manipulate(self.checks, phase=1),
@@ -78,7 +77,6 @@ class DropCreateDefaultReplica(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            AlterSystem("max_tables", "1000"),
             Initialize(self.checks),
             Manipulate(self.checks, phase=1),
             DropCreateDefaultReplicaAction(),
@@ -93,7 +91,6 @@ class RestartComputed(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            AlterSystem("max_tables", "1000"),
             StartComputed(),
             UseComputed(),
             Initialize(self.checks),
@@ -115,7 +112,6 @@ class RestartEnvironmentdStoraged(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            AlterSystem("max_tables", "1000"),
             StartComputed(),
             UseComputed(),
             Initialize(self.checks),
@@ -134,7 +130,6 @@ class KillStoraged(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            AlterSystem("max_tables", "1000"),
             Initialize(self.checks),
             KillStoragedAction(),
             Manipulate(self.checks, phase=1),
@@ -149,7 +144,6 @@ class RestartPostgresBackend(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            AlterSystem("max_tables", "1000"),
             Initialize(self.checks),
             RestartPostgresBackendAction(),
             Manipulate(self.checks, phase=1),

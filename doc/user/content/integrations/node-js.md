@@ -13,11 +13,18 @@ Materialize is **wire-compatible** with PostgreSQL, which means that Node.js app
 
 ## Connect
 
-To [connect](https://node-postgres.com/features/connecting) to a local Materialize instance using `node-postgres`, you can use the connection URI shorthand (`postgres://<USER>@<HOST>:<PORT>/<SCHEMA>`):
+To [connect](https://node-postgres.com/features/connecting) to Materialize using `node-postgres`, you can use the connection URI shorthand (`postgres://<USER>@<HOST>:<PORT>/<SCHEMA>`):
 
 ```js
 const { Client } = require('pg');
-const client = new Client('postgres://materialize@localhost:6875/materialize');
+const client = new Client({
+    user: MATERIALIZE_USERNAME,
+    password: MATERIALIZE_PASSWORD,
+    host: MATERIALIZE_HOST,
+    port: 6875,
+    database: 'materialize',
+    ssl: true
+});
 
 async function main() {
     await client.connect();
@@ -37,7 +44,14 @@ To read a stream of updates from an existing materialized view, open a long-live
 const { Client } = require('pg');
 
 async function main() {
-  const client = new Client('postgres://materialize@localhost:6875/materialize');
+  const client = new Client({
+    user: MATERIALIZE_USERNAME,
+    password: MATERIALIZE_PASSWORD,
+    host: MATERIALIZE_HOST,
+    port: 6875,
+    database: "materialize",
+    ssl: true,
+  });
   await client.connect();
 
   await client.query('BEGIN');
@@ -98,13 +112,21 @@ client.connect((err, client) => {
 
 Querying Materialize is identical to querying a PostgreSQL database: Node.js executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
-Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
 To query a view `my_view` using a `SELECT` statement:
 
 ```js
 const { Client } = require('pg');
-const client = new Client('postgres://materialize@localhost:6875/materialize');
+
+const client = new Client({
+  user: MATERIALIZE_USERNAME,
+  password: MATERIALIZE_PASSWORD,
+  host: MATERIALIZE_HOST,
+  port: 6875,
+  database: 'materialize',
+  ssl: true
+});
 
 async function main() {
   await client.connect();
@@ -119,14 +141,14 @@ For more details, see the  [`node-postgres` query](https://node-postgres.com/fea
 
 ## Push data to a source
 
-Materialize processes live streams of data and maintains views in memory, relying on external systems (like PostgreSQL, or Kafka) to serve as "systems of record" for the data. Instead of updating Materialize directly, **Node.js should send data to an intermediary system**. Materialize connects to the intermediary system as a [source](/sql/create-source/) and reads streaming updates from it.
+Materialize processes live streams of data and maintains query results up-to-date as new data arrives, relying on external systems (like PostgreSQL, or Kafka) to serve as "systems of record" for the data. Instead of updating Materialize directly, **Node.js should send data to an intermediary system**. Materialize connects to the intermediary system as a [source](/sql/create-source/) and reads streaming updates from it.
 
 The table below lists the intermediary systems a Node.js application can use to feed data into Materialize:
 
 Intermediary System | Notes
 -------------|-------------
 **Kafka** | Produce messages from [Node.js to Kafka](https://kafka.js.org/docs/getting-started), and create a [Kafka source](/sql/create-source/json-kafka/) to consume them. This is recommended for scenarios where low-latency and high-throughput are important.
-**PostgreSQL** | Send data from Node.js to PostgreSQL, and create a [PostgreSQL source](/sql/create-source/postgres/) that consumes a replication stream from the database based on its write-ahead log. This is recommended for Node.js apps that already use PostgreSQL and fast-changing transactional data.to the stream.
+**PostgreSQL** | Send data from Node.js to PostgreSQL, and create a [PostgreSQL source](/sql/create-source/postgres/) that consumes a replication stream from the database based on its write-ahead log. This is recommended for Node.js apps that already use PostgreSQL and fast-changing transactional data to the stream.
 
 ## Insert data into tables
 
@@ -136,7 +158,15 @@ Most data in Materialize will stream in via an external system, but a [table](/s
 
 ```js
 const { Client } = require('pg');
-const client = new Client('postgres://materialize@localhost:6875/materialize');
+
+const client = new Client({
+    user: MATERIALIZE_USERNAME,
+    password: MATERIALIZE_PASSWORD,
+    host: MATERIALIZE_HOST,
+    port: 6875,
+    database: 'materialize',
+    ssl: true
+});
 
 const text = 'INSERT INTO countries(code, name) VALUES($1, $2);';
 const values = ['GH', 'GHANA'];
@@ -158,7 +188,15 @@ Typically, you create sources, views, and indexes when deploying Materialize, bu
 
 ```js
 const { Client } = require('pg');
-const client = new Client('postgres://materialize@localhost:6875/materialize');
+
+const client = new Client({
+    user: MATERIALIZE_USERNAME,
+    password: MATERIALIZE_PASSWORD,
+    host: MATERIALIZE_HOST,
+    port: 6875,
+    database: 'materialize',
+    ssl: true
+});
 
 async function main() {
     await client.connect();
@@ -177,7 +215,15 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
 ```js
 const { Client } = require('pg');
-const client = new Client('postgres://materialize@localhost:6875/materialize');
+
+const client = new Client({
+    user: MATERIALIZE_USERNAME,
+    password: MATERIALIZE_PASSWORD,
+    host: MATERIALIZE_HOST,
+    port: 6875,
+    database: "materialize",
+    ssl: true,
+});
 
 async function main() {
     await client.connect();

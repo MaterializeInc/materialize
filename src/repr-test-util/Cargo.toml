@@ -2,8 +2,8 @@
 name = "mz-repr-test-util"
 description = "Utilities for creating objects in the repr crate for testing"
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

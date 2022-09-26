@@ -1,9 +1,9 @@
 [package]
 name = "mz-storaged"
 description = "Materialize's storage server."
-version = "0.27.0-dev"
-edition = "2021"
-rust-version = "1.63.0"
+version = "0.27.0-alpha.22.post"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

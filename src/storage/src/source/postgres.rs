@@ -33,6 +33,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
+use crate::source::commit::LogCommitter;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -176,6 +177,7 @@ impl SourceReader for PostgresSourceReader {
     type Value = Row;
     // Postgres can produce deletes that cause retractions
     type Diff = Diff;
+    type OffsetCommitter = LogCommitter;
     type Connection = PostgresSourceConnection;
 
     fn new(
@@ -189,7 +191,7 @@ impl SourceReader for PostgresSourceReader {
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
@@ -241,11 +243,18 @@ impl SourceReader for PostgresSourceReader {
             );
         }
 
-        Ok(Self {
-            receiver_stream: dataflow_rx,
-            active_read_worker,
-            reported_unconsumed_partitions: false,
-        })
+        Ok((
+            Self {
+                receiver_stream: dataflow_rx,
+                active_read_worker,
+                reported_unconsumed_partitions: false,
+            },
+            LogCommitter {
+                source_id,
+                worker_id,
+                worker_count,
+            },
+        ))
     }
 
     // TODO(guswynn): use `next` instead of using a channel

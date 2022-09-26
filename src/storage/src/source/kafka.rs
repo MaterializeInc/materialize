@@ -28,6 +28,7 @@ use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
+use crate::source::commit::LogCommitter;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -79,6 +80,7 @@ impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Diff = ();
+    type OffsetCommitter = LogCommitter;
     type Connection = KafkaSourceConnection;
 
     /// Create a new instance of a Kafka reader.
@@ -93,7 +95,7 @@ impl SourceReader for KafkaSourceReader {
         _: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let KafkaSourceConnection {
             connection,
             options,
@@ -179,22 +181,34 @@ impl SourceReader for KafkaSourceReader {
                 .unpark_on_drop()
         };
         let partition_ids = start_offsets.keys().copied().collect();
-        Ok(KafkaSourceReader {
-            topic_name: topic.clone(),
-            source_name,
-            id: source_id,
-            partition_consumers: VecDeque::new(),
-            consumer,
-            worker_id,
-            worker_count,
-            last_offsets: HashMap::new(),
-            start_offsets,
-            stats_rx,
-            partition_info,
-            include_headers: kc.include_headers.is_some(),
-            _metadata_thread_handle: metadata_thread_handle,
-            partition_metrics: KafkaPartitionMetrics::new(metrics, partition_ids, topic, source_id),
-        })
+        Ok((
+            KafkaSourceReader {
+                topic_name: topic.clone(),
+                source_name,
+                id: source_id,
+                partition_consumers: VecDeque::new(),
+                consumer,
+                worker_id,
+                worker_count,
+                last_offsets: HashMap::new(),
+                start_offsets,
+                stats_rx,
+                partition_info,
+                include_headers: kc.include_headers.is_some(),
+                _metadata_thread_handle: metadata_thread_handle,
+                partition_metrics: KafkaPartitionMetrics::new(
+                    metrics,
+                    partition_ids,
+                    topic,
+                    source_id,
+                ),
+            },
+            LogCommitter {
+                source_id,
+                worker_id,
+                worker_count,
+            },
+        ))
     }
 
     /// This function polls from the next consumer for which a message is available. This function
@@ -528,15 +542,6 @@ async fn create_kafka_config(
 ) -> ClientConfig {
     let mut kafka_config = create_new_client_config(connection_context.librdkafka_log_level);
 
-    crate::types::connections::populate_client_config(
-        kafka_connection.clone(),
-        options,
-        std::collections::HashSet::new(),
-        &mut kafka_config,
-        &*connection_context.secrets_reader,
-    )
-    .await;
-
     // Default to disabling Kafka auto commit. This can be explicitly enabled
     // by the user if they want to use it for progress tracking.
     kafka_config.set("enable.auto.commit", "false");
@@ -559,6 +564,15 @@ async fn create_kafka_config(
 
     kafka_config.set("fetch.message.max.bytes", "134217728");
 
+    crate::types::connections::populate_client_config(
+        kafka_connection.clone(),
+        options,
+        std::collections::HashSet::new(),
+        &mut kafka_config,
+        &*connection_context.secrets_reader,
+    )
+    .await;
+
     // Consumer group ID. librdkafka requires this, and we use offset committing
     // to provide a way for users to monitor ingest progress (though we do not
     // rely on the committed offsets for any functionality)
@@ -569,6 +583,8 @@ async fn create_kafka_config(
     // unique consumer group ID is the most surefire way to ensure that
     // librdkafka does not try to perform its own consumer group balancing,
     // which would wreak havoc with our careful partition assignment strategy.
+    //
+    // TODO(guswynn): make this include the connection id as well
     kafka_config.set(
         "group.id",
         &format!(

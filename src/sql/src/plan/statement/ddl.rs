@@ -404,7 +404,7 @@ pub fn plan_create_source(
 
             let topic = extracted_options
                 .topic
-                .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
+                .expect("validated exists during purification");
             let group_id_prefix = extracted_options.group_id_prefix;
 
             let mut start_offsets = HashMap::new();
@@ -732,7 +732,6 @@ pub fn plan_create_source(
             }
         }
         mz_sql_parser::ast::Envelope::Upsert => {
-            scx.require_unsafe_mode("ENVELOPE UPSERT")?;
             let key_encoding = match encoding.key_ref() {
                 None => {
                     bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))

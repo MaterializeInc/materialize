@@ -34,6 +34,7 @@ use mz_repr::Timestamp;
 use tracing::trace;
 
 use crate::controller::CollectionMetadata;
+use crate::source::antichain::OffsetAntichain;
 use crate::types::sources::MzOffset;
 
 /// A "follower" for the ReclockOperator, that maintains
@@ -56,7 +57,7 @@ struct ReclockFollowerInner {
     upper: Antichain<Timestamp>,
     /// The upper frontier in terms of `SourceTime`. Any attempt to reclock messages beyond this
     /// frontier will lead to minting new bindings.
-    source_upper: HashMap<PartitionId, MzOffset>,
+    source_upper: OffsetAntichain,
 }
 
 impl ReclockFollower {
@@ -67,12 +68,25 @@ impl ReclockFollower {
                 remap_trace: HashMap::new(),
                 since: as_of,
                 upper: Antichain::from_elem(Timestamp::minimum()),
-                source_upper: HashMap::new(),
+                source_upper: OffsetAntichain::new(),
             })),
         }
     }
 
-    pub fn source_upper(&self) -> Ref<HashMap<PartitionId, MzOffset>> {
+    /// Ensure the `ReclockFollower` has been initialized with trace
+    /// up to the given upper.
+    pub async fn ensure_initialized_to(&self, upper: Antichain<Timestamp>) {
+        // Careful not to hold a `Ref` over and await point.
+        loop {
+            if PartialOrder::less_equal(&upper, &RefCell::borrow(&self.inner).upper) {
+                return;
+            }
+            // Some short but non-0 amount of time
+            tokio::time::sleep(Duration::from_millis(100)).await
+        }
+    }
+
+    pub fn source_upper(&self) -> Ref<OffsetAntichain> {
         // `borrow` overlaps with `std::borrow::Borrow` so we have to do this
         Ref::map(RefCell::borrow(&self.inner), |inner| &inner.source_upper)
     }
@@ -88,7 +102,7 @@ impl ReclockFollower {
                 let bindings = inner.remap_trace.entry(pid.clone()).or_default();
                 bindings.push((ts, diff));
 
-                *inner.source_upper.entry(pid.clone()).or_default() += diff;
+                inner.source_upper.advance(pid.clone(), diff);
             }
         }
     }
@@ -162,15 +176,15 @@ impl ReclockFollower {
     /// The error will contain the offending `SourceTime`.
     pub fn reclock_frontier(
         &self,
-        source_frontier: &HashMap<PartitionId, MzOffset>,
+        source_frontier: &OffsetAntichain,
     ) -> Result<Antichain<Timestamp>, (PartitionId, MzOffset)> {
         let inner = RefCell::borrow(&self.inner);
         // The upper is the greatest frontier that we can ever return
         let mut dest_frontier = inner.upper.clone();
 
         let mut partitions = HashSet::new();
-        partitions.extend(inner.source_upper.keys());
-        partitions.extend(source_frontier.keys());
+        partitions.extend(inner.source_upper.partitions());
+        partitions.extend(source_frontier.partitions());
         // To refine it we have to go through all the partitions we know about and:
         for pid in partitions {
             let offset = source_frontier.get(pid).copied().unwrap_or_default();
@@ -208,7 +222,7 @@ impl ReclockFollower {
     pub fn source_upper_at_frontier(
         &self,
         ts_upper: AntichainRef<Timestamp>,
-    ) -> anyhow::Result<HashMap<PartitionId, MzOffset>> {
+    ) -> anyhow::Result<OffsetAntichain> {
         RefCell::borrow(&self.inner).source_upper_at_frontier(ts_upper)
     }
 
@@ -284,7 +298,7 @@ impl ReclockFollowerInner {
     pub fn source_upper_at_frontier(
         &self,
         ts_upper: AntichainRef<Timestamp>,
-    ) -> anyhow::Result<HashMap<PartitionId, MzOffset>> {
+    ) -> anyhow::Result<OffsetAntichain> {
         source_upper_at_frontier_impl(
             &self.remap_trace,
             &self.since,
@@ -399,14 +413,14 @@ impl ReclockOperator {
     /// The error will contain the offending `SourceTime`.
     pub fn reclock_frontier(
         &self,
-        source_frontier: &HashMap<PartitionId, MzOffset>,
+        source_frontier: &OffsetAntichain,
     ) -> Result<Antichain<Timestamp>, (PartitionId, MzOffset)> {
         // The upper is the greatest frontier that we can ever return
         let mut dest_frontier = self.upper.clone();
 
         let mut partitions = HashSet::new();
         partitions.extend(self.source_upper.keys());
-        partitions.extend(source_frontier.keys());
+        partitions.extend(source_frontier.partitions());
         // To refine it we have to go through all the partitions we know about and:
         for pid in partitions {
             let offset = source_frontier.get(pid).copied().unwrap_or_default();
@@ -468,7 +482,7 @@ impl ReclockOperator {
     pub fn source_upper_at_frontier(
         &self,
         ts_upper: AntichainRef<Timestamp>,
-    ) -> anyhow::Result<HashMap<PartitionId, MzOffset>> {
+    ) -> anyhow::Result<OffsetAntichain> {
         source_upper_at_frontier_impl(
             &self.remap_trace,
             &self.since,
@@ -552,16 +566,16 @@ impl ReclockOperator {
     /// When this function returns the local dTVC view of the remap collection will contain
     /// definite timestamp bindings that can be used to reclock messages at offsets that are not
     /// beyond the provided frontier.
-    pub async fn mint<P: Borrow<PartitionId>>(
+    pub async fn mint(
         &mut self,
-        source_frontier: &HashMap<P, MzOffset>,
+        source_frontier: &OffsetAntichain,
     ) -> HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> {
         // Any updates to the remap trace that occured during minting.
         let mut trace_updates: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> = HashMap::new();
 
         loop {
             let mut updates = vec![];
-            for (pid, upper) in source_frontier {
+            for (pid, upper) in source_frontier.iter() {
                 let pid = pid.borrow();
                 let part_upper = self.source_upper.get(pid).copied().unwrap_or_default();
 
@@ -770,7 +784,7 @@ fn source_upper_at_frontier_impl<'a, F>(
     cur_upper: &Antichain<Timestamp>,
     upper_to_invert: AntichainRef<Timestamp>,
     partition_bindings: &'a F,
-) -> anyhow::Result<HashMap<PartitionId, MzOffset>>
+) -> anyhow::Result<OffsetAntichain>
 where
     F: Fn(&PartitionId) -> PartitionBindings<'a>,
 {
@@ -789,7 +803,7 @@ where
     if PartialOrder::less_equal(since, &zero)
         && PartialOrder::less_equal(&upper_to_invert, &zero.borrow())
     {
-        return Ok(HashMap::new());
+        return Ok(OffsetAntichain::new());
     }
 
     // Assert we haven't compacted too far, and that we aren't (somehow) asking about the
@@ -809,7 +823,7 @@ where
         ));
     }
 
-    let mut source_upper = HashMap::with_capacity(remap_trace.len());
+    let mut source_upper = OffsetAntichain::with_capacity(remap_trace.len());
     for pid in remap_trace.keys() {
         let binding = partition_bindings(pid)
             .take_while(|(ts, _)| ts < &ts_to_invert)
@@ -894,7 +908,7 @@ mod tests {
     async fn mint_and_follow(
         operator: &mut ReclockOperator,
         follower: &mut ReclockFollower,
-        source_upper: &mut HashMap<PartitionId, MzOffset>,
+        source_upper: &mut OffsetAntichain,
     ) {
         let trace_updates = operator.mint(source_upper).await;
         let reclock_upper = operator
@@ -909,7 +923,7 @@ mod tests {
         const PART_ID: PartitionId = PartitionId::None;
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
-        let mut source_upper = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
 
         tokio::time::advance(Duration::from_secs(1)).await;
 
@@ -940,7 +954,7 @@ mod tests {
 
         // This will return the antichain containing 1000 because that's where future messages will
         // offset 1 will be reclocked to
-        let query = HashMap::from_iter([(PART_ID, MzOffset::from(1))]);
+        let query = OffsetAntichain::from_iter([(PART_ID, MzOffset::from(1))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             follower.reclock_frontier(&query)
@@ -961,7 +975,7 @@ mod tests {
 
         // We're done with offset 3. Now the reclocking the source upper will result to the overall
         // target upper (1001) because any new bindings will be minted beyond that timestamp.
-        let query = HashMap::from_iter([(PART_ID, MzOffset::from(4))]);
+        let query = OffsetAntichain::from_iter([(PART_ID, MzOffset::from(4))]);
 
         assert_eq!(
             Ok(Antichain::from_elem(1001.into())),
@@ -1006,7 +1020,7 @@ mod tests {
         let (mut operator, _follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
-        let query = HashMap::new();
+        let query = OffsetAntichain::new();
         // This is the initial source frontier so we should get the initial ts upper
         assert_eq!(
             Ok(Antichain::from_elem(0.into())),
@@ -1017,10 +1031,10 @@ mod tests {
 
         // Mint a couple of bindings for multiple partitions
         operator
-            .mint(&HashMap::from_iter([(PART1, MzOffset::from(10))]))
+            .mint(&OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]))
             .await;
         operator
-            .mint(&HashMap::from_iter([(PART2, MzOffset::from(10))]))
+            .mint(&OffsetAntichain::from_iter([(PART2, MzOffset::from(10))]))
             .await;
         assert_eq!(
             operator.remap_trace[&PART1],
@@ -1032,25 +1046,26 @@ mod tests {
         );
 
         // The initial frontier should now map to the minimum between the two partitions
-        let query = HashMap::new();
+        let query = OffsetAntichain::new();
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             operator.reclock_frontier(&query)
         );
 
         // Map a frontier that advances only one of the partitions
-        let query = HashMap::from_iter([(PART1, MzOffset::from(9))]);
+        let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(9))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             operator.reclock_frontier(&query)
         );
-        let query = HashMap::from_iter([(PART1, MzOffset::from(10))]);
+        let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2000.into())),
             operator.reclock_frontier(&query)
         );
         // A frontier that is the upper of both partitions should map to the timestamp upper
-        let query = HashMap::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
+        let query =
+            OffsetAntichain::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2001.into())),
             operator.reclock_frontier(&query)
@@ -1059,7 +1074,8 @@ mod tests {
         // Advance the operator and confirm that we get to the next timestamp
         tokio::time::advance(Duration::from_secs(1)).await;
         operator.advance().await;
-        let query = HashMap::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
+        let query =
+            OffsetAntichain::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(3001.into())),
             operator.reclock_frontier(&query)
@@ -1067,7 +1083,7 @@ mod tests {
 
         // Compact but not enough to change the bindings
         operator.compact(Antichain::from_elem(900.into())).await;
-        let query = HashMap::from_iter([(PART1, MzOffset::from(9))]);
+        let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(9))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             operator.reclock_frontier(&query)
@@ -1075,12 +1091,12 @@ mod tests {
 
         // Compact enough to compact bindings
         operator.compact(Antichain::from_elem(1500.into())).await;
-        let query = HashMap::from_iter([(PART1, MzOffset::from(9))]);
+        let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(9))]);
         assert_eq!(
             Err((PART1, MzOffset::from(9))),
             operator.reclock_frontier(&query)
         );
-        let query = HashMap::from_iter([(PART1, MzOffset::from(10))]);
+        let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2000.into())),
             operator.reclock_frontier(&query)
@@ -1095,7 +1111,7 @@ mod tests {
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
         let mut batch = HashMap::new();
-        let mut source_upper = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
 
         // Reclock offsets 1 and 2 to timestamp 0
         batch.insert(
@@ -1204,7 +1220,7 @@ mod tests {
             make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
 
         let mut batch = HashMap::new();
-        let mut source_upper = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
 
         tokio::time::advance(Duration::from_secs(1)).await;
 
@@ -1302,7 +1318,7 @@ mod tests {
 
         // Reclock a batch from one of the operators
         let mut batch = HashMap::new();
-        let mut source_upper = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
 
         tokio::time::advance(Duration::from_secs(1)).await;
 
@@ -1369,7 +1385,7 @@ mod tests {
             make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
 
         let mut batch = HashMap::new();
-        let mut source_upper = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
 
         tokio::time::advance(Duration::from_secs(1)).await;
 
@@ -1517,7 +1533,7 @@ mod tests {
         let (mut operator, _follower) =
             make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
 
-        let mut source_upper = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
 
         // We do multiple rounds of minting. This will downgrade the since of
         // the internal listen. If we didn't make sure to also heartbeat the

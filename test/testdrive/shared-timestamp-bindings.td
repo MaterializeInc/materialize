@@ -157,5 +157,5 @@ $ kafka-ingest format=avro topic=data partition=15 schema=${schema}
 $ skip-if
 SELECT ${arg.replicas} > 1
 
-> SELECT COUNT(*) FROM mz_records_per_dataflow_global WHERE name LIKE '%check_v%' AND records > 0;
+> SELECT COUNT(*) FROM mz_internal.mz_records_per_dataflow_global WHERE name LIKE '%check_v%' AND records > 0;
 0

@@ -2,8 +2,8 @@
 name = "mz-ccsr"
 description = "Confluent-compatible schema registry API client."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

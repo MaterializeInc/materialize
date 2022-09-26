@@ -431,7 +431,7 @@ where
     }
 
     // NB: Unlike the other methods here, this one is read-only.
-    pub async fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
+    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
         match self.state.verify_listen(as_of) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(Upper(_))) => {
@@ -1044,7 +1044,7 @@ pub mod datadriven {
             ),
             inputs,
         };
-        let res = Compactor::compact::<u64, i64>(
+        let res = Compactor::<u64, i64>::compact(
             cfg,
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
