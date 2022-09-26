@@ -11,13 +11,12 @@ use std::collections::BTreeSet;
 
 use mz_compute_client::controller::{ComputeInstanceId, Instance as ComputeInstanceController};
 use mz_expr::MirScalarExpr;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, TimestampManipulation};
 use mz_stash::Append;
 use mz_transform::IndexOracle;
 
 use crate::catalog::{CatalogItem, CatalogState, Index};
 use crate::coord::dataflows::DataflowBuilder;
-use crate::coord::CoordTimestamp;
 use crate::coord::{CollectionIdBundle, Coordinator};
 
 /// Answers questions about the indexes available on a particular compute
@@ -52,7 +51,7 @@ impl<T: Copy> DataflowBuilder<'_, T> {
     }
 }
 
-impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
+impl<T: TimestampManipulation> ComputeInstanceIndexOracle<'_, T> {
     /// Identifies a bundle of storage and compute collection ids sufficient for
     /// building a dataflow for the identifiers in `ids` out of the indexes
     /// available in this compute instance.
@@ -106,7 +105,7 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
     }
 }
 
-impl<T: CoordTimestamp> IndexOracle for ComputeInstanceIndexOracle<'_, T> {
+impl<T: TimestampManipulation> IndexOracle for ComputeInstanceIndexOracle<'_, T> {
     fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
         Box::new(
             ComputeInstanceIndexOracle::indexes_on(self, id)

@@ -73,9 +73,56 @@ use serde::{Deserialize, Serialize, Serializer};
     Default,
     Arbitrary,
 )]
+
 pub struct Timestamp {
     /// note no `pub`.
     internal: u64,
+}
+
+pub trait TimestampManipulation:
+    timely::progress::Timestamp
+    + timely::order::TotalOrder
+    + differential_dataflow::lattice::Lattice
+    + std::fmt::Debug
+{
+    /// Advance a timestamp by the least amount possible such that
+    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
+    fn step_forward(&self) -> Self;
+
+    /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
+    fn step_forward_by(&self, amount: &Self) -> Self;
+
+    /// Retreat a timestamp by the least amount possible such that
+    /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
+    /// which must only happen if the timestamp is `Timestamp::minimum()`.
+    fn step_back(&self) -> Option<Self>;
+
+    /// Return the maximum value for this timestamp.
+    fn maximum() -> Self;
+}
+
+impl TimestampManipulation for Timestamp {
+    fn step_forward(&self) -> Self {
+        match self.checked_add(1) {
+            Some(ts) => ts,
+            None => panic!("could not step forward"),
+        }
+    }
+
+    fn step_forward_by(&self, amount: &Self) -> Self {
+        match self.checked_add(*amount) {
+            Some(ts) => ts,
+            None => panic!("could not step {self} forward by {amount}"),
+        }
+    }
+
+    fn step_back(&self) -> Option<Self> {
+        self.checked_sub(1)
+    }
+
+    fn maximum() -> Self {
+        Self::MAX
+    }
 }
 
 impl Timestamp {
