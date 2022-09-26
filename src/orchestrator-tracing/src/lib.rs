@@ -34,9 +34,7 @@ use mz_orchestrator::{
 use mz_ore::cli::{DefaultTrue, KeyValueArg};
 #[cfg(feature = "tokio-console")]
 use mz_ore::tracing::TokioConsoleConfig;
-use mz_ore::tracing::{
-    OpenTelemetryConfig, StderrLogConfig, TracingConfig,
-};
+use mz_ore::tracing::{OpenTelemetryConfig, SentryConfig, StderrLogConfig, TracingConfig};
 
 /// Command line arguments for application tracing.
 ///
@@ -176,6 +174,9 @@ pub struct TracingCliArgs {
         default_value = "1h",
     )]
     pub tokio_console_retention: Duration,
+    /// Sentry data source to submit events and exceptions (e.g. panics) to.
+    #[clap(long, env = "SENTRY_DSN")]
+    pub sentry_dsn: Option<String>,
 }
 
 impl Default for TracingCliArgs {
@@ -219,6 +220,15 @@ impl From<&TracingCliArgs> for TracingConfig {
                     publish_interval: args.tokio_console_publish_interval,
                     retention: args.tokio_console_retention,
                 }),
+            sentry: args.sentry_dsn.clone().map(|dsn| SentryConfig {
+                dsn,
+                tags: args
+                    .opentelemetry_resource
+                    .iter()
+                    .cloned()
+                    .map(|kv| (kv.key, kv.value))
+                    .collect(),
+            }),
         }
     }
 }
@@ -239,10 +249,7 @@ impl TracingOrchestrator {
     ///
     /// All services created by the orchestrator **must** embed the
     /// [`TracingCliArgs`] in their command-line argument parser.
-    pub fn new(
-        inner: Arc<dyn Orchestrator>,
-        tracing_args: TracingCliArgs,
-    ) -> TracingOrchestrator {
+    pub fn new(inner: Arc<dyn Orchestrator>, tracing_args: TracingCliArgs) -> TracingOrchestrator {
         TracingOrchestrator {
             inner,
             tracing_args,
@@ -292,6 +299,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 tokio_console_publish_interval,
                 #[cfg(feature = "tokio-console")]
                 tokio_console_retention,
+                sentry_dsn,
             } = &self.tracing_args;
             args.push(format!("--log-filter={log_filter}"));
             if log_prefix.is_some() {
@@ -312,10 +320,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 for kv in opentelemetry_resource {
                     args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
                 }
-                args.push(format!(
-                    "--opentelemetry-enabled={}",
-                    opentelemetry_enabled
-                ));
+                args.push(format!("--opentelemetry-enabled={}", opentelemetry_enabled));
             }
             #[cfg(feature = "tokio-console")]
             if let Some(port) = tokio_console_port {
@@ -331,6 +336,9 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                     "--tokio-console-retention={} microseconds",
                     tokio_console_retention.as_micros(),
                 ));
+            }
+            if let Some(dsn) = sentry_dsn {
+                args.push(format!("--sentry-dsn={dsn}"));
             }
             args
         };

@@ -31,6 +31,7 @@ pin-project = "1.0.12"
 prometheus = { version = "0.13.2", default-features = false, optional = true }
 smallvec = { version = "1.10.0", optional = true }
 stacker = { version = "0.1.15", optional = true }
+sentry = { version = "0.27.0", optional = true }
 serde = { version = "1.0.145", features = ["derive"], optional = true }
 serde_json = { version = "1.0.86", optional = true }
 ssh-key = { version = "0.4.3", optional = true }
@@ -59,6 +60,7 @@ hyper-tls = { version = "0.5.0", optional = true }
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"], optional = true }
 opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", optional = true }
 console-subscriber = { version = "0.1.8", optional = true }
+sentry-tracing = { version = "0.27.0", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.20.2", features = ["macros"] }
@@ -83,6 +85,8 @@ tracing_ = [
   "opentelemetry",
   "opentelemetry-otlp",
   "tonic",
+  "sentry",
+  "sentry-tracing",
 ]
 tokio-console = ["console-subscriber", "tokio", "tokio/tracing"]
 cli = ["clap"]
