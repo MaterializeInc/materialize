@@ -97,7 +97,11 @@ impl<S: Append + 'static> Coordinator<S> {
         if since.less_equal(&candidate) {
             Ok(candidate)
         } else {
-            coord_bail!(self.generate_error_msg(id_bundle, compute_instance, candidate));
+            coord_bail!(self.generate_timestamp_not_valid_error_msg(
+                id_bundle,
+                compute_instance,
+                candidate
+            ));
         }
     }
 
@@ -215,7 +219,7 @@ impl<S: Append + 'static> Coordinator<S> {
         })
     }
 
-    fn generate_error_msg(
+    fn generate_timestamp_not_valid_error_msg(
         &self,
         id_bundle: &CollectionIdBundle,
         compute_instance: ComputeInstanceId,
