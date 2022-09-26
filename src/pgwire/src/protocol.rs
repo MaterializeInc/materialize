@@ -17,7 +17,6 @@ use std::mem;
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
-use mz_repr::GlobalId;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
@@ -25,6 +24,7 @@ use tokio::select;
 use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
 
+use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
     TransactionStatus,
@@ -35,6 +35,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::GlobalId;
 use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
@@ -168,7 +169,7 @@ where
         }
     }
 
-    let is_expired = if let Some(frontegg) = frontegg {
+    let (external_id, is_expired) = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
@@ -186,9 +187,9 @@ where
         match frontegg
             .exchange_password_for_token(&password)
             .await
-            .and_then(|token| frontegg.check_expiry(token, user.clone()))
+            .and_then(|token| frontegg.continuously_validate_access_token(token, user.clone()))
         {
-            Ok(check) => check.left_future(),
+            Ok((claims, is_expired)) => (Some(claims.user_id), is_expired.left_future()),
             Err(e) => {
                 warn!("PGwire connection failed authentication: {}", e);
                 return conn
@@ -201,11 +202,17 @@ where
         }
     } else {
         // No frontegg check, so is_expired never resolves.
-        pending().right_future()
+        (None, pending().right_future())
     };
 
     // Construct session.
-    let mut session = Session::new(conn.id(), user);
+    let mut session = Session::new(
+        conn.id(),
+        User {
+            name: user,
+            external_id,
+        },
+    );
     for (name, value) in params {
         let local = false;
         let _ = session.vars_mut().set(&name, &value, local);

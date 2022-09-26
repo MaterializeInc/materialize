@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::OwnedMutexGuard;
+use uuid::Uuid;
 
 use mz_pgrepr::Format;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType};
@@ -43,6 +44,21 @@ pub(crate) mod vars;
 
 const DUMMY_CONNECTION_ID: ConnectionId = 0;
 
+/// Identifies a user.
+#[derive(Debug, Clone)]
+pub struct User {
+    /// The name of the user within the system.
+    pub name: String,
+    /// An identifier associated with the user external to the system.
+    pub external_id: Option<Uuid>,
+}
+
+impl PartialEq for User {
+    fn eq(&self, other: &User) -> bool {
+        self.name == other.name
+    }
+}
+
 /// A session holds per-connection state.
 #[derive(Debug)]
 pub struct Session<T = mz_repr::Timestamp> {
@@ -51,14 +67,14 @@ pub struct Session<T = mz_repr::Timestamp> {
     portals: HashMap<String, Portal>,
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
-    user: String,
+    user: User,
     vars: SessionVars,
     drop_sinks: Vec<ComputeSinkId>,
 }
 
 impl<T: CoordTimestamp> Session<T> {
     /// Creates a new session for the specified connection ID.
-    pub fn new(conn_id: ConnectionId, user: String) -> Session<T> {
+    pub fn new(conn_id: ConnectionId, user: User) -> Session<T> {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
         Self::new_internal(conn_id, user)
     }
@@ -68,10 +84,10 @@ impl<T: CoordTimestamp> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        Self::new_internal(DUMMY_CONNECTION_ID, SYSTEM_USER.into())
+        Self::new_internal(DUMMY_CONNECTION_ID, SYSTEM_USER.clone())
     }
 
-    fn new_internal(conn_id: ConnectionId, user: String) -> Session<T> {
+    fn new_internal(conn_id: ConnectionId, user: User) -> Session<T> {
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
@@ -450,8 +466,8 @@ impl<T: CoordTimestamp> Session<T> {
         drop_sinks
     }
 
-    /// Returns the name of the user who owns this session.
-    pub fn user(&self) -> &str {
+    /// Returns the user who owns this session.
+    pub fn user(&self) -> &User {
         &self.user
     }
 

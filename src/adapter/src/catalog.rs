@@ -82,7 +82,7 @@ pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::BootstrapArgs;
 use crate::client::ConnectionId;
 use crate::session::vars::SystemVars;
-use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
+use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::index_sql;
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
@@ -95,8 +95,17 @@ pub mod builtin;
 pub mod storage;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
-pub const SYSTEM_USER: &str = "mz_system";
-pub const HTTP_DEFAULT_USER: &str = "anonymous_http_user";
+
+pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
+    name: "mz_system".into(),
+    external_id: None,
+});
+
+pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
+    name: "anonymous_http_user".into(),
+    external_id: None,
+});
+
 const CREATE_SQL_TODO: &str = "TODO";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -423,7 +432,7 @@ impl CatalogState {
                 .ok()
                 .map(|db| db.id()),
             search_path: Vec::new(),
-            user: SYSTEM_USER.into(),
+            user: SYSTEM_USER.clone(),
             prepared_statements: None,
         };
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
@@ -1087,7 +1096,7 @@ pub struct ConnCatalog<'a> {
     compute_instance: String,
     database: Option<DatabaseId>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-    user: String,
+    user: User,
     prepared_statements: Option<Cow<'a, HashMap<String, PreparedStatement>>>,
 }
 
@@ -2615,12 +2624,12 @@ impl<S: Append> Catalog<S> {
             compute_instance: session.vars().cluster().into(),
             database,
             search_path,
-            user: session.user().into(),
+            user: session.user().clone(),
             prepared_statements: Some(Cow::Borrowed(session.prepared_statements())),
         }
     }
 
-    pub fn for_sessionless_user(&self, user: String) -> ConnCatalog {
+    pub fn for_sessionless_user(&self, user: User) -> ConnCatalog {
         ConnCatalog {
             state: Cow::Borrowed(&self.state),
             conn_id: SYSTEM_CONN_ID,
@@ -2638,7 +2647,7 @@ impl<S: Append> Catalog<S> {
     // Leaving the system's search path empty allows us to catch issues
     // where catalog object names have not been normalized correctly.
     pub fn for_system_session(&self) -> ConnCatalog {
-        self.for_sessionless_user(SYSTEM_USER.into())
+        self.for_sessionless_user(SYSTEM_USER.clone())
     }
 
     async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection<S>> {
@@ -3023,7 +3032,7 @@ impl<S: Append> Catalog<S> {
         object_type: ObjectType,
         event_details: EventDetails,
     ) -> Result<(), Error> {
-        let user = session.map(|session| session.user().to_string());
+        let user = session.map(|session| session.user().name.to_string());
         let occurred_at = (self.state.config.now)();
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(
@@ -4785,7 +4794,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
 
 impl SessionCatalog for ConnCatalog<'_> {
     fn active_user(&self) -> &str {
-        &self.user
+        &self.user.name
     }
 
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc> {

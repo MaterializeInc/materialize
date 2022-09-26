@@ -3333,11 +3333,12 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     fn is_user_allowed_to_alter_system(&self, session: &Session) -> Result<(), AdapterError> {
-        if session.user() == SYSTEM_USER {
+        if session.user() == &*SYSTEM_USER {
             Ok(())
         } else {
             Err(AdapterError::Unauthorized(format!(
-                "only user '{SYSTEM_USER}' is allowed to execute 'ALTER SYSTEM ...'"
+                "only user '{}' is allowed to execute 'ALTER SYSTEM ...'",
+                SYSTEM_USER.name,
             )))
         }
     }

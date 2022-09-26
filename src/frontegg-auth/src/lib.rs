@@ -188,19 +188,24 @@ impl FronteggAuthentication {
         Ok(msg.claims)
     }
 
-    /// Returns a future that resolves if the token has expired.
-    pub fn check_expiry(
+    /// Continuously validates and refreshes an access token.
+    ///
+    /// Validates the provided access token once, as `validate_access_token`
+    /// does. If is valid, returns the contained claims and a future that will
+    /// attempt to refresh the access token before it expires, resolving iff
+    /// the token expires or fails to refresh.
+    pub fn continuously_validate_access_token(
         &self,
         mut token: ApiTokenResponse,
         expected_email: String,
-    ) -> Result<impl Future<Output = ()>, FronteggError> {
+    ) -> Result<(Claims, impl Future<Output = ()>), FronteggError> {
         // Do an initial full validity check of the token.
         let mut claims = self.validate_access_token(&token.access_token, Some(&expected_email))?;
         let frontegg = self.clone();
 
         // This future resolves once the token expiry time has been reached. It will
         // repeatedly attempt to refresh the token before it expires.
-        Ok(async move {
+        Ok((claims.clone(), async move {
             let refresh_url = format!("{}{}", frontegg.admin_api_token_url, REFRESH_SUFFIX);
             loop {
                 let expire_in = claims.exp - frontegg.now.as_secs();
@@ -252,7 +257,7 @@ impl FronteggAuthentication {
                     },
                 };
             }
-        })
+        }))
     }
 }
 
@@ -285,6 +290,7 @@ pub struct ApiTokenResponse {
 pub struct Claims {
     pub exp: i64,
     pub email: String,
+    pub user_id: Uuid,
     pub tenant_id: Uuid,
     pub roles: Vec<String>,
     pub permissions: Vec<String>,
