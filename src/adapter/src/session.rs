@@ -49,8 +49,17 @@ const DUMMY_CONNECTION_ID: ConnectionId = 0;
 pub struct User {
     /// The name of the user within the system.
     pub name: String,
-    /// An identifier associated with the user external to the system.
-    pub external_id: Option<Uuid>,
+    /// Metadata about this user in an external system.
+    pub external_metadata: Option<ExternalUserMetadata>,
+}
+
+/// Metadata about a [`User`] in an external system.
+#[derive(Debug, Clone)]
+pub struct ExternalUserMetadata {
+    /// The ID of the user in the external system.
+    pub user_id: Uuid,
+    /// The ID of the user's active group in the external system.
+    pub group_id: Uuid,
 }
 
 impl PartialEq for User {

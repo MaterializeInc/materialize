@@ -290,10 +290,18 @@ pub struct ApiTokenResponse {
 pub struct Claims {
     pub exp: i64,
     pub email: String,
-    pub user_id: Uuid,
+    pub sub: Uuid,
+    pub user_id: Option<Uuid>,
     pub tenant_id: Uuid,
     pub roles: Vec<String>,
     pub permissions: Vec<String>,
+}
+
+impl Claims {
+    /// Extracts the most specific user ID present in the token.
+    pub fn best_user_id(&self) -> Uuid {
+        self.user_id.unwrap_or(self.sub)
+    }
 }
 
 #[derive(Error, Debug)]

@@ -439,7 +439,8 @@ fn start_mzcloud(
             &Claims {
                 exp: context.now.as_secs() + context.expires_in_secs,
                 email,
-                user_id: Uuid::new_v4(),
+                sub: Uuid::new_v4(),
+                user_id: None,
                 tenant_id: context.tenant_id,
                 roles: Vec::new(),
                 permissions: Vec::new(),
@@ -636,7 +637,8 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     let claims = Claims {
         exp: 1000,
         email: "user@_.com".to_string(),
-        user_id: Uuid::new_v4(),
+        sub: Uuid::new_v4(),
+        user_id: None,
         tenant_id,
         roles: Vec::new(),
         permissions: Vec::new(),

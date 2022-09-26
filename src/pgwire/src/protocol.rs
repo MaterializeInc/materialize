@@ -26,8 +26,8 @@ use tracing::{debug, warn, Instrument};
 
 use mz_adapter::session::User;
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
-    TransactionStatus,
+    EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
+    RowBatchStream, Session, TransactionStatus,
 };
 use mz_adapter::{ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::FronteggAuthentication;
@@ -169,7 +169,7 @@ where
         }
     }
 
-    let (external_id, is_expired) = if let Some(frontegg) = frontegg {
+    let (external_metadata, is_expired) = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
@@ -189,7 +189,13 @@ where
             .await
             .and_then(|token| frontegg.continuously_validate_access_token(token, user.clone()))
         {
-            Ok((claims, is_expired)) => (Some(claims.user_id), is_expired.left_future()),
+            Ok((claims, is_expired)) => {
+                let external_metadata = Some(ExternalUserMetadata {
+                    user_id: claims.best_user_id(),
+                    group_id: claims.tenant_id,
+                });
+                (external_metadata, is_expired.left_future())
+            }
             Err(e) => {
                 warn!("PGwire connection failed authentication: {}", e);
                 return conn
@@ -210,7 +216,7 @@ where
         conn.id(),
         User {
             name: user,
-            external_id,
+            external_metadata,
         },
     );
     for (name, value) in params {

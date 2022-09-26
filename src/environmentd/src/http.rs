@@ -50,7 +50,9 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_adapter::catalog::HTTP_DEFAULT_USER;
-use mz_adapter::session::{EndTransactionAction, Session, TransactionStatus, User};
+use mz_adapter::session::{
+    EndTransactionAction, ExternalUserMetadata, Session, TransactionStatus, User,
+};
 use mz_adapter::{
     ExecuteResponse, ExecuteResponseKind, ExecuteResponsePartialError, PeekResponseUnary,
     SessionClient,
@@ -658,7 +660,7 @@ async fn auth<B>(
         // present, otherwise the default HTTP user.
         None => User {
             name: user.unwrap_or_else(|| HTTP_DEFAULT_USER.name.to_string()),
-            external_id: None,
+            external_metadata: None,
         },
         // If we require Frontegg auth, fetch credentials from the HTTP auth
         // header. Basic auth comes with a username/password, where the password
@@ -686,8 +688,11 @@ async fn auth<B>(
             };
             let claims = frontegg.validate_access_token(&token, user.as_deref())?;
             User {
+                external_metadata: Some(ExternalUserMetadata {
+                    user_id: claims.best_user_id(),
+                    group_id: claims.tenant_id,
+                }),
                 name: claims.email,
-                external_id: Some(claims.user_id),
             }
         }
     };
