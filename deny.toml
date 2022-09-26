@@ -153,9 +153,6 @@ allow-git = [
     # release.
     "https://github.com/MaterializeInc/pprof-rs.git",
 
-    # Waiting on https://github.com/meilisearch/segment/pull/9.
-    "https://github.com/MaterializeInc/segment.git",
-
     # Waiting on https://github.com/AltSysrq/proptest/pull/264.
     "https://github.com/MaterializeInc/proptest.git",
 
