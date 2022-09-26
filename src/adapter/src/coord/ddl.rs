@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use itertools::Itertools;
+use serde_json::json;
 use timely::progress::Antichain;
 use tracing::Level;
 use tracing::{event, warn};
@@ -252,9 +253,9 @@ impl<S: Append + 'static> Coordinator<S> {
             .send(collections)
             .expect("sending on consolidations_tx must succeed");
 
-        if let (Some(segment_client), Some(user_id)) = (
+        if let (Some(segment_client), Some(user_metadata)) = (
             &self.segment_client,
-            session.and_then(|s| s.user().external_id),
+            session.and_then(|s| s.user().external_metadata.as_ref()),
         ) {
             for VersionedEvent::V1(event) in audit_events {
                 let event_type = format!(
@@ -262,7 +263,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     event.object_type.as_title_case(),
                     event.event_type.as_title_case()
                 );
-                segment_client.track(user_id, event_type, event.event_details.as_json());
+                segment_client.track(
+                    user_metadata.user_id,
+                    event_type,
+                    json!({
+                        "event_source": "environmentd",
+                        "organization_id": user_metadata.group_id,
+                        "details": event.event_details.as_json(),
+                    }),
+                );
             }
         }
 

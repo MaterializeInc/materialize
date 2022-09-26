@@ -98,12 +98,12 @@ pub const SYSTEM_CONN_ID: ConnectionId = 0;
 
 pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
     name: "mz_system".into(),
-    external_id: None,
+    external_metadata: None,
 });
 
 pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
     name: "anonymous_http_user".into(),
-    external_id: None,
+    external_metadata: None,
 });
 
 const CREATE_SQL_TODO: &str = "TODO";
