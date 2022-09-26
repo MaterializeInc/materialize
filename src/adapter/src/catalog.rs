@@ -542,7 +542,6 @@ impl CatalogState {
         );
 
         self.entry_by_id.insert(entry.id, entry.clone());
-
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
