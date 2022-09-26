@@ -541,7 +541,7 @@ impl CatalogState {
             entry.name.item.clone()
         );
 
-        self.entry_by_id.insert(entry.id, entry);
+        self.entry_by_id.insert(entry.id, entry.clone());
 
     }
 
