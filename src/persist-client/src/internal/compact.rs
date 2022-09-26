@@ -452,8 +452,6 @@ where
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
     ) -> Result<(Vec<HollowBatchPart>, Vec<usize>, usize), anyhow::Error> {
-        let compaction_start = Instant::now();
-
         let mut compaction_runs = vec![];
         let mut compaction_parts_count = 0;
         let mut total_updates = 0;
@@ -589,7 +587,6 @@ where
         timings.part_writing += start.elapsed();
         assert_eq!(compaction_parts.len(), compaction_parts_count);
 
-        timings.total = compaction_start.elapsed();
         timings.record(&metrics);
 
         Ok((compaction_parts, compaction_runs, total_updates))
@@ -695,7 +692,6 @@ struct Timings {
     consolidation: Duration,
     part_columnar_encoding: Duration,
     part_writing: Duration,
-    total: Duration,
 }
 
 impl Timings {
@@ -707,7 +703,6 @@ impl Timings {
             consolidation,
             part_columnar_encoding,
             part_writing,
-            total,
         } = self;
 
         metrics
@@ -735,11 +730,6 @@ impl Timings {
             .steps
             .part_write_seconds
             .inc_by(part_writing.as_secs_f64());
-        metrics
-            .compaction
-            .steps
-            .total_seconds
-            .inc_by(total.as_secs_f64());
     }
 }
 

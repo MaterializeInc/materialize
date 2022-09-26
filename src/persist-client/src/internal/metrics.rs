@@ -672,7 +672,6 @@ pub struct CompactionStepTimings {
     pub(crate) consolidation_seconds: Counter,
     pub(crate) part_columnar_encoding_seconds: Counter,
     pub(crate) part_write_seconds: Counter,
-    pub(crate) total_seconds: Counter,
 }
 
 impl CompactionStepTimings {
@@ -684,7 +683,6 @@ impl CompactionStepTimings {
             part_columnar_encoding_seconds: step_timings
                 .with_label_values(&["part_columnar_encoding"]),
             part_write_seconds: step_timings.with_label_values(&["part_write_seconds"]),
-            total_seconds: step_timings.with_label_values(&["total"]),
         }
     }
 }
