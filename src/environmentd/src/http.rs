@@ -734,14 +734,21 @@ impl InternalServer {
             .route(
                 "/api/opentelemetry/config",
                 routing::put(move |payload| async move {
-                    mz_http_util::handle_modify_filter_target(self.tracing_target_callbacks.tracing, payload).await
+                    mz_http_util::handle_modify_filter_target(
+                        self.tracing_target_callbacks.tracing,
+                        payload,
+                    )
+                    .await
                 }),
             )
             .route(
                 "/api/stderr/config",
                 routing::put(move |payload| async move {
-                    mz_http_util::handle_modify_filter_target(self.tracing_target_callbacks.stderr, payload)
-                        .await
+                    mz_http_util::handle_modify_filter_target(
+                        self.tracing_target_callbacks.stderr,
+                        payload,
+                    )
+                    .await
                 }),
             );
         axum::Server::bind(&addr).serve(router.into_make_service())

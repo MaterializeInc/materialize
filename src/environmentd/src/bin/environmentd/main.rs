@@ -574,10 +574,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         &metrics_registry,
     );
     let persist_clients = Arc::new(Mutex::new(persist_clients));
-    let orchestrator = Arc::new(TracingOrchestrator::new(
-        orchestrator,
-        args.tracing.clone(),
-    ));
+    let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,

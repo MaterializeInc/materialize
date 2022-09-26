@@ -208,10 +208,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Listen on the internal HTTP API port.
     let internal_http_local_addr = {
         let metrics_registry = config.metrics_registry.clone();
-        let server = http::InternalServer::new(
-            metrics_registry,
-            config.tracing_target_callbacks,
-        );
+        let server = http::InternalServer::new(metrics_registry, config.tracing_target_callbacks);
         let bound_server = server.bind(config.internal_http_listen_addr);
         let internal_http_local_addr = bound_server.local_addr();
         task::spawn(|| "internal_http_server", {
