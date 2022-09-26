@@ -114,7 +114,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 ! CREATE SOURCE invalid_with_option
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   LEGACYWITH (badoption = true)
-  FORMAT AVRO USING SCHEMA '${schema}'
+  KEY FORMAT AVRO USING SCHEMA '${schema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 contains:unexpected parameters for CREATE SOURCE: badoption
 
