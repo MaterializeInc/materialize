@@ -153,23 +153,24 @@ def run(
         db = sql.Database(port=db_port, host=db_host, user=db_user)
         db.set_database(scenario)
 
-        df = pd.DataFrame(
-            data={
-                query.name(): np.array(
-                    [
-                        cast(
-                            np.timedelta64,
-                            db.explain(query, timing=True).optimization_time(),
-                        ).astype(int)
-                        for _ in range(samples)
-                    ]
+        df = pd.DataFrame.from_records(
+            [
+                (
+                    query.name(),
+                    sample,
+                    cast(
+                        np.timedelta64,
+                        db.explain(query, timing=True).optimization_time(),
+                    ).astype(int),
                 )
+                for sample in range(samples)
                 for query in [
                     sql.Query(query)
                     for query in sql.parse_from_file(scenario.workload_path())
                 ]
-            }
-        )
+            ],
+            columns=["query", "sample", "data"],
+        ).pivot(index="sample", columns="query", values="data")
 
         if print_results:
             print(df.to_string())
