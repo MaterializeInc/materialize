@@ -36,7 +36,7 @@ SELECT (SELECT COUNT(*) FROM mz_catalog.mz_views WHERE name NOT LIKE '%_1') - (S
 # The default cluster also has log sources, thus we should have one set active at boot.
 # Check the presence of one source and one view
 query T rowsort
-select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 1
 
@@ -49,7 +49,7 @@ statement ok
 CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '2'));
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 3
 
@@ -62,7 +62,7 @@ statement ok
 DROP CLUSTER REPLICA c1.r1;
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 2
 
@@ -75,7 +75,7 @@ statement ok
 DROP CLUSTER c1;
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 1
 
@@ -93,7 +93,7 @@ CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
 
 # We have to guess the identifier 4 here, it should match c1.r1 at this point
 statement ok
-CREATE VIEW v1 AS SELECT * FROM mz_internal.mz_peek_active_4;
+CREATE VIEW v1 AS SELECT * FROM mz_internal.mz_active_peeks_4;
 
 statement ok
 CREATE VIEW w1 AS SELECT * FROM mz_internal.mz_compute_frontiers_4;
@@ -105,7 +105,7 @@ statement ok
 CREATE VIEW w11 AS SELECT * FROM w1;
 
 statement ok
-CREATE VIEW v2 AS SELECT * FROM mz_internal.mz_peek_active_5;
+CREATE VIEW v2 AS SELECT * FROM mz_internal.mz_active_peeks_5;
 
 statement ok
 CREATE VIEW w2 AS SELECT * FROM mz_internal.mz_compute_frontiers_5;
@@ -152,7 +152,7 @@ query error unknown catalog item 'w21'
 SELECT * FROM w21;
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
+select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_active_peeks_%';
 ----
 1
 

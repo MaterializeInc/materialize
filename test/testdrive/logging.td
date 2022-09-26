@@ -56,7 +56,7 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM count_dependencies;
 1
 
-> CREATE VIEW count_peeks AS SELECT count(*) FROM mz_internal.mz_peek_active;
+> CREATE VIEW count_peeks AS SELECT count(*) FROM mz_internal.mz_active_peeks;
 > SELECT count(*) FROM count_peeks;
 1
 

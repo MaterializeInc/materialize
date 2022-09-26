@@ -523,8 +523,8 @@ mz_message_counts_received_internal             log
 mz_message_counts_received_internal_1           log
 mz_message_counts_sent_internal                 log
 mz_message_counts_sent_internal_1               log
-mz_peek_active                                  log
-mz_peek_active_1                                log
+mz_active_peeks                                 log
+mz_active_peeks_1                               log
 mz_peek_durations                               log
 mz_peek_durations_1                             log
 mz_scheduling_elapsed_internal                  log

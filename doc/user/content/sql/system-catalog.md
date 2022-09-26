@@ -499,9 +499,9 @@ Field             | Type       | Meaning
 `sent`            | [`bigint`] | The number of messages sent.
 `received`        | [`bigint`] | The number of messages received.
 
-### `mz_peek_active`
+### `mz_active_peeks`
 
-The `mz_peek_active` source describes all read queries ("peeks") that are
+The `mz_active_peeks` source describes all read queries ("peeks") that are
 pending in the dataflow layer.
 
 Field      | Type       | Meaning
