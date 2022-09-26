@@ -1047,6 +1047,7 @@ URL '${{testdrive.schema-registry-url}}';
   INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 
@@ -1306,6 +1307,7 @@ URL '${{testdrive.schema-registry-url}}';
   INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
+  ENVELOPE DEBEZIUM
 """
             for i in range(0, self.n())
         )

@@ -19,3 +19,4 @@
 > CREATE SINK upgrade_kafka_sink FROM static_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'upgrade-kafka-sink')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM

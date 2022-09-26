@@ -468,7 +468,8 @@ class KafkaSinks(Generator):
                      > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
                      > CREATE SINK s{i} FROM v{i}
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-{i}')
-                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                       ENVELOPE DEBEZIUM;
                      """
                 )
             )
@@ -513,6 +514,7 @@ class KafkaSinksSameSource(Generator):
                      > CREATE SINK s{i} FROM v1
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+                       ENVELOPE DEBEZIUM
                      """
                 )
             )

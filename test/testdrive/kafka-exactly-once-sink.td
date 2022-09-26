@@ -203,52 +203,64 @@ New York,NY,10004
 > CREATE SINK output1 FROM input_kafka_cdcv2
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output1-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK output2 FROM input_kafka_dbz
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output2-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK output3 FROM input_table
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output3-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK output4 FROM input_kafka_cdcv2_mview
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output4-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK output4_view FROM input_kafka_cdcv2_mview_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output4b-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 ! CREATE SINK output5 FROM input_kafka_dbz_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output5-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 contains:input_kafka_dbz_view is a view, which cannot be exported as a sink
 
 > CREATE SINK output5_view FROM input_kafka_dbz_view_mview
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output5b-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK output6 FROM input_table_mview
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output6-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 ! CREATE SINK output7 FROM input_values_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output7-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 contains:input_values_view is a view, which cannot be exported as a sink
 
 > CREATE SINK output8 FROM input_values_mview
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output8-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK output12 FROM input_kafka_dbz_derived_table
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output12-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK output13 FROM input_csv
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output13-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 # We need some data -- any data -- to start creating timestamp bindings
 $ kafka-ingest format=avro topic=input_cdcv2 schema=${cdcv2-schema}
