@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test that non-views can be used in TAIL.
+# Test that non-views can be used in SUBSCRIBE.
 
 $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
@@ -17,14 +17,14 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL (SELECT * FROM t1)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t1)
 
 > FETCH ALL c
 <TIMESTAMP> 1 123
 
 > COMMIT
 
-> TAIL (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
+> SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
 <TIMESTAMP> 1 1 a
 <TIMESTAMP> 1 2 a
 
@@ -34,18 +34,18 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL (SELECT * FROM v1, v2)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM v1, v2)
 
 > FETCH ALL c
 <TIMESTAMP> 1 1 3
 
 > COMMIT
 
-# Verify TAIL behavior when the query includes an ORDER BY and a LIMIT.
+# Verify SUBSCRIBE behavior when the query includes an ORDER BY and a LIMIT.
 
-# Check that the initial output of the TAIL is correct.
+# Check that the initial output of the SUBSCRIBE is correct.
 > BEGIN
-> DECLARE c CURSOR FOR TAIL (SELECT * FROM t1 ORDER BY 1 DESC LIMIT 1)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t1 ORDER BY 1 DESC LIMIT 1)
 > FETCH ALL c
 <TIMESTAMP> 1 123
 
@@ -54,14 +54,14 @@ $ postgres-connect name=alt url=postgres://materialize:materialize@${testdrive.m
 $ postgres-execute connection=alt
 INSERT INTO t1 VALUES (100)
 
-# Verify that the TAIL does not emit any updates.
+# Verify that the SUBSCRIBE does not emit any updates.
 > FETCH ALL c WITH (timeout = '100ms')
 
 # Insert a value from another connection that *is* a new maximum.
 $ postgres-execute connection=alt
 INSERT INTO t1 VALUES (124)
 
-# Verify that the TAIL emits the new maximum.
+# Verify that the SUBSCRIBE emits the new maximum.
 > FETCH ALL c
 <TIMESTAMP> -1 123
 <TIMESTAMP> 1 124

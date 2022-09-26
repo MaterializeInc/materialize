@@ -158,7 +158,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // Ensure that the dataflow's `as_of` is at least `since`.
         if let Some(as_of) = &mut dataflow.as_of {
             // It should not be possible to request an invalid time. SINK doesn't support
-            // AS OF. TAIL and Peek check that their AS OF is >= since.
+            // AS OF. Subscribe and Peek check that their AS OF is >= since.
             assert!(
                 PartialOrder::less_equal(&since, as_of),
                 "Dataflow {} requested as_of ({:?}) not >= since ({:?})",

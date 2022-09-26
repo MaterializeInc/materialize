@@ -124,7 +124,7 @@ use crate::coord::timeline::{TimelineState, WriteTimestamp};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::sink_connection;
-use crate::tail::PendingTail;
+use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter};
 
 pub(crate) mod id_bundle;
@@ -328,8 +328,8 @@ pub struct Coordinator<S> {
     /// A map from client connection ids to a set of all pending peeks for that client
     client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ComputeInstanceId>>,
 
-    /// A map from pending tails to the tail description.
-    pending_tails: HashMap<GlobalId, PendingTail>,
+    /// A map from pending subscribes to the subscribe description.
+    pending_subscribes: HashMap<GlobalId, PendingSubscribe>,
 
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -912,7 +912,7 @@ pub async fn serve<S: Append + 'static>(
                 txn_reads: Default::default(),
                 pending_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),
-                pending_tails: HashMap::new(),
+                pending_subscribes: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),

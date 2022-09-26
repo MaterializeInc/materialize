@@ -170,14 +170,14 @@ impl<S: Append + 'static> Coordinator<S> {
             ControllerResponse::PeekResponse(uuid, response, otel_ctx) => {
                 self.send_peek_response(uuid, response, otel_ctx);
             }
-            ControllerResponse::TailResponse(sink_id, response) => {
+            ControllerResponse::SubscribeResponse(sink_id, response) => {
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
-                if let Some(pending_tail) = self.pending_tails.get_mut(&sink_id) {
-                    let remove = pending_tail.process_response(response);
+                if let Some(pending_subscribes) = self.pending_subscribes.get_mut(&sink_id) {
+                    let remove = pending_subscribes.process_response(response);
                     if remove {
-                        self.pending_tails.remove(&sink_id);
+                        self.pending_subscribes.remove(&sink_id);
                     }
                 }
             }

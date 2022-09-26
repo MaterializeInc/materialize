@@ -36,9 +36,9 @@ main();
 
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, you can use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, you can use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```js
 const { Client } = require('pg');
@@ -55,7 +55,7 @@ async function main() {
   await client.connect();
 
   await client.query('BEGIN');
-  await client.query('DECLARE c CURSOR FOR TAIL my_view');
+  await client.query('DECLARE c CURSOR FOR SUBSCRIBE my_view');
 
   while (true) {
     const res = await client.query('FETCH ALL c');
@@ -66,7 +66,7 @@ async function main() {
 main();
 ```
 
-The [`TAIL` output format](/sql/tail/#output) of `res.rows` is an array of view update objects. When a row of a tailed view is **updated,** two objects will show up in the `rows` array:
+The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `res.rows` is an array of view update objects. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
 ```js
 [
@@ -102,7 +102,7 @@ client.connect((err, client) => {
   if (err) {
     throw err;
   }
-  const stream = client.query(new QueryStream('TAIL avg_bid', []));
+  const stream = client.query(new QueryStream('SUBSCRIBE avg_bid', []));
   stream.pipe(process.stdout);
 });
 ```

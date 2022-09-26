@@ -313,6 +313,7 @@ Stdin
 Stdout
 Strategy
 String
+Subscribe
 Substring
 Superuser
 System

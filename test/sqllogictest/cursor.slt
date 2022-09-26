@@ -42,7 +42,7 @@ CREATE VIEW v AS VALUES ('a', 'b'), ('c', 'd'), ('e', 'f'), ('g', 'h')
 ----
 
 query IITT
-TAIL v
+SUBSCRIBE v
 ----
 18446744073709551615  1  a  b
 18446744073709551615  1  c  d
@@ -53,7 +53,7 @@ statement ok
 BEGIN
 
 statement ok
-DECLARE c CURSOR FOR TAIL v
+DECLARE c CURSOR FOR SUBSCRIBE v
 
 query IITT
 FETCH c
@@ -87,7 +87,7 @@ statement ok
 BEGIN
 
 statement ok
-DECLARE c CURSOR FOR TAIL v
+DECLARE c CURSOR FOR SUBSCRIBE v
 
 statement error timeout out of range
 FETCH c WITH (TIMEOUT = '25h')

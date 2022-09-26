@@ -90,4 +90,4 @@ query error can't use null as a mztimestamp for AS OF
 SELECT * FROM data AS OF NULL::numeric;
 
 query error can't use null as a mztimestamp for AS OF
-TAIL (SELECT 1) AS OF NULL::timestamptz;
+SUBSCRIBE (SELECT 1) AS OF NULL::timestamptz;

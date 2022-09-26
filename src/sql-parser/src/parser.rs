@@ -254,6 +254,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(COMMIT) => Ok(self.parse_commit()?),
                 Token::Keyword(ROLLBACK) => Ok(self.parse_rollback()?),
                 Token::Keyword(TAIL) => Ok(self.parse_tail()?),
+                Token::Keyword(SUBSCRIBE) => Ok(self.parse_subscribe()?),
                 Token::Keyword(EXPLAIN) => Ok(self.parse_explain()?),
                 Token::Keyword(DECLARE) => Ok(self.parse_declare()?),
                 Token::Keyword(FETCH) => Ok(self.parse_fetch()?),
@@ -3623,7 +3624,7 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RParen)?;
             match query {
                 Statement::Select(stmt) => CopyRelation::Select(stmt),
-                Statement::Tail(stmt) => CopyRelation::Tail(stmt),
+                Statement::Subscribe(stmt) => CopyRelation::Subscribe(stmt),
                 _ => return parser_err!(self, self.peek_prev_pos(), "unsupported query in COPY"),
             }
         } else {
@@ -5223,32 +5224,41 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_tail(&mut self) -> Result<Statement<Raw>, ParserError> {
+        parser_err!(
+            self,
+            self.peek_prev_pos(),
+            "TAIL has been renamed to SUBSCRIBE"
+        )
+    }
+
+    fn parse_subscribe(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let _ = self.parse_keyword(TO);
         let relation = if self.consume_token(&Token::LParen) {
             let query = self.parse_query()?;
             self.expect_token(&Token::RParen)?;
-            TailRelation::Query(query)
+            SubscribeRelation::Query(query)
         } else {
-            TailRelation::Name(self.parse_raw_name()?)
+            SubscribeRelation::Name(self.parse_raw_name()?)
         };
-        let options = self.parse_kw_options(Parser::parse_tail_option)?;
+        let options = self.parse_kw_options(Parser::parse_subscribe_option)?;
         let as_of = self.parse_optional_as_of()?;
-        Ok(Statement::Tail(TailStatement {
+        Ok(Statement::Subscribe(SubscribeStatement {
             relation,
             options,
             as_of,
         }))
     }
 
-    fn parse_tail_option(&mut self) -> Result<TailOption<Raw>, ParserError> {
+    fn parse_subscribe_option(&mut self) -> Result<SubscribeOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[PROGRESS, SNAPSHOT])? {
-            PROGRESS => TailOptionName::Progress,
-            SNAPSHOT => TailOptionName::Snapshot,
+            PROGRESS => SubscribeOptionName::Progress,
+            SNAPSHOT => SubscribeOptionName::Snapshot,
             _ => unreachable!(),
         };
 
         let _ = self.consume_token(&Token::Eq);
 
-        Ok(TailOption {
+        Ok(SubscribeOption {
             name,
             value: self.parse_opt_with_option_value(false)?,
         })

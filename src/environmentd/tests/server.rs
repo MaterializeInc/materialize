@@ -316,9 +316,9 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             body: r#"{"results":[{"error":"request supplied 0 parameters, but SELECT $1 requires 1"}]}"#,
         },
         TestCaseSimple {
-            query: "tail (select * from t)",
+            query: "subscribe (select * from t)",
             status: StatusCode::BAD_REQUEST,
-            body: r#"unsupported via this API: TAIL (SELECT * FROM t)"#,
+            body: r#"unsupported via this API: SUBSCRIBE (SELECT * FROM t)"#,
         },
     ];
 
@@ -522,9 +522,9 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
             body: r#"{"results":[{"rows":[[1],[2],[3]],"col_names":["a"]}]}"#,
         },
         TestCaseExtended {
-            requests: vec![("tail (select * from t)", vec![])],
+            requests: vec![("subscribe (select * from t)", vec![])],
             status: StatusCode::BAD_REQUEST,
-            body: r#"unsupported via this API: TAIL (SELECT * FROM t)"#,
+            body: r#"unsupported via this API: SUBSCRIBE (SELECT * FROM t)"#,
         },
     ];
 

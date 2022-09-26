@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Make sure that data that was ingested during the lifetime of a TAIL cursor can be FETCH-ed
+# Make sure that data that was ingested during the lifetime of a SUBSCRIBE cursor can be FETCH-ed
 #
 
 $set-regex match=\d{13} replacement=<TIMESTAMP>
@@ -28,7 +28,7 @@ $ kafka-create-topic topic=tail-fetch-during-ingest
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL fetch_during_ingest;
+> DECLARE c CURSOR FOR SUBSCRIBE fetch_during_ingest;
 
 $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestamp=1
 {"f1": 123}

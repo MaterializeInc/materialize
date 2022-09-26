@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Make sure that TAIL/FETCH can handle a case where the diff column has a very large value
+# Make sure that SUBSCRIBE/FETCH can handle a case where the diff column has a very large value
 #
 
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
@@ -29,7 +29,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL v1;
+> DECLARE c CURSOR FOR SUBSCRIBE v1;
 
 > FETCH 1 c;
 <TIMESTAMP> 10000000 <null>
@@ -40,7 +40,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL v2;
+> DECLARE c CURSOR FOR SUBSCRIBE v2;
 
 > FETCH 10 c;
 <TIMESTAMP> 1000000 1

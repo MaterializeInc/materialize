@@ -46,7 +46,7 @@ use mz_storage::controller::CollectionMetadata;
 
 use crate::command::{CommunicationConfig, ComputeCommand, ComputeCommandHistory, Peek, ReplicaId};
 use crate::logging::LogVariant;
-use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
+use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 /// Configuration for `replica_task`.
@@ -154,7 +154,7 @@ struct PendingPeek {
 struct ActiveReplicationState<T> {
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashMap<uuid::Uuid, PendingPeek>,
-    /// Reported frontier of each in-progress tail.
+    /// Reported frontier of each in-progress subscribe.
     tails: HashMap<GlobalId, Antichain<T>>,
     /// Frontier information, unioned across all replicas.
     uppers: HashMap<GlobalId, Antichain<T>>,
@@ -273,9 +273,9 @@ where
                     None
                 }
             }
-            ComputeResponse::TailResponse(id, response) => {
+            ComputeResponse::SubscribeResponse(id, response) => {
                 match response {
-                    TailResponse::Batch(TailBatch {
+                    SubscribeResponse::Batch(SubscribeBatch {
                         lower: _,
                         upper,
                         mut updates,
@@ -299,9 +299,9 @@ where
                             entry.clone_from(&new_upper);
                             updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
                             Some(ActiveReplicationResponse::ComputeResponse(
-                                ComputeResponse::TailResponse(
+                                ComputeResponse::SubscribeResponse(
                                     id,
-                                    TailResponse::Batch(TailBatch {
+                                    SubscribeResponse::Batch(SubscribeBatch {
                                         lower: new_lower,
                                         upper: new_upper,
                                         updates,
@@ -312,14 +312,17 @@ where
                             None
                         }
                     }
-                    TailResponse::DroppedAt(frontier) => {
+                    SubscribeResponse::DroppedAt(frontier) => {
                         // Introduce a new terminal frontier to suppress all future responses.
                         // We cannot simply remove the entry, as we currently create new entries in response
                         // to observed responses; if we pre-load the entries in response to commands we can
                         // clean up the state here.
                         self.tails.insert(id, Antichain::new());
                         Some(ActiveReplicationResponse::ComputeResponse(
-                            ComputeResponse::TailResponse(id, TailResponse::DroppedAt(frontier)),
+                            ComputeResponse::SubscribeResponse(
+                                id,
+                                SubscribeResponse::DroppedAt(frontier),
+                            ),
                         ))
                     }
                 }

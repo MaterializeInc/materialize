@@ -27,9 +27,9 @@ conn = psycopg2.connect(dsn)
 
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a Python application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Python application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```python
 #!/usr/bin/env python3
@@ -41,14 +41,14 @@ dsn = "postgresql://MATERIALIZE_USERNAME:MATERIALIZE_PASSWORD@MATERIALIZE_HOST:6
 conn = psycopg2.connect(dsn)
 
 with conn.cursor() as cur:
-    cur.execute("DECLARE c CURSOR FOR TAIL my_view")
+    cur.execute("DECLARE c CURSOR FOR SUBSCRIBE my_view")
     while True:
         cur.execute("FETCH ALL c")
         for row in cur:
             print(row)
 ```
 
-The [TAIL output format](/sql/tail/#output) of `cur` is a data access object that can be used to iterate over the set of rows. When a row of a tailed view is **updated,** two objects will show up in the `rows` array:
+The [SUBSCRIBE output format](/sql/subscribe/#output) of `cur` is a data access object that can be used to iterate over the set of rows. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
 ```python
     ...
@@ -69,7 +69,7 @@ A `mz_diff` value of `-1` indicates Materialize is deleting one row with the inc
 {{< /warning >}}
 
 Although `psycopg3` can function identically as the `psycopg2` example above,
-it provides has a `stream` feature where rows are not buffered, which allows you to use `TAIL` directly:
+it provides has a `stream` feature where rows are not buffered, which allows you to use `SUBSCRIBE` directly:
 
 ```python
 #!/usr/bin/env python3
@@ -82,7 +82,7 @@ conn = psycopg3.connect(dsn)
 
 conn = psycopg3.connect(dsn)
 with conn.cursor() as cur:
-    for row in cur.stream("TAIL t"):
+    for row in cur.stream("SUBSCRIBE t"):
         print(row)
 ```
 

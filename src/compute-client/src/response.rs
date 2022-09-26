@@ -39,8 +39,8 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
     /// The worker's response to a specified (by connection id) peek.
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// The worker's next response to a specified tail.
-    TailResponse(GlobalId, TailResponse<T>),
+    /// The worker's next response to a specified subscribe.
+    SubscribeResponse(GlobalId, SubscribeResponse<T>),
 }
 
 impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
@@ -57,10 +57,12 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                         otel_ctx: otel_ctx.clone().into(),
                     })
                 }
-                ComputeResponse::TailResponse(id, resp) => TailResponse(ProtoTailResponseKind {
-                    id: Some(id.into_proto()),
-                    resp: Some(resp.into_proto()),
-                }),
+                ComputeResponse::SubscribeResponse(id, resp) => {
+                    SubscribeResponse(ProtoSubscribeResponseKind {
+                        id: Some(id.into_proto()),
+                        resp: Some(resp.into_proto()),
+                    })
+                }
             }),
         }
     }
@@ -76,9 +78,11 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                 resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
                 resp.otel_ctx.into(),
             )),
-            Some(TailResponse(resp)) => Ok(ComputeResponse::TailResponse(
-                resp.id.into_rust_if_some("ProtoTailResponseKind::id")?,
-                resp.resp.into_rust_if_some("ProtoTailResponseKind::resp")?,
+            Some(SubscribeResponse(resp)) => Ok(ComputeResponse::SubscribeResponse(
+                resp.id
+                    .into_rust_if_some("ProtoSubscribeResponseKind::id")?,
+                resp.resp
+                    .into_rust_if_some("ProtoSubscribeResponseKind::resp")?,
             )),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeResponse::kind",
@@ -98,8 +102,8 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
             (any_uuid(), any::<PeekResponse>()).prop_map(|(id, resp)| {
                 ComputeResponse::PeekResponse(id, resp, OpenTelemetryContext::empty())
             }),
-            (any::<GlobalId>(), any::<TailResponse>())
-                .prop_map(|(id, resp)| ComputeResponse::TailResponse(id, resp)),
+            (any::<GlobalId>(), any::<SubscribeResponse>())
+                .prop_map(|(id, resp)| ComputeResponse::SubscribeResponse(id, resp)),
         ]
         .boxed()
     }
@@ -190,45 +194,49 @@ impl Arbitrary for PeekResponse {
     }
 }
 
-/// Various responses that can be communicated about the progress of a TAIL command.
+/// Various responses that can be communicated about the progress of a SUBSCRIBE command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub enum TailResponse<T = mz_repr::Timestamp> {
+pub enum SubscribeResponse<T = mz_repr::Timestamp> {
     /// A batch of updates over a non-empty interval of time.
-    Batch(TailBatch<T>),
-    /// The TAIL dataflow was dropped, leaving updates from this frontier onward unspecified.
+    Batch(SubscribeBatch<T>),
+    /// The SUBSCRIBE dataflow was dropped, leaving updates from this frontier onward unspecified.
     DroppedAt(Antichain<T>),
 }
 
-impl RustType<ProtoTailResponse> for TailResponse<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoTailResponse {
-        use proto_tail_response::Kind::*;
-        ProtoTailResponse {
+impl RustType<ProtoSubscribeResponse> for SubscribeResponse<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoSubscribeResponse {
+        use proto_subscribe_response::Kind::*;
+        ProtoSubscribeResponse {
             kind: Some(match self {
-                TailResponse::Batch(tail_batch) => Batch(tail_batch.into_proto()),
-                TailResponse::DroppedAt(antichain) => DroppedAt(antichain.into_proto()),
+                SubscribeResponse::Batch(subscribe_batch) => Batch(subscribe_batch.into_proto()),
+                SubscribeResponse::DroppedAt(antichain) => DroppedAt(antichain.into_proto()),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoTailResponse) -> Result<Self, TryFromProtoError> {
-        use proto_tail_response::Kind::*;
+    fn from_proto(proto: ProtoSubscribeResponse) -> Result<Self, TryFromProtoError> {
+        use proto_subscribe_response::Kind::*;
         match proto.kind {
-            Some(Batch(tail_batch)) => Ok(TailResponse::Batch(tail_batch.into_rust()?)),
-            Some(DroppedAt(antichain)) => Ok(TailResponse::DroppedAt(antichain.into_rust()?)),
-            None => Err(TryFromProtoError::missing_field("ProtoTailResponse::kind")),
+            Some(Batch(subscribe_batch)) => {
+                Ok(SubscribeResponse::Batch(subscribe_batch.into_rust()?))
+            }
+            Some(DroppedAt(antichain)) => Ok(SubscribeResponse::DroppedAt(antichain.into_rust()?)),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoSubscribeResponse::kind",
+            )),
         }
     }
 }
 
-impl Arbitrary for TailResponse<mz_repr::Timestamp> {
+impl Arbitrary for SubscribeResponse<mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            any::<TailBatch<mz_repr::Timestamp>>().prop_map(TailResponse::Batch),
+            any::<SubscribeBatch<mz_repr::Timestamp>>().prop_map(SubscribeResponse::Batch),
             proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4)
-                .prop_map(|antichain| TailResponse::DroppedAt(Antichain::from(antichain)))
+                .prop_map(|antichain| SubscribeResponse::DroppedAt(Antichain::from(antichain)))
         ]
         .boxed()
     }
@@ -236,7 +244,7 @@ impl Arbitrary for TailResponse<mz_repr::Timestamp> {
 
 /// A batch of updates for the interval `[lower, upper)`.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TailBatch<T> {
+pub struct SubscribeBatch<T> {
     /// The lower frontier of the batch of updates.
     pub lower: Antichain<T>,
     /// The upper frontier of the batch of updates.
@@ -245,10 +253,10 @@ pub struct TailBatch<T> {
     pub updates: Vec<(T, Row, Diff)>,
 }
 
-impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoTailBatch {
-        use proto_tail_batch::ProtoUpdate;
-        ProtoTailBatch {
+impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoSubscribeBatch {
+        use proto_subscribe_batch::ProtoUpdate;
+        ProtoSubscribeBatch {
             lower: Some(self.lower.into_proto()),
             upper: Some(self.upper.into_proto()),
             updates: self
@@ -263,8 +271,8 @@ impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
         }
     }
 
-    fn from_proto(proto: ProtoTailBatch) -> Result<Self, TryFromProtoError> {
-        Ok(TailBatch {
+    fn from_proto(proto: ProtoSubscribeBatch) -> Result<Self, TryFromProtoError> {
+        Ok(SubscribeBatch {
             lower: proto.lower.into_rust_if_some("ProtoTailUpdate::lower")?,
             upper: proto.upper.into_rust_if_some("ProtoTailUpdate::upper")?,
             updates: proto
@@ -282,7 +290,7 @@ impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
     }
 }
 
-impl Arbitrary for TailBatch<mz_repr::Timestamp> {
+impl Arbitrary for SubscribeBatch<mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -295,7 +303,7 @@ impl Arbitrary for TailBatch<mz_repr::Timestamp> {
                 1..4,
             ),
         )
-            .prop_map(|(lower, upper, updates)| TailBatch {
+            .prop_map(|(lower, upper, updates)| SubscribeBatch {
                 lower: Antichain::from(lower),
                 upper: Antichain::from(upper),
                 updates,

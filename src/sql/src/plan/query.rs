@@ -806,7 +806,7 @@ where
     Ok(expr.map(map_exprs).project(project_key))
 }
 
-/// Plans an expression in the AS OF position of a `SELECT` or `TAIL` statement.
+/// Plans an expression in the AS OF position of a `SELECT` or `SUBSCRIBE` statement.
 pub fn plan_as_of(
     scx: &StatementContext,
     as_of: Option<AsOf<Aug>>,

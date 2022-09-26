@@ -319,7 +319,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::SetVariable(_)
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
-                    | Statement::Tail(_)
+                    | Statement::Subscribe(_)
                     | Statement::Raise(_) => {
                         // Always safe.
                     }

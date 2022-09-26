@@ -26,15 +26,15 @@ message ProtoComputeResponse {
     map<string, string> otel_ctx = 3;
     }
 
-    message ProtoTailResponseKind {
+    message ProtoSubscribeResponseKind {
         mz_repr.global_id.ProtoGlobalId id = 1;
-        ProtoTailResponse resp = 2;
+        ProtoSubscribeResponse resp = 2;
     }
 
     oneof kind {
         mz_storage.protocol.client.ProtoFrontierUppersKind frontier_uppers = 1;
         ProtoPeekResponseKind peek_response = 2;
-        ProtoTailResponseKind tail_response = 3;
+        ProtoSubscribeResponseKind subscribe_response = 3;
     }
 }
 
@@ -55,14 +55,14 @@ message ProtoPeekResponse {
     }
 }
 
-message ProtoTailResponse {
+message ProtoSubscribeResponse {
     oneof kind {
-        ProtoTailBatch batch = 1;
+        ProtoSubscribeBatch batch = 1;
         mz_repr.antichain.ProtoU64Antichain dropped_at = 2;
     }
 }
 
-message ProtoTailBatch {
+message ProtoSubscribeBatch {
     message ProtoUpdate {
         uint64 timestamp = 1;
         mz_repr.row.ProtoRow row = 2;

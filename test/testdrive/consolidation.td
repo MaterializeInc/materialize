@@ -155,11 +155,11 @@ $ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public
 # $ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.nums_sink
 # 6 {"before": null, "after": {"row": {"num": 5}}}
 
-# Validate that `TAIL` is similarly consolidated.
+# Validate that `SUBSCRIBE` is similarly consolidated.
 # This protects against regression of #5421.
 
 > BEGIN
-> DECLARE cur CURSOR FOR TAIL nums AS OF 3
+> DECLARE cur CURSOR FOR SUBSCRIBE nums AS OF 3
 > FETCH ALL cur
 mz_timestamp  mz_diff  num
 --------------------------
