@@ -220,12 +220,12 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
         "bytes" => Format::Bytes { terminator: None },
         f => bail!("unknown format: {}", f),
     };
-    let key_schema = cmd.args.opt_string("key-schema");
+    let mut key_schema = cmd.args.opt_string("key-schema");
     let key_format = match cmd.args.opt_string("key-format").as_deref() {
         Some("avro") => Some(Format::Avro {
-            schema: key_schema
-                .take()
-                .ok_or_else(|| anyhow!("key-schema parameter required when key-format is present")),
+            schema: key_schema.take().ok_or_else(|| {
+                anyhow!("key-schema parameter required when key-format is present")
+            })?,
             confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         }),
         Some("protobuf") => {
