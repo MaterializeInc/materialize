@@ -201,7 +201,8 @@ where
         + TryFrom<i64>
         + Codec64
         + Unpin
-        + From<EpochMillis>,
+        + From<EpochMillis>
+        + mz_repr::TimestampManipulation,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
     StorageCommand<T>: RustType<ProtoStorageCommand>,

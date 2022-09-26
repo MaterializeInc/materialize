@@ -746,7 +746,7 @@ pub struct StorageControllerState<
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct Controller<T: Timestamp + Lattice + Codec64> {
+pub struct Controller<T: Timestamp + Lattice + Codec64 + mz_repr::TimestampManipulation> {
     state: StorageControllerState<T>,
     /// Storage host provisioning and storage object assignment.
     hosts: StorageHosts<T>,
@@ -762,7 +762,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64> {
     managed_collection_tx: Option<mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>>,
 }
 
-impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis>> Controller<T> {
+impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + mz_repr::TimestampManipulation>
+    Controller<T>
+{
     async fn open_persist_client(&mut self) -> PersistClient {
         self.persist
             .lock()
@@ -888,7 +890,12 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis>,
+    T: Timestamp
+        + Lattice
+        + TotalOrder
+        + Codec64
+        + From<EpochMillis>
+        + mz_repr::TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1510,7 +1517,12 @@ where
 #[async_trait(?Send)]
 impl<T> CollectionManager for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis>,
+    T: Timestamp
+        + Lattice
+        + TotalOrder
+        + Codec64
+        + From<EpochMillis>
+        + mz_repr::TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1622,7 +1634,12 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis>,
+    T: Timestamp
+        + Lattice
+        + TotalOrder
+        + Codec64
+        + From<EpochMillis>
+        + mz_repr::TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1669,7 +1686,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + mz_repr::TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
