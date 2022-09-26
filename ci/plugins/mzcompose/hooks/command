@@ -51,6 +51,8 @@ fi
 # Docker Compose run, which can leave old containers or volumes around that will
 # interfere with this build.
 echo "--- :docker: Purging containers and volumes from previous builds"
+mzcompose --mz-quiet kill
+mzcompose --mz-quiet rm --force -v
 mzcompose --mz-quiet down --volumes
 
 echo "--- :docker: Rebuilding non-mzbuild containers"

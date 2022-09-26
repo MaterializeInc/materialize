@@ -22,8 +22,11 @@ $ schema-registry-wait-schema schema=postgres.public.enum_type-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE enum_type
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.enum_type'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.enum_type')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

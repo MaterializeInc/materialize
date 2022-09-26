@@ -272,15 +272,26 @@ impl PredicatePushdown {
                                     if predicate.is_literal_err() {
                                         // Do nothing. We don't push down literal errors,
                                         // as we can't know the join will be non-empty.
-                                    } else if let Some(localized) = input_mapper
-                                        .try_map_to_input_with_bound_expr(
-                                            predicate.clone(),
+                                    } else {
+                                        let mut localized = predicate.clone();
+                                        if input_mapper.try_localize_to_input_with_bound_expr(
+                                            &mut localized,
                                             index,
-                                            &equivalences[..],
-                                        )
-                                    {
-                                        push_down.push(localized);
-                                        pushed = true;
+                                            &equivalences,
+                                        ) {
+                                            push_down.push(localized);
+                                            pushed = true;
+                                        } else if let Some(consequence) = input_mapper
+                                            // (`consequence_for_input` assumes that
+                                            // `try_localize_to_input_with_bound_expr` has already
+                                            // been called on `localized`.)
+                                            .consequence_for_input(&localized, index)
+                                        {
+                                            push_down.push(consequence);
+                                            // We don't set `pushed` here! We want to retain the
+                                            // predicate, because we only pushed a consequence of
+                                            // it, but not the full predicate.
+                                        }
                                     }
                                 }
 
@@ -641,13 +652,12 @@ impl PredicatePushdown {
                                         // Equivalences not including the current expression
                                         let mut other_equivalences = equivalences.clone();
                                         other_equivalences[equivalence_pos].remove(pos);
-                                        if let Some(localized) = input_mapper
-                                            .try_map_to_input_with_bound_expr(
-                                                expr.clone(),
-                                                input,
-                                                &other_equivalences[..],
-                                            )
-                                        {
+                                        let mut localized = expr.clone();
+                                        if input_mapper.try_localize_to_input_with_bound_expr(
+                                            &mut localized,
+                                            input,
+                                            &other_equivalences[..],
+                                        ) {
                                             Some((None, localized))
                                         } else {
                                             None

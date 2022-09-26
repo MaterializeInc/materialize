@@ -85,6 +85,7 @@ wrappers = [
   "mysql_common",
   "native-tls",
   "opentelemetry",
+  "parse_duration",
   "procfs",
   "prometheus",
   "proptest",
@@ -140,9 +141,6 @@ allow-git = [
     # See: https://github.com/BurntSushi/rust-csv/issues/271
     "https://github.com/BurntSushi/rust-csv.git",
 
-    # Waiting for an official release of criterion v0.4, which upgrades to clap v3.
-    "https://github.com/bheisler/criterion.rs.git",
-
     # Waiting on v0.18.
     # See: https://github.com/open-telemetry/opentelemetry-rust/pull/779
     "https://github.com/MaterializeInc/opentelemetry-rust.git",
@@ -183,7 +181,4 @@ allow-git = [
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",
-
-    # Waiting on https://github.com/alexcrichton/ssh2-rs/pull/257
-    "https://github.com/MaterializeInc/ssh2-rs",
 ]

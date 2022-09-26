@@ -26,6 +26,7 @@ use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 
+use crate::source::commit::LogCommitter;
 use crate::source::metrics::KinesisMetrics;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
@@ -34,7 +35,7 @@ use crate::types::connections::aws::AwsExternalIdPrefix;
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::SourceErrorDetails;
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{KinesisSourceConnection, MzOffset, SourceConnection};
+use crate::types::sources::{KinesisSourceConnection, MzOffset};
 
 /// To read all data from a Kinesis stream, we need to continually update
 /// our knowledge of the stream's shards by calling the ListShards API.
@@ -133,6 +134,8 @@ impl SourceReader for KinesisSourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
     type Diff = ();
+    type OffsetCommitter = LogCommitter;
+    type Connection = KinesisSourceConnection;
 
     fn new(
         _source_name: String,
@@ -140,17 +143,12 @@ impl SourceReader for KinesisSourceReader {
         worker_id: usize,
         worker_count: usize,
         _consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        kc: Self::Connection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
-        let kc = match connection {
-            SourceConnection::Kinesis(kc) => kc,
-            _ => unreachable!(),
-        };
-
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
@@ -164,19 +162,26 @@ impl SourceReader for KinesisSourceReader {
             &*connection_context.secrets_reader,
         ));
         match state {
-            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceReader {
-                tokio_handle: TokioHandle::current(),
-                kinesis_client,
-                shard_queue,
-                last_checked_shards: Instant::now(),
-                buffered_messages: VecDeque::new(),
-                shard_set,
-                stream_name,
-                processed_message_count: 0,
-                base_metrics: metrics.kinesis,
-                active_read_worker,
-                reported_unconsumed_partitions: false,
-            }),
+            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok((
+                KinesisSourceReader {
+                    tokio_handle: TokioHandle::current(),
+                    kinesis_client,
+                    shard_queue,
+                    last_checked_shards: Instant::now(),
+                    buffered_messages: VecDeque::new(),
+                    shard_set,
+                    stream_name,
+                    processed_message_count: 0,
+                    base_metrics: metrics.kinesis,
+                    active_read_worker,
+                    reported_unconsumed_partitions: false,
+                },
+                LogCommitter {
+                    source_id,
+                    worker_id,
+                    worker_count,
+                },
+            )),
             Err(e) => Err(anyhow!("{}", e)),
         }
     }

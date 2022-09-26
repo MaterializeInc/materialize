@@ -23,9 +23,9 @@ SHOW INDEXES FROM my_view;
 ```
 
 ```nofmt
- cluster | on_name |  key_name   | seq_in_index | column_name | expression | nullable
----------+---------+-------------+--------------+-------------+------------+----------
- default | t       | my_view_idx | 1            | a           |            | t
+     name    | on  | cluster | key
+-------------+-----+---------+--------------------------------------------
+ my_view_idx | t   | default | {a, b}
 ```
 
 ```sql
@@ -33,9 +33,9 @@ SHOW CREATE INDEX my_view_idx;
 ```
 
 ```nofmt
-             Index             |                                Create Index
--------------------------------|---------------------------------------------------------------------------
-materialize.public.my_view_idx | CREATE INDEX "my_view_idx" ON "materialize"."public"."my_view" ("a", "b");
+              name              |                                           create_sql
+--------------------------------+------------------------------------------------------------------------------------------------
+ materialize.public.my_view_idx | CREATE INDEX "my_view_idx" IN CLUSTER "default" ON "materialize"."public"."my_view" ("a", "b")
 ```
 
 ## Related pages

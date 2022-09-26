@@ -1,5 +1,5 @@
 ---
-title: "How to connect AWS Aurora to Materialize"
+title: "AWS Aurora (PostgreSQL)"
 description: "How to connect AWS Aurora PostgreSQL as a source to Materialize."
 menu:
   main:

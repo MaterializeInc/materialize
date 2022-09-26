@@ -37,6 +37,7 @@ use http::{Request, StatusCode};
 use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
 use itertools::izip;
+use mz_sql::plan::Plan;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use openssl::x509::X509;
@@ -50,10 +51,13 @@ use tracing::{error, warn};
 
 use mz_adapter::catalog::HTTP_DEFAULT_USER;
 use mz_adapter::session::{EndTransactionAction, Session, TransactionStatus};
-use mz_adapter::{ExecuteResponse, ExecuteResponsePartialError, PeekResponseUnary, SessionClient};
+use mz_adapter::{
+    ExecuteResponse, ExecuteResponseKind, ExecuteResponsePartialError, PeekResponseUnary,
+    SessionClient,
+};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::OpenTelemetryEnableCallback;
+use mz_ore::tracing::{OpenTelemetryEnableCallback, StderrFilterCallback};
 use mz_repr::{Datum, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement};
@@ -271,65 +275,95 @@ impl AuthedClient {
         &mut self,
         request: HttpSqlRequest,
     ) -> Result<SqlHttpExecuteResponse, anyhow::Error> {
+        // This API prohibits executing statements with responses whose
+        // semantics are at odds with an HTTP response.
+        fn check_prohibited_stmts(stmt: &Statement<Raw>) -> Result<(), anyhow::Error> {
+            let execute_responses = Plan::generated_from(stmt.into())
+                .into_iter()
+                .map(ExecuteResponse::generated_from)
+                .flatten()
+                .collect::<Vec<_>>();
+
+            if execute_responses.iter().any(|execute_response| {
+                matches!(
+                    execute_response,
+                    ExecuteResponseKind::Fetch
+                        | ExecuteResponseKind::SetVariable
+                        | ExecuteResponseKind::Tailing
+                        | ExecuteResponseKind::CopyTo
+                        | ExecuteResponseKind::CopyFrom
+                        | ExecuteResponseKind::Raise
+                        | ExecuteResponseKind::DeclaredCursor
+                        | ExecuteResponseKind::ClosedCursor
+                )
+            }) && !matches!(
+                stmt,
+                // Both `SelectStatement` and `CopyStatement` generate
+                // `PeekPlan`, but `SELECT` should be permitted and `COPY` not.
+                Statement::Select(mz_sql::ast::SelectStatement { query: _, as_of: _ })
+            ) {
+                anyhow::bail!("unsupported via this API: {}", stmt.to_ast_string());
+            }
+
+            Ok(())
+        }
+
+        let mut stmt_groups = vec![];
         let mut results = vec![];
 
         match request {
             HttpSqlRequest::Simple { query } => {
                 let stmts = mz_sql::parse::parse(&query).map_err(|e| anyhow!(e))?;
-                let num_stmts = stmts.len();
-
+                let mut stmt_group = Vec::with_capacity(stmts.len());
                 for stmt in stmts {
-                    if matches!(self.0.session().transaction(), TransactionStatus::Failed(_)) {
-                        break;
-                    }
-                    // Mirror the behavior of the PostgreSQL simple query protocol.
-                    // See the pgwire::protocol::StateMachine::query method for details.
-                    if let Err(e) = self.0.start_transaction(Some(num_stmts)).await {
-                        results.push(SimpleResult::err(e));
-                        break;
-                    }
-                    let res = self.execute_stmt(stmt, vec![]).await;
-                    if matches!(res, SimpleResult::Err { .. }) {
-                        self.0.fail_transaction();
-                    }
-                    results.push(res);
+                    check_prohibited_stmts(&stmt)?;
+                    stmt_group.push((stmt, vec![]));
                 }
+                stmt_groups.push(stmt_group);
             }
             HttpSqlRequest::Extended { queries } => {
                 for ExtendedRequest { query, params } in queries {
-                    if matches!(self.0.session().transaction(), TransactionStatus::Failed(_)) {
-                        break;
-                    }
-
-                    let mut stmts = match mz_sql::parse::parse(&query) {
-                        Ok(stmts) => stmts,
-                        Err(e) => {
-                            results.push(SimpleResult::err(e));
-                            break;
-                        }
-                    };
-
+                    let mut stmts = mz_sql::parse::parse(&query).map_err(|e| anyhow!(e))?;
                     if stmts.len() != 1 {
-                        results.push(SimpleResult::err(
-                            "each query must contain exactly 1 statement",
-                        ));
-                        break;
+                        anyhow::bail!(
+                            "each query must contain exactly 1 statement, but \"{}\" contains {}",
+                            query,
+                            stmts.len()
+                        );
                     }
 
-                    // Mirror the behavior of the PostgreSQL simple query protocol.
-                    // See the pgwire::protocol::StateMachine::query method for details.
-                    if let Err(e) = self.0.start_transaction(Some(1)).await {
-                        results.push(SimpleResult::err(e));
-                        break;
-                    }
-                    let res = self.execute_stmt(stmts.pop().unwrap(), params).await;
-                    if matches!(res, SimpleResult::Err { .. }) {
-                        self.0.fail_transaction();
-                    }
-                    results.push(res);
+                    let stmt = stmts.pop().unwrap();
+                    check_prohibited_stmts(&stmt)?;
+
+                    stmt_groups.push(vec![(stmt, params)]);
                 }
             }
         }
+
+        for stmt_group in stmt_groups {
+            let num_stmts = stmt_group.len();
+            for (stmt, params) in stmt_group {
+                assert!(num_stmts <= 1 || params.is_empty(),
+                    "statement groups contain more than 1 statement iff Simple request, which does not support parameters"
+                );
+
+                if matches!(self.0.session().transaction(), TransactionStatus::Failed(_)) {
+                    break;
+                }
+                // Mirror the behavior of the PostgreSQL simple query protocol.
+                // See the pgwire::protocol::StateMachine::query method for details.
+                if let Err(e) = self.0.start_transaction(Some(num_stmts)).await {
+                    results.push(SimpleResult::err(e));
+                    break;
+                }
+                let res = self.execute_stmt(stmt, params).await;
+                if matches!(res, SimpleResult::Err { .. }) {
+                    self.0.fail_transaction();
+                }
+                results.push(res);
+            }
+        }
+
         if self.0.session().transaction().is_implicit() {
             self.0.end_transaction(EndTransactionAction::Commit).await?;
         }
@@ -509,21 +543,19 @@ impl AuthedClient {
                     col_names,
                 }
             }
-            ExecuteResponse::Fetch { .. }
+            res @ (ExecuteResponse::Fetch { .. }
             | ExecuteResponse::SetVariable { .. }
             | ExecuteResponse::Tailing { .. }
             | ExecuteResponse::CopyTo { .. }
             | ExecuteResponse::CopyFrom { .. }
             | ExecuteResponse::Raise { .. }
             | ExecuteResponse::DeclaredCursor
-            | ExecuteResponse::ClosedCursor => {
-                // NOTE(benesch): it is a bit scary to ignore the response
-                // to these types of planning *after* they have been
-                // planned, as they may have mutated state. On a quick
-                // glance, though, ignoring the execute response in all of
-                // the above situations seems safe enough, and it's a more
-                // target allowlist than the code that was here before.
-                SimpleResult::err("executing statements of this type is unsupported via this API")
+            | ExecuteResponse::ClosedCursor) => {
+                SimpleResult::err(
+                    format!("internal error: encountered prohibited ExecuteResponse {:?}.\n\n
+This is a bug. Can you please file an issue letting us know?\n
+https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=C-bug%2CC-triage&template=01-bug.yml",
+                ExecuteResponseKind::from(res)))
             }
         }
     }
@@ -673,16 +705,19 @@ async fn auth<B>(
 pub struct InternalServer {
     metrics_registry: MetricsRegistry,
     otel_enable_callback: OpenTelemetryEnableCallback,
+    stderr_filter_callback: StderrFilterCallback,
 }
 
 impl InternalServer {
     pub fn new(
         metrics_registry: MetricsRegistry,
         otel_enable_callback: OpenTelemetryEnableCallback,
+        stderr_filter_callback: StderrFilterCallback,
     ) -> Self {
         Self {
             metrics_registry,
             otel_enable_callback,
+            stderr_filter_callback,
         }
     }
 
@@ -703,6 +738,13 @@ impl InternalServer {
                 "/api/opentelemetry/config",
                 routing::put(move |payload| async move {
                     mz_http_util::handle_enable_otel(self.otel_enable_callback, payload).await
+                }),
+            )
+            .route(
+                "/api/stderr/config",
+                routing::put(move |payload| async move {
+                    mz_http_util::handle_modify_stderr_filter(self.stderr_filter_callback, payload)
+                        .await
                 }),
             );
         axum::Server::bind(&addr).serve(router.into_make_service())

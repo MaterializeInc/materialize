@@ -504,6 +504,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
                     ),
                     parts: vec![],
                     len: 0,
+                    runs: vec![],
                 });
                 metrics.state.apply_spine_fast_path.inc();
                 return Ok(());

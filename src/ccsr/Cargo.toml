@@ -2,12 +2,12 @@
 name = "mz-ccsr"
 description = "Confluent-compatible schema registry API client."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.64"
+anyhow = "1.0.65"
 native-tls = "0.2.10"
 openssl = { version = "0.10.41", features = ["vendored"] }
 reqwest = { version = "0.11.11", features = ["blocking", "json", "native-tls-vendored"] }

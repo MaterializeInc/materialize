@@ -549,6 +549,7 @@ ORDER BY
 ----
 %0 = Let l0 =
 | Get materialize.public.nation (u1)
+| Filter ((#1 = "FRANCE") OR (#1 = "GERMANY"))
 | Project (#0, #1)
 | ArrangeBy (#0)
 
@@ -1481,7 +1482,7 @@ WHERE
 ----
 Source materialize.public.part (u4):
 | Map dummy, dummy, dummy, dummy, dummy
-| Filter (#5 >= 1)
+| Filter (#5 >= 1), (((#3 = "Brand#12") AND (#5 <= 5) AND ((#6 = "SM BOX") OR (#6 = "SM PKG") OR (#6 = "SM CASE") OR (#6 = "SM PACK"))) OR ((#3 = "Brand#23") AND (#5 <= 10) AND ((#6 = "MED BAG") OR (#6 = "MED BOX") OR (#6 = "MED PKG") OR (#6 = "MED PACK"))) OR ((#3 = "Brand#34") AND (#5 <= 15) AND ((#6 = "LG BOX") OR (#6 = "LG PKG") OR (#6 = "LG CASE") OR (#6 = "LG PACK"))))
 | Project (#0, #9, #10, #3, #11, #5, #6, #12, #13)
 
 Query:
@@ -1491,7 +1492,7 @@ Query:
 
 %1 =
 | Get materialize.public.part (u4)
-| Filter (#5 >= 1)
+| Filter (#5 >= 1), (((#3 = "Brand#12") AND (#5 <= 5) AND ((#6 = "SM BOX") OR (#6 = "SM PKG") OR (#6 = "SM CASE") OR (#6 = "SM PACK"))) OR ((#3 = "Brand#23") AND (#5 <= 10) AND ((#6 = "MED BAG") OR (#6 = "MED BOX") OR (#6 = "MED PKG") OR (#6 = "MED PACK"))) OR ((#3 = "Brand#34") AND (#5 <= 15) AND ((#6 = "LG BOX") OR (#6 = "LG PKG") OR (#6 = "LG CASE") OR (#6 = "LG PACK"))))
 | Project (#0, #3, #5, #6)
 | ArrangeBy (#0)
 
@@ -1500,7 +1501,8 @@ Query:
 | | implementation = DeltaQuery
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#1)
-| Filter (#13 = "DELIVER IN PERSON"), ((#14 = "AIR") OR (#14 = "AIR REG")), (((#17 = "Brand#12") AND (#4 <= 11) AND (#18 <= 5) AND (#4 >= 1) AND ((#19 = "SM BOX") OR (#19 = "SM PKG") OR (#19 = "SM CASE") OR (#19 = "SM PACK"))) OR ((#17 = "Brand#23") AND (#4 <= 20) AND (#18 <= 10) AND (#4 >= 10) AND ((#19 = "MED BAG") OR (#19 = "MED BOX") OR (#19 = "MED PKG") OR (#19 = "MED PACK"))) OR ((#17 = "Brand#34") AND (#4 <= 30) AND (#18 <= 15) AND (#4 >= 20) AND ((#19 = "LG BOX") OR (#19 = "LG PKG") OR (#19 = "LG CASE") OR (#19 = "LG PACK"))))
+| Map (#4 <= 20), (#4 >= 10), (#4 <= 30), (#4 >= 20), (#4 <= 11), (#4 >= 1)
+| Filter (#13 = "DELIVER IN PERSON"), ((#14 = "AIR") OR (#14 = "AIR REG")), ((#20 AND #21) OR (#22 AND #23) OR (#24 AND #25)), ((#20 AND #21 AND (#17 = "Brand#23") AND (#18 <= 10) AND ((#19 = "MED BAG") OR (#19 = "MED BOX") OR (#19 = "MED PKG") OR (#19 = "MED PACK"))) OR (#22 AND #23 AND (#17 = "Brand#34") AND (#18 <= 15) AND ((#19 = "LG BOX") OR (#19 = "LG PKG") OR (#19 = "LG CASE") OR (#19 = "LG PACK"))) OR (#24 AND #25 AND (#17 = "Brand#12") AND (#18 <= 5) AND ((#19 = "SM BOX") OR (#19 = "SM PKG") OR (#19 = "SM CASE") OR (#19 = "SM PACK"))))
 | Project (#5, #6)
 | Reduce group=()
 | | agg sum((#0 * (1 - #1)))

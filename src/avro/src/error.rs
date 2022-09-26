@@ -93,6 +93,7 @@ pub enum DecodeError {
         expected: [u8; 16],
         actual: [u8; 16],
     },
+    DateOutOfRange(i32),
     Custom(String),
 }
 
@@ -173,6 +174,7 @@ impl DecodeError {
                 "Block marker ({:x?}) does not match header marker ({:x?})",
                 actual, expected
             ),
+            DecodeError::DateOutOfRange(inner) => write!(f, "Date out of range: {}", inner),
         }
     }
 }

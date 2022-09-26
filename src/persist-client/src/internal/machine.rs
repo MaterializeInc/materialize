@@ -29,7 +29,6 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::compact::CompactReq;
-use crate::internal::gc::GcReq;
 use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics, ShardMetrics,
@@ -432,7 +431,7 @@ where
     }
 
     // NB: Unlike the other methods here, this one is read-only.
-    pub async fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
+    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
         match self.state.verify_listen(as_of) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(Upper(_))) => {
@@ -534,6 +533,22 @@ where
                     }
                 };
 
+                // Find out if this command has been selected to perform gc, so
+                // that it will fire off a background request to the
+                // GarbageCollector to delete eligible blobs and truncate the
+                // state history. This is dependant both on `maybe_gc` returning
+                // Some _and_ on this state being successfully compare_and_set.
+                //
+                // NB: Make sure this overwrites `garbage_collection` on every
+                // run though the loop (i.e. no `if let Some` here). When we
+                // lose a CaS race, we might discover that the winner got
+                // assigned the gc.
+                garbage_collection = new_state.maybe_gc(is_write);
+
+                // NB: Make sure this is the very last thing before the
+                // `try_compare_and_set_current` call. (In particular, it needs
+                // to come after anything that might modify new_state, such as
+                // `maybe_gc`.)
                 let diff = StateDiff::from_diff(&self.state, &new_state);
                 // Sanity check that our diff logic roundtrips and adds back up
                 // correctly.
@@ -547,25 +562,6 @@ where
                         panic!("validate_roundtrips failed: {}", err);
                     }
                 }
-
-                // Find out if this command has been selected to perform gc, so
-                // that it will fire off a background request to the
-                // GarbageCollector to delete eligible blobs and truncate the
-                // state history. This is dependant both on `maybe_gc` returning
-                // Some _and_ on this state being successfully compare_and_set.
-                //
-                // NB: Make sure this overwrites `garbage_collection` on every
-                // run though the loop (i.e. no `if let Some` here). When we
-                // lose a CaS race, we might discover that the winner got
-                // assigned the gc.
-                garbage_collection =
-                    new_state
-                        .maybe_gc(is_write)
-                        .map(|(old_seqno_since, new_seqno_since)| GcReq {
-                            shard_id: self.shard_id(),
-                            old_seqno_since,
-                            new_seqno_since,
-                        });
 
                 // SUBTLE! Unlike the other consensus and blob uses, we can't
                 // automatically retry indeterminate ExternalErrors here. However,
@@ -603,6 +599,10 @@ where
                             readers: expired_readers,
                             writers: expired_writers,
                         });
+
+                        if let Some(gc) = garbage_collection.as_ref() {
+                            debug!("Assigned gc request: {:?}", gc);
+                        }
 
                         let maintenance = RoutineMaintenance {
                             garbage_collection,
@@ -772,356 +772,424 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub mod datadriven {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use differential_dataflow::trace::Description;
     use mz_build_info::DUMMY_BUILD_INFO;
-    use mz_ore::cast::CastFrom;
-    use mz_ore::now::SYSTEM_TIME;
-    use tokio::sync::Mutex;
 
-    use crate::async_runtime::CpuHeavyRuntime;
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::fetch::fetch_batch_part;
     use crate::internal::compact::{CompactReq, Compactor};
+    use crate::internal::datadriven::DirectiveArgs;
+    use crate::internal::gc::GcReq;
     use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
-    use crate::{GarbageCollector, PersistConfig, ShardId};
+    use crate::{GarbageCollector, PersistClient};
 
     use super::*;
 
-    #[derive(Debug, Default)]
-    struct DatadrivenState {
-        batches: HashMap<String, HollowBatch<u64>>,
-        listens: HashMap<String, Listen<String, (), u64, i64>>,
+    /// Shared state for a single [crate::internal::machine] [datadriven::TestFile].
+    #[derive(Debug)]
+    pub struct MachineState {
+        pub client: PersistClient,
+        pub shard_id: ShardId,
+        pub state_versions: Arc<StateVersions>,
+        pub machine: Machine<String, (), u64, i64>,
+        pub batches: HashMap<String, HollowBatch<u64>>,
+        pub listens: HashMap<String, Listen<String, (), u64, i64>>,
     }
 
-    #[tokio::test]
-    async fn machine_datadriven() {
-        fn get_arg<'a>(args: &'a HashMap<String, Vec<String>>, name: &str) -> Option<&'a str> {
-            args.get(name).map(|vals| {
-                if vals.len() != 1 {
-                    panic!("unexpected values for {}: {:?}", name, vals);
-                }
-                vals[0].as_ref()
-            })
-        }
-        fn get_u64<'a>(args: &'a HashMap<String, Vec<String>>, name: &str) -> Option<u64> {
-            get_arg(args, name).map(|x| {
-                x.parse::<u64>()
-                    .unwrap_or_else(|_| panic!("invalid {}: {}", name, x))
-            })
-        }
-
-        datadriven::walk_async("tests/machine", |mut f| async {
+    impl MachineState {
+        pub async fn new() -> Self {
             let shard_id = ShardId::new();
             let mut client = new_test_client().await;
             // Reset blob_target_size. Individual batch writes and compactions
             // can override it with an arg.
             client.cfg.blob_target_size =
                 PersistConfig::new(&DUMMY_BUILD_INFO, client.cfg.now.clone()).blob_target_size;
-
-            let state = Arc::new(Mutex::new(DatadrivenState::default()));
-            let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-            let write = Arc::new(Mutex::new(
-                client
-                    .open_writer::<String, (), u64, i64>(shard_id)
-                    .await
-                    .expect("invalid shard types"),
+            let state_versions = Arc::new(StateVersions::new(
+                client.cfg.clone(),
+                Arc::clone(&client.consensus),
+                Arc::clone(&client.blob),
+                Arc::clone(&client.metrics),
             ));
-            let now = SYSTEM_TIME.clone();
+            let machine = Machine::new(
+                client.cfg.clone(),
+                shard_id,
+                Arc::clone(&client.metrics),
+                Arc::clone(&state_versions),
+            )
+            .await
+            .expect("codecs should match");
+            MachineState {
+                shard_id,
+                client,
+                state_versions,
+                machine,
+                batches: HashMap::default(),
+                listens: HashMap::default(),
+            }
+        }
+    }
 
-            f.run_async(move |tc| {
-                let shard_id = shard_id.clone();
-                let client = client.clone();
-                let state = Arc::clone(&state);
-                let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
-                let write = Arc::clone(&write);
-                let now = now.clone();
-                async move {
-                    let mut state = state.lock().await;
+    /// Scans consensus and returns all states with their SeqNos
+    /// and which batches they reference
+    pub async fn consensus_scan(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let from = SeqNo(args.expect("from_seqno"));
 
-                    match tc.directive.as_str() {
-                        // Scans consensus and returns all states with their SeqNos
-                        // and which batches they reference
-                        "consensus-scan" => {
-                            let from =
-                                SeqNo(get_u64(&tc.args, "from_seqno").expect("missing from_seqno"));
-
-                            let mut s = String::new();
-
-                            let mut states = write
-                                .lock()
-                                .await
-                                .machine
-                                .state_versions
-                                .fetch_live_states::<String, (), u64, i64>(&shard_id)
-                                .await
-                                .expect("shard codecs should not change");
-                            while let Some(x) = states.next() {
-                                if x.seqno < from {
-                                    continue;
-                                }
-                                let mut batches = vec![];
-                                x.collections.trace.map_batches(|b| {
-                                    for (batch_name, original_batch) in &state.batches {
-                                        if original_batch.parts == b.parts {
-                                            batches.push(batch_name.to_owned());
-                                            break;
-                                        }
-                                    }
-                                });
-                                write!(s, "seqno={} batches={}\n", x.seqno, batches.join(","));
-                            }
-                            s
-                        }
-                        "write-batch" => {
-                            let output = get_arg(&tc.args, "output").expect("missing output");
-                            let lower = get_u64(&tc.args, "lower").expect("missing lower");
-                            let upper = get_u64(&tc.args, "upper").expect("missing upper");
-                            let target_size = get_arg(&tc.args, "target_size")
-                                .map(|x| x.parse::<usize>().expect("invalid target_size"));
-
-                            let updates = tc
-                                .input
-                                .trim()
-                                .split('\n')
-                                .filter(|x| !x.is_empty())
-                                .map(|x| {
-                                    let parts = x.split(' ').collect::<Vec<_>>();
-                                    if parts.len() != 3 {
-                                        panic!("unexpected update: {}", x);
-                                    }
-                                    let (key, ts, diff) = (parts[0], parts[1], parts[2]);
-                                    let ts = ts.parse::<u64>().expect("invalid ts");
-                                    let diff = diff.parse::<i64>().expect("invalid diff");
-                                    (key.to_owned(), ts, diff)
-                                })
-                                .collect::<Vec<_>>();
-
-                            let mut cfg = client.cfg.clone();
-                            if let Some(target_size) = target_size {
-                                cfg.blob_target_size = target_size;
-                            };
-                            let mut builder = BatchBuilder::new(
-                                cfg,
-                                Arc::clone(&client.metrics),
-                                0,
-                                Antichain::from_elem(lower),
-                                Arc::clone(&client.blob),
-                                Arc::clone(&cpu_heavy_runtime),
-                                shard_id.clone(),
-                                WriterId::new(),
-                            );
-                            for (k, t, d) in updates {
-                                builder.add(&k, &(), &t, &d).await.expect("invalid batch");
-                            }
-                            let batch = builder
-                                .finish(Antichain::from_elem(upper))
-                                .await
-                                .expect("invalid batch")
-                                .into_hollow_batch();
-                            state.batches.insert(output.to_owned(), batch.clone());
-                            format!("parts={} len={}\n", batch.parts.len(), batch.len)
-                        }
-                        "fetch-batch" => {
-                            let input = get_arg(&tc.args, "input").expect("missing input");
-                            let batch = state.batches.get(input).expect("unknown batch").clone();
-
-                            let mut s = String::new();
-                            for (idx, part) in batch.parts.iter().enumerate() {
-                                write!(s, "<part {idx}>\n");
-                                let blob_batch =
-                                    client.blob.get(&part.key.complete(&shard_id)).await;
-                                match blob_batch {
-                                    Ok(Some(_)) | Err(_) => {}
-                                    // don't try to fetch/print the keys of the batch part
-                                    // if the blob store no longer has it
-                                    Ok(None) => {
-                                        s.push_str("<empty>\n");
-                                        continue;
-                                    }
-                                };
-                                let mut part = fetch_batch_part(
-                                    &shard_id,
-                                    client.blob.as_ref(),
-                                    client.metrics.as_ref(),
-                                    &part.key,
-                                    &batch.desc,
-                                )
-                                .await
-                                .expect("invalid batch part");
-                                while let Some((k, _v, t, d)) = part.next() {
-                                    let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
-                                    write!(s, "{k} {t} {d}\n");
-                                }
-                            }
-                            if s.is_empty() {
-                                s.push_str("<empty>\n");
-                            }
-                            s
-                        }
-                        "truncate-batch-desc" => {
-                            let input = get_arg(&tc.args, "input").expect("missing input");
-                            let output = get_arg(&tc.args, "output").expect("missing output");
-                            let lower = get_u64(&tc.args, "lower").expect("missing lower");
-                            let upper = get_u64(&tc.args, "upper").expect("missing upper");
-
-                            let mut batch =
-                                state.batches.get(input).expect("unknown batch").clone();
-                            let truncated_desc = Description::new(
-                                Antichain::from_elem(lower),
-                                Antichain::from_elem(upper),
-                                batch.desc.since().clone(),
-                            );
-                            match validate_truncate_batch(&batch.desc, &truncated_desc) {
-                                Ok(()) => {
-                                    batch.desc = truncated_desc;
-                                    state.batches.insert(output.to_owned(), batch.clone());
-                                    format!("parts={} len={}\n", batch.parts.len(), batch.len)
-                                }
-                                Err(err) => format!("error: {}\n", err),
-                            }
-                        }
-                        "compact" => {
-                            let output = get_arg(&tc.args, "output").expect("missing output");
-                            let lower = get_u64(&tc.args, "lower").expect("missing lower");
-                            let upper = get_u64(&tc.args, "upper").expect("missing upper");
-                            let since = get_u64(&tc.args, "since").expect("missing since");
-                            let target_size = get_arg(&tc.args, "target_size")
-                                .map(|x| x.parse::<usize>().expect("invalid target_size"));
-
-                            let mut inputs = Vec::new();
-                            for input in tc.args.get("inputs").expect("missing inputs") {
-                                inputs
-                                    .push(state.batches.get(input).expect("unknown batch").clone());
-                            }
-
-                            let mut cfg = client.cfg.clone();
-                            if let Some(target_size) = target_size {
-                                cfg.blob_target_size = target_size;
-                            };
-                            let req = CompactReq {
-                                shard_id,
-                                desc: Description::new(
-                                    Antichain::from_elem(lower),
-                                    Antichain::from_elem(upper),
-                                    Antichain::from_elem(since),
-                                ),
-                                inputs,
-                            };
-                            let res = Compactor::compact::<u64, i64>(
-                                cfg,
-                                Arc::clone(&client.blob),
-                                Arc::clone(&client.metrics),
-                                Arc::clone(&cpu_heavy_runtime),
-                                req,
-                                WriterId::new(),
-                            )
-                            .await;
-                            match res {
-                                Ok(res) => {
-                                    state.batches.insert(output.to_owned(), res.output.clone());
-                                    format!(
-                                        "parts={} len={}\n",
-                                        res.output.parts.len(),
-                                        res.output.len
-                                    )
-                                }
-                                Err(err) => format!("error: {}\n", err),
-                            }
-                        }
-                        "gc" => {
-                            let old_seqno_since =
-                                SeqNo(get_u64(&tc.args, "from_seqno").expect("missing from_seqno"));
-                            let new_seqno_since =
-                                SeqNo(get_u64(&tc.args, "to_seqno").expect("missing to_seqno"));
-
-                            GarbageCollector::gc_and_truncate(
-                                &mut write.lock().await.machine,
-                                GcReq {
-                                    shard_id,
-                                    old_seqno_since,
-                                    new_seqno_since,
-                                },
-                            )
-                            .await;
-
-                            "ok\n".into()
-                        }
-                        "register-listen" => {
-                            let output = get_arg(&tc.args, "output").expect("missing output");
-                            let as_of = get_u64(&tc.args, "as-of").expect("missing as-of");
-                            let read = client
-                                .open_reader::<String, (), u64, i64>(shard_id)
-                                .await
-                                .expect("invalid shard types");
-                            let listen = read.expect_listen(as_of).await;
-                            state.listens.insert(output.to_owned(), listen);
-                            "ok\n".into()
-                        }
-                        "listen-through" => {
-                            let input = get_arg(&tc.args, "input").expect("missing input");
-                            let frontier = get_u64(&tc.args, "frontier").expect("missing frontier");
-                            let listen = state.listens.get_mut(input).expect("unknown listener");
-                            let mut s = String::new();
-                            'outer: loop {
-                                for event in listen.next().await {
-                                    match event {
-                                        ListenEvent::Updates(x) => {
-                                            for ((k, _v), t, d) in x.iter() {
-                                                write!(s, "{} {} {}\n", k.as_ref().unwrap(), t, d);
-                                            }
-                                        }
-                                        ListenEvent::Progress(x) => {
-                                            if !x.less_than(&frontier) {
-                                                break 'outer;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if s.is_empty() {
-                                s.push_str("<empty>\n");
-                            }
-                            s
-                        }
-                        "compare-and-append" => {
-                            let input = get_arg(&tc.args, "input").expect("missing input");
-                            let batch = state.batches.get(input).expect("unknown batch");
-                            let mut write = write.lock().await;
-                            let writer_id = write.writer_id.clone();
-                            let (_, _) = write
-                                .machine
-                                .compare_and_append(batch, &writer_id, now())
-                                .await
-                                .expect("indeterminate")
-                                .expect("invalid usage")
-                                .expect("upper mismatch");
-                            format!("ok\n")
-                        }
-                        "apply-merge-res" => {
-                            let input = get_arg(&tc.args, "input").expect("missing input");
-                            let batch = state.batches.get(input).expect("unknown batch");
-                            let mut write = write.lock().await;
-                            let applied = write
-                                .machine
-                                .merge_res(&FueledMergeRes {
-                                    output: batch.clone(),
-                                })
-                                .await;
-                            format!("{}\n", applied)
-                        }
-                        _ => panic!("unknown directive {:?}", tc),
+        let mut states = datadriven
+            .state_versions
+            .fetch_live_states::<String, (), u64, i64>(&datadriven.shard_id)
+            .await
+            .expect("shard codecs should not change");
+        let mut s = String::new();
+        while let Some(x) = states.next() {
+            if x.seqno < from {
+                continue;
+            }
+            let mut batches = vec![];
+            x.collections.trace.map_batches(|b| {
+                for (batch_name, original_batch) in &datadriven.batches {
+                    if original_batch.parts == b.parts {
+                        batches.push(batch_name.to_owned());
+                        break;
                     }
                 }
-            })
-            .await;
-            f
-        })
-        .await;
+            });
+            write!(s, "seqno={} batches={}\n", x.seqno, batches.join(","));
+        }
+        Ok(s)
     }
+
+    pub async fn write_batch(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let output = args.expect_str("output");
+        let lower = args.expect("lower");
+        let upper = args.expect("upper");
+        let target_size = args.optional("target_size");
+        let parts_size_override = args.optional("parts_size_override");
+        let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
+
+        let mut cfg = datadriven.client.cfg.clone();
+        if let Some(target_size) = target_size {
+            cfg.blob_target_size = target_size;
+        };
+        let mut builder = BatchBuilder::new(
+            cfg,
+            Arc::clone(&datadriven.client.metrics),
+            0,
+            Antichain::from_elem(lower),
+            Arc::clone(&datadriven.client.blob),
+            Arc::clone(&datadriven.client.cpu_heavy_runtime),
+            datadriven.shard_id.clone(),
+            WriterId::new(),
+        );
+        for ((k, ()), t, d) in updates {
+            builder.add(&k, &(), &t, &d).await.expect("invalid batch");
+        }
+        let batch = builder
+            .finish(Antichain::from_elem(upper))
+            .await
+            .expect("invalid batch")
+            .into_hollow_batch();
+
+        if let Some(size) = parts_size_override {
+            let mut batch = batch.clone();
+            for part in batch.parts.iter_mut() {
+                part.encoded_size_bytes = size;
+            }
+            datadriven.batches.insert(output.to_owned(), batch);
+        } else {
+            datadriven.batches.insert(output.to_owned(), batch.clone());
+        }
+        Ok(format!("parts={} len={}\n", batch.parts.len(), batch.len))
+    }
+
+    pub async fn fetch_batch(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let input = args.expect_str("input");
+        let batch = datadriven.batches.get(input).expect("unknown batch");
+
+        let mut s = String::new();
+        for (idx, part) in batch.parts.iter().enumerate() {
+            write!(s, "<part {idx}>\n");
+            let blob_batch = datadriven
+                .client
+                .blob
+                .get(&part.key.complete(&datadriven.shard_id))
+                .await;
+            match blob_batch {
+                Ok(Some(_)) | Err(_) => {}
+                // don't try to fetch/print the keys of the batch part
+                // if the blob store no longer has it
+                Ok(None) => {
+                    s.push_str("<empty>\n");
+                    continue;
+                }
+            };
+            let mut part = fetch_batch_part(
+                &datadriven.shard_id,
+                datadriven.client.blob.as_ref(),
+                datadriven.client.metrics.as_ref(),
+                &part.key,
+                &batch.desc,
+            )
+            .await
+            .expect("invalid batch part");
+            while let Some((k, _v, t, d)) = part.next() {
+                let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
+                write!(s, "{k} {t} {d}\n");
+            }
+        }
+        if !s.is_empty() {
+            for (idx, run) in batch.runs().enumerate() {
+                write!(s, "<run {idx}>\n");
+                for part in run {
+                    let part_idx = batch
+                        .parts
+                        .iter()
+                        .position(|p| p == part)
+                        .expect("part should exist");
+                    write!(s, "part {part_idx}\n");
+                }
+            }
+        }
+        Ok(s)
+    }
+
+    #[allow(clippy::unused_async)]
+    pub async fn truncate_batch_desc(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let input = args.expect_str("input");
+        let output = args.expect_str("output");
+        let lower = args.expect("lower");
+        let upper = args.expect("upper");
+
+        let mut batch = datadriven
+            .batches
+            .get(input)
+            .expect("unknown batch")
+            .clone();
+        let truncated_desc = Description::new(
+            Antichain::from_elem(lower),
+            Antichain::from_elem(upper),
+            batch.desc.since().clone(),
+        );
+        let () = validate_truncate_batch(&batch.desc, &truncated_desc)?;
+        batch.desc = truncated_desc;
+        datadriven.batches.insert(output.to_owned(), batch.clone());
+        Ok(format!("parts={} len={}\n", batch.parts.len(), batch.len))
+    }
+
+    #[allow(clippy::unused_async)]
+    pub async fn set_batch_parts_size(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let input = args.expect_str("input");
+        let size = args.expect("size");
+        let batch = datadriven.batches.get_mut(input).expect("unknown batch");
+        for part in batch.parts.iter_mut() {
+            part.encoded_size_bytes = size;
+        }
+        Ok(format!("ok\n"))
+    }
+
+    pub async fn compact(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let output = args.expect_str("output");
+        let lower = args.expect("lower");
+        let upper = args.expect("upper");
+        let since = args.expect("since");
+        let target_size = args.optional("target_size");
+        let memory_bound = args.optional("memory_bound");
+
+        let mut inputs = Vec::new();
+        for input in args.args.get("inputs").expect("missing inputs") {
+            inputs.push(
+                datadriven
+                    .batches
+                    .get(input)
+                    .expect("unknown batch")
+                    .clone(),
+            );
+        }
+
+        let mut cfg = datadriven.client.cfg.clone();
+        if let Some(target_size) = target_size {
+            cfg.blob_target_size = target_size;
+        };
+        if let Some(memory_bound) = memory_bound {
+            cfg.compaction_memory_bound_bytes = memory_bound;
+        }
+        let req = CompactReq {
+            shard_id: datadriven.shard_id,
+            desc: Description::new(
+                Antichain::from_elem(lower),
+                Antichain::from_elem(upper),
+                Antichain::from_elem(since),
+            ),
+            inputs,
+        };
+        let res = Compactor::<u64, i64>::compact(
+            cfg,
+            Arc::clone(&datadriven.client.blob),
+            Arc::clone(&datadriven.client.metrics),
+            Arc::clone(&datadriven.client.cpu_heavy_runtime),
+            req,
+            WriterId::new(),
+        )
+        .await?;
+
+        datadriven
+            .batches
+            .insert(output.to_owned(), res.output.clone());
+        Ok(format!(
+            "parts={} len={}\n",
+            res.output.parts.len(),
+            res.output.len
+        ))
+    }
+
+    pub async fn gc(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let new_seqno_since = SeqNo(args.expect("to_seqno"));
+
+        let req = GcReq {
+            shard_id: datadriven.shard_id,
+            new_seqno_since,
+        };
+        GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+
+        Ok("ok\n".into())
+    }
+
+    pub async fn register_listen(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let output = args.expect_str("output");
+        let as_of = args.expect("as-of");
+        let read = datadriven
+            .client
+            .open_reader::<String, (), u64, i64>(datadriven.shard_id)
+            .await
+            .expect("invalid shard types");
+        let listen = read.expect_listen(as_of).await;
+        datadriven.listens.insert(output.to_owned(), listen);
+        Ok("ok\n".into())
+    }
+
+    pub async fn listen_through(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let input = args.expect_str("input");
+        let frontier = args.expect("frontier");
+        let listen = datadriven.listens.get_mut(input).expect("unknown listener");
+        let mut s = String::new();
+        loop {
+            for event in listen.next().await {
+                match event {
+                    ListenEvent::Updates(x) => {
+                        for ((k, _v), t, d) in x.iter() {
+                            write!(s, "{} {} {}\n", k.as_ref().unwrap(), t, d);
+                        }
+                    }
+                    ListenEvent::Progress(x) => {
+                        if !x.less_than(&frontier) {
+                            return Ok(s);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub async fn register_writer(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let writer_id = args.expect("writer_id");
+        let (upper, _state) = datadriven
+            .machine
+            .register_writer(
+                &writer_id,
+                datadriven.client.cfg.writer_lease_duration,
+                (datadriven.client.cfg.now)(),
+            )
+            .await;
+        Ok(format!("{:?}\n", upper.0.elements()))
+    }
+
+    pub async fn compare_and_append(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let input = args.expect_str("input");
+        let writer_id = args.expect("writer_id");
+        let batch = datadriven
+            .batches
+            .get(input)
+            .expect("unknown batch")
+            .clone();
+        let now = (datadriven.client.cfg.now)();
+        let (_, _) = datadriven
+            .machine
+            .compare_and_append(&batch, &writer_id, now)
+            .await
+            .expect("indeterminate")
+            .expect("invalid usage")
+            .expect("upper mismatch");
+        Ok(format!("ok\n"))
+    }
+
+    pub async fn apply_merge_res(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let input = args.expect_str("input");
+        let batch = datadriven
+            .batches
+            .get(input)
+            .expect("unknown batch")
+            .clone();
+        let applied = datadriven
+            .machine
+            .merge_res(&FueledMergeRes { output: batch })
+            .await;
+        Ok(format!("{}\n", applied))
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use std::sync::Arc;
+
+    use mz_ore::cast::CastFrom;
+    use mz_ore::task::spawn;
+    use mz_persist::intercept::{InterceptBlob, InterceptHandle};
+    use mz_persist::location::{Blob, SeqNo};
+    use timely::progress::Antichain;
+
+    use crate::internal::gc::{GarbageCollector, GcReq};
+    use crate::tests::new_test_client;
+    use crate::ShardId;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn apply_unbatched_cmd_truncate() {
@@ -1171,5 +1239,53 @@ mod tests {
             live_diffs.len(),
             max_live_diffs
         );
+    }
+
+    // A regression test for #14719, where a bug in gc led to an incremental
+    // state invariant being violated which resulted in gc being permanently
+    // wedged for the shard.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn regression_gc_skipped_req_and_interrupted() {
+        let mut client = new_test_client().await;
+        let intercept = InterceptHandle::default();
+        client.blob = Arc::new(InterceptBlob::new(
+            Arc::clone(&client.blob),
+            intercept.clone(),
+        )) as Arc<dyn Blob + Send + Sync>;
+        let (_, mut read) = client
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        // Create a new SeqNo
+        read.downgrade_since(&Antichain::from_elem(1)).await;
+        let new_seqno_since = read.machine.seqno();
+
+        // Start a GC in the background for some SeqNo range that is not
+        // contiguous compared to the last gc req (in this case, n/a) and then
+        // crash when it gets to the blob deletes. In the regression case, this
+        // renders the shard permanently un-gc-able.
+        assert!(new_seqno_since > SeqNo::minimum());
+        intercept.set_post_delete(Some(Arc::new(|_, _| panic!("boom"))));
+        let mut machine = read.machine.clone();
+        // Run this in a spawn so we can catch the boom panic
+        let gc = spawn(|| "", async move {
+            let req = GcReq {
+                shard_id: machine.shard_id(),
+                new_seqno_since,
+            };
+            GarbageCollector::gc_and_truncate(&mut machine, req).await
+        });
+        // Wait for gc to either panic (regression case) or finish (good case)
+        // because it happens to not call blob delete.
+        let _ = gc.await;
+
+        // Allow blob deletes to go through and try GC again. In the regression
+        // case, this hangs.
+        intercept.set_post_delete(None);
+        let req = GcReq {
+            shard_id: read.machine.shard_id(),
+            new_seqno_since,
+        };
+        let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
     }
 }

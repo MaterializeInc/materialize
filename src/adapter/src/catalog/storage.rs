@@ -14,11 +14,11 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use itertools::{max, Itertools};
+use mz_ore::now::EpochMillis;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use uuid::Uuid;
 
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
 use mz_ore::cast::CastFrom;
@@ -74,7 +74,7 @@ async fn migrate<S: Append>(
     let migrations: &[for<'a> fn(
         &mut Transaction<'a, S>,
         &'a BootstrapArgs,
-    ) -> Result<(), StashError>] = &[
+    ) -> Result<(), catalog::error::Error>] = &[
         |txn: &mut Transaction<'_, S>, bootstrap_args| {
             txn.id_allocator.insert(
                 IdAllocKey {
@@ -215,35 +215,77 @@ async fn migrate<S: Append>(
                     name: "materialize".into(),
                 },
             )?;
+            let default_instance = ComputeInstanceValue {
+                name: "default".into(),
+                config: Some(ComputeInstanceIntrospectionConfig {
+                    debugging: false,
+                    interval: Duration::from_secs(1),
+                }),
+            };
+            let default_replica = ComputeInstanceReplicaValue {
+                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                name: "default_replica".into(),
+                config: SerializedComputeInstanceReplicaConfig {
+                    persisted_logs: SerializedComputeInstanceReplicaLogging::Default,
+                    location: SerializedComputeInstanceReplicaLocation::Managed {
+                        size: bootstrap_args.default_cluster_replica_size.clone(),
+                        availability_zone: bootstrap_args.default_availability_zone.clone(),
+                        az_user_specified: false,
+                    },
+                },
+            };
             txn.compute_instances.insert(
                 ComputeInstanceKey {
                     id: DEFAULT_COMPUTE_INSTANCE_ID,
                 },
-                ComputeInstanceValue {
-                    name: "default".into(),
-                    config: Some(ComputeInstanceIntrospectionConfig {
-                        debugging: false,
-                        interval: Duration::from_secs(1),
-                    }),
-                },
+                default_instance.clone(),
             )?;
             txn.compute_instance_replicas.insert(
                 ComputeInstanceReplicaKey {
                     id: DEFAULT_REPLICA_ID,
                 },
-                ComputeInstanceReplicaValue {
-                    compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
-                    name: "default_replica".into(),
-                    config: SerializedComputeInstanceReplicaConfig {
-                        persisted_logs: SerializedComputeInstanceReplicaLogging::Default,
-                        location: SerializedComputeInstanceReplicaLocation::Managed {
-                            size: bootstrap_args.default_cluster_replica_size.clone(),
-                            availability_zone: bootstrap_args.default_availability_zone.clone(),
-                            az_user_specified: false,
-                        },
-                    },
-                },
+                default_replica.clone(),
             )?;
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::Cluster,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: DEFAULT_COMPUTE_INSTANCE_ID,
+                            name: default_instance.name.clone(),
+                        }),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::ClusterReplica,
+                        EventDetails::CreateComputeInstanceReplicaV1(
+                            mz_audit_log::CreateComputeInstanceReplicaV1 {
+                                cluster_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                                cluster_name: default_instance.name,
+                                replica_name: default_replica.name,
+                                logical_size: bootstrap_args.default_cluster_replica_size.clone(),
+                            },
+                        ),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
             txn.timestamps.insert(
                 TimestampKey {
                     id: Timeline::EpochMilliseconds.to_string(),
@@ -289,6 +331,7 @@ async fn migrate<S: Append>(
 }
 
 pub struct BootstrapArgs {
+    pub now: EpochMillis,
     pub default_cluster_replica_size: String,
     pub default_availability_zone: String,
 }
@@ -296,7 +339,6 @@ pub struct BootstrapArgs {
 #[derive(Debug)]
 pub struct Connection<S> {
     stash: S,
-    cluster_id: Uuid,
 }
 
 impl<S: Append> Connection<S> {
@@ -322,10 +364,7 @@ impl<S: Append> Connection<S> {
         initialize_stash(&mut stash).await?;
         migrate(&mut stash, skip, bootstrap_args).await?;
 
-        let conn = Connection {
-            cluster_id: Self::set_or_get_cluster_id(&mut stash).await?,
-            stash,
-        };
+        let conn = Connection { stash };
 
         Ok(conn)
     }
@@ -368,22 +407,6 @@ impl<S: Append> Connection<S> {
             .upsert(stash, once((key, value)))
             .await
             .map_err(|e| e.into())
-    }
-
-    /// Sets catalog's `cluster_id` setting on initialization or gets that value.
-    async fn set_or_get_cluster_id(stash: &mut impl Append) -> Result<Uuid, Error> {
-        let current_setting = Self::get_setting_stash(stash, "cluster_id").await?;
-        match current_setting {
-            // Server init
-            None => {
-                // Generate a new version 4 UUID. These are generated from random input.
-                let cluster_id = Uuid::new_v4();
-                Self::set_setting_stash(stash, "cluster_id", cluster_id.to_string()).await?;
-                Ok(cluster_id)
-            }
-            // Server reboot
-            Some(cs) => Ok(Uuid::parse_str(&cs)?),
-        }
     }
 
     pub async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
@@ -727,10 +750,6 @@ impl<S: Append> Connection<S> {
     pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), Error> {
         Ok(self.stash.consolidate_batch(&collections).await?)
     }
-
-    pub fn cluster_id(&self) -> Uuid {
-        self.cluster_id
-    }
 }
 
 #[tracing::instrument(level = "trace", skip_all)]
@@ -1062,7 +1081,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn remove_compute_instance(&mut self, name: &str) -> Result<Vec<GlobalId>, Error> {
+    pub fn remove_compute_instance(&mut self, name: &str) -> Result<(u64, Vec<GlobalId>), Error> {
         let deleted = self.compute_instances.delete(|_k, v| v.name == name);
         if deleted.is_empty() {
             Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
@@ -1075,10 +1094,13 @@ impl<'a, S: Append> Transaction<'a, S> {
             let introspection_source_indexes = self
                 .introspection_sources
                 .delete(|k, _v| k.compute_id == id);
-            Ok(introspection_source_indexes
-                .into_iter()
-                .map(|(_, v)| GlobalId::System(v.index_id))
-                .collect())
+            Ok((
+                id,
+                introspection_source_indexes
+                    .into_iter()
+                    .map(|(_, v)| GlobalId::System(v.index_id))
+                    .collect(),
+            ))
         }
     }
 
@@ -1180,7 +1202,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Upserts persisted system configuration `name` to `value`.
-    pub async fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
+    pub fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
@@ -1193,7 +1215,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Removes persisted system configuration `name`.
-    pub async fn remove_system_config(&mut self, name: &str) {
+    pub fn remove_system_config(&mut self, name: &str) {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
@@ -1201,7 +1223,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Removes all persisted system configurations.
-    pub async fn clear_system_configs(&mut self) {
+    pub fn clear_system_configs(&mut self) {
         self.system_configurations.delete(|_k, _v| true);
     }
 

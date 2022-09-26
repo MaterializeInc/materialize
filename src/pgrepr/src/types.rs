@@ -9,6 +9,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::mem::size_of;
 
 use once_cell::sync::Lazy;
 
@@ -142,6 +143,8 @@ pub enum Type {
     RegClass,
     /// A small int vector.
     Int2Vector,
+    /// A Materialize timestamp.
+    MzTimestamp,
 }
 
 /// An unpacked [`typmod`](Type::typmod) for a [`Type`].
@@ -442,6 +445,26 @@ pub static UINT8_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     )
 });
 
+/// An anonymous [`Type::MzTimestamp`], akin to [`postgres_types::Type::TEXT`].
+pub static MZTIMESTAMP: Lazy<postgres_types::Type> = Lazy::new(|| {
+    postgres_types::Type::new(
+        "mztimestamp".to_owned(),
+        oid::TYPE_MZTIMESTAMP_OID,
+        postgres_types::Kind::Pseudo,
+        "mz_catalog".to_owned(),
+    )
+});
+
+/// An anonymous [`Type::Array`], akin to [`postgres_types::Type::TEXT_ARRAY`].
+pub static MZTIMESTAMP_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
+    postgres_types::Type::new(
+        "mztimestamp_array".to_owned(),
+        oid::TYPE_MZTIMESTAMP_ARRAY_OID,
+        postgres_types::Kind::Pseudo,
+        "mz_catalog".to_owned(),
+    )
+});
+
 impl Type {
     /// Returns the type corresponding to the provided OID, if the OID is known.
     pub fn from_oid(oid: u32) -> Result<Type, TypeFromOidError> {
@@ -610,6 +633,7 @@ impl Type {
                 Type::RegProc => &postgres_types::Type::REGPROC_ARRAY,
                 Type::RegType => &postgres_types::Type::REGTYPE_ARRAY,
                 Type::Int2Vector => &postgres_types::Type::INT2_VECTOR_ARRAY,
+                Type::MzTimestamp => &MZTIMESTAMP_ARRAY,
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -643,6 +667,7 @@ impl Type {
             Type::RegProc => &postgres_types::Type::REGPROC,
             Type::RegType => &postgres_types::Type::REGTYPE,
             Type::Int2Vector => &postgres_types::Type::INT2_VECTOR,
+            Type::MzTimestamp => &MZTIMESTAMP,
         }
     }
 
@@ -760,6 +785,7 @@ impl Type {
             | Type::Timestamp { precision: None }
             | Type::TimestampTz { precision: None }
             | Type::Uuid
+            | Type::MzTimestamp
             | Type::VarChar { max_length: None } => None,
         }
     }
@@ -801,6 +827,11 @@ impl Type {
             Type::RegProc => 4,
             Type::RegType => 4,
             Type::Int2Vector => -1,
+            // Don't hard code this because should it change in the future it
+            // would be very difficult to remember to change this function.
+            Type::MzTimestamp => size_of::<mz_repr::Timestamp>()
+                .try_into()
+                .expect("must fit"),
         }
     }
 
@@ -918,6 +949,7 @@ impl TryFrom<&Type> for ScalarType {
             Type::RegProc => Ok(ScalarType::RegProc),
             Type::RegType => Ok(ScalarType::RegType),
             Type::Int2Vector => Ok(ScalarType::Int2Vector),
+            Type::MzTimestamp => Ok(ScalarType::MzTimestamp),
         }
     }
 }
@@ -1065,6 +1097,7 @@ impl From<&ScalarType> for Type {
             ScalarType::RegProc => Type::RegProc,
             ScalarType::RegType => Type::RegType,
             ScalarType::Int2Vector => Type::Int2Vector,
+            ScalarType::MzTimestamp => Type::MzTimestamp,
         }
     }
 }

@@ -205,8 +205,8 @@ pub struct CatalogConfig {
     /// NOTE(benesch): this is only necessary for producing unique Kafka sink
     /// topics. Perhaps we can remove this when #2915 is complete.
     pub nonce: u64,
-    /// A persistent UUID associated with the catalog.
-    pub cluster_id: Uuid,
+    /// A persistent ID associated with the environment.
+    pub environment_id: String,
     /// A transient UUID associated with this process.
     pub session_id: Uuid,
     /// Whether the server is running in unsafe mode.
@@ -435,6 +435,7 @@ pub enum CatalogType<T: TypeReference> {
     UInt16,
     UInt32,
     UInt64,
+    MzTimestamp,
     Interval,
     Jsonb,
     List {
@@ -603,7 +604,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     start_time: DateTime::<Utc>::MIN_UTC,
     start_instant: Instant::now(),
     nonce: 0,
-    cluster_id: Uuid::from_u128(0),
+    environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
     session_id: Uuid::from_u128(0),
     unsafe_mode: true,
     build_info: &DUMMY_BUILD_INFO,

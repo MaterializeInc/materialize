@@ -22,6 +22,7 @@ use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, Indeterminate};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
+use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
@@ -37,7 +38,8 @@ use crate::internal::state::{HollowBatch, Upper};
 use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct WriterId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for WriterId {
@@ -57,6 +59,20 @@ impl std::str::FromStr for WriterId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         parse_id('w', "WriterId", s).map(WriterId)
+    }
+}
+
+impl From<WriterId> for String {
+    fn from(writer_id: WriterId) -> Self {
+        writer_id.to_string()
+    }
+}
+
+impl TryFrom<String> for WriterId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -94,7 +110,7 @@ where
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
-    pub(crate) compact: Option<Compactor>,
+    pub(crate) compact: Option<Compactor<T, D>>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) writer_id: WriterId,
@@ -449,6 +465,7 @@ where
                     desc: desc.clone(),
                     parts,
                     len: num_updates,
+                    runs: vec![],
                 },
                 &self.writer_id,
                 heartbeat_timestamp,
@@ -697,6 +714,8 @@ where
 #[cfg(test)]
 mod tests {
     use differential_dataflow::consolidation::consolidate_updates;
+    use serde_json::json;
+    use std::str::FromStr;
 
     use crate::tests::{all_ok, new_test_client};
     use crate::ShardId;
@@ -779,5 +798,37 @@ mod tests {
         let mut actual = read.expect_snapshot_and_fetch(3).await;
         consolidate_updates(&mut actual);
         assert_eq!(actual, all_ok(&expected, 3));
+    }
+
+    #[test]
+    fn writer_id_human_readable_serde() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct Container {
+            writer_id: WriterId,
+        }
+
+        // roundtrip through json
+        let id = WriterId::from_str("w00000000-1234-5678-0000-000000000000").expect("valid id");
+        assert_eq!(
+            id,
+            serde_json::from_value(serde_json::to_value(id.clone()).expect("serializable"))
+                .expect("deserializable")
+        );
+
+        // deserialize a serialized string directly
+        assert_eq!(
+            id,
+            serde_json::from_str("\"w00000000-1234-5678-0000-000000000000\"")
+                .expect("deserializable")
+        );
+
+        // roundtrip id through a container type
+        let json = json!({ "writer_id": id });
+        assert_eq!(
+            "{\"writer_id\":\"w00000000-1234-5678-0000-000000000000\"}",
+            &json.to_string()
+        );
+        let container: Container = serde_json::from_value(json).expect("deserializable");
+        assert_eq!(container.writer_id, id);
     }
 }

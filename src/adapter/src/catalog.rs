@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -363,7 +364,7 @@ impl CatalogState {
             let source_name = QualifiedObjectName {
                 qualifiers: ObjectQualifiers {
                     database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+                    schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
                 },
                 item: format!("{}_{}", log.name, replica_id),
             };
@@ -376,7 +377,7 @@ impl CatalogState {
             assert!(name_template.find("{}").is_some());
             let name = name_template.replace("{}", &replica_id.to_string());
             let sql = "CREATE VIEW ".to_string()
-                + MZ_CATALOG_SCHEMA
+                + MZ_INTERNAL_SCHEMA
                 + "."
                 + &name
                 + " AS "
@@ -391,7 +392,7 @@ impl CatalogState {
                         qualifiers: ObjectQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
-                                self.get_mz_catalog_schema_id().clone(),
+                                self.get_mz_internal_schema_id().clone(),
                             ),
                         },
                         item: name,
@@ -587,7 +588,7 @@ impl CatalogState {
         &self.database_by_id[database_id]
     }
 
-    async fn insert_compute_instance(
+    fn insert_compute_instance(
         &mut self,
         id: ComputeInstanceId,
         name: String,
@@ -609,7 +610,7 @@ impl CatalogState {
                         qualifiers: ObjectQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
-                                self.get_mz_catalog_schema_id().clone(),
+                                self.get_mz_internal_schema_id().clone(),
                             ),
                         },
                         item: index_name.clone(),
@@ -838,6 +839,10 @@ impl CatalogState {
 
     pub fn get_information_schema_id(&self) -> &SchemaId {
         &self.ambient_schemas_by_name[INFORMATION_SCHEMA]
+    }
+
+    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
+        &self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
     }
 
     pub fn is_system_schema(&self, schema: &str) -> bool {
@@ -1768,7 +1773,7 @@ impl<S: Append> Catalog<S> {
                     start_instant: Instant::now(),
                     nonce: rand::random(),
                     unsafe_mode: config.unsafe_mode,
-                    cluster_id: config.storage.cluster_id(),
+                    environment_id: config.environment_id,
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
                     timestamp_interval: Duration::from_secs(1),
@@ -1785,11 +1790,11 @@ impl<S: Append> Catalog<S> {
             storage: Arc::new(Mutex::new(config.storage)),
         };
 
-        catalog.create_temporary_schema(SYSTEM_CONN_ID).await?;
+        catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
 
         let databases = catalog.storage().await.load_databases().await?;
         for (id, name) in databases {
-            let oid = catalog.allocate_oid().await?;
+            let oid = catalog.allocate_oid()?;
             catalog.state.database_by_id.insert(
                 id.clone(),
                 Database {
@@ -1808,7 +1813,7 @@ impl<S: Append> Catalog<S> {
 
         let schemas = catalog.storage().await.load_schemas().await?;
         for (schema_id, schema_name, database_id) in schemas {
-            let oid = catalog.allocate_oid().await?;
+            let oid = catalog.allocate_oid()?;
             let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
                 Some(database_id) => {
                     let db = catalog
@@ -1846,7 +1851,7 @@ impl<S: Append> Catalog<S> {
 
         let roles = catalog.storage().await.load_roles().await?;
         for (id, name) in roles {
-            let oid = catalog.allocate_oid().await?;
+            let oid = catalog.allocate_oid()?;
             catalog.state.roles.insert(
                 name.clone(),
                 Role {
@@ -1888,14 +1893,14 @@ impl<S: Append> Catalog<S> {
             };
             match builtin {
                 Builtin::Log(log) => {
-                    let oid = catalog.allocate_oid().await?;
+                    let oid = catalog.allocate_oid()?;
                     catalog
                         .state
                         .insert_item(id, oid, name.clone(), CatalogItem::Log(log));
                 }
 
                 Builtin::Table(table) => {
-                    let oid = catalog.allocate_oid().await?;
+                    let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -1926,14 +1931,14 @@ impl<S: Append> Catalog<S> {
                                 view.name, e
                             )
                         });
-                    let oid = catalog.allocate_oid().await?;
+                    let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(id, oid, name, item);
                 }
 
                 Builtin::Type(_) => unreachable!("loaded separately"),
 
                 Builtin::Func(func) => {
-                    let oid = catalog.allocate_oid().await?;
+                    let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -1943,7 +1948,7 @@ impl<S: Append> Catalog<S> {
                 }
 
                 Builtin::StorageCollection(coll) => {
-                    let oid = catalog.allocate_oid().await?;
+                    let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
                         id,
                         oid,
@@ -2008,8 +2013,7 @@ impl<S: Append> Catalog<S> {
             };
             catalog
                 .state
-                .insert_compute_instance(id, name, introspection, introspection_sources)
-                .await;
+                .insert_compute_instance(id, name, introspection, introspection_sources);
         }
 
         let replicas = catalog
@@ -2086,7 +2090,7 @@ impl<S: Append> Catalog<S> {
         let mut catalog = {
             let mut storage = catalog.storage().await;
             let mut tx = storage.transaction().await?;
-            let catalog = Self::load_catalog_items(&mut tx, &catalog).await?;
+            let catalog = Self::load_catalog_items(&mut tx, &catalog)?;
             tx.commit().await?;
             catalog
         };
@@ -2288,6 +2292,7 @@ impl<S: Append> Catalog<S> {
             CatalogType::UInt16 => CatalogType::UInt16,
             CatalogType::UInt32 => CatalogType::UInt32,
             CatalogType::UInt64 => CatalogType::UInt64,
+            CatalogType::MzTimestamp => CatalogType::MzTimestamp,
             CatalogType::Interval => CatalogType::Interval,
             CatalogType::Jsonb => CatalogType::Jsonb,
             CatalogType::Numeric => CatalogType::Numeric,
@@ -2517,7 +2522,7 @@ impl<S: Append> Catalog<S> {
     /// objects, which is necessary for at least one catalog migration.
     ///
     /// TODO(justin): it might be nice if these were two different types.
-    pub async fn load_catalog_items<'a>(
+    pub fn load_catalog_items<'a>(
         tx: &mut storage::Transaction<'a, S>,
         c: &Catalog<S>,
     ) -> Result<Catalog<S>, Error> {
@@ -2543,7 +2548,7 @@ impl<S: Append> Catalog<S> {
                     }))
                 }
             };
-            let oid = c.allocate_oid().await?;
+            let oid = c.allocate_oid()?;
             c.state.insert_item(id, oid, name, item);
         }
         c.transient_revision = 1;
@@ -2565,6 +2570,7 @@ impl<S: Append> Catalog<S> {
         let storage = storage::Connection::open(
             stash,
             &BootstrapArgs {
+                now: (now)(),
                 default_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
             },
@@ -2575,6 +2581,7 @@ impl<S: Append> Catalog<S> {
             storage,
             unsafe_mode: true,
             build_info: &DUMMY_BUILD_INFO,
+            environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
             now,
             skip_migrations: true,
             metrics_registry,
@@ -2695,7 +2702,7 @@ impl<S: Append> Catalog<S> {
         self.storage().await.allocate_user_id().await
     }
 
-    pub async fn allocate_oid(&mut self) -> Result<u32, Error> {
+    pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         self.state.allocate_oid()
     }
 
@@ -2854,14 +2861,18 @@ impl<S: Append> Catalog<S> {
         self.state.get_information_schema_id()
     }
 
+    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
+        self.state.get_mz_internal_schema_id()
+    }
+
     pub fn get_database(&self, id: &DatabaseId) -> &Database {
         self.state.get_database(id)
     }
 
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
-    pub async fn create_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
-        let oid = self.allocate_oid().await?;
+    pub fn create_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
+        let oid = self.allocate_oid()?;
         self.state.temporary_schemas.insert(
             conn_id,
             Schema {
@@ -3012,11 +3023,7 @@ impl<S: Append> Catalog<S> {
         object_type: ObjectType,
         event_details: EventDetails,
     ) -> Result<(), Error> {
-        let session = match session {
-            Some(session) => session,
-            None => return Ok(()),
-        };
-        let user = session.user().to_string();
+        let user = session.map(|session| session.user().to_string());
         let occurred_at = (self.state.config.now)();
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(
@@ -3086,9 +3093,15 @@ impl<S: Append> Catalog<S> {
     ) -> Result<ConcreteComputeInstanceReplicaLocation, AdapterError> {
         let cluster_replica_sizes = &self.state.cluster_replica_sizes;
         let location = match location {
-            SerializedComputeInstanceReplicaLocation::Remote { addrs } => {
-                ConcreteComputeInstanceReplicaLocation::Remote { addrs }
-            }
+            SerializedComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => ConcreteComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             SerializedComputeInstanceReplicaLocation::Managed {
                 size,
                 availability_zone,
@@ -3450,7 +3463,10 @@ impl<S: Append> Catalog<S> {
                         &mut builtin_table_updates,
                         EventType::Create,
                         ObjectType::Cluster,
-                        EventDetails::NameV1(mz_audit_log::NameV1 { name: name.clone() }),
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id,
+                            name: name.clone(),
+                        }),
                     )?;
                     vec![Action::CreateComputeInstance {
                         id,
@@ -3469,11 +3485,17 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
+                    let id = tx.insert_compute_instance_replica(
+                        &on_cluster_name,
+                        &name,
+                        &config.clone().into(),
+                    )?;
                     if let ConcreteComputeInstanceReplicaLocation::Managed { size, .. } =
                         &config.location
                     {
                         let details = EventDetails::CreateComputeInstanceReplicaV1(
                             mz_audit_log::CreateComputeInstanceReplicaV1 {
+                                cluster_id: id,
                                 cluster_name: on_cluster_name.clone(),
                                 replica_name: name.clone(),
                                 logical_size: size.clone(),
@@ -3489,11 +3511,7 @@ impl<S: Append> Catalog<S> {
                         )?;
                     }
                     vec![Action::CreateComputeInstanceReplica {
-                        id: tx.insert_compute_instance_replica(
-                            &on_cluster_name,
-                            &name,
-                            &config.clone().into(),
-                        )?,
+                        id,
                         name,
                         on_cluster_name,
                         config,
@@ -3586,7 +3604,8 @@ impl<S: Append> Catalog<S> {
                     vec![Action::DropRole { name }]
                 }
                 Op::DropComputeInstance { name } => {
-                    let introspection_source_index_ids = tx.remove_compute_instance(&name)?;
+                    let (instance_id, introspection_source_index_ids) =
+                        tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
                     for id in &introspection_source_index_ids {
                         builtin_table_updates.extend(self.state.pack_item_update(*id, -1));
@@ -3597,7 +3616,10 @@ impl<S: Append> Catalog<S> {
                         &mut builtin_table_updates,
                         EventType::Drop,
                         ObjectType::Cluster,
-                        EventDetails::NameV1(mz_audit_log::NameV1 { name: name.clone() }),
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: instance_id,
+                            name: name.clone(),
+                        }),
                     )?;
                     vec![Action::DropComputeInstance {
                         name,
@@ -3628,6 +3650,7 @@ impl<S: Append> Catalog<S> {
 
                     let details = EventDetails::DropComputeInstanceReplicaV1(
                         mz_audit_log::DropComputeInstanceReplicaV1 {
+                            cluster_id: instance.id,
                             cluster_name: instance.name.clone(),
                             replica_name: name.clone(),
                         },
@@ -3820,15 +3843,15 @@ impl<S: Append> Catalog<S> {
                     vec![]
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
-                    tx.upsert_system_config(&name, &value).await?;
+                    tx.upsert_system_config(&name, &value)?;
                     vec![Action::UpdateSysytemConfiguration { name, value }]
                 }
                 Op::ResetSystemConfiguration { name } => {
-                    tx.remove_system_config(&name).await;
+                    tx.remove_system_config(&name);
                     vec![Action::ResetSystemConfiguration { name }]
                 }
                 Op::ResetAllSystemConfiguration {} => {
-                    tx.clear_system_configs().await;
+                    tx.clear_system_configs();
                     vec![Action::ResetAllSystemConfiguration]
                 }
                 Op::UpdateRotatedKeys {
@@ -3945,14 +3968,12 @@ impl<S: Append> Catalog<S> {
                             .iter()
                             .map(|(_, id)| *id)
                             .collect();
-                    state
-                        .insert_compute_instance(
-                            id,
-                            name.clone(),
-                            config,
-                            arranged_introspection_sources,
-                        )
-                        .await;
+                    state.insert_compute_instance(
+                        id,
+                        name.clone(),
+                        config,
+                        arranged_introspection_sources,
+                    );
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
                     for id in arranged_introspection_source_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
@@ -4433,6 +4454,16 @@ impl<S: Append> Catalog<S> {
     pub fn system_config(&self) -> &SystemVars {
         self.state.system_config()
     }
+
+    pub async fn most_recent_storage_usage_collection(&self) -> Result<Option<EpochMillis>, Error> {
+        Ok(self
+            .storage()
+            .await
+            .storage_usage()
+            .await?
+            .map(|usage| usage.timestamp())
+            .max())
+    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {
@@ -4584,6 +4615,8 @@ impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceRep
 pub enum SerializedComputeInstanceReplicaLocation {
     Remote {
         addrs: BTreeSet<String>,
+        compute_addrs: BTreeSet<String>,
+        workers: NonZeroUsize,
     },
     Managed {
         size: String,
@@ -4597,7 +4630,15 @@ pub enum SerializedComputeInstanceReplicaLocation {
 impl From<ConcreteComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
     fn from(loc: ConcreteComputeInstanceReplicaLocation) -> Self {
         match loc {
-            ConcreteComputeInstanceReplicaLocation::Remote { addrs } => Self::Remote { addrs },
+            ConcreteComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => Self::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             ConcreteComputeInstanceReplicaLocation::Managed {
                 allocation: _,
                 size,

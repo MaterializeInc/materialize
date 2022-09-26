@@ -1162,6 +1162,10 @@ where
                         accum: i128::from(u),
                         non_nulls: 1,
                     },
+                    Datum::MzTimestamp(t) => AccumInner::SimpleNumber {
+                        accum: i128::from(u64::from(t)),
+                        non_nulls: 1,
+                    },
                     Datum::Null => AccumInner::SimpleNumber {
                         accum: 0,
                         non_nulls: 0,
@@ -1484,6 +1488,7 @@ pub mod monoids {
             | AggregateFunc::MaxUInt16
             | AggregateFunc::MaxUInt32
             | AggregateFunc::MaxUInt64
+            | AggregateFunc::MaxMzTimestamp
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
             | AggregateFunc::MaxBool
@@ -1498,6 +1503,7 @@ pub mod monoids {
             | AggregateFunc::MinUInt16
             | AggregateFunc::MinUInt32
             | AggregateFunc::MinUInt64
+            | AggregateFunc::MinMzTimestamp
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
             | AggregateFunc::MinBool

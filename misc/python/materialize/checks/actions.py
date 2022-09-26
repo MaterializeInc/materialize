@@ -34,13 +34,23 @@ class StartMz(Action):
         c.up("materialized")
         c.wait_for_materialized()
 
+        for config_param in ["max_tables", "max_sources"]:
+            c.sql(
+                f"ALTER SYSTEM SET {config_param} TO 1000",
+                user="mz_system",
+                port=6877,
+            )
+
 
 class UseComputed(Action):
     def execute(self, c: Composition) -> None:
         c.sql(
             """
             DROP CLUSTER REPLICA default.default_replica;
-            CREATE CLUSTER REPLICA default.default_replica REMOTE ['computed_1:2100'];
+            CREATE CLUSTER REPLICA default.default_replica
+                REMOTE ['computed_1:2100'],
+                COMPUTE ['computed_1:2102'],
+                WORKERS 1;
         """
         )
 
@@ -53,11 +63,7 @@ class KillComputed(Action):
 
 class StartComputed(Action):
     def execute(self, c: Composition) -> None:
-        with c.override(
-            Computed(
-                name="computed_1", options="--workers 1 --process 0 computed_1:2102"
-            )
-        ):
+        with c.override(Computed(name="computed_1")):
             c.up("computed_1")
 
 
@@ -141,16 +147,3 @@ class Testdrive(Action):
 
     def execute(self, c: Composition) -> None:
         c.testdrive(input=self.td_str)
-
-
-class AlterSystem(Action):
-    def __init__(self, config_param: str, value: str) -> None:
-        self.config_param = config_param
-        self.value = value
-
-    def execute(self, c: Composition) -> None:
-        c.sql(
-            f"ALTER SYSTEM SET {self.config_param} TO {self.value}",
-            user="mz_system",
-            port=6877,
-        )

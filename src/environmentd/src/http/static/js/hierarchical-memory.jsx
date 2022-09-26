@@ -52,25 +52,25 @@ function Dataflows() {
                 SELECT DISTINCT
                     id, address
                 FROM
-                    mz_catalog.mz_dataflow_addresses;
+                    mz_internal.mz_dataflow_addresses;
 
                 SELECT DISTINCT
                     id, name
                 FROM
-                    mz_catalog.mz_dataflow_operators;
+                    mz_internal.mz_dataflow_operators;
 
                 SELECT
-                    id, source_node, target_node, source_port, target_port, sum(sent) as sent
+                    id, from_index, to_index, from_port, to_port, sum(sent) as sent
                 FROM
-                    mz_catalog.mz_dataflow_channels AS channels
-                    LEFT JOIN mz_catalog.mz_message_counts AS counts
-                        ON channels.id = counts.channel AND channels.worker = counts.source_worker
-                GROUP BY id, source_node, target_node, source_port, target_port;
+                    mz_internal.mz_dataflow_channels AS channels
+                    LEFT JOIN mz_internal.mz_message_counts AS counts
+                        ON channels.id = counts.channel_id AND channels.worker_id = counts.from_worker_id
+                GROUP BY id, from_index, to_index, from_port, to_port;
 
                 SELECT
-                    operator as id, sum(records)
+                    operator_id as id, sum(records)
                 FROM
-                    mz_catalog.mz_arrangement_sizes
+                    mz_internal.mz_arrangement_sizes
                 GROUP BY
                     id;
             `);
@@ -162,7 +162,7 @@ function Dataflows() {
       // Meant to render the scope identifier by addr, and its children recursively.
       async function render_scope(addr) {
 
-        if (scope_channels.get(addr) != null) {
+        if (scope_channels.get(addr) != null && scope_children.get(addr) != undefined) {
 
           let ids_seen = [];
           const edges = scope_channels.get(addr).map(([source, target, source_port, target_port, sent]) => {

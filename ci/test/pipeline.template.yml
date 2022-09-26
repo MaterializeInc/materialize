@@ -75,7 +75,7 @@ steps:
     command: bin/check
     env:
       CARGO_INCREMENTAL: "0"
-      RUSTUP_TOOLCHAIN: $ENVIRONMENTD_RUST_VERSION
+      RUSTUP_TOOLCHAIN: $RUST_VERSION
     inputs:
       - Cargo.lock
       - "**/Cargo.toml"
@@ -462,6 +462,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persist
+          args: [--consensus=mem, --blob=mem]
     agents:
       queue: linux-x86_64
 
@@ -540,7 +541,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres]
+          args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres, --check=PgCdc]
 
   - id: cloudtest
     label: Cloudtest

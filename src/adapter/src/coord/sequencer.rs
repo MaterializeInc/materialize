@@ -23,8 +23,7 @@ use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeSinkId, ConcreteComputeInstanceReplicaConfig,
-    ConcreteComputeInstanceReplicaLogging,
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging,
 };
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
@@ -54,8 +53,9 @@ use mz_sql::plan::{
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
-    RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom, TailPlan, View,
+    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
+    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom,
+    TailPlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
@@ -81,19 +81,22 @@ use crate::session::{
     WriteOp,
 };
 use crate::tail::PendingTail;
-use crate::util::{send_immediate_rows, ClientTransmitter};
+use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
 use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_plan(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
+        mut tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
+        let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+        tx.set_allowed(responses);
+
         match plan {
             Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateConnection(plan) => {
@@ -418,7 +421,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id().await?;
-        let source_oid = self.catalog.allocate_oid().await?;
+        let source_oid = self.catalog.allocate_oid()?;
         let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
@@ -503,7 +506,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: CreateConnectionPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let connection_oid = self.catalog.allocate_oid().await?;
+        let connection_oid = self.catalog.allocate_oid()?;
         let connection_gid = self.catalog.allocate_user_id().await?;
         let mut connection = plan.connection.connection.clone();
 
@@ -566,8 +569,8 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let db_oid = self.catalog.allocate_oid().await?;
-        let schema_oid = self.catalog.allocate_oid().await?;
+        let db_oid = self.catalog.allocate_oid()?;
+        let schema_oid = self.catalog.allocate_oid()?;
         let ops = vec![catalog::Op::CreateDatabase {
             name: plan.name.clone(),
             oid: db_oid,
@@ -588,7 +591,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateSchema {
             database_id: plan.database_spec,
             schema_name: plan.schema_name,
@@ -612,7 +615,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateRole {
             name: plan.name,
             oid,
@@ -637,7 +640,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("Must have at least one availability zone");
         let first_argmin = n_replicas_per_az
             .iter()
-            .find_map(|(k, v)| (*v == min).then(|| k))
+            .find_map(|(k, v)| (*v == min).then_some(k))
             .expect("Must have at least one availability zone");
         first_argmin.clone()
     }
@@ -691,9 +694,15 @@ impl<S: Append + 'static> Coordinator<S> {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
             let location = match replica_config {
-                ComputeInstanceReplicaConfig::Remote { addrs } => {
-                    SerializedComputeInstanceReplicaLocation::Remote { addrs }
-                }
+                ComputeInstanceReplicaConfig::Remote {
+                    addrs,
+                    compute_addrs,
+                    workers,
+                } => SerializedComputeInstanceReplicaLocation::Remote {
+                    addrs,
+                    compute_addrs,
+                    workers,
+                },
                 ComputeInstanceReplicaConfig::Managed {
                     size,
                     availability_zone,
@@ -814,9 +823,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Choose default AZ if necessary
         let location = match config {
-            ComputeInstanceReplicaConfig::Remote { addrs } => {
-                SerializedComputeInstanceReplicaLocation::Remote { addrs }
-            }
+            ComputeInstanceReplicaConfig::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            } => SerializedComputeInstanceReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             ComputeInstanceReplicaConfig::Managed {
                 size,
                 availability_zone,
@@ -931,7 +946,7 @@ impl<S: Append + 'static> Coordinator<S> {
             conn_id,
             depends_on,
         };
-        let table_oid = self.catalog.allocate_oid().await?;
+        let table_oid = self.catalog.allocate_oid()?;
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
             oid: table_oid,
@@ -999,7 +1014,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let payload = self.extract_secret(session, &mut secret.secret_as)?;
 
         let id = self.catalog.allocate_user_id().await?;
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let secret = catalog::Secret {
             create_sql: format!("CREATE SECRET {} AS '********'", full_name),
         };
@@ -1053,7 +1068,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 return;
             }
         };
-        let oid = match self.catalog.allocate_oid().await {
+        let oid = match self.catalog.allocate_oid() {
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
@@ -1212,7 +1227,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ops.extend(self.catalog.drop_items_ops(&[id]));
         }
         let view_id = self.catalog.allocate_user_id().await?;
-        let view_oid = self.catalog.allocate_oid().await?;
+        let view_oid = self.catalog.allocate_oid()?;
         let optimized_expr = self.view_optimizer.optimize(view.expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
@@ -1275,7 +1290,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Allocate IDs for the materialized view in the catalog.
         let id = self.catalog.allocate_user_id().await?;
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         // Allocate a unique ID that can be used by the dataflow builder to
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
@@ -1379,7 +1394,7 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
             compute_instance,
         };
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -1424,7 +1439,7 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
         };
         let id = self.catalog.allocate_user_id().await?;
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -1901,7 +1916,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
         // Queries are independent of the logical timestamp iff there are no referenced
-        // sources or indexes and there is no reference to `mz_logical_timestamp()`.
+        // sources or indexes and there is no reference to `mz_now()`.
         let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
         // For queries that do not use AS OF, get the
         // timestamp of the in-progress transaction or create one. If this is an AS OF
@@ -2031,7 +2046,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.catalog.state(),
                 plan,
                 ExprPrepStyle::OneShot {
-                    logical_time: Some(timestamp.into()),
+                    logical_time: Some(timestamp),
                     session,
                 },
             )?;
@@ -2546,13 +2561,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     compute_instance,
                 )?;
                 let since = self.least_valid_read(&id_bundle).elements().to_vec();
-                let upper = self.least_valid_write(&id_bundle).elements().to_vec();
-                let has_table = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-                let table_read_ts = if has_table {
-                    Some(self.get_local_read_ts())
-                } else {
-                    None
-                };
+                let upper = self.least_valid_write(&id_bundle);
+                let respond_immediately = !upper.less_equal(&timestamp);
+                let upper = upper.elements().to_vec();
                 let mut sources = Vec::new();
                 {
                     for id in id_bundle.storage_ids.iter() {
@@ -2576,9 +2587,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 {
                     if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-                        let compute = self.controller.compute.instance(compute_instance).unwrap();
                         for id in compute_ids {
-                            let state = compute.collection(*id).unwrap();
+                            let state = self
+                                .controller
+                                .compute
+                                .collection(compute_instance, *id)
+                                .unwrap();
                             let name = self
                                 .catalog
                                 .try_get_entry(id)
@@ -2601,9 +2615,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     timestamp,
                     since,
                     upper,
-                    has_table,
-                    table_read_ts,
+                    global_timestamp: self.get_local_read_ts(),
+                    respond_immediately,
                     sources,
+                    timeline,
                 };
                 explanation.to_string()
             }
@@ -2764,7 +2779,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 if selection.contains_temporal() {
                     tx.send(
                         Err(AdapterError::Unsupported(
-                            "calls to mz_logical_timestamp in write statements",
+                            "calls to mz_now in write statements",
                         )),
                         session,
                     );
@@ -2938,8 +2953,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let ts = self.get_local_read_ts();
-        // TODO: Convert to MzTimestamp.
-        let ts = MirScalarExpr::literal_ok(Datum::from(u64::from(ts)), ScalarType::UInt64);
+        let ts = MirScalarExpr::literal_ok(Datum::from(ts), ScalarType::MzTimestamp);
         let peek_response = match self
             .sequence_peek(
                 &mut session,
@@ -3283,7 +3297,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
         if update_max_result_size {
-            self.update_max_result_size().await;
+            self.update_max_result_size();
         }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
@@ -3299,7 +3313,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
         if update_max_result_size {
-            self.update_max_result_size().await;
+            self.update_max_result_size();
         }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
@@ -3313,7 +3327,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
-        self.update_max_result_size().await;
+        self.update_max_result_size();
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
@@ -3327,13 +3341,15 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    async fn update_max_result_size(&mut self) {
+    fn update_max_result_size(&mut self) {
         let mut compute = self.controller.active_compute();
         for compute_instance in self.catalog.compute_instances() {
-            let mut instance = compute.instance(compute_instance.id).unwrap();
-            instance
-                .update_max_result_size(self.catalog.system_config().max_result_size())
-                .await;
+            compute
+                .update_max_result_size(
+                    compute_instance.id,
+                    self.catalog.system_config().max_result_size(),
+                )
+                .unwrap();
         }
     }
 

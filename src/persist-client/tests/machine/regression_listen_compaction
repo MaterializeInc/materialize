@@ -17,7 +17,11 @@ one 1 1
 ----
 parts=1 len=1
 
-compare-and-append input=b0
+register-writer writer_id=w11111111-1111-1111-1111-111111111111
+----
+[0]
+
+compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
 ----
 ok
 
@@ -35,7 +39,7 @@ two 2 1
 ----
 parts=1 len=1
 
-compare-and-append input=b1
+compare-and-append input=b1 writer_id=w11111111-1111-1111-1111-111111111111
 ----
 ok
 
@@ -53,7 +57,7 @@ threeD 3 1
 ----
 parts=1 len=4
 
-compare-and-append input=b2
+compare-and-append input=b2 writer_id=w11111111-1111-1111-1111-111111111111
 ----
 ok
 

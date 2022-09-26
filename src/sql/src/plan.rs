@@ -26,25 +26,31 @@
 // `plan_root_query` and fanning out based on the contents of the `SELECT`
 // statement.
 
+// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
+// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
+#![allow(clippy::extra_unused_lifetimes)]
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
+use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_storage::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage::types::sources::{SourceDesc, Timeline};
 
 use crate::ast::{
     ExplainOptions, ExplainStageNew, ExplainStageOld, Expr, FetchDirection, IndexOptionName,
-    NoticeSeverity, ObjectType, Raw, SetVariableValue, Statement, TransactionAccessMode,
+    NoticeSeverity, ObjectType, Raw, SetVariableValue, Statement, StatementKind,
+    TransactionAccessMode,
 };
 use crate::catalog::{CatalogType, IdReference};
 use crate::names::{
@@ -76,7 +82,8 @@ pub use query::{QueryContext, QueryLifetime};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
-#[derive(Debug)]
+#[derive(Debug, EnumKind)]
+#[enum_kind(PlanKind)]
 pub enum Plan {
     CreateConnection(CreateConnectionPlan),
     CreateDatabase(CreateDatabasePlan),
@@ -136,6 +143,86 @@ pub enum Plan {
     RotateKeys(RotateKeysPlan),
 }
 
+impl Plan {
+    /// Expresses which [`StatementKind`] can generate which set of
+    /// [`PlanKind`].
+    pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
+        match stmt {
+            StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
+            StatementKind::AlterIndex => vec![
+                PlanKind::AlterIndexResetOptions,
+                PlanKind::AlterIndexSetOptions,
+                PlanKind::AlterNoop,
+            ],
+            StatementKind::AlterObjectRename => {
+                vec![PlanKind::AlterItemRename, PlanKind::AlterNoop]
+            }
+            StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
+            StatementKind::AlterSource => vec![PlanKind::AlterNoop, PlanKind::AlterSource],
+            StatementKind::AlterSystemReset => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterSystemReset]
+            }
+            StatementKind::AlterSystemResetAll => {
+                vec![PlanKind::AlterNoop, PlanKind::AlterSystemResetAll]
+            }
+            StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
+            StatementKind::Close => vec![PlanKind::Close],
+            StatementKind::Commit => vec![PlanKind::CommitTransaction],
+            StatementKind::Copy => vec![
+                PlanKind::CopyFrom,
+                PlanKind::Peek,
+                PlanKind::SendDiffs,
+                PlanKind::Tail,
+            ],
+            StatementKind::CreateCluster => vec![PlanKind::CreateComputeInstance],
+            StatementKind::CreateClusterReplica => vec![PlanKind::CreateComputeInstanceReplica],
+            StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
+            StatementKind::CreateDatabase => vec![PlanKind::CreateDatabase],
+            StatementKind::CreateIndex => vec![PlanKind::CreateIndex],
+            StatementKind::CreateMaterializedView => vec![PlanKind::CreateMaterializedView],
+            StatementKind::CreateRole => vec![PlanKind::CreateRole],
+            StatementKind::CreateSchema => vec![PlanKind::CreateSchema],
+            StatementKind::CreateSecret => vec![PlanKind::CreateSecret],
+            StatementKind::CreateSink => vec![PlanKind::CreateSink],
+            StatementKind::CreateSource => vec![PlanKind::CreateSource],
+            StatementKind::CreateTable => vec![PlanKind::CreateTable],
+            StatementKind::CreateType => vec![PlanKind::CreateType],
+            StatementKind::CreateView => vec![PlanKind::CreateView],
+            StatementKind::CreateViews => vec![PlanKind::CreateViews],
+            StatementKind::Deallocate => vec![PlanKind::Deallocate],
+            StatementKind::Declare => vec![PlanKind::Declare],
+            StatementKind::Delete => vec![PlanKind::ReadThenWrite],
+            StatementKind::Discard => vec![PlanKind::DiscardAll, PlanKind::DiscardTemp],
+            StatementKind::DropClusterReplicas => vec![PlanKind::DropComputeInstanceReplica],
+            StatementKind::DropClusters => vec![PlanKind::DropComputeInstances],
+            StatementKind::DropDatabase => vec![PlanKind::DropDatabase],
+            StatementKind::DropObjects => vec![PlanKind::DropItems],
+            StatementKind::DropRoles => vec![PlanKind::DropRoles],
+            StatementKind::DropSchema => vec![PlanKind::DropSchema],
+            StatementKind::Execute => vec![PlanKind::Execute],
+            StatementKind::Explain => vec![PlanKind::Explain],
+            StatementKind::Fetch => vec![PlanKind::Fetch],
+            StatementKind::Insert => vec![PlanKind::Insert],
+            StatementKind::Prepare => vec![PlanKind::Prepare],
+            StatementKind::Raise => vec![PlanKind::Raise],
+            StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
+            StatementKind::Rollback => vec![PlanKind::AbortTransaction],
+            StatementKind::Select => vec![PlanKind::Peek],
+            StatementKind::SetTransaction => vec![],
+            StatementKind::SetVariable => vec![PlanKind::SetVariable],
+            StatementKind::Show => vec![
+                PlanKind::Peek,
+                PlanKind::SendRows,
+                PlanKind::ShowVariable,
+                PlanKind::ShowAllVariables,
+            ],
+            StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
+            StatementKind::Tail => vec![PlanKind::Tail],
+            StatementKind::Update => vec![PlanKind::ReadThenWrite, PlanKind::SendRows],
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct StartTransactionPlan {
     pub access: Option<TransactionAccessMode>,
@@ -187,6 +274,8 @@ pub struct ComputeInstanceIntrospectionConfig {
 pub enum ComputeInstanceReplicaConfig {
     Remote {
         addrs: BTreeSet<String>,
+        compute_addrs: BTreeSet<String>,
+        workers: NonZeroUsize,
     },
     Managed {
         size: String,
@@ -197,7 +286,11 @@ pub enum ComputeInstanceReplicaConfig {
 impl ComputeInstanceReplicaConfig {
     pub fn get_az(&self) -> Option<&str> {
         match self {
-            ComputeInstanceReplicaConfig::Remote { addrs: _ } => None,
+            ComputeInstanceReplicaConfig::Remote {
+                addrs: _,
+                compute_addrs: _,
+                workers: _,
+            } => None,
             ComputeInstanceReplicaConfig::Managed {
                 size: _,
                 availability_zone,

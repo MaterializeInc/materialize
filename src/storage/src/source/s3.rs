@@ -56,13 +56,14 @@ use mz_repr::GlobalId;
 
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
+use crate::source::commit::LogCommitter;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
 use crate::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use crate::types::connections::ConnectionContext;
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{Compression, MzOffset, S3KeySource, SourceConnection};
+use crate::types::sources::{Compression, MzOffset, S3KeySource, S3SourceConnection};
 
 use super::metrics::SourceBaseMetrics;
 
@@ -811,6 +812,8 @@ impl SourceReader for S3SourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
     type Diff = ();
+    type OffsetCommitter = LogCommitter;
+    type Connection = S3SourceConnection;
 
     fn new(
         source_name: String,
@@ -818,19 +821,12 @@ impl SourceReader for S3SourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        s3_conn: Self::Connection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
-        let s3_conn = match connection {
-            SourceConnection::S3(s3_conn) => s3_conn,
-            _ => {
-                panic!("S3 is the only legitimate SourceConnection for S3SourceReader")
-            }
-        };
-
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
@@ -909,15 +905,22 @@ impl SourceReader for S3SourceReader {
             (dataflow_rx, shutdowner)
         };
 
-        Ok(S3SourceReader {
-            source_name,
-            id: source_id,
-            receiver_stream: receiver,
-            dataflow_status: shutdowner,
-            offset: S3Offset(0),
-            active_read_worker,
-            reported_unconsumed_partitions: false,
-        })
+        Ok((
+            S3SourceReader {
+                source_name,
+                id: source_id,
+                receiver_stream: receiver,
+                dataflow_status: shutdowner,
+                offset: S3Offset(0),
+                active_read_worker,
+                reported_unconsumed_partitions: false,
+            },
+            LogCommitter {
+                source_id,
+                worker_id,
+                worker_count,
+            },
+        ))
     }
 
     fn get_next_message(

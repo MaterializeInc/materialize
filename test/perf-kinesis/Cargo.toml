@@ -2,12 +2,12 @@
 name = "mz-perf-kinesis"
 description = "Tool to test Materialize's performance with AWS Kinesis."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.64"
+anyhow = "1.0.65"
 aws-config = { version = "0.48.0", default-features = false, features = ["native-tls"] }
 aws-sdk-kinesis = { version = "0.18.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-types = "0.48.0"

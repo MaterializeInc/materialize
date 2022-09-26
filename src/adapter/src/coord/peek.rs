@@ -261,7 +261,7 @@ fn permute_oneshot_mfp_around_index(
     key: &[MirScalarExpr],
 ) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
     // Convert `mfp` to an executable, non-temporal plan.
-    // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
+    // It should be non-temporal, as OneShot preparation populates `mz_now`.
     let mut safe_mfp = mfp
         .clone()
         .into_plan()
@@ -460,13 +460,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 literal_constraints,
                 map_filter_project,
             )) => (
-                (
-                    id,
-                    literal_constraints,
-                    timestamp,
-                    finishing.clone(),
-                    map_filter_project,
-                ),
+                (id, literal_constraints, timestamp, map_filter_project),
                 None,
             ),
             PeekPlan::SlowPath(PeekDataflowPlan {
@@ -484,9 +478,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
                     .active_compute()
-                    .instance(compute_instance)
-                    .unwrap()
-                    .create_dataflows(vec![dataflow])
+                    .create_dataflows(compute_instance, vec![dataflow])
                     .await
                     .unwrap();
                 self.initialize_compute_read_policies(
@@ -516,7 +508,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                         index_id, // transient identifier produced by `dataflow_plan`.
                         None,
                         timestamp,
-                        finishing.clone(),
                         map_filter_project,
                     ),
                     Some(index_id),
@@ -550,13 +541,12 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             .entry(conn_id)
             .or_default()
             .insert(uuid, compute_instance);
-        let (id, literal_constraints, timestamp, _finishing, map_filter_project) = peek_command;
+        let (id, literal_constraints, timestamp, map_filter_project) = peek_command;
 
         self.controller
             .active_compute()
-            .instance(compute_instance)
-            .unwrap()
             .peek(
+                compute_instance,
                 id,
                 literal_constraints,
                 uuid,
@@ -607,9 +597,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             for (compute_instance, uuids) in inverse {
                 self.controller
                     .active_compute()
-                    .instance(compute_instance)
-                    .unwrap()
-                    .cancel_peeks(&uuids)
+                    .cancel_peeks(compute_instance, uuids)
                     .await
                     .unwrap();
             }

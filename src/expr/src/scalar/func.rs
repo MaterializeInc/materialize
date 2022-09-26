@@ -66,8 +66,8 @@ pub enum UnmaterializableFunc {
     CurrentSchemasWithoutSystem,
     CurrentTimestamp,
     CurrentUser,
-    MzClusterId,
-    MzLogicalTimestamp,
+    MzEnvironmentId,
+    MzNow,
     MzSessionId,
     MzUptime,
     MzVersion,
@@ -90,11 +90,8 @@ impl UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
             UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
-            UnmaterializableFunc::MzClusterId => ScalarType::Uuid.nullable(false),
-            UnmaterializableFunc::MzLogicalTimestamp => ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
+            UnmaterializableFunc::MzEnvironmentId => ScalarType::String.nullable(false),
+            UnmaterializableFunc::MzNow => ScalarType::MzTimestamp.nullable(false),
             UnmaterializableFunc::MzSessionId => ScalarType::Uuid.nullable(false),
             UnmaterializableFunc::MzUptime => ScalarType::Interval.nullable(true),
             UnmaterializableFunc::MzVersion => ScalarType::String.nullable(false),
@@ -116,8 +113,8 @@ impl fmt::Display for UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => f.write_str("current_timestamp"),
             UnmaterializableFunc::CurrentUser => f.write_str("current_user"),
-            UnmaterializableFunc::MzClusterId => f.write_str("mz_cluster_id"),
-            UnmaterializableFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
+            UnmaterializableFunc::MzEnvironmentId => f.write_str("mz_environment_id"),
+            UnmaterializableFunc::MzNow => f.write_str("mz_now"),
             UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
             UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
             UnmaterializableFunc::MzVersion => f.write_str("mz_version"),
@@ -138,8 +135,8 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
             UnmaterializableFunc::CurrentTimestamp => CurrentTimestamp(()),
             UnmaterializableFunc::CurrentUser => CurrentUser(()),
-            UnmaterializableFunc::MzClusterId => MzClusterId(()),
-            UnmaterializableFunc::MzLogicalTimestamp => MzLogicalTimestamp(()),
+            UnmaterializableFunc::MzEnvironmentId => MzEnvironmentId(()),
+            UnmaterializableFunc::MzNow => MzNow(()),
             UnmaterializableFunc::MzSessionId => MzSessionId(()),
             UnmaterializableFunc::MzUptime => MzUptime(()),
             UnmaterializableFunc::MzVersion => MzVersion(()),
@@ -162,8 +159,8 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                 }
                 CurrentTimestamp(()) => Ok(UnmaterializableFunc::CurrentTimestamp),
                 CurrentUser(()) => Ok(UnmaterializableFunc::CurrentUser),
-                MzClusterId(()) => Ok(UnmaterializableFunc::MzClusterId),
-                MzLogicalTimestamp(()) => Ok(UnmaterializableFunc::MzLogicalTimestamp),
+                MzEnvironmentId(()) => Ok(UnmaterializableFunc::MzEnvironmentId),
+                MzNow(()) => Ok(UnmaterializableFunc::MzNow),
                 MzSessionId(()) => Ok(UnmaterializableFunc::MzSessionId),
                 MzUptime(()) => Ok(UnmaterializableFunc::MzUptime),
                 MzVersion(()) => Ok(UnmaterializableFunc::MzVersion),
@@ -322,21 +319,19 @@ fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let date = a.unwrap_date();
     let time = b.unwrap_time();
 
-    Datum::Timestamp(
-        NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms_nano(
-            time.hour(),
-            time.minute(),
-            time.second(),
-            time.nanosecond(),
-        ),
-    )
+    Datum::Timestamp(NaiveDate::from(date).and_hms_nano(
+        time.hour(),
+        time.minute(),
+        time.second(),
+        time.nanosecond(),
+    ))
 }
 
 fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, interval.months)?;
     Ok(Datum::Timestamp(
         dt.checked_add_signed(interval.duration_as_chrono())
@@ -773,7 +768,7 @@ fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn sub_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from((a.unwrap_date() - b.unwrap_date()).num_days() as i32)
+    Datum::from(a.unwrap_date() - b.unwrap_date())
 }
 
 fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -792,7 +787,7 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
     let dt = interval
         .months
         .checked_neg()
@@ -1446,8 +1441,8 @@ fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             (Datum::JsonNull, Datum::JsonNull) => true,
             (Datum::False, Datum::False) => true,
             (Datum::True, Datum::True) => true,
-            (Datum::Numeric(a), Datum::Numeric(b)) => (a == b),
-            (Datum::String(a), Datum::String(b)) => (a == b),
+            (Datum::Numeric(a), Datum::Numeric(b)) => a == b,
+            (Datum::String(a), Datum::String(b)) => a == b,
             (Datum::List(a), Datum::List(b)) => b
                 .iter()
                 .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false))),
@@ -1839,7 +1834,7 @@ where
 fn extract_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date())?.into()),
+        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date().into())?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
@@ -3621,16 +3616,23 @@ trait LazyUnaryFunc {
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError>;
 
-    /// The output ColumnType of this function
+    /// The output ColumnType of this function.
     fn output_type(&self, input_type: ColumnType) -> ColumnType;
 
-    /// Whether this function will produce NULL on NULL input
+    /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
 
-    /// Whether this function will produce NULL on non-NULL input
+    /// Whether this function will produce NULL on non-NULL input.
     fn introduces_nulls(&self) -> bool;
 
-    /// Whether this function preserves uniqueness
+    /// Whether this function preserves uniqueness.
+    ///
+    /// Uniqueness is preserved when `if f(x) = f(y) then x = y` is true. This
+    /// is used by the optimizer when a guarantee can be made that a collection
+    /// with unique items will stay unique when mapped by this function.
+    ///
+    /// Functions should conservatively return `false` unless they are certain
+    /// the above property is true.
     fn preserves_uniqueness(&self) -> bool;
 }
 
@@ -3821,6 +3823,15 @@ derive_unary!(
     CastNumericToUint32,
     CastNumericToUint64,
     CastNumericToString,
+    CastMzTimestampToString,
+    CastStringToMzTimestamp,
+    CastUint64ToMzTimestamp,
+    CastUint32ToMzTimestamp,
+    CastInt64ToMzTimestamp,
+    CastInt32ToMzTimestamp,
+    CastNumericToMzTimestamp,
+    CastTimestampToMzTimestamp,
+    CastTimestampTzToMzTimestamp,
     CastStringToBool,
     CastStringToPgLegacyChar,
     CastStringToBytes,
@@ -3964,7 +3975,8 @@ derive_unary!(
     RescaleNumeric,
     PgColumnSize,
     MzRowSize,
-    MzTypeName
+    MzTypeName,
+    StepMzTimestamp
 );
 
 impl UnaryFunc {
@@ -4617,6 +4629,16 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::PgColumnSize(_) => PgColumnSize(()),
             UnaryFunc::MzRowSize(_) => MzRowSize(()),
             UnaryFunc::MzTypeName(_) => MzTypeName(()),
+            UnaryFunc::CastMzTimestampToString(_) => CastMzTimestampToString(()),
+            UnaryFunc::CastStringToMzTimestamp(_) => CastStringToMzTimestamp(()),
+            UnaryFunc::CastUint64ToMzTimestamp(_) => CastUint64ToMzTimestamp(()),
+            UnaryFunc::CastUint32ToMzTimestamp(_) => CastUint32ToMzTimestamp(()),
+            UnaryFunc::CastInt64ToMzTimestamp(_) => CastInt64ToMzTimestamp(()),
+            UnaryFunc::CastInt32ToMzTimestamp(_) => CastInt32ToMzTimestamp(()),
+            UnaryFunc::CastNumericToMzTimestamp(_) => CastNumericToMzTimestamp(()),
+            UnaryFunc::CastTimestampToMzTimestamp(_) => CastTimestampToMzTimestamp(()),
+            UnaryFunc::CastTimestampTzToMzTimestamp(_) => CastTimestampTzToMzTimestamp(()),
+            UnaryFunc::StepMzTimestamp(_) => StepMzTimestamp(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -4988,6 +5010,17 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 PgColumnSize(()) => Ok(impls::PgColumnSize.into()),
                 MzRowSize(()) => Ok(impls::MzRowSize.into()),
                 MzTypeName(()) => Ok(impls::MzTypeName.into()),
+
+                CastMzTimestampToString(()) => Ok(impls::CastMzTimestampToString.into()),
+                CastStringToMzTimestamp(()) => Ok(impls::CastStringToMzTimestamp.into()),
+                CastUint64ToMzTimestamp(()) => Ok(impls::CastUint64ToMzTimestamp.into()),
+                CastUint32ToMzTimestamp(()) => Ok(impls::CastUint32ToMzTimestamp.into()),
+                CastInt64ToMzTimestamp(()) => Ok(impls::CastInt64ToMzTimestamp.into()),
+                CastInt32ToMzTimestamp(()) => Ok(impls::CastInt32ToMzTimestamp.into()),
+                CastNumericToMzTimestamp(()) => Ok(impls::CastNumericToMzTimestamp.into()),
+                CastTimestampToMzTimestamp(()) => Ok(impls::CastTimestampToMzTimestamp.into()),
+                CastTimestampTzToMzTimestamp(()) => Ok(impls::CastTimestampTzToMzTimestamp.into()),
+                StepMzTimestamp(()) => Ok(impls::StepMzTimestamp.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
@@ -5587,6 +5620,7 @@ where
         Int2Vector => strconv::format_legacy_vector(buf, &d.unwrap_array().elements(), |buf, d| {
             stringify_datum(buf.nonnull_buffer(), d, &ScalarType::Int16)
         }),
+        MzTimestamp { .. } => Ok(strconv::format_mztimestamp(buf, d.unwrap_mztimestamp())),
     }
 }
 

@@ -27,18 +27,10 @@ pub struct JsonEncoder {
 }
 
 impl JsonEncoder {
-    pub fn new(
-        key_desc: Option<RelationDesc>,
-        value_desc: RelationDesc,
-        debezium: bool,
-        include_transaction: bool,
-    ) -> Self {
+    pub fn new(key_desc: Option<RelationDesc>, value_desc: RelationDesc, debezium: bool) -> Self {
         let mut value_columns = column_names_and_types(value_desc);
         if debezium {
             value_columns = envelopes::dbz_envelope(value_columns);
-        }
-        if include_transaction {
-            envelopes::txn_metadata(&mut value_columns);
         }
         JsonEncoder {
             key_columns: if let Some(desc) = key_desc {
@@ -95,7 +87,7 @@ impl fmt::Debug for JsonEncoder {
 pub fn encode_datums_as_json<'a, I>(
     datums: I,
     names_types: &[(ColumnName, ColumnType)],
-) -> serde_json::value::Value
+) -> serde_json::Value
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -104,19 +96,19 @@ where
         .zip(names_types)
         .map(|(datum, (name, typ))| (name.to_string(), TypedDatum::new(datum, typ.clone()).json()))
         .collect();
-    serde_json::value::Value::Object(value_fields)
+    serde_json::Value::Object(value_fields)
 }
 
 pub trait ToJson {
     /// Transforms this value to a JSON value.
-    fn json(self) -> serde_json::value::Value;
+    fn json(self) -> serde_json::Value;
 }
 
 impl ToJson for TypedDatum<'_> {
-    fn json(self) -> serde_json::value::Value {
+    fn json(self) -> serde_json::Value {
         let TypedDatum { datum, typ } = self;
         if typ.nullable && datum.is_null() {
-            serde_json::value::Value::Null
+            serde_json::Value::Null
         } else {
             match &typ.scalar_type {
                 ScalarType::Bool => json!(datum.unwrap_bool()),
@@ -139,28 +131,24 @@ impl ToJson for TypedDatum<'_> {
                     json!(datum.unwrap_numeric().0.to_standard_notation_string())
                 }
                 // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
-                ScalarType::Date => {
-                    serde_json::value::Value::String(format!("{:?}", datum.unwrap_date()))
-                }
-                ScalarType::Time => {
-                    serde_json::value::Value::String(format!("{:?}", datum.unwrap_time()))
-                }
-                ScalarType::Timestamp => serde_json::value::Value::String(format!(
+                ScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
+                ScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
+                ScalarType::Timestamp => serde_json::Value::String(format!(
                     "{:?}",
                     datum.unwrap_timestamp().timestamp_millis()
                 )),
-                ScalarType::TimestampTz => serde_json::value::Value::String(format!(
+                ScalarType::TimestampTz => serde_json::Value::String(format!(
                     "{:?}",
                     datum.unwrap_timestamptz().timestamp_millis()
                 )),
                 ScalarType::Interval => {
-                    serde_json::value::Value::String(format!("{}", datum.unwrap_interval()))
+                    serde_json::Value::String(format!("{}", datum.unwrap_interval()))
                 }
                 ScalarType::Bytes => json!(datum.unwrap_bytes()),
                 ScalarType::String | ScalarType::VarChar { .. } => json!(datum.unwrap_str()),
                 ScalarType::Char { length } => {
                     let s = char::format_str_pad(datum.unwrap_str(), *length);
-                    serde_json::value::Value::String(s)
+                    serde_json::Value::String(s)
                 }
                 ScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
                 ScalarType::Uuid => json!(datum.unwrap_uuid()),
@@ -185,11 +173,11 @@ impl ToJson for TypedDatum<'_> {
                             datum.json()
                         })
                         .collect();
-                    serde_json::value::Value::Array(values)
+                    serde_json::Value::Array(values)
                 }
                 ScalarType::Record { fields, .. } => {
                     let list = datum.unwrap_list();
-                    let fields: Map<String, serde_json::value::Value> = fields
+                    let fields: Map<String, serde_json::Value> = fields
                         .iter()
                         .zip(list.into_iter())
                         .map(|((name, typ), datum)| {
@@ -217,8 +205,9 @@ impl ToJson for TypedDatum<'_> {
                             (key.to_string(), value)
                         })
                         .collect();
-                    serde_json::value::Value::Object(elements)
+                    serde_json::Value::Object(elements)
                 }
+                ScalarType::MzTimestamp => json!(datum.unwrap_mztimestamp().to_string()),
             }
         }
     }
@@ -229,7 +218,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
     names_seen: &mut HashSet<String>,
     custom_names: &HashMap<GlobalId, String>,
     typ: &ColumnType,
-) -> serde_json::value::Value {
+) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
         ScalarType::Bool => json!("boolean"),
         ScalarType::PgLegacyChar => json!({
@@ -240,24 +229,13 @@ fn build_row_schema_field<F: FnMut() -> String>(
             json!("int")
         }
         ScalarType::Int64 => json!("long"),
-        ScalarType::UInt16 => json!({
-            "type": "fixed",
-            "size": 2,
-        }),
+        ScalarType::UInt16 => build_unsigned_type(names_seen, 2),
         ScalarType::UInt32
         | ScalarType::Oid
         | ScalarType::RegClass
         | ScalarType::RegProc
-        | ScalarType::RegType => {
-            json!({
-                "type": "fixed",
-                "size": 4,
-            })
-        }
-        ScalarType::UInt64 => json!({
-            "type": "fixed",
-            "size": 8,
-        }),
+        | ScalarType::RegType => build_unsigned_type(names_seen, 4),
+        ScalarType::UInt64 => build_unsigned_type(names_seen, 8),
         ScalarType::Float32 => json!("float"),
         ScalarType::Float64 => json!("double"),
         ScalarType::Date => json!({
@@ -350,6 +328,7 @@ fn build_row_schema_field<F: FnMut() -> String>(
                 "scale": s,
             })
         }
+        ScalarType::MzTimestamp => json!("string"),
     };
     if typ.nullable {
         field_type = json!(["null", field_type]);
@@ -362,7 +341,7 @@ pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
     names_seen: &mut HashSet<String>,
     namer: &mut F,
     custom_names: &HashMap<GlobalId, String>,
-) -> Vec<serde_json::value::Value> {
+) -> Vec<serde_json::Value> {
     let mut fields = Vec::new();
     for (name, typ) in columns.iter() {
         let field_type = build_row_schema_field(namer, names_seen, custom_names, typ);
@@ -374,18 +353,34 @@ pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
     fields
 }
 
+const AVRO_NAMESPACE: &str = "com.materialize.sink";
+
+fn build_unsigned_type(names_seen: &mut HashSet<String>, width: usize) -> serde_json::Value {
+    let name = format!("{AVRO_NAMESPACE}.uint{width}");
+    if names_seen.contains(&name) {
+        json!(name)
+    } else {
+        names_seen.insert(name.clone());
+        json!({
+            "type": "fixed",
+            "size": width,
+            "name": name,
+        })
+    }
+}
+
 /// Builds the JSON for the row schema, which can be independently useful.
 pub fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
     custom_names: &HashMap<GlobalId, String>,
-) -> serde_json::value::Value {
+) -> serde_json::Value {
     let mut name_idx = 0;
     let fields = build_row_schema_fields(
         columns,
         &mut Default::default(),
         &mut move || {
-            let ret = format!("com.materialize.sink.record{}", name_idx);
+            let ret = format!("{AVRO_NAMESPACE}.record{name_idx}");
             name_idx += 1;
             ret
         },

@@ -9,8 +9,11 @@
 
 $ schema-registry-wait-schema schema=sql-server.dbo.transaction_table1-value
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE transaction_table1
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.transaction_table1'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.transaction_table1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -21,7 +24,7 @@ $ schema-registry-wait-schema schema=sql-server.dbo.transaction_table2-value
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE transaction_table2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.transaction_table2'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.transaction_table2')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

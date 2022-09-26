@@ -39,36 +39,7 @@ a b
 # Verify that SELECTs on introspection tables work.
 
 statement ok
-SELECT * FROM mz_materializations
-
-# Verify that we are always hitting the same replica.
-# We check that the number of peeks in mz_peek_durations (which is a
-# replica-specific introspection source) increases by one with every query.
-# We sleep between checks to give dataflow logging time to catch up.
-# Creating and deleting the table forces the read timestamp forward and help
-# make this test less flakey.
-
-statement ok
-SELECT mz_internal.mz_sleep(2)
-
-statement ok
-CREATE TABLE t (a INT)
-
-query I
-SELECT sum(count) FROM mz_peek_durations
-----
-2
-
-statement ok
-SELECT mz_internal.mz_sleep(2)
-
-statement ok
-DROP TABLE t
-
-query I
-SELECT sum(count) FROM mz_peek_durations
-----
-3
+SELECT * FROM mz_internal.mz_materializations
 
 # Verify that we see no prior peeks when targeting another replica.
 
@@ -76,7 +47,7 @@ statement ok
 SET cluster_replica = replica_b
 
 query I
-SELECT sum(count) FROM mz_peek_durations
+SELECT sum(count) FROM mz_internal.mz_peek_durations
 ----
 NULL
 
@@ -94,17 +65,17 @@ statement ok
 RESET cluster_replica
 
 query error log source reads must target a replica
-SELECT * FROM mz_materializations
+SELECT * FROM mz_internal.mz_materializations
 
 statement ok
-CREATE VIEW introspection_view AS SELECT * FROM mz_materializations
+CREATE VIEW introspection_view AS SELECT * FROM mz_internal.mz_materializations
 
 query error log source reads must target a replica
 SELECT * FROM introspection_view
 
 # Verify that the logic does not apply to persisted logs
 statement ok
-SELECT * FROM mz_peek_active_1
+SELECT * FROM mz_internal.mz_peek_active_1
 
 # Verify that untargeted introspection queries on unreplicated clusters are
 # allowed.
@@ -113,7 +84,7 @@ statement ok
 DROP CLUSTER REPLICA test.replica_b;
 
 statement ok
-SELECT * FROM mz_materializations
+SELECT * FROM mz_internal.mz_materializations
 
 statement ok
 SELECT * FROM introspection_view
@@ -130,7 +101,7 @@ CREATE CLUSTER test
   INTROSPECTION INTERVAL 0
 
 query error cannot read log sources on cluster with disabled introspection
-SELECT * FROM mz_materializations
+SELECT * FROM mz_internal.mz_materializations
 
 # Clean up.
 

@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 
 use aws_arn::ResourceName as AmazonResourceName;
@@ -56,7 +57,7 @@ use mz_storage::types::sources::encoding::{
 use mz_storage::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
-    KinesisSourceConnection, LoadGeneratorSourceConnection, MzOffset, PostgresSourceConnection,
+    KinesisSourceConnection, LoadGeneratorSourceConnection, PostgresSourceConnection,
     PostgresSourceDetails, ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection,
     SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
@@ -367,112 +368,62 @@ pub fn plan_create_source(
 
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(mz_sql_parser::ast::KafkaSourceConnection {
-            connection: connection_inner,
-            topic,
+            connection:
+                mz_sql_parser::ast::KafkaConnection {
+                    connection: connection_name,
+                    options,
+                },
             key: _,
         }) => {
-            let (kafka_connection, topic, options, optional_start_offset, group_id_prefix) =
-                match &connection_inner {
-                    mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
-                        scx.require_unsafe_mode("creating Kafka sources with inline connections")?;
-                        let connection = KafkaConnection {
-                            brokers: vec![broker.clone()],
-                            progress_topic: None,
-                            security: None,
-                        };
-
-                        let options = connection.clone().into();
-                        (
-                            connection,
-                            topic
-                                .clone()
-                                .expect("inline definitions always parse a topic"),
-                            options,
-                            None,
-                            None,
-                        )
-                    }
-                    mz_sql_parser::ast::KafkaConnection::Reference {
-                        connection,
-                        options,
-                    } => {
-                        let item = scx.get_item_by_resolved_name(&connection)?;
-                        let connection = match item.connection()? {
-                            Connection::Kafka(connection) => connection.clone(),
-                            _ => sql_bail!("{} is not a kafka connection", item.name()),
-                        };
-
-                        // Starting offsets are allowed out unsafe mode, as they are a simple,
-                        // useful way to specify where to start reading a topic.
-                        if options.iter().any(|opt| {
-                            opt.name != KafkaConfigOptionName::StartOffset
-                                && opt.name != KafkaConfigOptionName::StartTimestamp
-                        }) {
-                            scx.require_unsafe_mode("KAFKA CONNECTION...WITH (...)")?;
-                        }
-
-                        kafka_util::validate_options_for_context(
-                            &options,
-                            kafka_util::KafkaOptionCheckContext::Source,
-                        )?;
-
-                        let extracted_options: KafkaConfigOptionExtracted =
-                            options.clone().try_into()?;
-
-                        let optional_start_offset =
-                            Option::<kafka_util::KafkaStartOffsetType>::try_from(
-                                &extracted_options,
-                            )?;
-                        let config_options =
-                            kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
-
-                        let topic = extracted_options
-                            .topic
-                            .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
-
-                        (
-                            connection,
-                            topic,
-                            config_options,
-                            optional_start_offset,
-                            extracted_options.group_id_prefix,
-                        )
-                    }
-                };
-
-            let parse_offset = |s: i64| {
-                // we parse an i64 here, because we don't yet support u64's in
-                // sql, but put it into an internal MzOffset that holds a u64
-                // TODO: make this an native u64 when
-                // https://github.com/MaterializeInc/materialize/issues/7629 is
-                // resolved.
-                if s >= 0 {
-                    Ok(MzOffset {
-                        offset: s.try_into().unwrap(),
-                    })
-                } else {
-                    sql_bail!("START OFFSET must be a nonnegative integer")
-                }
+            let item = scx.get_item_by_resolved_name(&connection_name)?;
+            let kafka_connection = match item.connection()? {
+                Connection::Kafka(connection) => connection.clone(),
+                _ => sql_bail!("{} is not a kafka connection", item.name()),
             };
 
+            // Starting offsets are allowed out unsafe mode, as they are a simple,
+            // useful way to specify where to start reading a topic.
+            if let Some(opt) = options.iter().find(|opt| {
+                opt.name != KafkaConfigOptionName::StartOffset
+                    && opt.name != KafkaConfigOptionName::StartTimestamp
+                    && opt.name != KafkaConfigOptionName::Topic
+            }) {
+                scx.require_unsafe_mode(&format!("KAFKA CONNECTION option {}", opt.name))?;
+            }
+
+            kafka_util::validate_options_for_context(
+                &options,
+                kafka_util::KafkaOptionCheckContext::Source,
+            )?;
+
+            let extracted_options: KafkaConfigOptionExtracted = options.clone().try_into()?;
+
+            let optional_start_offset =
+                Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
+            let options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+            let topic = extracted_options
+                .topic
+                .expect("validated exists during purification");
+            let group_id_prefix = extracted_options.group_id_prefix;
+
             let mut start_offsets = HashMap::new();
-            let has_nontrivial_start_offsets = match optional_start_offset {
-                None => {
-                    start_offsets.insert(0, MzOffset::from(0));
-                    false
-                }
-                Some(KafkaStartOffsetType::StartOffset(vs)) => {
-                    for (i, v) in vs.iter().enumerate() {
-                        start_offsets.insert(i32::try_from(i)?, parse_offset(*v)?);
+            match optional_start_offset {
+                None => (),
+                Some(KafkaStartOffsetType::StartOffset(offsets)) => {
+                    for (part, offset) in offsets.iter().enumerate() {
+                        if *offset < 0 {
+                            sql_bail!("START OFFSET must be a nonnegative integer");
+                        }
+                        start_offsets.insert(i32::try_from(part)?, *offset);
                     }
-                    true
                 }
                 Some(KafkaStartOffsetType::StartTimestamp(_)) => {
                     unreachable!("time offsets should be converted in purification")
                 }
-            };
+            }
 
-            if has_nontrivial_start_offsets && envelope.requires_all_input() {
+            if !start_offsets.is_empty() && envelope.requires_all_input() {
                 sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
             }
 
@@ -484,7 +435,7 @@ pub fn plan_create_source(
                 topic,
                 start_offsets,
                 group_id_prefix,
-                cluster_id: scx.catalog.config().cluster_id,
+                environment_id: scx.catalog.config().environment_id.clone(),
                 include_timestamp: None,
                 include_partition: None,
                 include_topic: None,
@@ -708,8 +659,6 @@ pub fn plan_create_source(
         // TODO: fixup key envelope
         mz_sql_parser::ast::Envelope::None => UnplannedSourceEnvelope::None(key_envelope),
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
-            scx.require_unsafe_mode("ENVELOPE DEBEZIUM")?;
-
             //TODO check that key envelope is not set
             let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
@@ -718,6 +667,8 @@ pub fn plan_create_source(
                     UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
                 }
                 DbzMode::Plain { tx_metadata } => {
+                    scx.require_unsafe_mode("ENVELOPE DEBEZIUM")?;
+
                     // TODO(#11668): Probably make this not a WITH option and integrate into the DBZ envelope?
                     let mut tx_metadata_source = None;
                     let mut tx_metadata_collection = None;
@@ -781,7 +732,6 @@ pub fn plan_create_source(
             }
         }
         mz_sql_parser::ast::Envelope::Upsert => {
-            scx.require_unsafe_mode("ENVELOPE UPSERT")?;
             let key_encoding = match encoding.key_ref() {
                 None => {
                     bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
@@ -2042,57 +1992,48 @@ generate_extracted_config!(
 
 fn kafka_sink_builder(
     scx: &StatementContext,
-    connection: mz_sql_parser::ast::KafkaConnection<Aug>,
+    mz_sql_parser::ast::KafkaConnection {
+        connection,
+        options: with_options,
+    }: mz_sql_parser::ast::KafkaConnection<Aug>,
     format: Option<Format<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
 ) -> Result<StorageSinkConnectionBuilder, PlanError> {
-    let (
-        connection_id,
-        connection,
-        config_options,
-        KafkaConfigOptionExtracted {
-            topic,
-            partition_count,
-            replication_factor,
-            retention_ms,
-            retention_bytes,
-            ..
-        },
-    ) = match connection {
-        mz_sql_parser::ast::KafkaConnection::Reference {
-            connection,
-            options: with_options,
-        } => {
-            let item = scx.get_item_by_resolved_name(&connection)?;
-            // Get Kafka connection
-            let connection = match item.connection()? {
-                Connection::Kafka(connection) => connection.clone(),
-                _ => sql_bail!("{} is not a kafka connection", item.name()),
-            };
-
-            if with_options
-                .iter()
-                .any(|mz_sql_parser::ast::KafkaConfigOption { name, .. }| {
-                    !matches!(name, KafkaConfigOptionName::Topic)
-                })
-            {
-                scx.require_unsafe_mode("KAFKA CONNECTION options besides TOPIC")?;
-            }
-
-            kafka_util::validate_options_for_context(
-                &with_options,
-                kafka_util::KafkaOptionCheckContext::Sink,
-            )?;
-
-            let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
-            let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
-            (item.id(), connection, config_options, extracted_options)
-        }
-        mz_sql_parser::ast::KafkaConnection::Inline { .. } => unreachable!(),
+    let item = scx.get_item_by_resolved_name(&connection)?;
+    // Get Kafka connection
+    let connection = match item.connection()? {
+        Connection::Kafka(connection) => connection.clone(),
+        _ => sql_bail!("{} is not a kafka connection", item.name()),
     };
+
+    if with_options
+        .iter()
+        .any(|mz_sql_parser::ast::KafkaConfigOption { name, .. }| {
+            !matches!(name, KafkaConfigOptionName::Topic)
+        })
+    {
+        scx.require_unsafe_mode("KAFKA CONNECTION options besides TOPIC")?;
+    }
+
+    kafka_util::validate_options_for_context(
+        &with_options,
+        kafka_util::KafkaOptionCheckContext::Sink,
+    )?;
+
+    let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
+    let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+    let connection_id = item.id();
+    let KafkaConfigOptionExtracted {
+        topic,
+        partition_count,
+        replication_factor,
+        retention_ms,
+        retention_bytes,
+        ..
+    } = extracted_options;
 
     let topic_name = topic.ok_or_else(|| sql_err!("KAFKA CONNECTION must specify TOPIC"))?;
 
@@ -2151,7 +2092,6 @@ fn kafka_sink_builder(
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
                 matches!(envelope, SinkEnvelope::Debezium),
-                true,
             );
             let value_schema = schema_generator.value_writer_schema().to_string();
             let key_schema = schema_generator
@@ -2169,11 +2109,12 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
+    let environment_id = &scx.catalog.config().environment_id;
     let consistency_config = KafkaConsistencyConfig::Progress {
         topic: connection
             .progress_topic
             .clone()
-            .unwrap_or_else(|| format!("_materialize-progress-{connection_id}")),
+            .unwrap_or_else(|| format!("_materialize-progress-{environment_id}-{connection_id}")),
     };
 
     if partition_count == 0 || partition_count < -1 {
@@ -2619,7 +2560,9 @@ generate_extracted_config!(
     ReplicaOption,
     (AvailabilityZone, String),
     (Size, String),
-    (Remote, Vec<String>)
+    (Remote, Vec<String>),
+    (Compute, Vec<String>),
+    (Workers, u16)
 );
 
 fn plan_replica_config(
@@ -2630,35 +2573,69 @@ fn plan_replica_config(
         availability_zone,
         size,
         remote,
+        workers,
+        compute,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
     if remote.is_some() {
         scx.require_unsafe_mode("REMOTE cluster replica option")?;
     }
+    if compute.is_some() {
+        scx.require_unsafe_mode("COMPUTE cluster replica option")?;
+    }
+    if workers.is_some() {
+        scx.require_unsafe_mode("WORKERS cluster replica option")?;
+    }
 
-    let remote_addrs = remote
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<BTreeSet<String>>();
-
-    match (remote_addrs.len() > 0, size) {
-        (true, None) => {
+    match (size, remote) {
+        (None, Some(remote)) => {
+            // REMOTE given, no SIZE
             if availability_zone.is_some() {
                 sql_bail!("cannot specify AVAILABILITY ZONE and REMOTE");
             }
+            // Unwrap REMOTE options
+            let remote_addrs = remote.into_iter().collect::<BTreeSet<String>>();
+            let compute_addrs = compute
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<BTreeSet<String>>();
+            let workers = workers.unwrap_or(1);
+
+            if remote_addrs.len() > 1 && (remote_addrs.len() != compute_addrs.len()) {
+                sql_bail!(
+                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
+                );
+            }
+            if compute_addrs.len() > remote_addrs.len() {
+                sql_bail!(
+                    "must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas"
+                );
+            }
+
+            let workers = NonZeroUsize::new(workers.into())
+                .ok_or_else(|| sql_err!("WORKERS must be greater 0"))?;
             Ok(ComputeInstanceReplicaConfig::Remote {
                 addrs: remote_addrs,
+                compute_addrs,
+                workers,
             })
         }
-        (false, Some(size)) => Ok(ComputeInstanceReplicaConfig::Managed {
-            size,
-            availability_zone,
-        }),
-        (false, None) => {
-            sql_bail!("one of REMOTE or SIZE must be specified")
+        (Some(size), None) => {
+            // SIZE given, no REMOTE
+            if workers.is_some() {
+                sql_bail!("cannot specify SIZE and WORKERS");
+            }
+            if compute.is_some() {
+                sql_bail!("cannot specify SIZE and COMPUTE");
+            }
+            Ok(ComputeInstanceReplicaConfig::Managed {
+                size,
+                availability_zone,
+            })
         }
-        (true, Some(_)) => {
+        (_, _) => {
+            // SIZE and REMOTE given, or none of them
             sql_bail!("only one of REMOTE or SIZE may be specified")
         }
     }
@@ -2761,7 +2738,8 @@ impl KafkaConnectionOptionExtracted {
                 .map_err(|e| sql_err!("parsing kafka broker: {e}"))?
                 .to_string();
             if broker.contains(',') {
-                sql_bail!("invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string");
+                sql_bail!("invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string.\n\n
+Instead, specify BROKERS using an array of strings, e.g. BROKERS ['kafka:9092', 'kafka:9093']");
             }
         }
 

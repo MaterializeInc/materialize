@@ -125,12 +125,20 @@ fn test_no_block() -> Result<(), anyhow::Error> {
                 let _ = result?;
 
                 let result = client
-                    .batch_execute(&format!("
-                        CREATE SOURCE foo \
-                        FROM KAFKA BROKER '{}' TOPIC 'foo' \
-                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                    .batch_execute(&format!(
+                        "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
                         &*KAFKA_ADDRS,
                     ))
+                    .await;
+                info!("test_no_block: in thread; create Kafka conn done");
+                let _ = result?;
+
+                let result = client
+                    .batch_execute(
+                        "CREATE SOURCE foo \
+                        FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
+                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                    )
                     .await;
                 info!("test_no_block: in thread; create source done");
                 result
@@ -188,15 +196,20 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
                 schema_registry_server.addr,
             ))
             .await?;
+        client
+            .batch_execute(&format!(
+                "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+                &*KAFKA_ADDRS,
+            ))
+            .await?;
         let source_task = task::spawn(|| "source_client", async move {
             info!("test_drop_connection_race: in task; creating connection and source");
             let result = client
-                .batch_execute(&format!(
+                .batch_execute(
                     "CREATE SOURCE foo \
-                     FROM KAFKA BROKER '{}' TOPIC 'foo' \
+                     FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn",
-                    &*KAFKA_ADDRS,
-                ))
+                )
                 .await;
             info!(
                 "test_drop_connection_race: in task; create source done: {:?}",
@@ -1027,35 +1040,28 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().with_now(now);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
-    let timestamp_re = Regex::new(r"\d{4}").unwrap();
+    let timestamp_re = Regex::new(r"\s*(\d{4}|0) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
+    let bool_re = Regex::new(r"true|false").unwrap();
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
 
-    let expect = "     timestamp:          <TIMESTAMP>
-         since:[         <TIMESTAMP>]
-         upper:[         <TIMESTAMP>]
-     has table: true
- table read ts:          <TIMESTAMP>
+    let expect = "          query timestamp:<TIMESTAMP>
+                    since:[<TIMESTAMP>]
+                    upper:[<TIMESTAMP>]
+         global timestamp:<TIMESTAMP>
+  can respond immediately: <BOOL>
 
 source materialize.public.t1 (u1, storage):
- read frontier:[         <TIMESTAMP>]
-write frontier:[         <TIMESTAMP>]\n";
+ read frontier:[<TIMESTAMP>]
+write frontier:[<TIMESTAMP>]\n";
 
-    // Upper starts at 0, which the regex doesn't cover. Wait until it moves ahead.
-    Retry::default()
-        .retry(|_| {
-            let row = client
-                .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
-                .unwrap();
-            let explain: String = row.get(0);
-            let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
-            if explain != expect {
-                Err(format!("expected {expect}, got {explain}"))
-            } else {
-                Ok(())
-            }
-        })
+    let row = client
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
         .unwrap();
+    let explain: String = row.get(0);
+    let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+    let explain = bool_re.replace_all(&explain, "<BOOL>");
+    assert_eq!(explain, expect);
 
     Ok(())
 }
@@ -1512,6 +1518,65 @@ fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn test_concurrent_writes() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    let num_tables = 10;
+
+    {
+        let mut client = server.connect(postgres::NoTls)?;
+        for i in 0..num_tables {
+            client.batch_execute(&format!("CREATE TABLE t_{i} (a INT, b text, c text)"))?;
+        }
+    }
+
+    let num_threads = 3;
+    let num_loops = 10;
+
+    let mut clients = Vec::new();
+    for _ in 0..num_threads {
+        clients.push(server.connect(postgres::NoTls)?);
+    }
+
+    let handles: Vec<_> = clients
+        .into_iter()
+        .map(|mut client| {
+            std::thread::spawn(move || {
+                for j in 0..num_loops {
+                    for i in 0..num_tables {
+                        let string_a = "A";
+                        let string_b = "B";
+                        client
+                            .batch_execute(&format!(
+                                "INSERT INTO t_{i} VALUES ({j}, '{string_a}', '{string_b}')"
+                            ))
+                            .unwrap();
+                    }
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let mut client = server.connect(postgres::NoTls)?;
+
+    for i in 0..num_tables {
+        let count = client
+            .query_one(&format!("SELECT count(*) FROM t_{i}"), &[])?
+            .get::<_, i64>(0);
+        assert_eq!(num_loops * num_threads, count);
+    }
+
+    Ok(())
+}
+
 /// Group commit will block writes until the current time has advanced. This can make
 /// performing inserts while using deterministic time difficult. This is a helper
 /// method to perform writes and advance the current time.
@@ -1546,7 +1611,9 @@ fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMil
         .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
         .unwrap();
     let explain: String = row.get(0);
-    let timestamp_re = Regex::new(r"^\s+timestamp:\s+(\d+)\n").unwrap();
+    let timestamp_re =
+        Regex::new(r"^\s+query timestamp:\s+(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d\.\d\d\d\)\n")
+            .unwrap();
     let timestamp_caps = timestamp_re.captures(&explain).unwrap();
     timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
 }
@@ -1691,13 +1758,11 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
         .unwrap();
 
     let row = client
-        .query_one(
-            "SELECT count(*), mz_logical_timestamp()::int8 FROM counter",
-            &[],
-        )
+        .query_one("SELECT count(*), mz_now()::text FROM counter", &[])
         .unwrap();
     let initial_count: i64 = row.get(0);
-    let timestamp_millis: i64 = row.get(1);
+    let timestamp_millis: String = row.get(1);
+    let timestamp_millis: i64 = timestamp_millis.parse().unwrap();
     const WAIT: i64 = 100;
     let next = timestamp_millis + WAIT;
     let expect = initial_count + WAIT;

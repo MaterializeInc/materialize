@@ -24,8 +24,11 @@ $ kafka-ingest format=avro topic=resolution-records-int2double schema=${int-col}
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE resolution_records_int2double
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-records-int2double-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-records-int2double-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 

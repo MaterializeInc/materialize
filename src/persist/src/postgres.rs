@@ -90,7 +90,7 @@ impl PostgresConsensusConfig {
         "MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL";
 
     /// Returns a new [PostgresConsensusConfig] for use in production.
-    pub async fn new(
+    pub fn new(
         url: &str,
         connection_pool_max_size: usize,
         metrics: PostgresConsensusMetrics,
@@ -111,7 +111,7 @@ impl PostgresConsensusConfig {
     /// with a valid connection url [1].
     ///
     /// [1]: https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url
-    pub async fn new_for_test() -> Result<Option<Self>, Error> {
+    pub fn new_for_test() -> Result<Option<Self>, Error> {
         let url = match std::env::var(Self::EXTERNAL_TESTS_POSTGRES_URL) {
             Ok(url) => url,
             Err(_) => {
@@ -126,8 +126,7 @@ impl PostgresConsensusConfig {
             &url,
             2,
             PostgresConsensusMetrics::new(&MetricsRegistry::new()),
-        )
-        .await?;
+        )?;
         Ok(Some(config))
     }
 }
@@ -459,7 +458,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn postgres_consensus() -> Result<(), ExternalError> {
-        let config = match PostgresConsensusConfig::new_for_test().await? {
+        let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,
             None => {
                 info!(

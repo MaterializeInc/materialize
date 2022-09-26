@@ -104,6 +104,7 @@ impl TypeCategory {
                 }
             }
             ScalarType::Map { .. } => Self::Pseudo,
+            ScalarType::MzTimestamp => Self::Numeric,
         }
     }
 
@@ -161,6 +162,7 @@ impl TypeCategory {
             | CatalogType::VarChar { .. } => Self::String,
             CatalogType::Record { .. } => TypeCategory::Composite,
             CatalogType::Map { .. } | CatalogType::Pseudo => Self::Pseudo,
+            CatalogType::MzTimestamp => Self::String,
         }
     }
 
@@ -844,6 +846,7 @@ impl From<ScalarBaseType> for ParamType {
             RegProc => ScalarType::RegProc,
             RegType => ScalarType::RegType,
             Int2Vector => ScalarType::Int2Vector,
+            MzTimestamp => ScalarType::MzTimestamp,
         };
         ParamType::Plain(s)
     }
@@ -2439,6 +2442,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(UInt16) => AggregateFunc::MaxUInt16, oid::FUNC_MAX_UINT16_OID;
             params!(UInt32) => AggregateFunc::MaxUInt32, oid::FUNC_MAX_UINT32_OID;
             params!(UInt64) => AggregateFunc::MaxUInt64, oid::FUNC_MAX_UINT64_OID;
+            params!(MzTimestamp) => AggregateFunc::MaxMzTimestamp, oid::FUNC_MAX_MZTIMESTAMP_OID;
             params!(Float32) => AggregateFunc::MaxFloat32, 2119;
             params!(Float64) => AggregateFunc::MaxFloat64, 2120;
             params!(String) => AggregateFunc::MaxString, 2129;
@@ -2457,6 +2461,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(UInt16) => AggregateFunc::MinUInt16, oid::FUNC_MIN_UINT16_OID;
             params!(UInt32) => AggregateFunc::MinUInt32, oid::FUNC_MIN_UINT32_OID;
             params!(UInt64) => AggregateFunc::MinUInt64, oid::FUNC_MIN_UINT64_OID;
+            params!(MzTimestamp) => AggregateFunc::MinMzTimestamp, oid::FUNC_MIN_MZTIMESTAMP_OID;
             params!(Float32) => AggregateFunc::MinFloat32, 2135;
             params!(Float64) => AggregateFunc::MinFloat64, 2136;
             params!(String) => AggregateFunc::MinString, 2145;
@@ -2886,11 +2891,14 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         "map_length" => Scalar {
             params![MapAny] => UnaryFunc::MapLength(func::MapLength) => Int32, oid::FUNC_MAP_LENGTH_OID;
         },
-        "mz_cluster_id" => Scalar {
-            params!() => UnmaterializableFunc::MzClusterId, oid::FUNC_MZ_CLUSTER_ID_OID;
+        "mz_environment_id" => Scalar {
+            params!() => UnmaterializableFunc::MzEnvironmentId, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
         },
         "mz_logical_timestamp" => Scalar {
-            params!() => UnmaterializableFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
+            params!() => Operation::nullary(|_ecx| sql_bail!("mz_logical_timestamp() has been renamed to mz_now()")) => MzTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
+        },
+        "mz_now" => Scalar {
+            params!() => UnmaterializableFunc::MzNow, oid::FUNC_MZ_NOW_OID;
         },
         "mz_uptime" => Scalar {
             params!() => UnmaterializableFunc::MzUptime, oid::FUNC_MZ_UPTIME_OID;
@@ -3456,6 +3464,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Lt, 3242;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lt => Bool, 1072;
             params!(RecordAny, RecordAny) => BinaryFunc::Lt => Bool, 2990;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lt =>Bool, oid::FUNC_MZTIMESTAMP_LT_MZTIMESTAMP_OID;
         },
         "<=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Lte, 1755;
@@ -3482,6 +3491,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Lte, 3244;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lte => Bool, 1074;
             params!(RecordAny, RecordAny) => BinaryFunc::Lte => Bool, 2992;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lte =>Bool, oid::FUNC_MZTIMESTAMP_LTE_MZTIMESTAMP_OID;
         },
         ">" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gt, 1756;
@@ -3508,6 +3518,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Gt, 3243;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gt => Bool, 1073;
             params!(RecordAny, RecordAny) => BinaryFunc::Gt => Bool, 2991;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gt =>Bool, oid::FUNC_MZTIMESTAMP_GT_MZTIMESTAMP_OID;
         },
         ">=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gte, 1757;
@@ -3534,6 +3545,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Gte, 3245;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gte => Bool, 1075;
             params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gte =>Bool, oid::FUNC_MZTIMESTAMP_GTE_MZTIMESTAMP_OID;
         },
         // Warning! If you are writing functions here that do not simply use
         // `BinaryFunc::Eq`, you will break row equality (used e.g. DISTINCT
@@ -3564,6 +3576,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ListAny, ListAny) => BinaryFunc::Eq => Bool, oid::FUNC_LIST_EQ_OID;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Eq => Bool, 1070;
             params!(RecordAny, RecordAny) => BinaryFunc::Eq => Bool, 2988;
+            params!(MzTimestamp, MzTimestamp) => BinaryFunc::Eq => Bool, oid::FUNC_MZTIMESTAMP_EQ_MZTIMESTAMP_OID;
         },
         "<>" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::NotEq, 1753;
@@ -3590,6 +3603,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
             params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq => Bool, 1071;
             params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;
+            params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq=>Bool, oid::FUNC_MZTIMESTAMP_NOT_EQ_MZTIMESTAMP_OID;
         }
     }
 });

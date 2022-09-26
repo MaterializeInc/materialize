@@ -75,14 +75,15 @@ message ProtoMirScalarExpr {
 
 
 message ProtoUnmaterializableFunc {
+    reserved "mz_cluster_id"; // The former name of mz_environment_id.
     oneof kind {
         google.protobuf.Empty current_database = 1;
         google.protobuf.Empty current_schemas_with_system = 2;
         google.protobuf.Empty current_schemas_without_system = 3;
         google.protobuf.Empty current_timestamp = 4;
         google.protobuf.Empty current_user = 5;
-        google.protobuf.Empty mz_cluster_id = 6;
-        google.protobuf.Empty mz_logical_timestamp = 7;
+        google.protobuf.Empty mz_environment_id = 6;
+        google.protobuf.Empty mz_now = 7;
         google.protobuf.Empty mz_session_id = 8;
         google.protobuf.Empty mz_uptime = 9;
         google.protobuf.Empty mz_version = 10;
@@ -385,6 +386,16 @@ message ProtoUnaryFunc {
         google.protobuf.Empty bit_not_uint16 = 264;
         google.protobuf.Empty bit_not_uint32 = 265;
         google.protobuf.Empty bit_not_uint64 = 266;
+        google.protobuf.Empty cast_mz_timestamp_to_string = 267;
+        google.protobuf.Empty cast_string_to_mz_timestamp = 268;
+        google.protobuf.Empty cast_uint64_to_mz_timestamp = 269;
+        google.protobuf.Empty cast_int64_to_mz_timestamp = 270;
+        google.protobuf.Empty cast_numeric_to_mz_timestamp = 271;
+        google.protobuf.Empty cast_timestamp_to_mz_timestamp = 272;
+        google.protobuf.Empty cast_timestamp_tz_to_mz_timestamp = 273;
+        google.protobuf.Empty cast_uint32_to_mz_timestamp = 274;
+        google.protobuf.Empty cast_int32_to_mz_timestamp = 275;
+        google.protobuf.Empty step_mz_timestamp = 276;
     }
 }
 
@@ -702,5 +713,8 @@ message ProtoEvalError {
         google.protobuf.Empty uint16_out_of_range = 55;
         google.protobuf.Empty uint32_out_of_range = 56;
         google.protobuf.Empty uint64_out_of_range = 57;
+        google.protobuf.Empty date_out_of_range = 58;
+        google.protobuf.Empty mz_timestamp_out_of_range = 59;
+        google.protobuf.Empty mz_timestamp_step_overflow = 60;
     }
 }

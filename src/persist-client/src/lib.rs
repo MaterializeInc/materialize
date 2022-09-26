@@ -71,6 +71,9 @@ pub(crate) mod internal {
     pub mod state_diff;
     pub mod state_versions;
     pub mod trace;
+
+    #[cfg(test)]
+    pub mod datadriven;
 }
 
 // TODO: Remove this in favor of making it possible for all PersistClients to be
@@ -114,8 +117,7 @@ impl PersistLocation {
             &self.consensus_uri,
             config.consensus_connection_pool_max_size,
             metrics.postgres_consensus.clone(),
-        )
-        .await?;
+        )?;
         let consensus = retry_external(&metrics.retries.external.consensus_open, || {
             consensus.clone().open()
         })
@@ -130,6 +132,7 @@ impl PersistLocation {
 /// or otherwise used as an interchange format. It can be parsed back using
 /// [str::parse] or [std::str::FromStr::from_str].
 #[derive(Arbitrary, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct ShardId([u8; 16]);
 
 impl std::fmt::Display for ShardId {
@@ -149,6 +152,20 @@ impl std::str::FromStr for ShardId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         parse_id('s', "ShardId", s).map(ShardId)
+    }
+}
+
+impl From<ShardId> for String {
+    fn from(shard_id: ShardId) -> Self {
+        shard_id.to_string()
+    }
+}
+
+impl TryFrom<String> for ShardId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -180,6 +197,11 @@ pub struct PersistConfig {
     pub batch_builder_max_outstanding_parts: usize,
     /// Whether to physically and logically compact batches in blob storage.
     pub compaction_enabled: bool,
+    /// The upper bound on compaction's memory consumption. The value must be at
+    /// least 4*`blob_target_size`. Increasing this value beyond the minimum allows
+    /// compaction to merge together more runs at once, providing greater
+    /// consolidation of updates, at the cost of greater memory usage.
+    pub compaction_memory_bound_bytes: usize,
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
     /// if the number of inputs is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
@@ -253,6 +275,7 @@ impl PersistConfig {
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
             compaction_enabled: !compaction_disabled,
+            compaction_memory_bound_bytes: 1024 * MB,
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
             consensus_connection_pool_max_size: 50,
@@ -304,7 +327,7 @@ impl PersistClient {
     ///
     /// This is exposed mostly for testing. Persist users likely want
     /// [crate::cache::PersistClientCache::open].
-    pub async fn new(
+    pub fn new(
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
@@ -434,9 +457,7 @@ impl PersistClient {
         let writer_id = WriterId::new();
         let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
-                self.cfg.clone(),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
+                machine.clone(),
                 Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
             )
@@ -501,6 +522,7 @@ mod tests {
     use mz_persist::workload::DataGenerator;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+    use serde_json::json;
     use timely::progress::Antichain;
     use timely::PartialOrder;
     use tokio::task::JoinHandle;
@@ -1430,6 +1452,39 @@ mod tests {
                 "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-zA-Z], found `O` at 38"
             ))
         );
+    }
+
+    #[test]
+    fn shard_id_human_readable_serde() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct ShardIdContainer {
+            shard_id: ShardId,
+        }
+
+        // roundtrip id through json
+        let id =
+            ShardId::from_str("s00000000-1234-5678-0000-000000000000").expect("valid shard id");
+        assert_eq!(
+            id,
+            serde_json::from_value(serde_json::to_value(id).expect("serializable"))
+                .expect("deserializable")
+        );
+
+        // deserialize a serialized string directly
+        assert_eq!(
+            id,
+            serde_json::from_str("\"s00000000-1234-5678-0000-000000000000\"")
+                .expect("deserializable")
+        );
+
+        // roundtrip shard id through a container type
+        let json = json!({ "shard_id": id });
+        assert_eq!(
+            "{\"shard_id\":\"s00000000-1234-5678-0000-000000000000\"}",
+            &json.to_string()
+        );
+        let container: ShardIdContainer = serde_json::from_value(json).expect("deserializable");
+        assert_eq!(container.shard_id, id);
     }
 
     #[tokio::test(flavor = "multi_thread")]

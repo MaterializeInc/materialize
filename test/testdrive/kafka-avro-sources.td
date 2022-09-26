@@ -107,9 +107,12 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}", "c": "False", "d": "FileNotFound", "e": {"nested_data_1": {"n1_a": 43, "n1_b":{"nested_data_2": {"n2_a": 44, "n2_b": -1}}}}, "f": {"nested_data_2": {"n2_a": 45, "n2_b": -2}}}}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": {"boolean": false}}, "op": "c"}
 {"before": null, "after": {"row": {"a": -1, "b": 7, "json": "[1, 2, 3]", "c": "FileNotFound", "d": "True", "e": null, "f": null}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 # We should refuse to create a source with invalid WITH options
 ! CREATE SOURCE invalid_with_option
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   LEGACYWITH (badoption = true)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
@@ -121,17 +124,13 @@ name    type
 
 
 # Create a source using an inline schema.
-
-> CREATE CONNECTION kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
 > CREATE SOURCE data_schema_inline
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 
 > SHOW CREATE SOURCE data_schema_inline
-Source   "Create Source"
+name   create_sql
 ------------------------
 materialize.public.data_schema_inline "CREATE SOURCE \"materialize\".\"public\".\"data_schema_inline\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM"
 
@@ -207,8 +206,8 @@ contains:INCLUDE TOPIC not yet supported
 > SELECT * FROM non_dbz_data_metadata
 a b partition offset
 --------------------
-1 2 0         1
-2 3 0         2
+1 2 0         0
+2 3 0         1
 
 > CREATE SOURCE non_dbz_data_metadata_named
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
@@ -219,8 +218,8 @@ a b partition offset
 > SELECT * FROM non_dbz_data_metadata_named
 a b  part  mzo
 --------------
-1 2  0     1
-2 3  0     2
+1 2  0     0
+2 3  0     1
 
 # Test an Avro source without a Debezium envelope starting at specified partition offsets.
 

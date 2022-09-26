@@ -2,12 +2,12 @@
 name = "mz-compute-client"
 description = "The public API for the compute layer."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.64"
+anyhow = "1.0.65"
 async-trait = "0.1.57"
 chrono = { version = "0.4.22", default-features = false, features = ["clock", "std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
@@ -32,7 +32,7 @@ serde = { version = "1.0.144", features = ["derive"] }
 serde_json = "1.0.85"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.19.2"
-tokio-stream = "0.1.9"
+tokio-stream = "0.1.10"
 tonic = "0.8.1"
 tracing = "0.1.36"
 uuid = { version = "1.1.2", features = ["serde", "v4"] }

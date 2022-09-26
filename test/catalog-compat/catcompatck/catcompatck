@@ -73,8 +73,11 @@ $ kafka-ingest format=avro topic=real-time schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 3, "b": 1}}}
 {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE real_time_src
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-real-time-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-real-time-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 
@@ -154,7 +157,7 @@ $ set schema={
   }
 
 > CREATE SOURCE real_time_src_no_stats
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-real-time-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-real-time-${testdrive.seed}')
   WITH (statistics_interval_ms = 0)
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM

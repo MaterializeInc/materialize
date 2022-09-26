@@ -2,12 +2,12 @@
 name = "mz-controller"
 description = "Controller for unified storage and compute layers."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.64"
+anyhow = "1.0.65"
 chrono = { version = "0.4.22", default-features = false, features = ["clock", "std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 mz-build-info = { path = "../build-info" }

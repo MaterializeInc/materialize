@@ -2,12 +2,12 @@
 name = "mz-orchestrator-tracing"
 description = "Service orchestration for tracing-aware services."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.64"
+anyhow = "1.0.65"
 async-trait = "0.1.57"
 clap = { version = "3.2.20", features = ["env", "derive"] }
 futures-core = "0.3.21"

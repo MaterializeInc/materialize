@@ -16,10 +16,12 @@ use mz_repr::{Diff, GlobalId, Row};
 
 use super::metrics::SourceBaseMetrics;
 use super::{SourceMessage, SourceMessageType};
+use crate::source::commit::LogCommitter;
 use crate::source::{NextMessage, SourceReader, SourceReaderError};
 use crate::types::connections::ConnectionContext;
-use crate::types::sources::{encoding::SourceDataEncoding, MzOffset, SourceConnection};
-use crate::types::sources::{Generator, LoadGenerator};
+use crate::types::sources::{
+    encoding::SourceDataEncoding, Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
+};
 
 mod auction;
 mod counter;
@@ -55,6 +57,8 @@ impl SourceReader for LoadGeneratorSourceReader {
     type Value = Row;
     // LoadGenerator can produce deletes that cause retractions
     type Diff = Diff;
+    type OffsetCommitter = LogCommitter;
+    type Connection = LoadGeneratorSourceConnection;
 
     fn new(
         _source_name: String,
@@ -62,19 +66,12 @@ impl SourceReader for LoadGeneratorSourceReader {
         worker_id: usize,
         worker_count: usize,
         _consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        connection: Self::Connection,
         start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         _metrics: SourceBaseMetrics,
         _connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
-        let connection = match connection {
-            SourceConnection::LoadGenerator(lg) => lg,
-            _ => {
-                panic!("LoadGenerator is the only legitimate SourceConnection for LoadGeneratorSourceReader")
-            }
-        };
-
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
@@ -97,15 +94,22 @@ impl SourceReader for LoadGeneratorSourceReader {
             rows.next();
         }
 
-        Ok(Self {
-            rows: Box::new(rows),
-            last: Instant::now(),
-            tick: Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000)),
-            offset,
-            pending: Vec::new(),
-            active_read_worker,
-            reported_unconsumed_partitions: false,
-        })
+        Ok((
+            Self {
+                rows: Box::new(rows),
+                last: Instant::now(),
+                tick: Duration::from_micros(connection.tick_micros.unwrap_or(1_000_000)),
+                offset,
+                pending: Vec::new(),
+                active_read_worker,
+                reported_unconsumed_partitions: false,
+            },
+            LogCommitter {
+                source_id,
+                worker_id,
+                worker_count,
+            },
+        ))
     }
 
     fn get_next_message(

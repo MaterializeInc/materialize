@@ -10,7 +10,6 @@
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
 use std::collections::{BTreeMap, HashMap};
-use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
 use std::time::Duration;
@@ -26,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_persist_types::Codec;
-use mz_proto::{any_uuid, TryFromProtoError};
+use mz_proto::TryFromProtoError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
@@ -238,24 +237,6 @@ impl AddAssign<u64> for MzOffset {
 impl AddAssign<Self> for MzOffset {
     fn add_assign(&mut self, x: Self) {
         self.offset += x.offset;
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct KafkaOffset {
-    pub offset: i64,
-}
-
-/// Convert from KafkaOffset to MzOffset (1-indexed), failing if the offset
-/// is negative.
-impl TryFrom<KafkaOffset> for MzOffset {
-    type Error = TryFromIntError;
-    fn try_from(kafka_offset: KafkaOffset) -> Result<Self, Self::Error> {
-        Ok(MzOffset {
-            // If the offset is negative, or +1 overflows, then this
-            // fails
-            offset: (kafka_offset.offset + 1).try_into()?,
-        })
     }
 }
 
@@ -989,9 +970,9 @@ pub struct KafkaSourceConnection {
     pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     // Map from partition -> starting offset
-    pub start_offsets: HashMap<i32, MzOffset>,
+    pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
-    pub cluster_id: Uuid,
+    pub environment_id: String,
     /// If present, include the timestamp as an output column of the source with the given name
     pub include_timestamp: Option<IncludedColumnPos>,
     /// If present, include the partition as an output column of the source with the given name.
@@ -1003,6 +984,12 @@ pub struct KafkaSourceConnection {
     pub include_headers: Option<IncludedColumnPos>,
 }
 
+impl crate::source::types::SourceConnection for KafkaSourceConnection {
+    fn name(&self) -> &'static str {
+        "kafka"
+    }
+}
+
 impl Arbitrary for KafkaSourceConnection {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -1012,9 +999,9 @@ impl Arbitrary for KafkaSourceConnection {
             any::<KafkaConnection>(),
             any::<BTreeMap<String, StringOrSecret>>(),
             any::<String>(),
-            any::<HashMap<i32, MzOffset>>(),
+            any::<HashMap<i32, i64>>(),
             any::<Option<String>>(),
-            any_uuid(),
+            any::<String>(),
             any::<Option<IncludedColumnPos>>(),
             any::<Option<IncludedColumnPos>>(),
             any::<Option<IncludedColumnPos>>(),
@@ -1028,7 +1015,7 @@ impl Arbitrary for KafkaSourceConnection {
                     topic,
                     start_offsets,
                     group_id_prefix,
-                    cluster_id,
+                    environment_id,
                     include_timestamp,
                     include_partition,
                     include_topic,
@@ -1040,7 +1027,7 @@ impl Arbitrary for KafkaSourceConnection {
                     topic,
                     start_offsets,
                     group_id_prefix,
-                    cluster_id,
+                    environment_id,
                     include_timestamp,
                     include_partition,
                     include_topic,
@@ -1062,13 +1049,10 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
                 .map(|(k, v)| (k.clone(), v.into_proto()))
                 .collect(),
             topic: self.topic.clone(),
-            start_offsets: self
-                .start_offsets
-                .iter()
-                .map(|(k, v)| (*k, v.into_proto()))
-                .collect(),
+            start_offsets: self.start_offsets.clone(),
             group_id_prefix: self.group_id_prefix.clone(),
-            cluster_id: Some(self.cluster_id.into_proto()),
+            environment_id: None,
+            environment_name: Some(self.environment_id.into_proto()),
             include_timestamp: self.include_timestamp.into_proto(),
             include_partition: self.include_partition.into_proto(),
             include_topic: self.include_topic.into_proto(),
@@ -1078,11 +1062,6 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
     }
 
     fn from_proto(proto: ProtoKafkaSourceConnection) -> Result<Self, TryFromProtoError> {
-        let start_offsets: Result<_, TryFromProtoError> = proto
-            .start_offsets
-            .into_iter()
-            .map(|(k, v)| MzOffset::from_proto(v).map(|v| (k, v)))
-            .collect();
         let options: Result<_, TryFromProtoError> = proto
             .options
             .into_iter()
@@ -1094,11 +1073,16 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
                 .into_rust_if_some("ProtoKafkaSourceConnection::connection")?,
             options: options?,
             topic: proto.topic,
-            start_offsets: start_offsets?,
+            start_offsets: proto.start_offsets,
             group_id_prefix: proto.group_id_prefix,
-            cluster_id: proto
-                .cluster_id
-                .into_rust_if_some("ProtoPostgresSourceConnection::details")?,
+            environment_id: match (proto.environment_id, proto.environment_name) {
+                (_, Some(name)) => name,
+                (u128, _) => {
+                    let uuid: Uuid =
+                        u128.into_rust_if_some("ProtoKafkaSourceConnection::environment_id")?;
+                    uuid.to_string()
+                }
+            },
             include_timestamp: proto.include_timestamp.into_rust()?,
             include_partition: proto.include_partition.into_rust()?,
             include_topic: proto.include_topic.into_rust()?,
@@ -1304,7 +1288,7 @@ impl SourceConnection {
             }) => {
                 let mut items = BTreeMap::new();
                 for (include, ty) in [
-                    (offset, ScalarType::Int64),
+                    (offset, ScalarType::UInt64),
                     (part, ScalarType::Int32),
                     (time, ScalarType::Timestamp),
                     (topic, ScalarType::String),
@@ -1386,12 +1370,13 @@ impl SourceConnection {
 
     /// Returns the name of the external source connection.
     pub fn name(&self) -> &'static str {
+        use crate::source::types::SourceConnection as _;
         match self {
-            SourceConnection::Kafka(_) => "kafka",
-            SourceConnection::Kinesis(_) => "kinesis",
-            SourceConnection::S3(_) => "s3",
-            SourceConnection::Postgres(_) => "postgres",
-            SourceConnection::LoadGenerator(_) => "loadgen",
+            SourceConnection::Kafka(c) => c.name(),
+            SourceConnection::Kinesis(c) => c.name(),
+            SourceConnection::S3(c) => c.name(),
+            SourceConnection::Postgres(c) => c.name(),
+            SourceConnection::LoadGenerator(c) => c.name(),
         }
     }
 
@@ -1417,6 +1402,12 @@ pub struct KinesisSourceConnection {
     pub aws: AwsConfig,
 }
 
+impl crate::source::types::SourceConnection for KinesisSourceConnection {
+    fn name(&self) -> &'static str {
+        "kinesis"
+    }
+}
+
 impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
     fn into_proto(&self) -> ProtoKinesisSourceConnection {
         ProtoKinesisSourceConnection {
@@ -1440,6 +1431,12 @@ pub struct PostgresSourceConnection {
     pub connection: PostgresConnection,
     pub publication: String,
     pub details: PostgresSourceDetails,
+}
+
+impl crate::source::types::SourceConnection for PostgresSourceConnection {
+    fn name(&self) -> &'static str {
+        "postgres"
+    }
 }
 
 impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
@@ -1496,6 +1493,12 @@ pub struct LoadGeneratorSourceConnection {
     pub tick_micros: Option<u64>,
 }
 
+impl crate::source::types::SourceConnection for LoadGeneratorSourceConnection {
+    fn name(&self) -> &'static str {
+        "loadgen"
+    }
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
@@ -1548,6 +1551,12 @@ pub struct S3SourceConnection {
     pub pattern: Option<Glob>,
     pub aws: AwsConfig,
     pub compression: Compression,
+}
+
+impl crate::source::types::SourceConnection for S3SourceConnection {
+    fn name(&self) -> &'static str {
+        "s3"
+    }
 }
 
 fn any_glob() -> impl Strategy<Value = Glob> {

@@ -11,6 +11,9 @@
 # In strict serializable mode we may select a timestamp that is ahead of on of the table's upper and hang forever.
 > SET transaction_isolation = serializable
 
+# Increased from the default because of CI flakiness.
+$ set-sql-timeout duration=180s
+
 > SELECT COUNT(*) FROM t1;
 0
 

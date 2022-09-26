@@ -10,12 +10,11 @@
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::iter;
-use std::ops::Add;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::bail;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDateTime;
 use crossbeam::thread;
 use rand::distributions::{
     uniform::SampleUniform, Alphanumeric, Bernoulli, Uniform, WeightedIndex,
@@ -105,8 +104,7 @@ impl<'a> RandomAvroGenerator<'a> {
             }
             SchemaPiece::Date => {
                 let days = self.ints.get_mut(&p).unwrap()(rng);
-                let val = NaiveDate::from_ymd(1970, 1, 1).add(chrono::Duration::days(days as i64));
-                Value::Date(val)
+                Value::Date(days)
             }
             SchemaPiece::TimestampMilli => {
                 let millis = self.longs.get_mut(&p).unwrap()(rng);

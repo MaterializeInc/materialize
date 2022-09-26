@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::Context;
+use mz_repr::adt::date::Date;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -343,7 +344,9 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
             mz_avro::types::Scalar::Double(val) => {
                 self.packer.push(Datum::Float64(OrderedFloat(val)))
             }
-            mz_avro::types::Scalar::Date(val) => self.packer.push(Datum::Date(val)),
+            mz_avro::types::Scalar::Date(val) => self.packer.push(Datum::Date(
+                Date::from_unix_epoch(val).map_err(|_| DecodeError::DateOutOfRange(val))?,
+            )),
             mz_avro::types::Scalar::Timestamp(val) => self.packer.push(Datum::Timestamp(val)),
         }
         Ok(())

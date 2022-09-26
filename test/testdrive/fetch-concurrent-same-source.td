@@ -11,14 +11,17 @@
 # Make sure that FETCH-ing using multiple cursors from the same source works as expected
 #
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "type": "int"} ] }
 
 $ kafka-create-topic topic=fetch-concurrent-same-source
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE fetch_concurrent_same_source
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-same-source-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-same-source-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
   WITH (TIMESTAMP INTERVAL '10ms')

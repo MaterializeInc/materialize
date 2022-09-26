@@ -111,13 +111,13 @@ where
         name: source_name,
         upstream_name: connection.upstream_name().map(ToOwned::to_owned),
         id,
-        scope,
         timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
         encoding: encoding.clone(),
         now: storage_state.now.clone(),
-        base_metrics: &storage_state.source_metrics,
+        // TODO(guswynn): avoid extra clones here
+        base_metrics: storage_state.source_metrics.clone(),
         resume_upper: resume_upper.clone(),
         storage_metadata: description.storage_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
@@ -131,47 +131,52 @@ where
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let ((ok_source, err_source), capability) = match connection {
-        SourceConnection::Kafka(_) => {
+        SourceConnection::Kafka(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
+                scope,
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );
             ((SourceType::Delimited(ok), err), cap)
         }
-        SourceConnection::Kinesis(_) => {
+        SourceConnection::Kinesis(connection) => {
             let ((ok, err), cap) =
                 source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
+                    scope,
                     base_source_config,
-                    &connection,
+                    connection,
                     storage_state.connection_context.clone(),
                     resumption_calculator,
                 );
             ((SourceType::Delimited(ok), err), cap)
         }
-        SourceConnection::S3(_) => {
+        SourceConnection::S3(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
+                scope,
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );
             ((SourceType::ByteStream(ok), err), cap)
         }
-        SourceConnection::Postgres(_) => {
+        SourceConnection::Postgres(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
+                scope,
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );
             ((SourceType::Row(ok), err), cap)
         }
-        SourceConnection::LoadGenerator(_) => {
+        SourceConnection::LoadGenerator(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
+                scope,
                 base_source_config,
-                &connection,
+                connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );

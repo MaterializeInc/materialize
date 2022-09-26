@@ -126,9 +126,9 @@ contains:Expected a list of columns in parentheses, found EOF
 
 # The write frontier of a source from  a static CSV should be empty,
 # since the definition of "static" means "will never change again".
-$ set-regex match=(\d{13}|u\d{1,3}) replacement=<>
+$ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM static_csv
-"     timestamp: <>\n         since:[<>]\n         upper:[]\n     has table: false\n\nsource materialize.public.static_csv (<>, storage):\n read frontier:[<>]\nwrite frontier:[]\n"
+"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.static_csv (<>, storage):\n read frontier:[<> <>]\nwrite frontier:[]\n"
 
 # Static CSV with manual headers.
 > CREATE SOURCE static_csv_manual_header (city_man, state_man, zip_man)
@@ -216,7 +216,7 @@ contains:Decode error: Text: CSV error at record number 2: invalid UTF-8
 
 # Declare a key constraint (PRIMARY KEY NOT ENFORCED)
 
-$ kafka-create-topic topic=static-csv-pkne-sink
+$ kafka-create-topic topic=static-csv-pkne-sink partitions=1
 
 > CREATE SOURCE static_csv_pkne (PRIMARY KEY (zip) NOT ENFORCED)
   FROM S3 CONNECTION s3_conn
@@ -237,6 +237,6 @@ $ kafka-create-topic topic=static-csv-pkne-sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 $ kafka-verify format=avro sink=materialize.public.static_csv_pkne_sink sort-messages=true
-{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004", "transaction": {"id": "<>"}}
-{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618", "transaction": {"id": "<>"}}
-{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679", "transaction": {"id": "<>"}}
+{"zip": "10004"} {"city": "New York", "state": "NY", "zip": "10004"}
+{"zip": "14618"} {"city": "Rochester", "state": "NY", "zip": "14618"}
+{"zip": "92679"} {"city": "bad,\nplace\"", "state": "CA", "zip": "92679"}

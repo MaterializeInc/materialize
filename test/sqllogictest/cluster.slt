@@ -64,6 +64,22 @@ default
 statement error only one of REMOTE or SIZE may be specified
 CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], SIZE 'small'))
 
+statement error must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234', 'localhost:4567'], COMPUTE [], WORKERS 1))
+
+statement error must specify as many REMOTE addresses as COMPUTE addresses for multi-process replicas
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE [], COMPUTE ['localhost:1234', 'localhost:4567']))
+
+statement error WORKERS must be greater 0
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE [], WORKERS 0))
+
+# SIZE + Remote options produce error
+statement error cannot specify SIZE and WORKERS
+CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', WORKERS 1))
+
+statement error cannot specify SIZE and COMPUTE
+CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', COMPUTE ['localhost:1234']))
+
 # Test `cluster` session variable.
 
 query T
@@ -93,18 +109,18 @@ SELECT * FROM v
 ----
 1
 
-query TTTTTTT
+query TTTT
 SHOW INDEXES ON v IN CLUSTER bar;
 ----
-bar v v_primary_idx 1 ?column? NULL false
+v_primary_idx v bar {?column?}
 
 statement ok
 CREATE DEFAULT INDEX foo_v_idx IN CLUSTER foo ON v
 
-query TTTTTTT
+query TTTT
 SHOW INDEXES IN CLUSTER bar;
 ----
-bar  v  v_primary_idx  1  ?column?  NULL  false
+v_primary_idx v bar {?column?}
 
 query TTTTTTT
 SELECT
@@ -125,64 +141,64 @@ FROM
 WHERE clusters.name = 'bar'
 ORDER BY on_name, seq_in_index ASC;
 ----
-bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  1  operator  NULL  false
-bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  2  worker  NULL  false
-bar  mz_arrangement_records_internal  mz_arrangement_records_internal_4_primary_idx  1  operator  NULL  false
-bar  mz_arrangement_records_internal  mz_arrangement_records_internal_4_primary_idx  2  worker  NULL  false
-bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_4_primary_idx  1  operator  NULL  false
-bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_4_primary_idx  2  worker  NULL  false
+bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_records_internal  mz_arrangement_records_internal_4_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_records_internal  mz_arrangement_records_internal_4_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_4_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_4_primary_idx  2  worker_id  NULL  false
 bar  mz_dataflow_addresses  mz_dataflow_addresses_4_primary_idx  1  id  NULL  false
-bar  mz_dataflow_addresses  mz_dataflow_addresses_4_primary_idx  2  worker  NULL  false
+bar  mz_dataflow_addresses  mz_dataflow_addresses_4_primary_idx  2  worker_id  NULL  false
 bar  mz_dataflow_channels  mz_dataflow_channels_4_primary_idx  1  id  NULL  false
-bar  mz_dataflow_channels  mz_dataflow_channels_4_primary_idx  2  worker  NULL  false
+bar  mz_dataflow_channels  mz_dataflow_channels_4_primary_idx  2  worker_id  NULL  false
 bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  1  address  NULL  false
 bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  2  port  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  3  worker  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  3  worker_id  NULL  false
 bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  4  update_type  NULL  false
 bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  5  timestamp  NULL  true
 bar  mz_dataflow_operators  mz_dataflow_operators_4_primary_idx  1  id  NULL  false
-bar  mz_dataflow_operators  mz_dataflow_operators_4_primary_idx  2  worker  NULL  false
-bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  1  dataflow  NULL  false
-bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  2  source  NULL  false
-bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  3  worker  NULL  false
-bar  mz_materializations  mz_materializations_4_primary_idx  1  global_id  NULL  false
-bar  mz_materializations  mz_materializations_4_primary_idx  2  worker  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  1  channel  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  2  source_worker  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  3  target_worker  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_4_primary_idx  1  channel  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_4_primary_idx  2  source_worker  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_4_primary_idx  3  target_worker  NULL  false
+bar  mz_dataflow_operators  mz_dataflow_operators_4_primary_idx  2  worker_id  NULL  false
+bar  mz_materializations  mz_materializations_4_primary_idx  1  object_id  NULL  false
+bar  mz_materializations  mz_materializations_4_primary_idx  2  worker_id  NULL  false
+bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  1  channel_id  NULL  false
+bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  3  to_worker_id  NULL  false
+bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_4_primary_idx  1  channel_id  NULL  false
+bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_4_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_4_primary_idx  3  to_worker_id  NULL  false
 bar  mz_peek_active  mz_peek_active_4_primary_idx  1  id  NULL  false
-bar  mz_peek_active  mz_peek_active_4_primary_idx  2  worker  NULL  false
-bar  mz_peek_durations  mz_peek_durations_4_primary_idx  1  worker  NULL  false
+bar  mz_peek_active  mz_peek_active_4_primary_idx  2  worker_id  NULL  false
+bar  mz_peek_durations  mz_peek_durations_4_primary_idx  1  worker_id  NULL  false
 bar  mz_peek_durations  mz_peek_durations_4_primary_idx  2  duration_ns  NULL  false
 bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_4_primary_idx  1  id  NULL  false
-bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_4_primary_idx  2  worker  NULL  false
+bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_4_primary_idx  2  worker_id  NULL  false
 bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_4_primary_idx  1  id  NULL  false
-bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_4_primary_idx  2  worker  NULL  false
+bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_4_primary_idx  2  worker_id  NULL  false
 bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_4_primary_idx  3  duration_ns  NULL  false
-bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  1  worker  NULL  false
+bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  1  worker_id  NULL  false
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  2  slept_for  NULL  false
 bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  3  requested  NULL  false
-bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  1  global_id  NULL  false
-bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  2  source  NULL  false
-bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  3  worker  NULL  false
+bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  1  object_id  NULL  false
+bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  2  source_id  NULL  false
+bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  3  worker_id  NULL  false
 bar  mz_worker_materialization_delays  mz_worker_materialization_delays_4_primary_idx  4  delay_ns  NULL  false
-bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  1  global_id  NULL  false
-bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  2  worker  NULL  false
+bar  mz_worker_materialization_dependencies  mz_worker_materialization_dependencies_4_primary_idx  1  export_id  NULL  false
+bar  mz_worker_materialization_dependencies  mz_worker_materialization_dependencies_4_primary_idx  2  import_id  NULL  false
+bar  mz_worker_materialization_dependencies  mz_worker_materialization_dependencies_4_primary_idx  3  worker_id  NULL  false
+bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  1  object_id  NULL  false
+bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  2  worker_id  NULL  false
 bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  3  time  NULL  false
-bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  1  global_id  NULL  false
-bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  2  source  NULL  false
-bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  3  worker  NULL  false
+bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  1  object_id  NULL  false
+bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  2  source_id  NULL  false
+bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  3  worker_id  NULL  false
 bar  mz_worker_materialization_source_frontiers  mz_worker_materialization_source_frontiers_4_primary_idx  4  time  NULL  false
 bar  v  v_primary_idx  1  ?column?  NULL  false
 
-query TTTTTTT
+query TTTT
 SHOW INDEXES;
 ----
-bar  v  v_primary_idx  1  ?column?  NULL  false
-foo  v  foo_v_idx  1  ?column?  NULL  false
+foo_v_idx v foo {?column?}
+v_primary_idx v bar {?column?}
 
 query T
 SELECT
@@ -225,11 +241,11 @@ v_primary_idx
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER bar ON v
 
-query TTTTTTT
+query TTTT
 SHOW INDEXES ON v IN CLUSTER bar;
 ----
-bar v v_primary_idx 1 ?column? NULL false
-bar v v_primary_idx1 1 ?column? NULL false
+v_primary_idx v bar {?column?}
+v_primary_idx1 v bar {?column?}
 
 statement error unknown cluster 'noexist'
 CREATE DEFAULT INDEX IN CLUSTER noexist ON v
@@ -247,11 +263,11 @@ DROP CLUSTER baz
 statement error cannot drop cluster with active indexes or materialized views
 DROP CLUSTER bar
 
-query TTTTTTT
-SHOW INDEXES IN CLUSTER bar WHERE on_name = 'v';
+query TTTT
+SHOW INDEXES IN CLUSTER bar WHERE on = 'v';
 ----
-bar v v_primary_idx 1 ?column? NULL false
-bar v v_primary_idx1 1 ?column? NULL false
+v_primary_idx v bar {?column?}
+v_primary_idx1 v bar {?column?}
 
 statement ok
 DROP INDEX v_primary_idx

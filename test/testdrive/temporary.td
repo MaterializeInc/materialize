@@ -113,9 +113,9 @@ contains:catalog item 'temp_t' already exists
 #
 # > SHOW INDEXES FROM temp_t
 #  on_name    key_name            seq_in_index  column_name  expression  nullable
+#  name                 on          cluster         key
 # --------------------------------------------------------------------------------
-#  temp_t     temp_t_primary_idx  1             a            <null>      true
-#  temp_t     temp_t_primary_idx  2             b            <null>      false
+#  temp_t_primary_idx   d           default         {a, b}
 
 > DROP TABLE temp_t
 
@@ -197,8 +197,11 @@ $ set schema={
     "fields": [{},]
   }
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 ! CREATE TEMPORARY SOURCE data_schema_inline
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE, found SOURCE

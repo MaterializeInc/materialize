@@ -187,8 +187,8 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
         blob_uri: args.blob_uri,
         consensus_uri: args.consensus_uri,
     };
-    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     let config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
     let (blob, consensus) = location.open_locations(&config, &metrics).await?;
     let unreliable = UnreliableHandle::default();
     let should_happen = 1.0 - args.unreliability;
@@ -199,7 +199,7 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
     let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable))
         as Arc<dyn Consensus + Send + Sync>;
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    PersistClient::new(config, blob, consensus, metrics, cpu_heavy_runtime).await
+    PersistClient::new(config, blob, consensus, metrics, cpu_heavy_runtime)
 }
 
 mod api {

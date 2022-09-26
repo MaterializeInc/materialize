@@ -8,16 +8,17 @@
 # by the Apache License, Version 2.0.
 
 # Batches start empty
-batches
+spine-batches
 ----
+<empty>
 
 # Insert a len=1 batch.
-insert
-0 1 0 1 k0
+push-batch
+[0][1][0] 1 k0
 ----
 ok
 
-batches
+spine-batches
 ----
 [0][1][0] 1 k0
 
@@ -26,18 +27,18 @@ take-merge-reqs
 <empty>
 
 # Insert more len=1 batches.
-insert
-1 2 0 1 k1
-2 3 0 1 k2
-3 4 0 1 k3
-4 5 0 1 k4
-5 6 0 1 k5
-6 7 0 1 k6
-7 8 0 1 k7
+push-batch
+[1][2][0] 1 k1
+[2][3][0] 1 k2
+[3][4][0] 1 k3
+[4][5][0] 1 k4
+[5][6][0] 1 k5
+[6][7][0] 1 k6
+[7][8][0] 1 k7
 ----
 ok
 
-batches
+spine-batches
 ----
 [0][4][0] 4/4 k0 k1 k2 k3
 [4][6][0] 2/2 k4 k5
@@ -53,12 +54,12 @@ take-merge-reqs
 # Insert a large batch, which because of spine's invariants, must be inserted at
 # a higher level. This causes the len=1 batches to smash together at the level
 # above it and generate a merge.
-insert
-8 9 0 100 k8
+push-batch
+[8][9][0] 100 k8
 ----
 ok
 
-batches
+spine-batches
 ----
 [0][8][0] 8/8 k0 k1 k2 k3 k4 k5 k6 k7
 [8][9][0] 100 k8
@@ -69,7 +70,7 @@ take-merge-reqs
 
 # Merge responses that we didn't generate are ignored.
 apply-merge-res
-1 3 0 0 nope
+[1][3][0] 0 nope
 ----
 no-op
 
@@ -77,23 +78,23 @@ no-op
 # SpineBatch. In practice, this means a merge req that is outdated when it
 # arrives will be a no-op.
 apply-merge-res
-0 2 0 2 nope
+[0][2][0] 2 nope
 ----
 no-op
 
 # Verify that nothing has been changed by the no-op.
-batches
+spine-batches
 ----
 [0][8][0] 8/8 k0 k1 k2 k3 k4 k5 k6 k7
 [8][9][0] 100 k8
 
 # Successfully apply a merge res
 apply-merge-res
-0 8 0 5 k0-7
+[0][8][0] 5 k0-7
 ----
 applied
 
-batches
+spine-batches
 ----
 [0][8][0] 5 k0-7
 [8][9][0] 100 k8

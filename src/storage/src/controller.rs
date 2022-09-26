@@ -477,9 +477,11 @@ impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalcu
         remap_write.fetch_recent_upper().await;
         data_write.fetch_recent_upper().await;
 
-        self.collection_metadata
-            .get_resume_upper_from_handles(remap_write, data_write, &self.source_envelope)
-            .await
+        self.collection_metadata.get_resume_upper_from_handles(
+            remap_write,
+            data_write,
+            &self.source_envelope,
+        )
     }
 }
 
@@ -487,7 +489,7 @@ impl CollectionMetadata {
     /// Calculate the point at which we can resume ingestion computing the greatest
     /// antichain that is less or equal to all state and output shard uppers,
     /// using pre-existing `WriteHandle`s
-    pub async fn get_resume_upper_from_handles<T>(
+    pub fn get_resume_upper_from_handles<T>(
         &self,
         remap_write: &mut WriteHandle<(), PartitionId, T, MzOffset>,
         data_write: &mut WriteHandle<SourceData, (), T, Diff>,
@@ -563,7 +565,6 @@ impl CollectionMetadata {
     {
         let (mut remap_write, mut data_write) = self.get_write_handles(persist).await;
         self.get_resume_upper_from_handles(&mut remap_write, &mut data_write, source_envelope)
-            .await
     }
 }
 
@@ -1055,10 +1056,11 @@ where
 
             let from_collection = self.collection(from)?;
             let from_storage_metadata = from_collection.collection_metadata.clone();
-            // We've added the dependency above in `exported_collections` so this guaranteed not to change at least until the sink is started up.
+            // We've added the dependency above in `exported_collections` so this guaranteed not to change at least
+            // until the sink is started up.
             let from_since = from_collection.implied_capability.clone();
 
-            let initial_as_of = MetadataExportFetcher::get_stash_collection()
+            let as_of = MetadataExportFetcher::get_stash_collection()
                 .insert_without_overwrite(
                     &mut self.state.stash,
                     &id,
@@ -1067,17 +1069,8 @@ where
                     },
                 )
                 .await?
-                .initial_as_of;
-
-            let as_of = if PartialOrder::less_equal(&initial_as_of.frontier, &from_since) {
-                SinkAsOf {
-                    frontier: from_since,
-                    // If we're using the since, never read the snapshot
-                    strict: true,
-                }
-            } else {
-                initial_as_of
-            };
+                .initial_as_of
+                .maybe_fast_forward(&from_since);
 
             let cmd = ExportSinkCommand {
                 id,

@@ -40,7 +40,7 @@ class DebeziumStop(Action):
     def requires(self) -> Set[Type[Capability]]:
         return {DebeziumRunning}
 
-    def removes(self) -> Set[Type[Capability]]:
+    def withholds(self) -> Set[Type[Capability]]:
         return {DebeziumRunning}
 
     def run(self, c: Composition) -> None:

@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// `EnumKind` and various macros unconditionally introduce lifetimes.
+// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
+// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
 use std::fmt::{self, Write};
@@ -15,7 +16,7 @@ use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
@@ -30,6 +31,7 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::{Array, ArrayDimension};
 use crate::adt::char::{Char, CharLength};
+use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
@@ -71,7 +73,7 @@ pub enum Datum<'a> {
     /// A 64-bit floating point number.
     Float64(OrderedFloat<f64>),
     /// A date.
-    Date(NaiveDate),
+    Date(Date),
     /// A time.
     Time(NaiveTime),
     /// A date and time, without a timezone.
@@ -103,6 +105,7 @@ pub enum Datum<'a> {
     JsonNull,
     /// A universally unique identifier.
     Uuid(Uuid),
+    MzTimestamp(crate::Timestamp),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -151,7 +154,7 @@ impl<'a> Serialize for Datum<'a> {
             UInt64(u) => serializer.serialize_u64(*u),
             Float32(f) => serializer.serialize_f32(**f),
             Float64(f) => serializer.serialize_f64(**f),
-            Date(d) => d.serialize(serializer),
+            Date(d) => chrono::NaiveDate::from(d).serialize(serializer),
             Time(t) => t.serialize(serializer),
             Timestamp(ts) => ts.serialize(serializer),
             TimestampTz(tstz) => tstz.serialize(serializer),
@@ -163,6 +166,7 @@ impl<'a> Serialize for Datum<'a> {
             Map(m) => m.serialize(serializer),
             Numeric(n) => serializer.serialize_str(&n.to_string()),
             Uuid(u) => u.serialize(serializer),
+            MzTimestamp(t) => serializer.serialize_str(&t.to_string()),
             Dummy => serializer.serialize_str("Dummy"),
             JsonNull => serializer.serialize_str("JsonNull"),
             Null => serializer.serialize_none(),
@@ -541,14 +545,14 @@ impl<'a> Datum<'a> {
     ///
     /// Panics if the datum is not [`Datum::Date`].
     #[track_caller]
-    pub fn unwrap_date(&self) -> chrono::NaiveDate {
+    pub fn unwrap_date(&self) -> Date {
         match self {
             Datum::Date(d) => *d,
             _ => panic!("Datum::unwrap_date called on {:?}", self),
         }
     }
 
-    /// Unwraps the time value within this datum.
+    /// Unwraps the time vaqlue within this datum.
     ///
     /// # Panics
     ///
@@ -691,6 +695,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the mz_repr::Timestamp value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::MzTimestamp`].
+    #[track_caller]
+    pub fn unwrap_mztimestamp(&self) -> crate::Timestamp {
+        match self {
+            Datum::MzTimestamp(t) => *t,
+            _ => panic!("Datum::unwrap_mztimestamp called on {:?}", self),
+        }
+    }
+
     /// Reports whether this datum is an instance of the specified column type.
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
@@ -789,6 +806,8 @@ impl<'a> Datum<'a> {
                     (Datum::JsonNull, _) => false,
                     (Datum::Numeric(_), ScalarType::Numeric { .. }) => true,
                     (Datum::Numeric(_), _) => false,
+                    (Datum::MzTimestamp(_), ScalarType::MzTimestamp) => true,
+                    (Datum::MzTimestamp(_), _) => false,
                 }
             }
         }
@@ -914,8 +933,8 @@ impl<'a> From<&'a [u8]> for Datum<'a> {
     }
 }
 
-impl<'a> From<NaiveDate> for Datum<'a> {
-    fn from(d: NaiveDate) -> Datum<'a> {
+impl<'a> From<Date> for Datum<'a> {
+    fn from(d: Date) -> Datum<'a> {
         Datum::Date(d)
     }
 }
@@ -941,6 +960,11 @@ impl<'a> From<DateTime<Utc>> for Datum<'a> {
 impl<'a> From<Uuid> for Datum<'a> {
     fn from(uuid: Uuid) -> Datum<'a> {
         Datum::Uuid(uuid)
+    }
+}
+impl<'a> From<crate::Timestamp> for Datum<'a> {
+    fn from(ts: crate::Timestamp) -> Datum<'a> {
+        Datum::MzTimestamp(ts)
     }
 }
 
@@ -1032,6 +1056,7 @@ impl fmt::Display for Datum<'_> {
                 f.write_str("}")
             }
             Datum::Numeric(n) => write!(f, "{}", n.0.to_standard_notation_string()),
+            Datum::MzTimestamp(t) => write!(f, "{}", t),
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
         }
@@ -1094,6 +1119,7 @@ impl From<&Datum<'_>> for serde_json::Value {
             | Datum::Time(_)
             | Datum::Timestamp(_)
             | Datum::TimestampTz(_)
+            | Datum::MzTimestamp(_)
             | Datum::Uuid(_) => serde_json::Value::String(datum.to_string()),
         }
     }
@@ -1221,6 +1247,8 @@ pub enum ScalarType {
     /// A vector on small ints; this is a legacy type in PG used primarily in
     /// the catalog.
     Int2Vector,
+    /// A Materialize timestamp.
+    MzTimestamp,
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
@@ -1302,6 +1330,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                     value_type: Some(value_type.into_proto()),
                     custom_id: custom_id.map(|id| id.into_proto()),
                 })),
+                ScalarType::MzTimestamp => MzTimestamp(()),
             }),
         }
     }
@@ -1373,6 +1402,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                 ),
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
+            MzTimestamp(()) => Ok(ScalarType::MzTimestamp),
         }
     }
 }
@@ -1479,13 +1509,14 @@ impl_datum_type_copy!(u16, UInt16);
 impl_datum_type_copy!(u32, UInt32);
 impl_datum_type_copy!(u64, UInt64);
 impl_datum_type_copy!(Interval, Interval);
-impl_datum_type_copy!(NaiveDate, Date);
+impl_datum_type_copy!(Date, Date);
 impl_datum_type_copy!(NaiveTime, Time);
 impl_datum_type_copy!(NaiveDateTime, Timestamp);
 impl_datum_type_copy!(DateTime<Utc>, TimestampTz);
 impl_datum_type_copy!(Uuid, Uuid);
 impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
+impl_datum_type_copy!(crate::Timestamp, MzTimestamp);
 
 impl<'a, E> DatumType<'a, E> for Datum<'a> {
     fn nullable() -> bool {
@@ -2313,7 +2344,7 @@ pub enum PropDatum {
     Float32(f32),
     Float64(f64),
 
-    Date(chrono::NaiveDate),
+    Date(Date),
     Time(chrono::NaiveTime),
     Timestamp(chrono::NaiveDateTime),
     TimestampTz(chrono::DateTime<chrono::Utc>),
@@ -2346,7 +2377,7 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         any::<i64>().prop_map(PropDatum::Int64),
         any::<f32>().prop_map(PropDatum::Float32),
         any::<f64>().prop_map(PropDatum::Float64),
-        add_arb_duration(chrono::NaiveDate::from_ymd(2000, 1, 1)).prop_map(PropDatum::Date),
+        arb_date().prop_map(PropDatum::Date),
         add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropDatum::Time),
         add_arb_duration(chrono::NaiveDateTime::from_timestamp(0, 0))
             .prop_map(PropDatum::Timestamp),
@@ -2434,6 +2465,12 @@ fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDic
             row.packer().push_dict(entry_iter.into_iter());
             PropDict(row, entries)
         })
+        .boxed()
+}
+
+fn arb_date() -> BoxedStrategy<Date> {
+    (Date::LOW_DAYS..Date::HIGH_DAYS)
+        .prop_map(move |days| Date::from_pg_epoch(days).unwrap())
         .boxed()
 }
 

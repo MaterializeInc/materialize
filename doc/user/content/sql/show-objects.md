@@ -9,7 +9,7 @@ aliases:
 ---
 
 `SHOW OBJECTS` returns a list of all objects available to your Materialize instances in a given schema.
-Objects include tables, sources, views, and indexes.
+Objects include tables, sources, sinks, views, indexes, secrets and connections.
 
 ## Syntax
 
@@ -61,5 +61,8 @@ my_view   | view
 
 - [`SHOW TABLES`](../show-tables)
 - [`SHOW SOURCES`](../show-sources)
+- [`SHOW SINKS`](../show-sinks)
 - [`SHOW VIEWS`](../show-views)
 - [`SHOW INDEXES`](../show-indexes)
+- [`SHOW SECRETS`](../show-secrets)
+- [`SHOW CONNECTIONS`](../show-connections)

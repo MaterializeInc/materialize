@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use itertools::Itertools;
+use mz_repr::adt::date::DateError;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
@@ -1519,13 +1520,12 @@ impl MirScalarExpr {
     }
 
     /// True iff the expression contains
-    /// `UnmaterializableFunc::MzLogicalTimestamp`.
+    /// `UnmaterializableFunc::MzNow`.
     pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
         #[allow(deprecated)]
         self.visit_post_nolimit(&mut |e| {
-            if let MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzLogicalTimestamp) = e
-            {
+            if let MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow) = e {
                 contains = true;
             }
         });
@@ -1794,9 +1794,12 @@ pub enum EvalError {
     UInt16OutOfRange,
     UInt32OutOfRange,
     UInt64OutOfRange,
+    MzTimestampOutOfRange,
+    MzTimestampStepOverflow,
     OidOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
+    DateOutOfRange,
     CharOutOfRange,
     IndexOutOfRange {
         provided: i32,
@@ -1884,9 +1887,12 @@ impl fmt::Display for EvalError {
             EvalError::UInt16OutOfRange => f.write_str("uint2 out of range"),
             EvalError::UInt32OutOfRange => f.write_str("uint4 out of range"),
             EvalError::UInt64OutOfRange => f.write_str("uint8 out of range"),
+            EvalError::MzTimestampOutOfRange => f.write_str("mztimestamp out of range"),
+            EvalError::MzTimestampStepOverflow => f.write_str("step mztimestamp overflow"),
             EvalError::OidOutOfRange => f.write_str("OID out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
+            EvalError::DateOutOfRange => f.write_str("date out of range"),
             EvalError::CharOutOfRange => f.write_str("\"char\" out of range"),
             EvalError::IndexOutOfRange {
                 provided,
@@ -2065,6 +2071,14 @@ impl From<TypeFromOidError> for EvalError {
     }
 }
 
+impl From<DateError> for EvalError {
+    fn from(e: DateError) -> EvalError {
+        match e {
+            DateError::OutOfRange => EvalError::DateOutOfRange,
+        }
+    }
+}
+
 impl RustType<ProtoEvalError> for EvalError {
     fn into_proto(&self) -> ProtoEvalError {
         use proto_eval_error::Kind::*;
@@ -2089,9 +2103,12 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::UInt16OutOfRange => Uint16OutOfRange(()),
             EvalError::UInt32OutOfRange => Uint32OutOfRange(()),
             EvalError::UInt64OutOfRange => Uint64OutOfRange(()),
+            EvalError::MzTimestampOutOfRange => MzTimestampOutOfRange(()),
+            EvalError::MzTimestampStepOverflow => MzTimestampStepOverflow(()),
             EvalError::OidOutOfRange => OidOutOfRange(()),
             EvalError::IntervalOutOfRange => IntervalOutOfRange(()),
             EvalError::TimestampOutOfRange => TimestampOutOfRange(()),
+            EvalError::DateOutOfRange => DateOutOfRange(()),
             EvalError::CharOutOfRange => CharOutOfRange(()),
             EvalError::IndexOutOfRange {
                 provided,
@@ -2194,9 +2211,12 @@ impl RustType<ProtoEvalError> for EvalError {
                 Uint16OutOfRange(()) => Ok(EvalError::UInt16OutOfRange),
                 Uint32OutOfRange(()) => Ok(EvalError::UInt32OutOfRange),
                 Uint64OutOfRange(()) => Ok(EvalError::UInt64OutOfRange),
+                MzTimestampOutOfRange(()) => Ok(EvalError::MzTimestampOutOfRange),
+                MzTimestampStepOverflow(()) => Ok(EvalError::MzTimestampStepOverflow),
                 OidOutOfRange(()) => Ok(EvalError::OidOutOfRange),
                 IntervalOutOfRange(()) => Ok(EvalError::IntervalOutOfRange),
                 TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),
+                DateOutOfRange(()) => Ok(EvalError::DateOutOfRange),
                 CharOutOfRange(()) => Ok(EvalError::CharOutOfRange),
                 IndexOutOfRange(v) => Ok(EvalError::IndexOutOfRange {
                     provided: v.provided,

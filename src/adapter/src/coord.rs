@@ -89,6 +89,7 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::stack;
@@ -144,9 +145,6 @@ mod timestamp_selection;
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<mz_repr::Timestamp> =
     Some(Timestamp::new(1_000));
-
-/// The default interval at which to collect storage usage information.
-pub const DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// A dummy availability zone to use when no availability zones are explicitly
 /// specified.
@@ -223,6 +221,7 @@ pub struct Config<S> {
     pub storage: storage::Connection<S>,
     pub unsafe_mode: bool,
     pub build_info: &'static BuildInfo,
+    pub environment_id: String,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Arc<dyn SecretsController>,
@@ -232,6 +231,7 @@ pub struct Config<S> {
     pub default_storage_host_size: Option<String>,
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
+    pub storage_usage_collection_interval: Duration,
 }
 
 /// Soft-state metadata about a compute replica
@@ -261,7 +261,7 @@ struct TxnReads {
     // True iff all statements run so far in the transaction are independent
     // of the chosen logical timestamp (not the PlanContext walltime). This
     // happens if both 1) there are no referenced sources or indexes and 2)
-    // `mz_logical_timestamp()` is not present.
+    // `mz_now()` is not present.
     timestamp_independent: bool,
     read_holds: crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>,
 }
@@ -352,7 +352,7 @@ pub struct Coordinator<S> {
     /// dropped and for which no further updates should be recorded.
     transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
 
-    // Persist client for fetching storage metadata such as size metrics.
+    /// Persist client for fetching storage metadata such as size metrics.
     storage_usage_client: StorageUsageClient,
     /// The interval at which to collect storage usage information.
     storage_usage_collection_interval: Duration,
@@ -524,9 +524,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
                         self.controller
                             .active_compute()
-                            .instance(idx.compute_instance)
-                            .unwrap()
-                            .create_dataflows(dataflow_plan)
+                            .create_dataflows(idx.compute_instance, dataflow_plan)
                             .await
                             .unwrap();
                     }
@@ -625,8 +623,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         key.iter().map(move |k| {
                             let row = Row::pack_slice(&[
                                 Datum::String(log_id),
-                                Datum::Int64(*k as i64),
-                                Datum::Int64(index as i64),
+                                Datum::UInt64(u64::cast_from(*k)),
+                                Datum::UInt64(u64::cast_from(index)),
                             ]);
                             BuiltinTableUpdate {
                                 id: mz_view_keys,
@@ -647,10 +645,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         pairs.into_iter().map(move |(c, p)| {
                             let row = Row::pack_slice(&[
                                 Datum::String(&log_id),
-                                Datum::Int64(c as i64),
+                                Datum::UInt64(u64::cast_from(c)),
                                 Datum::String(&parent_id),
-                                Datum::Int64(p as i64),
-                                Datum::Int64(index as i64),
+                                Datum::UInt64(u64::cast_from(p)),
+                                Datum::UInt64(u64::cast_from(index)),
                             ]);
                             BuiltinTableUpdate {
                                 id: mz_foreign_keys,
@@ -734,9 +732,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // Watcher that listens for and reports compute service status changes.
         let mut compute_events = self.controller.compute.watch_services();
 
-        // Trigger a storage usage metric collection on configured interval.
-        let mut storage_usage_update_interval =
-            tokio::time::interval(self.storage_usage_collection_interval);
+        self.schedule_storage_usage_collection().await;
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -776,7 +772,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::GroupCommitInitiate,
-                _ = storage_usage_update_interval.tick() => Message::StorageUsageFetch,
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
                 // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 Some(collections) = consolidations_rx.recv() => {
@@ -811,6 +806,7 @@ pub async fn serve<S: Append + 'static>(
         storage,
         unsafe_mode,
         build_info,
+        environment_id,
         metrics_registry,
         now,
         secrets_controller,
@@ -820,6 +816,7 @@ pub async fn serve<S: Append + 'static>(
         mut availability_zones,
         connection_context,
         storage_usage_client,
+        storage_usage_collection_interval,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -846,6 +843,7 @@ pub async fn serve<S: Append + 'static>(
             storage,
             unsafe_mode,
             build_info,
+            environment_id,
             now: now.clone(),
             skip_migrations: false,
             metrics_registry: &metrics_registry,
@@ -856,7 +854,6 @@ pub async fn serve<S: Append + 'static>(
             secrets_reader: secrets_controller.reader(),
         })
         .await?;
-    let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
     let start_instant = catalog.config().start_instant;
 
@@ -923,7 +920,7 @@ pub async fn serve<S: Append + 'static>(
                 connection_context,
                 transient_replica_metadata: HashMap::new(),
                 storage_usage_client,
-                storage_usage_collection_interval: DEFAULT_STORAGE_USAGE_COLLECTION_INTERVAL,
+                storage_usage_collection_interval,
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
@@ -942,7 +939,6 @@ pub async fn serve<S: Append + 'static>(
     match bootstrap_rx.await.unwrap() {
         Ok(()) => {
             let handle = Handle {
-                cluster_id,
                 session_id,
                 start_instant,
                 _thread: thread.join_on_drop(),

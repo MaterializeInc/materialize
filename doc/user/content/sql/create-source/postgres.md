@@ -29,6 +29,12 @@ _src_name_  | The name for the source.
 **CONNECTION** _connection_name_ | The name of the Postgres connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
 **PUBLICATION** _publication_name_ | Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 
+### `WITH` options
+
+Field                                | Value     | Description
+-------------------------------------|-----------|-------------------------------------
+`SIZE`                               | `text`    | Default: `3xsmall`. The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
+
 ## Features
 
 ### Change data capture
@@ -168,6 +174,26 @@ FROM POSTGRES
   CONNECTION pg_connection
   PUBLICATION 'mz_source';
 ```
+
+### Sizing a source
+
+To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
+
+```sql
+CREATE SOURCE mz_source
+FROM POSTGRES
+  CONNECTION pg_connection
+  PUBLICATION 'mz_source'
+  WITH (SIZE = 'xsmall');
+```
+
+To resize the source after creation:
+
+```sql
+ALTER SOURCE mz_source SET (SIZE = 'large');
+```
+
+By default, sources are provisioned using the smallest size (`3xsmall`). For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
 
 ## Related pages
 

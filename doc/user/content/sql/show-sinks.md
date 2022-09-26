@@ -1,10 +1,9 @@
 ---
 title: "SHOW SINKS"
 description: "`SHOW SINKS` returns a list of all sinks available to your Materialize instances."
-draft: true
-#menu:
-  #main:
-    #parent: commands
+menu:
+  main:
+    parent: commands
 aliases:
     - /sql/show-sink
 ---

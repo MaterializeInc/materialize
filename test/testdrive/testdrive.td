@@ -81,7 +81,7 @@ contains:unknown catalog item 'UID'
 
 # kafka-verify sort-messages
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
@@ -97,9 +97,9 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.sort_messages_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 2}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": 3}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": 1}}}
+{"before": null, "after": {"row": {"a": 2}}}
+{"before": null, "after": {"row": {"a": 3}}}
 
 # Use $ postgresql-execute and ${testdrive.materialize_addr}
 
@@ -183,8 +183,8 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort-messages=true
-{"before": null, "after": {"row": {"a": "u123"}}, "transaction": {"id": "<TIMESTAMP>"}}
-{"before": null, "after": {"row": {"a": "u234"}}, "transaction": {"id": "<TIMESTAMP>"}}
+{"before": null, "after": {"row": {"a": "UID"}}}
+{"before": null, "after": {"row": {"a": "UID"}}}
 
 # $ postgresql-connect
 

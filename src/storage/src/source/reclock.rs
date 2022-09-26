@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::Context;
 use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice as _;
-use timely::progress::frontier::Antichain;
+use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp as _;
 use timely::PartialOrder;
 use tokio::sync::Mutex;
@@ -34,6 +34,7 @@ use mz_repr::Timestamp;
 use tracing::trace;
 
 use crate::controller::CollectionMetadata;
+use crate::source::antichain::OffsetAntichain;
 use crate::types::sources::MzOffset;
 
 /// A "follower" for the ReclockOperator, that maintains
@@ -56,7 +57,7 @@ struct ReclockFollowerInner {
     upper: Antichain<Timestamp>,
     /// The upper frontier in terms of `SourceTime`. Any attempt to reclock messages beyond this
     /// frontier will lead to minting new bindings.
-    source_upper: HashMap<PartitionId, MzOffset>,
+    source_upper: OffsetAntichain,
 }
 
 impl ReclockFollower {
@@ -67,12 +68,25 @@ impl ReclockFollower {
                 remap_trace: HashMap::new(),
                 since: as_of,
                 upper: Antichain::from_elem(Timestamp::minimum()),
-                source_upper: HashMap::new(),
+                source_upper: OffsetAntichain::new(),
             })),
         }
     }
 
-    pub fn source_upper(&self) -> Ref<HashMap<PartitionId, MzOffset>> {
+    /// Ensure the `ReclockFollower` has been initialized with trace
+    /// up to the given upper.
+    pub async fn ensure_initialized_to(&self, upper: Antichain<Timestamp>) {
+        // Careful not to hold a `Ref` over and await point.
+        loop {
+            if PartialOrder::less_equal(&upper, &RefCell::borrow(&self.inner).upper) {
+                return;
+            }
+            // Some short but non-0 amount of time
+            tokio::time::sleep(Duration::from_millis(100)).await
+        }
+    }
+
+    pub fn source_upper(&self) -> Ref<OffsetAntichain> {
         // `borrow` overlaps with `std::borrow::Borrow` so we have to do this
         Ref::map(RefCell::borrow(&self.inner), |inner| &inner.source_upper)
     }
@@ -88,7 +102,7 @@ impl ReclockFollower {
                 let bindings = inner.remap_trace.entry(pid.clone()).or_default();
                 bindings.push((ts, diff));
 
-                *inner.source_upper.entry(pid.clone()).or_default() += diff;
+                inner.source_upper.advance(pid.clone(), diff);
             }
         }
     }
@@ -162,15 +176,15 @@ impl ReclockFollower {
     /// The error will contain the offending `SourceTime`.
     pub fn reclock_frontier(
         &self,
-        source_frontier: &HashMap<PartitionId, MzOffset>,
+        source_frontier: &OffsetAntichain,
     ) -> Result<Antichain<Timestamp>, (PartitionId, MzOffset)> {
         let inner = RefCell::borrow(&self.inner);
         // The upper is the greatest frontier that we can ever return
         let mut dest_frontier = inner.upper.clone();
 
         let mut partitions = HashSet::new();
-        partitions.extend(inner.source_upper.keys());
-        partitions.extend(source_frontier.keys());
+        partitions.extend(inner.source_upper.partitions());
+        partitions.extend(source_frontier.partitions());
         // To refine it we have to go through all the partitions we know about and:
         for pid in partitions {
             let offset = source_frontier.get(pid).copied().unwrap_or_default();
@@ -201,6 +215,15 @@ impl ReclockFollower {
     #[allow(dead_code)]
     pub fn compact(&self, new_since: Antichain<Timestamp>) {
         self.inner.borrow_mut().compact(new_since)
+    }
+
+    /// Invert the `DestTime` frontier into a `SourceTime` frontier.
+    #[allow(dead_code)]
+    pub fn source_upper_at_frontier(
+        &self,
+        ts_upper: AntichainRef<Timestamp>,
+    ) -> anyhow::Result<OffsetAntichain> {
+        RefCell::borrow(&self.inner).source_upper_at_frontier(ts_upper)
     }
 
     /// Create a shallow copy of this struct that shares the underlying trace.
@@ -263,6 +286,26 @@ impl ReclockFollowerInner {
                 first_offset
             }
         }
+    }
+
+    /// Invert the `DestTime` frontier into a `SourceTime` frontier.
+    ///
+    /// This is the same as `ReclockOperator::source_upper_at`, but it takes as input
+    /// an _upper_, as opposed to a specific timestamp.
+    ///
+    /// `ts_upper` must represent a frontier for a totally ordered time.
+    #[allow(dead_code)]
+    pub fn source_upper_at_frontier(
+        &self,
+        ts_upper: AntichainRef<Timestamp>,
+    ) -> anyhow::Result<OffsetAntichain> {
+        source_upper_at_frontier_impl(
+            &self.remap_trace,
+            &self.since,
+            &self.upper,
+            ts_upper,
+            &|pid| self.partition_bindings(pid),
+        )
     }
 }
 
@@ -370,14 +413,14 @@ impl ReclockOperator {
     /// The error will contain the offending `SourceTime`.
     pub fn reclock_frontier(
         &self,
-        source_frontier: &HashMap<PartitionId, MzOffset>,
+        source_frontier: &OffsetAntichain,
     ) -> Result<Antichain<Timestamp>, (PartitionId, MzOffset)> {
         // The upper is the greatest frontier that we can ever return
         let mut dest_frontier = self.upper.clone();
 
         let mut partitions = HashSet::new();
         partitions.extend(self.source_upper.keys());
-        partitions.extend(source_frontier.keys());
+        partitions.extend(source_frontier.partitions());
         // To refine it we have to go through all the partitions we know about and:
         for pid in partitions {
             let offset = source_frontier.get(pid).copied().unwrap_or_default();
@@ -430,19 +473,23 @@ impl ReclockOperator {
         }
     }
 
-    /// Calculates the source upper frontier at a particular timestamp
-    pub fn source_upper_at(&self, target: Timestamp) -> HashMap<PartitionId, MzOffset> {
-        let mut source_upper = HashMap::new();
-        for pid in self.remap_trace.keys() {
-            let binding = self
-                .partition_bindings(pid)
-                .take_while(|(ts, _)| ts <= &target)
-                .last();
-            if let Some((_, part_upper)) = binding {
-                source_upper.insert(pid.clone(), part_upper);
-            }
-        }
-        source_upper
+    /// Invert the `DestTime` frontier into a `SourceTime` frontier.
+    ///
+    /// This is the same as `ReclockOperator::source_upper_at`, but it takes as input
+    /// an _upper_, as opposed to a specific timestamp.
+    ///
+    /// `ts_upper` must represent a frontier for a totally ordered time.
+    pub fn source_upper_at_frontier(
+        &self,
+        ts_upper: AntichainRef<Timestamp>,
+    ) -> anyhow::Result<OffsetAntichain> {
+        source_upper_at_frontier_impl(
+            &self.remap_trace,
+            &self.since,
+            &self.upper,
+            ts_upper,
+            &|pid| self.partition_bindings(pid),
+        )
     }
 
     /// Syncs the state of this operator to match that of the persist shard until the provided
@@ -451,6 +498,12 @@ impl ReclockOperator {
         &mut self,
         target_upper: &Antichain<Timestamp>,
     ) -> Vec<(PartitionId, Vec<(Timestamp, MzOffset)>)> {
+        // **IMPORTANT**: Make sure we heartbeat our read handle when we read
+        // from our listen. The listen will internally downgrade its since, and
+        // if we let our read handle expire that means we don't hold back the
+        // since to what we think it should be.
+        self.read_handle.maybe_downgrade_since(&self.since).await;
+
         let mut pending_batch = vec![];
 
         let mut trace_updates: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> = HashMap::new();
@@ -513,16 +566,16 @@ impl ReclockOperator {
     /// When this function returns the local dTVC view of the remap collection will contain
     /// definite timestamp bindings that can be used to reclock messages at offsets that are not
     /// beyond the provided frontier.
-    pub async fn mint<P: Borrow<PartitionId>>(
+    pub async fn mint(
         &mut self,
-        source_frontier: &HashMap<P, MzOffset>,
+        source_frontier: &OffsetAntichain,
     ) -> HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> {
         // Any updates to the remap trace that occured during minting.
         let mut trace_updates: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>> = HashMap::new();
 
         loop {
             let mut updates = vec![];
-            for (pid, upper) in source_frontier {
+            for (pid, upper) in source_frontier.iter() {
                 let pid = pid.borrow();
                 let part_upper = self.source_upper.get(pid).copied().unwrap_or_default();
 
@@ -724,6 +777,64 @@ impl<'a, M> ReclockIter<'a, M> {
     }
 }
 
+/// Shared implementation between `ReclockFollower` and `ReclockOperator`
+fn source_upper_at_frontier_impl<'a, F>(
+    remap_trace: &HashMap<PartitionId, Vec<(Timestamp, MzOffset)>>,
+    since: &Antichain<Timestamp>,
+    cur_upper: &Antichain<Timestamp>,
+    upper_to_invert: AntichainRef<Timestamp>,
+    partition_bindings: &'a F,
+) -> anyhow::Result<OffsetAntichain>
+where
+    F: Fn(&PartitionId) -> PartitionBindings<'a>,
+{
+    // Take advantage of the fact that we are working with a totally ordered time.
+    //
+    // We also assert that the frontier isn't empty, which has no
+    // meaningful mapping.
+    let ts_to_invert = upper_to_invert
+        .as_option()
+        .context("tried to invert empty frontier")?;
+
+    // If the since and the upper we are inverting are both == to 0, then
+    // we are either starting up for the first time, or we have a source that always
+    // starts at ts 0.
+    let zero = Antichain::from_elem(Timestamp::minimum());
+    if PartialOrder::less_equal(since, &zero)
+        && PartialOrder::less_equal(&upper_to_invert, &zero.borrow())
+    {
+        return Ok(OffsetAntichain::new());
+    }
+
+    // Assert we haven't compacted too far, and that we aren't (somehow) asking about the
+    // future.
+    if !PartialOrder::less_than(&since.borrow(), &upper_to_invert) {
+        return Err(anyhow::anyhow!(
+            "cannot invert {:?} because since ({:?}) is too great",
+            upper_to_invert,
+            since
+        ));
+    }
+    if !PartialOrder::less_equal(&upper_to_invert, &cur_upper.borrow()) {
+        return Err(anyhow::anyhow!(
+            "cannot invert {:?} because upper ({:?}) is too small",
+            upper_to_invert,
+            cur_upper,
+        ));
+    }
+
+    let mut source_upper = OffsetAntichain::with_capacity(remap_trace.len());
+    for pid in remap_trace.keys() {
+        let binding = partition_bindings(pid)
+            .take_while(|(ts, _)| ts < &ts_to_invert)
+            .last();
+        if let Some((_, part_upper)) = binding {
+            source_upper.insert(pid.clone(), part_upper);
+        }
+    }
+    Ok(source_upper)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -737,9 +848,17 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
 
+    // 15 minutes
+    static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
+
     static PERSIST_CACHE: Lazy<Arc<Mutex<PersistClientCache>>> = Lazy::new(|| {
+        let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+
+        persistcfg.reader_lease_duration = PERSIST_READER_LEASE_TIMEOUT_MS;
+        persistcfg.now = now_fn();
+
         Arc::new(Mutex::new(PersistClientCache::new(
-            PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+            persistcfg,
             &MetricsRegistry::new(),
         )))
     });
@@ -748,9 +867,6 @@ mod tests {
         shard: ShardId,
         as_of: Antichain<Timestamp>,
     ) -> (ReclockOperator, ReclockFollower) {
-        let start = tokio::time::Instant::now();
-        let now_fn = NowFn::from(move || start.elapsed().as_millis().try_into().unwrap());
-
         let metadata = CollectionMetadata {
             persist_location: PersistLocation {
                 blob_uri: "mem://".to_owned(),
@@ -764,7 +880,7 @@ mod tests {
         let operator = ReclockOperator::new(
             Arc::clone(&*PERSIST_CACHE),
             metadata,
-            now_fn.clone(),
+            now_fn(),
             Duration::from_secs(1),
             as_of.clone(),
         )
@@ -780,10 +896,19 @@ mod tests {
         (operator, follower)
     }
 
+    /// A `NowFn` that uses `tokio::time::Instant::now()`, so that we can
+    /// control time in tests.
+    fn now_fn() -> NowFn {
+        let start = tokio::time::Instant::now();
+        let now_fn = NowFn::from(move || start.elapsed().as_millis().try_into().unwrap());
+
+        now_fn
+    }
+
     async fn mint_and_follow(
         operator: &mut ReclockOperator,
         follower: &mut ReclockFollower,
-        source_upper: &mut HashMap<PartitionId, MzOffset>,
+        source_upper: &mut OffsetAntichain,
     ) {
         let trace_updates = operator.mint(source_upper).await;
         let reclock_upper = operator
@@ -798,7 +923,7 @@ mod tests {
         const PART_ID: PartitionId = PartitionId::None;
         let (mut operator, mut follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
-        let mut source_upper = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
 
         tokio::time::advance(Duration::from_secs(1)).await;
 
@@ -829,7 +954,7 @@ mod tests {
 
         // This will return the antichain containing 1000 because that's where future messages will
         // offset 1 will be reclocked to
-        let query = HashMap::from_iter([(PART_ID, MzOffset::from(1))]);
+        let query = OffsetAntichain::from_iter([(PART_ID, MzOffset::from(1))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             follower.reclock_frontier(&query)
@@ -850,7 +975,7 @@ mod tests {
 
         // We're done with offset 3. Now the reclocking the source upper will result to the overall
         // target upper (1001) because any new bindings will be minted beyond that timestamp.
-        let query = HashMap::from_iter([(PART_ID, MzOffset::from(4))]);
+        let query = OffsetAntichain::from_iter([(PART_ID, MzOffset::from(4))]);
 
         assert_eq!(
             Ok(Antichain::from_elem(1001.into())),
@@ -895,7 +1020,7 @@ mod tests {
         let (mut operator, _follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
-        let query = HashMap::new();
+        let query = OffsetAntichain::new();
         // This is the initial source frontier so we should get the initial ts upper
         assert_eq!(
             Ok(Antichain::from_elem(0.into())),
@@ -906,10 +1031,10 @@ mod tests {
 
         // Mint a couple of bindings for multiple partitions
         operator
-            .mint(&HashMap::from_iter([(PART1, MzOffset::from(10))]))
+            .mint(&OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]))
             .await;
         operator
-            .mint(&HashMap::from_iter([(PART2, MzOffset::from(10))]))
+            .mint(&OffsetAntichain::from_iter([(PART2, MzOffset::from(10))]))
             .await;
         assert_eq!(
             operator.remap_trace[&PART1],
@@ -921,25 +1046,26 @@ mod tests {
         );
 
         // The initial frontier should now map to the minimum between the two partitions
-        let query = HashMap::new();
+        let query = OffsetAntichain::new();
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             operator.reclock_frontier(&query)
         );
 
         // Map a frontier that advances only one of the partitions
-        let query = HashMap::from_iter([(PART1, MzOffset::from(9))]);
+        let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(9))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             operator.reclock_frontier(&query)
         );
-        let query = HashMap::from_iter([(PART1, MzOffset::from(10))]);
+        let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2000.into())),
             operator.reclock_frontier(&query)
         );
         // A frontier that is the upper of both partitions should map to the timestamp upper
-        let query = HashMap::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
+        let query =
+            OffsetAntichain::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2001.into())),
             operator.reclock_frontier(&query)
@@ -948,7 +1074,8 @@ mod tests {
         // Advance the operator and confirm that we get to the next timestamp
         tokio::time::advance(Duration::from_secs(1)).await;
         operator.advance().await;
-        let query = HashMap::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
+        let query =
+            OffsetAntichain::from_iter([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(3001.into())),
             operator.reclock_frontier(&query)
@@ -956,7 +1083,7 @@ mod tests {
 
         // Compact but not enough to change the bindings
         operator.compact(Antichain::from_elem(900.into())).await;
-        let query = HashMap::from_iter([(PART1, MzOffset::from(9))]);
+        let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(9))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             operator.reclock_frontier(&query)
@@ -964,12 +1091,12 @@ mod tests {
 
         // Compact enough to compact bindings
         operator.compact(Antichain::from_elem(1500.into())).await;
-        let query = HashMap::from_iter([(PART1, MzOffset::from(9))]);
+        let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(9))]);
         assert_eq!(
             Err((PART1, MzOffset::from(9))),
             operator.reclock_frontier(&query)
         );
-        let query = HashMap::from_iter([(PART1, MzOffset::from(10))]);
+        let query = OffsetAntichain::from_iter([(PART1, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2000.into())),
             operator.reclock_frontier(&query)
@@ -984,7 +1111,7 @@ mod tests {
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
         let mut batch = HashMap::new();
-        let mut source_upper = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
 
         // Reclock offsets 1 and 2 to timestamp 0
         batch.insert(
@@ -1093,7 +1220,7 @@ mod tests {
             make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
 
         let mut batch = HashMap::new();
-        let mut source_upper = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
 
         tokio::time::advance(Duration::from_secs(1)).await;
 
@@ -1191,7 +1318,7 @@ mod tests {
 
         // Reclock a batch from one of the operators
         let mut batch = HashMap::new();
-        let mut source_upper = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
 
         tokio::time::advance(Duration::from_secs(1)).await;
 
@@ -1247,5 +1374,215 @@ mod tests {
             ]
         );
         assert!(batch[&PART_ID].is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_inversion() {
+        let binding_shard = ShardId::new();
+
+        const PART_ID: PartitionId = PartitionId::None;
+        let (mut operator, mut follower) =
+            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+
+        let mut batch = HashMap::new();
+        let mut source_upper = OffsetAntichain::new();
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+
+        // SETUP
+        // Reclock offsets 1 and 2 to timestamp 1000
+        batch.insert(
+            PART_ID,
+            vec![(1, MzOffset::from(1)), (2, MzOffset::from(2))],
+        );
+        source_upper.insert(PART_ID, MzOffset::from(3));
+        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        let reclocked_msgs = follower
+            .reclock(&mut batch)
+            .expect("beyond source frontier")
+            .expect("we should have all required bindings")
+            .consume_all();
+        assert_eq!(reclocked_msgs, &[(1, 1000.into()), (2, 1000.into())]);
+        assert!(batch[&PART_ID].is_empty());
+        // Reclock offsets 3 and 4 to timestamp 2000
+        batch.insert(
+            PART_ID,
+            vec![(3, MzOffset::from(3)), (4, MzOffset::from(4))],
+        );
+        source_upper.insert(PART_ID, MzOffset::from(5));
+        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        let reclocked_msgs = follower
+            .reclock(&mut batch)
+            .expect("beyond source frontier")
+            .expect("we should have all required bindings")
+            .consume_all();
+        assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
+        assert!(batch[&PART_ID].is_empty());
+        // Reclock offsets 5 and 6 to timestamp 3000
+        batch.insert(
+            PART_ID,
+            vec![(5, MzOffset::from(5)), (6, MzOffset::from(6))],
+        );
+        source_upper.insert(PART_ID, MzOffset::from(7));
+        mint_and_follow(&mut operator, &mut follower, &mut source_upper).await;
+        let reclocked_msgs = follower
+            .reclock(&mut batch)
+            .expect("beyond source frontier")
+            .expect("we should have all required bindings")
+            .consume_all();
+        assert_eq!(reclocked_msgs, &[(5, 3000.into()), (6, 3000.into())]);
+        assert!(batch[&PART_ID].is_empty());
+
+        // END SETUP
+
+        // If we source_upper_at_frontier at the current `upper`, we should get the offset
+        // upper (strictly greater!!) back!
+        assert_eq!(
+            follower
+                .source_upper_at_frontier(Antichain::from_elem(3001.into()).borrow())
+                .unwrap(),
+            HashMap::from([(PART_ID.clone(), MzOffset::from(7))])
+        );
+        // Check out "upper strictly greater is correct
+        assert_eq!(
+            follower
+                .source_upper_at_frontier(Antichain::from_elem(3000.into()).borrow())
+                .unwrap(),
+            // Note this is the UPPER offset for the previous part of
+            // the trace.
+            HashMap::from([(PART_ID.clone(), MzOffset::from(5))])
+        );
+        // random time in the middle of 2 pieces of the trace
+        assert_eq!(
+            follower
+                .source_upper_at_frontier(Antichain::from_elem(2500.into()).borrow())
+                .unwrap(),
+            // Note this is the UPPER offset for the previous part of
+            // the trace.
+            HashMap::from([(PART_ID.clone(), MzOffset::from(5))])
+        );
+
+        // Also make sure the operator impl agrees!
+        assert_eq!(
+            operator
+                .source_upper_at_frontier(Antichain::from_elem(2500.into()).borrow())
+                .unwrap(),
+            // Note this is the UPPER offset for the previous part of
+            // the trace.
+            HashMap::from([(PART_ID.clone(), MzOffset::from(5))])
+        );
+
+        // Check startup edge-case (the since is still 0 here) doesn't panic.
+        assert_eq!(
+            follower
+                .source_upper_at_frontier(Antichain::from_elem(Timestamp::minimum()).borrow())
+                .unwrap(),
+            HashMap::new()
+        );
+
+        // Similarly, for an earlier part of the trace,
+        // we get the upper for that section of the trace
+        assert_eq!(
+            follower
+                .source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow())
+                .unwrap(),
+            HashMap::from([(PART_ID.clone(), MzOffset::from(5))])
+        );
+        // upper logic, as before
+        assert_eq!(
+            follower
+                .source_upper_at_frontier(Antichain::from_elem(2000.into()).borrow())
+                .unwrap(),
+            HashMap::from([(PART_ID.clone(), MzOffset::from(3))])
+        );
+
+        // After compaction it should still work
+        follower.compact(Antichain::from_elem(1000.into()));
+        assert_eq!(
+            follower
+                .source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow())
+                .unwrap(),
+            HashMap::from([(PART_ID.clone(), MzOffset::from(5))])
+        );
+        // compact as close as we can
+        follower.compact(Antichain::from_elem(2000.into()));
+        assert_eq!(
+            follower
+                .source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow())
+                .unwrap(),
+            HashMap::from([(PART_ID.clone(), MzOffset::from(5))])
+        );
+
+        // If we compact too far, we get a panic. Note we compact
+        // to the previous UPPER we were checking.
+        follower.compact(Antichain::from_elem(2001.into()));
+
+        let err = follower
+            .source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow())
+            .unwrap_err();
+        assert!(err.to_string().contains("is too great"));
+    }
+
+    // Regression test for
+    // https://github.com/MaterializeInc/materialize/issues/14740.
+    #[tokio::test(start_paused = true)]
+    async fn test_since_hold() {
+        let binding_shard = ShardId::new();
+
+        const PART_ID: PartitionId = PartitionId::None;
+        let (mut operator, _follower) =
+            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+
+        let mut source_upper = OffsetAntichain::new();
+
+        // We do multiple rounds of minting. This will downgrade the since of
+        // the internal listen. If we didn't make sure to also heartbeat the
+        // internal handle that holds back the overall remap since the checks
+        // below would fail.
+        //
+        // We do two rounds and advance the time by half the lease timeout in
+        // between so that the "listen handle" will not timeout but the internal
+        // handle used for holding back the since will timeout.
+
+        tokio::time::advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1)).await;
+        source_upper.insert(PART_ID, MzOffset::from(3));
+        let _ = operator.mint(&source_upper).await;
+
+        tokio::time::advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1)).await;
+        source_upper.insert(PART_ID, MzOffset::from(5));
+        let _ = operator.mint(&source_upper).await;
+
+        // Allow time for background maintenance work, which does lease
+        // expiration. 1 ms is enough here, we just need to yield to allow the
+        // background task to be "scheduled".
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        // Starting a new operator with an `as_of` of `0`, to verify that
+        // holding back the `since` of the remap shard works as expected.
+        let (_operator, _follower) =
+            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+
+        // Also manually assert the since of the remap shard.
+        let persist_location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        let mut persist_clients = PERSIST_CACHE.lock().await;
+        let persist_client = persist_clients
+            .open(persist_location)
+            .await
+            .expect("error creating persist client");
+        drop(persist_clients);
+
+        let read_handle = persist_client
+            .open_reader::<(), PartitionId, Timestamp, MzOffset>(binding_shard)
+            .await
+            .expect("error opening persist shard");
+
+        assert_eq!(
+            Antichain::from_elem(0.into()),
+            read_handle.since().to_owned()
+        );
     }
 }

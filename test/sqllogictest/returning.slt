@@ -116,7 +116,7 @@ statement error cannot evaluate unmaterializable function
 INSERT INTO t VALUES (7, 8) RETURNING now()
 
 statement error cannot evaluate unmaterializable function
-INSERT INTO t VALUES (7, 8) RETURNING mz_logical_timestamp()
+INSERT INTO t VALUES (7, 8) RETURNING mz_now()
 
 # Verify the above errors didn't have any side effects.
 query II

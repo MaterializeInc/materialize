@@ -20,8 +20,11 @@ INSERT INTO temporal_types VALUES ('2011-11-11', '11:11:11.123456', '2011-11-11 
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE temporal_types
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.temporal_types'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.temporal_types')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

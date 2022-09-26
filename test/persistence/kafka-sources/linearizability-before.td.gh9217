@@ -65,8 +65,11 @@ $ kafka-ingest format=avro topic=linearizability key-format=avro key-schema=${ke
 FOR CONFLUENT SCHEMA REGISTRY
 URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE linearizability
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-linearizability-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-linearizability-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 

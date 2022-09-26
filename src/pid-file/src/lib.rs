@@ -118,7 +118,7 @@ impl PidFile {
             let err = io::Error::last_os_error();
             if err.kind() == io::ErrorKind::AlreadyExists {
                 Err(Error::AlreadyRunning {
-                    pid: (old_pid != -1).then(|| old_pid),
+                    pid: (old_pid != -1).then_some(old_pid),
                 })
             } else {
                 Err(Error::Io(err))

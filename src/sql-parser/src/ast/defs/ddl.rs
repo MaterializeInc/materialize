@@ -890,36 +890,19 @@ impl<T: AstInfo> AstDisplay for KafkaConfigOption<T> {
 impl_display_t!(KafkaConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum KafkaConnection<T: AstInfo> {
-    Inline {
-        broker: String,
-    },
-    Reference {
-        connection: T::ObjectName,
-        options: Vec<KafkaConfigOption<T>>,
-    },
+pub struct KafkaConnection<T: AstInfo> {
+    pub connection: T::ObjectName,
+    pub options: Vec<KafkaConfigOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for KafkaConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            KafkaConnection::Inline { broker } => {
-                f.write_str("BROKER '");
-                f.write_node(&display::escape_single_quote_string(broker));
-                f.write_str("'");
-            }
-            KafkaConnection::Reference {
-                connection,
-                options,
-            } => {
-                f.write_str("CONNECTION ");
-                f.write_node(connection);
-                if !options.is_empty() {
-                    f.write_str(" (");
-                    f.write_node(&display::comma_separated(options));
-                    f.write_str(")");
-                }
-            }
+        f.write_str("CONNECTION ");
+        f.write_node(&self.connection);
+        if !self.options.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
         }
     }
 }
@@ -928,7 +911,6 @@ impl_display_t!(KafkaConnection);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaSourceConnection<T: AstInfo> {
     pub connection: KafkaConnection<T>,
-    pub topic: Option<String>,
     pub key: Option<Vec<Ident>>,
 }
 
@@ -966,18 +948,9 @@ pub enum CreateSourceConnection<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceConnection::Kafka(KafkaSourceConnection {
-                connection,
-                topic,
-                key,
-            }) => {
+            CreateSourceConnection::Kafka(KafkaSourceConnection { connection, key }) => {
                 f.write_str("KAFKA ");
                 f.write_node(connection);
-                if let Some(topic) = topic {
-                    f.write_str(" TOPIC '");
-                    f.write_node(&display::escape_single_quote_string(topic));
-                    f.write_str("'");
-                }
                 if let Some(key) = key.as_ref() {
                     f.write_str(" KEY (");
                     f.write_node(&display::comma_separated(&key));

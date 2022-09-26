@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
 use prometheus::core::AtomicU64;
@@ -26,7 +26,7 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
-use rdkafka::message::{Message, OwnedMessage, ToBytes};
+use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use rdkafka::{Offset, TopicPartitionList};
@@ -35,14 +35,14 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{InputHandle, OutputHandle};
-use timely::dataflow::operators::{Capability, Map};
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
-use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::Activator;
+use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
 use mz_interchange::encode::Encode;
@@ -53,7 +53,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::async_op;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -100,21 +100,6 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        // consistent/exactly-once Kafka sinks need the timestamp in the row
-        let sinked_collection = sinked_collection
-            .inner
-            .map(|((k, v), t, diff)| {
-                let v = v.map(|mut v| {
-                    let t = t.to_string();
-                    RowPacker::for_existing_row(&mut v).push_list_with(|rp| {
-                        rp.push(Datum::String(&t));
-                    });
-                    v
-                });
-                ((k, v), t, diff)
-            })
-            .as_collection();
-
         // TODO: this is a brittle way to indicate the worker that will write to the sink
         // because it relies on us continuing to hash on the sink_id, with the same hash
         // function, and for the Exchange pact to continue to distribute by modulo number
@@ -258,11 +243,12 @@ impl ProducerContext for SinkProducerContext {
     fn delivery(&self, result: &DeliveryResult, _: Self::DeliveryOpaque) {
         match result {
             Ok(_) => self.retry_manager.blocking_lock().record_success(),
-            Err((_e, msg)) => {
+            Err((e, msg)) => {
                 self.metrics.message_delivery_errors_counter.inc();
                 // TODO: figure out a good way to back these retries off.  Should be okay without
                 // because we seem to very rarely end up in a constant state where rdkafka::send
                 // works but everything is immediately rejected and hits this branch.
+                warn!("Kafka producer delivery error {:?} for {:?}", e, msg);
                 self.retry_manager
                     .blocking_lock()
                     .record_error(msg.detach());
@@ -413,15 +399,15 @@ struct KafkaSinkState {
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
     sink_state: KafkaSinkStateEnum,
 
-    /// Timestamp of the latest `END` record that was written out to Kafka.
+    /// Timestamp of the latest progress record that was written out to Kafka.
     latest_progress_ts: Timestamp,
 
     /// Write frontier of this sink.
     ///
     /// The write frontier potentially blocks compaction of timestamp bindings
-    /// in upstream sources. The latest written `END` record is used when
+    /// in upstream sources. The latest written progress record is used when
     /// restarting the sink to gate updates with a lower timestamp. We advance
-    /// the write frontier in lockstep with writing out END records. This
+    /// the write frontier in lockstep with writing out progress records. This
     /// ensures that we don't write updates more than once, ensuring
     /// exactly-once guarantees.
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
@@ -580,12 +566,16 @@ impl KafkaSinkState {
                         let should_shutdown = Retry::default()
                             .clamp_backoff(Duration::from_secs(60 * 10))
                             .retry_async(|_| async {
+                                info!("Attempting to abort kafka transaction");
                                 match self_self_producer.abort_transaction().await {
                                     Ok(_) => Ok(false),
                                     Err(KafkaError::Transaction(e)) if e.is_retriable() => {
                                         Err(KafkaError::Transaction(e))
                                     }
-                                    Err(_) => Ok(true),
+                                    Err(e) => {
+                                        error!("Error aborting kafka transaction: {:?}", e);
+                                        Ok(true)
+                                    }
                                 }
                             })
                             .await
@@ -610,7 +600,10 @@ impl KafkaSinkState {
         // Consider a retriable error that's hit our max backoff to be fatal.
         if shutdown.get() {
             self.shutdown_flag.store(true, Ordering::SeqCst);
-            info!("shutting down kafka sink: {}", &self.name);
+            info!(
+                "shutting down kafka sink {} from error {:?}",
+                &self.name, last_error
+            );
         }
         Err(last_error)
     }
@@ -629,7 +622,7 @@ impl KafkaSinkState {
         tokio::pin!(tries);
         while tries.next().await.is_some() {
             match self.producer.send(record) {
-                Ok(_) => {
+                Ok(()) => {
                     self.metrics.messages_sent_counter.inc();
                     self.retry_manager.lock().await.record_send();
                     return Ok(());
@@ -752,11 +745,11 @@ impl KafkaSinkState {
 
             let partition = partitions.into_element();
 
-            // We scan from the beginning and see if we can find an END record. We have
+            // We scan from the beginning and see if we can find a progress record. We have
             // to do it like this because Kafka Control Batches mess with offsets. We
-            // therefore cannot simply take the last offset from the back and expect an
-            // END message there. With a transactional producer, the OffsetTail(1) will
-            // not point to an END message but a control message. With aborted
+            // therefore cannot simply take the last offset from the back and expect a
+            // progress message there. With a transactional producer, the OffsetTail(1) will
+            // not point to an progress message but a control message. With aborted
             // transactions, there might even be a lot of garbage at the end of the
             // topic or in between.
 
@@ -888,36 +881,57 @@ impl KafkaSinkState {
     /// Updates the latest progress update timestamp based on the given
     /// input frontier and pending rows.
     ///
-    /// This will emit an `END` record to the progress topic if the frontier
+    /// This will emit a progress record to the progress topic if the frontier
     /// advanced and advance the maintained write frontier, which will in turn
     /// unblock compaction of timestamp bindings in sources.
     ///
-    /// *NOTE*: `END` records will only be emitted when
+    /// *NOTE*: Progress records will only be emitted when
     /// `KafkaSinkConnection.consistency` points to a progress topic. The
     /// write frontier will be advanced regardless.
     async fn maybe_emit_progress(
         &mut self,
-        input_frontier: AntichainRef<'_, Timestamp>,
+        mut input_frontier: Antichain<Timestamp>,
+        as_of: &SinkAsOf<Timestamp>,
     ) -> anyhow::Result<bool> {
+        input_frontier.extend(self.pending_rows.keys().min().cloned());
+        let min_frontier = input_frontier;
+
+        // If we emit a progress record before the as_of, we open ourselves to the possibility that
+        // we restart the sink with a gate timestamp behind the ASOF.  If that happens, we're unable
+        // to tell the difference between some records we've already written out and those that we
+        // still need to write out. (This is because asking for records with a given ASOF will fast
+        // forward all records at or before to the requested ASOF.)
+        //
+        // N.B. This condition is _not_ symmetric with the assert on the gate_ts on sink startup
+        // because we subtract 1 below to determine what progress value to actually write out.
+        if !PartialOrder::less_than(&as_of.frontier, &min_frontier) {
+            return Ok(false);
+        }
+
         let mut progress_emitted = false;
+
         // This only looks at the first entry of the antichain.
         // If we ever have multi-dimensional time, this is not correct
         // anymore. There might not even be progress in the first dimension.
         // We panic, so that future developers introducing multi-dimensional
         // time in Materialize will notice.
-        let input_frontier = input_frontier
+        let min_frontier = min_frontier
             .iter()
             .at_most_one()
             .expect("more than one element in the frontier")
             .cloned();
 
-        let min_pending_ts = self.pending_rows.keys().min().cloned();
-
-        let min_frontier = input_frontier.into_iter().chain(min_pending_ts).min();
-
         if let Some(min_frontier) = min_frontier {
-            // a frontier of `t` means we still might receive updates with `t`.
-            // The progress frontier we emit is a strict frontier, so subtract `1`.
+            // A frontier of `t` means we still might receive updates with `t`. The progress
+            // frontier we emit `f` indicates that all future values will be greater than `f`.
+            //
+            // The progress notion of frontier does not mesh with the notion of frontier in timely.
+            // This is confusing -- but still preferrable.  Were we to define the "progress
+            // frontier" to be the earliest time we could still write more data, we would need to
+            // write out a progress record of `t + 1` when we write out data.  Furthermore, were we
+            // to ever move to a notion of multi-dimensional time, it is more natural (and easier
+            // to keep the system correct) to record the time of the data we write to the progress
+            // topic.
             let min_frontier = min_frontier.saturating_sub(1);
 
             if min_frontier > self.latest_progress_ts {
@@ -927,6 +941,10 @@ impl KafkaSinkState {
                         self.retry_on_txn_error(|p| p.begin_transaction()).await?;
                     }
 
+                    info!(
+                        "{}: sending progress for gate ts: {:?}",
+                        &self.name, min_frontier
+                    );
                     self.send_progress_record(min_frontier, progress_state)
                         .await
                         .map_err(|_| anyhow::anyhow!("Error sending write frontier update."))?;
@@ -942,12 +960,17 @@ impl KafkaSinkState {
             let mut write_frontier = self.write_frontier.borrow_mut();
 
             // make sure we don't regress
+            info!(
+                "{}: downgrading write frontier to: {:?}",
+                &self.name, min_frontier
+            );
             assert!(write_frontier.less_equal(&min_frontier));
             write_frontier.clear();
             write_frontier.insert(min_frontier);
         } else {
             // If there's no longer an input frontier, we will no longer receive any data forever and, therefore, will
             // never output more data
+            info!("{}: advancing write frontier to empty", &self.name);
             self.write_frontier.borrow_mut().clear();
         }
 
@@ -999,7 +1022,6 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                true,
             );
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
@@ -1016,7 +1038,6 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                true,
             );
             encode_stream(
                 stream,
@@ -1112,9 +1133,15 @@ where
                     shutdown_flush.set(true);
                 }
 
-                // Indicate that the sink is closed to everyone else who
-                // might be tracking its write frontier.
-                s.write_frontier.borrow_mut().clear();
+                // NOTE: This is somewhat subtle, but we never downgrade our
+                // write frontier to the empty frontier when we're shutting
+                // down. We might be shutting down for any number of reasons,
+                // most of them probably not because our source is finished.
+                // Meaning in most cases it would be wrong to advance our write
+                // frontier to the empty frontier.
+                //
+                // This note is here because a previous version of the code
+                // _did_ downgrade to the empty frontier here.
                 return false;
             }
             // Panic if there's not exactly once element in the frontier like we expect.
@@ -1122,10 +1149,11 @@ where
 
             // Can't use `?` when the return type is a `bool` so use a custom try operator
             macro_rules! bail_err {
-                ($expr:expr) => {
+                ($expr:expr, $msg:tt) => {
                     match $expr {
                         Ok(val) => val,
-                        Err(_) => {
+                        Err(e) => {
+                            warn!("Kafka sink error {:?}: {:?}", e, $msg);
                             s.activator.activate();
                             return true;
                         }
@@ -1136,7 +1164,10 @@ where
             if is_active_worker {
                 if let KafkaSinkStateEnum::Init(ref init) = s.sink_state {
                     if s.transactional {
-                        bail_err!(s.retry_on_txn_error(|p| p.init_transactions()).await);
+                        bail_err!(
+                            s.retry_on_txn_error(|p| p.init_transactions()).await,
+                            "init_transactions"
+                        );
                     }
 
                     let latest_ts = match s.determine_latest_progress_record().await {
@@ -1147,6 +1178,10 @@ where
                             return true;
                         }
                     };
+                    info!(
+                        "{}: initial as_of: {:?}, latest progress record: {:?}",
+                        s.name, as_of.frontier, latest_ts
+                    );
                     shared_gate_ts.set(latest_ts);
 
                     let progress_state = init
@@ -1155,10 +1190,11 @@ where
 
                     if let Some(gate) = latest_ts {
                         assert!(
-                            as_of.frontier.iter().all(|ts| *ts <= gate),
-                            "some element of the Sink as_of frontier is too \
+                            PartialOrder::less_equal(&as_of.frontier, &Antichain::from_elem(gate)),
+                            "{}: some element of the Sink as_of frontier is too \
                                 far advanced for our output-gating timestamp: \
                                 as_of {:?}, gate_ts: {:?}",
+                            s.name,
                             as_of.frontier,
                             gate
                         );
@@ -1221,7 +1257,15 @@ where
                 assert!(is_active_worker);
 
                 if s.transactional {
-                    bail_err!(s.retry_on_txn_error(|p| p.begin_transaction()).await);
+                    info!(
+                        "Beginning transaction for {:?} with {:?} rows",
+                        ts,
+                        rows.len()
+                    );
+                    bail_err!(
+                        s.retry_on_txn_error(|p| p.begin_transaction()).await,
+                        "begin transaction"
+                    );
                 }
 
                 let mut repeat_counter = 0;
@@ -1236,8 +1280,14 @@ where
                         None => record,
                     };
 
+                    let ts_bytes = ts.to_string().into_bytes();
+                    let record = record.headers(OwnedHeaders::new().insert(Header {
+                        key: "materialize-timestamp",
+                        value: Some(&ts_bytes),
+                    }));
+
                     // Only fatal errors are returned from send
-                    bail_err!(s.send(record).await);
+                    bail_err!(s.send(record).await, "send record");
 
                     // advance to the next repetition of this row, or the next row if all
                     // repetitions are exhausted
@@ -1250,17 +1300,24 @@ where
 
                 // Flush to make sure that errored messages have been properly retried before
                 // sending progress records and commit transactions.
-                bail_err!(s.flush().await);
+                bail_err!(s.flush().await, "post-records flush");
 
                 if let Some(ref progress_state) = s.sink_state.unwrap_running() {
-                    bail_err!(s.send_progress_record(*ts, progress_state).await);
+                    bail_err!(
+                        s.send_progress_record(*ts, progress_state).await,
+                        "send progress record"
+                    );
                 }
 
                 if s.transactional {
-                    bail_err!(s.retry_on_txn_error(|p| p.commit_transaction()).await);
+                    info!("Committing transaction for {:?}", ts,);
+                    bail_err!(
+                        s.retry_on_txn_error(|p| p.commit_transaction()).await,
+                        "commit transaction"
+                    );
                 };
 
-                bail_err!(s.flush().await);
+                bail_err!(s.flush().await, "post-commit flush");
 
                 // sanity check for the continuous updating
                 // of the write frontier below
@@ -1270,7 +1327,9 @@ where
                 s.ready_rows.pop_front();
             }
 
-            // update our state based on any END records we might have sent
+            // Update our state based on any progress we may have sent.  This
+            // call is required for us to periodically write progress updates
+            // even without new data coming in.
             if let Some(ts) = progress_update.take() {
                 s.maybe_update_progress(&ts);
             }
@@ -1280,16 +1339,15 @@ where
             // While we still have ready rows that we're emitting, hold the write
             // frontier at the previous time.
             //
-            // Only ever emit progress records if this operator/worker received
-            // updates. Only on worker receives all the updates and we don't want
-            // the other workers to also emit END records.
+            // Only one worker receives all the updates and we don't want the
+            // other workers to also emit progress.
             if is_active_worker {
-                match s.maybe_emit_progress(frontier.borrow()).await {
+                match s.maybe_emit_progress(frontier.clone(), &as_of).await {
                     Ok(progress_emitted) => {
                         if progress_emitted {
                             // Don't flush if we know there were no records emitted.
                             // It has a noticeable negative performance impact.
-                            bail_err!(s.flush().await);
+                            bail_err!(s.flush().await, "progress emitted flush");
                         }
                     }
                     Err(e) => {
@@ -1302,8 +1360,20 @@ where
                 }
             }
 
-            debug_assert_eq!(s.producer.inner.in_flight_count(), 0);
-            debug_assert!(s.retry_manager.lock().await.sends_flushed());
+            // We want debug_assert but also to print out if we would have failed the assertion in release mode
+            let in_flight_count = s.producer.inner.in_flight_count();
+            let sends_flushed = s.retry_manager.lock().await.sends_flushed();
+            if cfg!(debug_assertions) {
+                assert_eq!(in_flight_count, 0);
+                assert!(sends_flushed);
+            } else {
+                if in_flight_count != 0 {
+                    error!("Producer has {:?} messages in flight", in_flight_count);
+                }
+                if !sends_flushed {
+                    error!("Retry manager has not flushed sends");
+                }
+            }
 
             if !s.pending_rows.is_empty() {
                 // We have some more rows that we need to wait for frontiers to advance before we

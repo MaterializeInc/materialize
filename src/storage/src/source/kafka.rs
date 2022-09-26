@@ -22,19 +22,19 @@ use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 use mz_expr::PartitionId;
 use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
+use crate::source::commit::LogCommitter;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
 use crate::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{KafkaOffset, KafkaSourceConnection, MzOffset, SourceConnection};
+use crate::types::sources::{KafkaSourceConnection, MzOffset};
 
 use self::metrics::KafkaPartitionMetrics;
 
@@ -56,11 +56,12 @@ pub struct KafkaSourceReader {
     worker_id: usize,
     /// Total count of workers
     worker_count: usize,
-    /// Map from partition -> most recently read offset. Can be -1,
-    /// if we are starting at the beginning.
-    last_offsets: HashMap<i32, KafkaOffset>,
-    /// Map from partition -> offset to start reading at. 0-indexed
-    start_offsets: HashMap<i32, u64>,
+    /// The most recently read offset for each partition known to this source
+    /// reader. An offset of -1 indicates that no prior message has been read
+    /// for the given partition.
+    last_offsets: HashMap<i32, i64>,
+    /// The offset to start reading from for each partition.
+    start_offsets: HashMap<i32, i64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
     /// The last partition we received
@@ -79,6 +80,8 @@ impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Diff = ();
+    type OffsetCommitter = LogCommitter;
+    type Connection = KafkaSourceConnection;
 
     /// Create a new instance of a Kafka reader.
     fn new(
@@ -87,28 +90,24 @@ impl SourceReader for KafkaSourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        kc: Self::Connection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
-        let kc = match connection {
-            SourceConnection::Kafka(kc) => kc,
-            _ => unreachable!(),
-        };
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let KafkaSourceConnection {
             connection,
             options,
             topic,
             group_id_prefix,
-            cluster_id,
+            environment_id,
             ..
         } = kc;
         let kafka_config = TokioHandle::current().block_on(create_kafka_config(
             &source_name,
             group_id_prefix,
-            cluster_id,
+            environment_id,
             &connection,
             &options,
             &connection_context,
@@ -122,31 +121,30 @@ impl SourceReader for KafkaSourceReader {
             .expect("Failed to create Kafka Consumer");
         let consumer = Arc::new(consumer);
 
-        // Start offsets is a map from pid -> next 0-indexed offset to read from,
-        // which is equivalent to 1 + the last 0-indexed offset read.
-        let mut start_offsets: HashMap<_, u64> = kc
+        // Start offsets is a map from partition to the next offset to read
+        // from.
+        let mut start_offsets: HashMap<_, i64> = kc
             .start_offsets
             .into_iter()
             .filter(|(pid, _offset)| {
                 let pid = PartitionId::Kafka(*pid);
                 crate::source::responsible_for(&source_id, worker_id, worker_count, &pid)
             })
-            .map(|(k, v)| (k, v.offset))
+            .map(|(k, v)| (k, v))
             .collect();
 
-        // Restored offsets are 1-indexed, so convert to 0-indexed offsets by
-        // subtracting 1. The bindings in sqlite already encode 1 offset past the
-        // last read offset.
-        for (pid, offset) in restored_offsets {
+        for (pid, restored_offset) in restored_offsets {
             let pid = match pid {
                 PartitionId::Kafka(id) => id,
                 _ => panic!("unexpected partition id type"),
             };
-            if let Some(offset) = offset {
+            if let Some(restored_offset) = restored_offset {
+                let restored_offset = i64::try_from(restored_offset.offset)
+                    .expect("restored kafka offsets must fit into i64");
                 if let Some(start_offset) = start_offsets.get_mut(&pid) {
-                    *start_offset = std::cmp::max(offset.offset - 1, *start_offset);
+                    *start_offset = std::cmp::max(restored_offset, *start_offset);
                 } else {
-                    start_offsets.insert(pid, offset.offset - 1);
+                    start_offsets.insert(pid, restored_offset);
                 }
             }
         }
@@ -183,22 +181,34 @@ impl SourceReader for KafkaSourceReader {
                 .unpark_on_drop()
         };
         let partition_ids = start_offsets.keys().copied().collect();
-        Ok(KafkaSourceReader {
-            topic_name: topic.clone(),
-            source_name,
-            id: source_id,
-            partition_consumers: VecDeque::new(),
-            consumer,
-            worker_id,
-            worker_count,
-            last_offsets: HashMap::new(),
-            start_offsets,
-            stats_rx,
-            partition_info,
-            include_headers: kc.include_headers.is_some(),
-            _metadata_thread_handle: metadata_thread_handle,
-            partition_metrics: KafkaPartitionMetrics::new(metrics, partition_ids, topic, source_id),
-        })
+        Ok((
+            KafkaSourceReader {
+                topic_name: topic.clone(),
+                source_name,
+                id: source_id,
+                partition_consumers: VecDeque::new(),
+                consumer,
+                worker_id,
+                worker_count,
+                last_offsets: HashMap::new(),
+                start_offsets,
+                stats_rx,
+                partition_info,
+                include_headers: kc.include_headers.is_some(),
+                _metadata_thread_handle: metadata_thread_handle,
+                partition_metrics: KafkaPartitionMetrics::new(
+                    metrics,
+                    partition_ids,
+                    topic,
+                    source_id,
+                ),
+            },
+            LogCommitter {
+                source_id,
+                worker_id,
+                worker_count,
+            },
+        ))
     }
 
     /// This function polls from the next consumer for which a message is available. This function
@@ -220,7 +230,7 @@ impl SourceReader for KafkaSourceReader {
                 let pid = PartitionId::Kafka(pid);
                 if crate::source::responsible_for(&self.id, self.worker_id, self.worker_count, &pid)
                 {
-                    self.add_partition(pid);
+                    self.ensure_partition(pid);
                 } else {
                     unconsumed_partitions.push(pid);
                 }
@@ -279,9 +289,7 @@ impl SourceReader for KafkaSourceReader {
 
 impl KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
-    /// In Kafka, partitions are assigned contiguously. This function consequently
-    /// creates partition queues for every p <= pid
-    fn add_partition(&mut self, pid: PartitionId) {
+    fn ensure_partition(&mut self, pid: PartitionId) {
         let pid = match pid {
             PartitionId::Kafka(p) => p,
             _ => unreachable!(),
@@ -290,22 +298,10 @@ impl KafkaSourceReader {
             return;
         }
 
-        let start_offset = match self.start_offsets.get(&pid) {
-            Some(offset) => *offset,
-            None => 0,
-        };
-
-        let start_offset: i64 = start_offset.try_into().expect("offset to be < i64::MAX");
+        let start_offset = self.start_offsets.get(&pid).copied().unwrap_or(0);
         self.create_partition_queue(pid, Offset::Offset(start_offset));
 
-        // Indicate a last offset of -1 if we have not been instructed to have a specific start
-        // offset for this topic.
-        let prev = self.last_offsets.insert(
-            pid,
-            KafkaOffset {
-                offset: start_offset - 1,
-            },
-        );
+        let prev = self.last_offsets.insert(pid, start_offset - 1);
 
         assert!(prev.is_none());
     }
@@ -459,7 +455,7 @@ impl KafkaSourceReader {
                         self.source_name,
                         self.topic_name,
                         pid,
-                        last_offset.offset,
+                        last_offset,
                         e
                     );
                 None
@@ -483,8 +479,6 @@ impl KafkaSourceReader {
             _ => unreachable!(),
         };
 
-        // Convert the received offset back from a 1-indexed MzOffset to the correct offset.
-        let offset = message.offset.offset - 1;
         // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
         // a network issue or a new partition added, at which point the consumer may
         // start processing the topic from the beginning, or we may see duplicate offsets
@@ -504,8 +498,12 @@ impl KafkaSourceReader {
             .expect("partition known to be installed");
 
         let last_offset = *last_offset_ref;
-        let offset_as_i64: i64 = offset.try_into().expect("offset to be < i64::MAX");
-        if offset_as_i64 <= last_offset.offset {
+        let offset_as_i64: i64 = message
+            .offset
+            .offset
+            .try_into()
+            .expect("offset to be < i64::MAX");
+        if offset_as_i64 <= last_offset {
             info!(
                 "Kafka message before expected offset, skipping: \
                              source {} (reading topic {}, partition {}) \
@@ -513,19 +511,17 @@ impl KafkaSourceReader {
                 self.source_name,
                 self.topic_name,
                 partition,
-                offset,
-                last_offset.offset + 1,
+                message.offset.offset,
+                last_offset + 1,
             );
-            // Seek to the *next* 0 indexed offset that we have not yet processed
-            self.fast_forward_consumer(partition, last_offset.offset + 1);
+            // Seek to the *next* offset that we have not yet processed
+            self.fast_forward_consumer(partition, last_offset + 1);
             // We explicitly should not consume the message as we have already processed it
             // However, we make sure to activate the source to make sure that we get a chance
             // to read from this consumer again (even if no new data arrives)
             NextMessage::TransientDelay
         } else {
-            *last_offset_ref = KafkaOffset {
-                offset: offset_as_i64,
-            };
+            *last_offset_ref = offset_as_i64;
             NextMessage::Ready(SourceMessageType::Finalized(message))
         }
     }
@@ -539,21 +535,12 @@ impl KafkaSourceReader {
 async fn create_kafka_config(
     name: &str,
     group_id_prefix: Option<String>,
-    cluster_id: Uuid,
+    environment_id: String,
     kafka_connection: &KafkaConnection,
     options: &BTreeMap<String, StringOrSecret>,
     connection_context: &ConnectionContext,
 ) -> ClientConfig {
     let mut kafka_config = create_new_client_config(connection_context.librdkafka_log_level);
-
-    crate::types::connections::populate_client_config(
-        kafka_connection.clone(),
-        options,
-        std::collections::HashSet::new(),
-        &mut kafka_config,
-        &*connection_context.secrets_reader,
-    )
-    .await;
 
     // Default to disabling Kafka auto commit. This can be explicitly enabled
     // by the user if they want to use it for progress tracking.
@@ -577,6 +564,15 @@ async fn create_kafka_config(
 
     kafka_config.set("fetch.message.max.bytes", "134217728");
 
+    crate::types::connections::populate_client_config(
+        kafka_connection.clone(),
+        options,
+        std::collections::HashSet::new(),
+        &mut kafka_config,
+        &*connection_context.secrets_reader,
+    )
+    .await;
+
     // Consumer group ID. librdkafka requires this, and we use offset committing
     // to provide a way for users to monitor ingest progress (though we do not
     // rely on the committed offsets for any functionality)
@@ -587,12 +583,14 @@ async fn create_kafka_config(
     // unique consumer group ID is the most surefire way to ensure that
     // librdkafka does not try to perform its own consumer group balancing,
     // which would wreak havoc with our careful partition assignment strategy.
+    //
+    // TODO(guswynn): make this include the connection id as well
     kafka_config.set(
         "group.id",
         &format!(
             "{}materialize-{}-{}",
             group_id_prefix.unwrap_or_else(String::new),
-            cluster_id,
+            environment_id,
             name
         ),
     );
@@ -604,9 +602,6 @@ fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     include_headers: bool,
 ) -> Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>, anyhow::Error> {
-    let kafka_offset = KafkaOffset {
-        offset: msg.offset(),
-    };
     let headers = match msg.headers() {
         Some(headers) if include_headers => Some(
             headers
@@ -618,12 +613,14 @@ fn construct_source_message(
     };
     Ok(SourceMessage {
         partition: PartitionId::Kafka(msg.partition()),
-        offset: kafka_offset.try_into().map_err(|_| {
-            anyhow::anyhow!(
-                "got negative offset ({}) from otherwise non-error'd kafka message",
-                kafka_offset.offset
-            )
-        })?,
+        offset: u64::try_from(msg.offset())
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "got negative offset ({}) from otherwise non-error'd kafka message",
+                    msg.offset()
+                )
+            })?
+            .into(),
         upstream_time_millis: msg.timestamp().to_millis(),
         key: msg.key().map(|k| k.to_vec()),
         value: msg.payload().map(|p| p.to_vec()),

@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
+use std::marker::{Send, Sync};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -38,7 +39,7 @@ use crate::source::metrics::SourceBaseMetrics;
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::{DecodeError, SourceErrorDetails};
 use crate::types::sources::encoding::SourceDataEncoding;
-use crate::types::sources::{MzOffset, SourceConnection};
+use crate::types::sources::MzOffset;
 
 /// This trait defines the interface between Materialize and external sources,
 /// and must be implemented for every new kind of source.
@@ -69,6 +70,9 @@ pub trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
     type Diff: timely::Data;
+    type Connection: SourceConnection;
+
+    type OffsetCommitter: OffsetCommitter + Send + Sync + 'static;
 
     /// Create a new source reader.
     ///
@@ -81,12 +85,12 @@ pub trait SourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: SourceConnection,
+        connection: Self::Connection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error>
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error>
     where
         Self: Sized;
 
@@ -153,11 +157,40 @@ pub trait SourceReader {
     }
 }
 
+pub trait SourceConnection: Clone {
+    fn name(&self) -> &'static str;
+}
+
+/// A sibling trait to `SourceReader` that represents a source's
+/// ability to _commit offsets_ that have been guaranteed
+/// to be written into persist
+#[async_trait]
+pub trait OffsetCommitter {
+    /// Commit the given partition-offset pairs upstream.
+    /// A specific `SourceReader`-`OffsetCommiter` pair
+    /// is guaranteed to only receive offsets for partitions
+    /// they are owners for.
+    async fn commit_offsets(
+        &self,
+        offsets: HashMap<PartitionId, MzOffset>,
+    ) -> Result<(), anyhow::Error>;
+}
+
 /// A `SourceToken` manages interest in a source.
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
     pub(crate) _activator: Rc<ActivateOnDrop<()>>,
+}
+
+/// A `AsyncSourceToken` manages interest in a source.
+///
+/// When the `AsyncSourceToken` is dropped the associated source will be stopped.
+///
+/// This type does the same thing as `SourceToken`, but operates in a way
+/// optimized for async timely operators.
+pub struct AsyncSourceToken {
+    pub(crate) _drop_closes_the_oneshot: tokio::sync::oneshot::Sender<()>,
 }
 
 pub enum NextMessage<Key, Value, Diff> {
@@ -347,8 +380,6 @@ impl From<anyhow::Error> for SourceReaderError {
 
 /// Source-specific Prometheus metrics
 pub struct SourceMetrics {
-    /// Number of times an operator gets scheduled
-    pub(crate) operator_scheduled_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     /// Value of the capability associated with this source
     pub(crate) capability: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Per-partition Prometheus metrics.
@@ -372,10 +403,6 @@ impl SourceMetrics {
             worker_id.to_string(),
         ];
         SourceMetrics {
-            operator_scheduled_counter: base
-                .source_specific
-                .operator_scheduled_counter
-                .get_delete_on_drop_counter(labels.to_vec()),
             capability: base
                 .source_specific
                 .capability

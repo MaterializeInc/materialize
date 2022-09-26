@@ -133,8 +133,12 @@ def main() -> None:
         URL 'http://{args.confluent_host}:8081'"""
     )
     cur.execute(
+        f"""CREATE CONNECTION kafka_conn
+        FROM KAFKA BROKER '{args.confluent_host}:9092'"""
+    )
+    cur.execute(
         f"""CREATE SOURCE src
-        FROM KAFKA BROKER '{args.confluent_host}:9092' TOPIC 'bench_data'
+        FROM KAFKA CONNECTION kafka_conn (TOPIC 'bench_data')
         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn"""
     )
 

@@ -609,6 +609,27 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // TODO: This is a temporary hack to allow us to support the special
+        // `date(expr)` cast function without needing to write a migration. It
+        // will be removed during a wipe week.
+        if let (FunctionArgs::Args { args, order_by }, None, None, false) =
+            (&args, &filter, &over, distinct)
+        {
+            if order_by.is_empty()
+                && args.len() == 1
+                && name.0.len() == 1
+                && name.0[0].as_str().eq_ignore_ascii_case("date")
+            {
+                return Ok(Expr::Cast {
+                    expr: Box::new(args[0].clone()),
+                    data_type: RawDataType::Other {
+                        name: RawObjectName::Name(name),
+                        typ_mod: Vec::new(),
+                    },
+                });
+            }
+        }
+
         Ok(Expr::Function(Function {
             name,
             args,
@@ -2039,7 +2060,7 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        Ok(KafkaConnection::Reference {
+        Ok(KafkaConnection {
             connection,
             options,
         })
@@ -2428,23 +2449,8 @@ impl<'a> Parser<'a> {
                 })
             }
             KAFKA => {
-                let (connection, topic) =
-                    match self.expect_one_of_keywords(&[BROKER, CONNECTION])? {
-                        BROKER => {
-                            let conn = KafkaConnection::Inline {
-                                broker: self.parse_literal_string()?,
-                            };
-                            self.expect_keyword(TOPIC)?;
-                            let topic = self.parse_literal_string()?;
-                            (conn, Some(topic))
-                        }
-                        CONNECTION => {
-                            let conn = self.parse_kafka_connection_reference()?;
-                            // TOPIC defined in options on `conn`
-                            (conn, None)
-                        }
-                        _ => unreachable!(),
-                    };
+                self.expect_keyword(CONNECTION)?;
+                let connection = self.parse_kafka_connection_reference()?;
                 // one token of lookahead:
                 // * `KEY (` means we're parsing a list of columns for the key
                 // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
@@ -2458,7 +2464,6 @@ impl<'a> Parser<'a> {
                 };
                 Ok(CreateSourceConnection::Kafka(KafkaSourceConnection {
                     connection,
-                    topic,
                     key,
                 }))
             }
@@ -2877,15 +2882,18 @@ impl<'a> Parser<'a> {
         }))
     }
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[AVAILABILITY, REMOTE, SIZE])? {
-            AVAILABILITY => {
-                self.expect_keyword(ZONE)?;
-                ReplicaOptionName::AvailabilityZone
-            }
-            REMOTE => ReplicaOptionName::Remote,
-            SIZE => ReplicaOptionName::Size,
-            _ => unreachable!(),
-        };
+        let name =
+            match self.expect_one_of_keywords(&[AVAILABILITY, COMPUTE, REMOTE, SIZE, WORKERS])? {
+                AVAILABILITY => {
+                    self.expect_keyword(ZONE)?;
+                    ReplicaOptionName::AvailabilityZone
+                }
+                COMPUTE => ReplicaOptionName::Compute,
+                REMOTE => ReplicaOptionName::Remote,
+                SIZE => ReplicaOptionName::Size,
+                WORKERS => ReplicaOptionName::Workers,
+                _ => unreachable!(),
+            };
         let value = self.parse_opt_with_option_value(false)?;
         Ok(ReplicaOption { name, value })
     }
@@ -4673,22 +4681,30 @@ impl<'a> Parser<'a> {
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if self.parse_keyword(INDEXES) {
-            let table_name = if self.parse_one_of_keywords(&[FROM, ON]).is_some() {
+            let from_schema = if self.parse_keywords(&[FROM, SCHEMA]) {
+                Some(self.parse_schema_name()?)
+            } else {
+                None
+            };
+            let on_object = if self.parse_one_of_keywords(&[FROM, ON]).is_some() {
                 Some(self.parse_raw_name()?)
             } else {
                 None
             };
+            if from_schema.is_some() && on_object.is_some() {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "Cannot specify both FROM SCHEMA and FROM or ON"
+                );
+            }
             let in_cluster = self.parse_optional_in_cluster()?;
 
-            let filter = if self.parse_keyword(WHERE) {
-                Some(ShowStatementFilter::Where(self.parse_expr()?))
-            } else {
-                None
-            };
             Ok(ShowStatement::ShowIndexes(ShowIndexesStatement {
-                table_name,
+                on_object,
+                from_schema,
                 in_cluster,
-                filter,
+                filter: self.parse_show_statement_filter()?,
             }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(ShowStatement::ShowCreateView(ShowCreateViewStatement {

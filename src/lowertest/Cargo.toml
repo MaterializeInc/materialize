@@ -2,8 +2,8 @@
 name = "mz-lowertest"
 description = "Utilities for testing lower layers of the Materialize stack"
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -14,5 +14,5 @@ serde = { version = "1.0.144", features = ["derive"] }
 serde_json = "1.0.85"
 
 [dev-dependencies]
-anyhow = "1.0.64"
+anyhow = "1.0.65"
 datadriven = "0.6.0"

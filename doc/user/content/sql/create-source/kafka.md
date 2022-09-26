@@ -53,7 +53,7 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 {{% create-source/syntax-connector-details connector="kafka" envelopes="debezium upsert append-only" %}}
 
-### `WITH` options
+### `CONNECTION` options
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
@@ -64,6 +64,12 @@ Field                                | Value     | Description
 `topic_metadata_refresh_interval_ms` | `int`     | Default: `300000`. Sets the frequency in `ms` at which the system checks for new partitions. Accepts values [0,3600000].
 `enable_auto_commit`                 | `boolean` | Default: `false`. Controls whether or not Materialize commits read offsets back into Kafka. This is purely for consumer progress monitoring and does not cause Materialize to resume reading from where it left off across restarts.
 `fetch_message_max_bytes` | `int` | Default: `134217728`. Controls the initial maximum number of bytes per topic+partition to request when fetching messages from the broker. If the client encounters a message larger than this value it will gradually try to increase it until the entire message can be fetched. Accepts values [1, 1000000000].
+
+### `WITH` options
+
+Field                                | Value     | Description
+-------------------------------------|-----------|-------------------------------------
+`SIZE`                               | `text`    | Default: `3xsmall`. The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Supported formats
 
@@ -274,7 +280,7 @@ A strategy of `LATEST` (the default) will choose the latest writer schema from t
 
 A connection describes how to connect and authenticate to an external system you want Materialize to read data from.
 
-Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#kafka) documentation page.
+Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
 
 #### Broker
 
@@ -389,9 +395,29 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 {{< /tab >}}
 {{< /tabs >}}
 
+### Sizing a source
+
+To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
+
+```sql
+CREATE SOURCE avro_source
+  FROM KAFKA
+    CONNECTION kafka_connection (TOPIC 'test_topic')
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+    WITH (SIZE = 'xsmall');
+```
+
+To resize the source after creation:
+
+```sql
+ALTER SOURCE avro_source SET (SIZE = 'large');
+```
+
+By default, sources are provisioned using the smallest size (`3xsmall`). For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
+
 ## Related pages
 
-- `CREATE SECRET`
+- [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
 - [Using Debezium](/integrations/debezium/)

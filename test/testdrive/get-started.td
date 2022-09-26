@@ -71,7 +71,7 @@ id true bigint
 
 
 > CREATE MATERIALIZED VIEW winning_bids AS
-  SELECT * FROM highest_bid_per_auction WHERE extract(epoch FROM end_time) * 1000 < mz_logical_timestamp()
+  SELECT * FROM highest_bid_per_auction WHERE end_time < mz_now()
 
 > SELECT auction_id, bid_id, item, amount FROM winning_bids ORDER BY auction_id LIMIT 5
 1 12 "Best Pizza in Town" 97

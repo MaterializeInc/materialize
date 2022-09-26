@@ -22,14 +22,17 @@ $ schema-registry-wait-schema schema=sql-server.transaction-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE sqlserver_tx_metadata
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.transaction'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.transaction')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE;
 
 # TODO: make sqlserver debezium tx_metadata work.  It doesn't send the END message
 > CREATE SOURCE t1
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.t1'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.t1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

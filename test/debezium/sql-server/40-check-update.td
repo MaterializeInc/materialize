@@ -9,8 +9,11 @@
 
 $ schema-registry-wait-schema schema=sql-server.dbo.update_table_pk-value
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE update_table_pk
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.update_table_pk'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.update_table_pk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -21,7 +24,7 @@ $ schema-registry-wait-schema schema=sql-server.dbo.update_table_nopk-value
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE update_table_nopk
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.update_table_nopk'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.update_table_nopk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

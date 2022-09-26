@@ -72,8 +72,10 @@ class Crate:
                     if "path" in c
                 )
         self.rust_version: Optional[str] = None
-        if "package" in config:
-            self.rust_version = config["package"].get("rust-version")
+        try:
+            self.rust_version = str(config["package"]["rust-version"])
+        except KeyError:
+            pass
         self.bins = []
         if "bin" in config:
             for bin in config["bin"]:
@@ -140,10 +142,18 @@ class Workspace:
         with open(root / "Cargo.toml") as f:
             config = toml.load(f)
 
+        workspace_config = config["workspace"]
+
         self.crates: Dict[str, Crate] = {}
-        for path in config["workspace"]["members"]:
+        for path in workspace_config["members"]:
             crate = Crate(root, root / path)
             self.crates[crate.name] = crate
+
+        self.rust_version: Optional[str] = None
+        try:
+            self.rust_version = workspace_config["package"].get("rust-version")
+        except KeyError:
+            pass
 
     def crate_for_bin(self, bin: str) -> Crate:
         """Find the crate containing the named binary.

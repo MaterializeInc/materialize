@@ -12,10 +12,11 @@
 use std::fmt;
 use std::iter;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::date::Date;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
 use proptest::prelude::{Arbitrary, Just};
@@ -130,6 +131,18 @@ where
     Datum::from(x)
 }
 
+fn max_mztimestamp<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let x: Option<mz_repr::Timestamp> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_mztimestamp())
+        .max();
+    Datum::from(x)
+}
+
 fn max_float32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -184,7 +197,7 @@ fn max_date<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<NaiveDate> = datums
+    let x: Option<Date> = datums
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_date())
@@ -300,6 +313,18 @@ where
     Datum::from(x)
 }
 
+fn min_mztimestamp<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let x: Option<mz_repr::Timestamp> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_mztimestamp())
+        .min();
+    Datum::from(x)
+}
+
 fn min_float32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -354,7 +379,7 @@ fn min_date<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<NaiveDate> = datums
+    let x: Option<Date> = datums
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_date())
@@ -1065,6 +1090,7 @@ pub enum AggregateFunc {
     MaxUInt16,
     MaxUInt32,
     MaxUInt64,
+    MaxMzTimestamp,
     MaxFloat32,
     MaxFloat64,
     MaxBool,
@@ -1079,6 +1105,7 @@ pub enum AggregateFunc {
     MinUInt16,
     MinUInt32,
     MinUInt64,
+    MinMzTimestamp,
     MinFloat32,
     MinFloat64,
     MinBool,
@@ -1176,6 +1203,7 @@ impl Arbitrary for AggregateFunc {
             Just(AggregateFunc::MaxUInt16),
             Just(AggregateFunc::MaxUInt32),
             Just(AggregateFunc::MaxUInt64),
+            Just(AggregateFunc::MaxMzTimestamp),
             Just(AggregateFunc::MaxFloat32),
             Just(AggregateFunc::MaxFloat64),
             Just(AggregateFunc::MaxBool),
@@ -1190,6 +1218,7 @@ impl Arbitrary for AggregateFunc {
             Just(AggregateFunc::MinUInt16),
             Just(AggregateFunc::MinUInt32),
             Just(AggregateFunc::MinUInt64),
+            Just(AggregateFunc::MinMzTimestamp),
             Just(AggregateFunc::MinFloat32),
             Just(AggregateFunc::MinFloat64),
             Just(AggregateFunc::MinBool),
@@ -1273,6 +1302,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                 AggregateFunc::MaxUInt16 => Kind::MaxUint16(()),
                 AggregateFunc::MaxUInt32 => Kind::MaxUint32(()),
                 AggregateFunc::MaxUInt64 => Kind::MaxUint64(()),
+                AggregateFunc::MaxMzTimestamp => Kind::MaxMzTimestamp(()),
                 AggregateFunc::MaxFloat32 => Kind::MaxFloat32(()),
                 AggregateFunc::MaxFloat64 => Kind::MaxFloat64(()),
                 AggregateFunc::MaxBool => Kind::MaxBool(()),
@@ -1287,6 +1317,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                 AggregateFunc::MinUInt16 => Kind::MinUint16(()),
                 AggregateFunc::MinUInt32 => Kind::MinUint32(()),
                 AggregateFunc::MinUInt64 => Kind::MinUint64(()),
+                AggregateFunc::MinMzTimestamp => Kind::MinMzTimestamp(()),
                 AggregateFunc::MinFloat32 => Kind::MinFloat32(()),
                 AggregateFunc::MinFloat64 => Kind::MinFloat64(()),
                 AggregateFunc::MinBool => Kind::MinBool(()),
@@ -1360,6 +1391,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
             Kind::MaxUint16(()) => AggregateFunc::MaxUInt16,
             Kind::MaxUint32(()) => AggregateFunc::MaxUInt32,
             Kind::MaxUint64(()) => AggregateFunc::MaxUInt64,
+            Kind::MaxMzTimestamp(()) => AggregateFunc::MaxMzTimestamp,
             Kind::MaxFloat32(()) => AggregateFunc::MaxFloat32,
             Kind::MaxFloat64(()) => AggregateFunc::MaxFloat64,
             Kind::MaxBool(()) => AggregateFunc::MaxBool,
@@ -1374,6 +1406,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
             Kind::MinUint16(()) => AggregateFunc::MinUInt16,
             Kind::MinUint32(()) => AggregateFunc::MinUInt32,
             Kind::MinUint64(()) => AggregateFunc::MinUInt64,
+            Kind::MinMzTimestamp(()) => AggregateFunc::MinMzTimestamp,
             Kind::MinFloat32(()) => AggregateFunc::MinFloat32,
             Kind::MinFloat64(()) => AggregateFunc::MinFloat64,
             Kind::MinBool(()) => AggregateFunc::MinBool,
@@ -1464,6 +1497,7 @@ impl AggregateFunc {
             AggregateFunc::MaxUInt16 => max_uint16(datums),
             AggregateFunc::MaxUInt32 => max_uint32(datums),
             AggregateFunc::MaxUInt64 => max_uint64(datums),
+            AggregateFunc::MaxMzTimestamp => max_mztimestamp(datums),
             AggregateFunc::MaxFloat32 => max_float32(datums),
             AggregateFunc::MaxFloat64 => max_float64(datums),
             AggregateFunc::MaxBool => max_bool(datums),
@@ -1478,6 +1512,7 @@ impl AggregateFunc {
             AggregateFunc::MinUInt16 => min_uint16(datums),
             AggregateFunc::MinUInt32 => min_uint32(datums),
             AggregateFunc::MinUInt64 => min_uint64(datums),
+            AggregateFunc::MinMzTimestamp => min_mztimestamp(datums),
             AggregateFunc::MinFloat32 => min_float32(datums),
             AggregateFunc::MinFloat64 => min_float64(datums),
             AggregateFunc::MinBool => min_bool(datums),
@@ -1731,6 +1766,7 @@ impl AggregateFunc {
             | AggregateFunc::MaxUInt16
             | AggregateFunc::MaxUInt32
             | AggregateFunc::MaxUInt64
+            | AggregateFunc::MaxMzTimestamp
             | AggregateFunc::MaxFloat32
             | AggregateFunc::MaxFloat64
             | AggregateFunc::MaxBool
@@ -1745,6 +1781,7 @@ impl AggregateFunc {
             | AggregateFunc::MinUInt16
             | AggregateFunc::MinUInt32
             | AggregateFunc::MinUInt64
+            | AggregateFunc::MinMzTimestamp
             | AggregateFunc::MinFloat32
             | AggregateFunc::MinFloat64
             | AggregateFunc::MinBool
@@ -1960,6 +1997,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::MaxUInt16 => f.write_str("max"),
             AggregateFunc::MaxUInt32 => f.write_str("max"),
             AggregateFunc::MaxUInt64 => f.write_str("max"),
+            AggregateFunc::MaxMzTimestamp => f.write_str("max"),
             AggregateFunc::MaxFloat32 => f.write_str("max"),
             AggregateFunc::MaxFloat64 => f.write_str("max"),
             AggregateFunc::MaxBool => f.write_str("max"),
@@ -1974,6 +2012,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::MinUInt16 => f.write_str("min"),
             AggregateFunc::MinUInt32 => f.write_str("min"),
             AggregateFunc::MinUInt64 => f.write_str("min"),
+            AggregateFunc::MinMzTimestamp => f.write_str("min"),
             AggregateFunc::MinFloat32 => f.write_str("min"),
             AggregateFunc::MinFloat64 => f.write_str("min"),
             AggregateFunc::MinBool => f.write_str("min"),

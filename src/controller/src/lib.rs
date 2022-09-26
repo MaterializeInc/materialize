@@ -35,7 +35,7 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{
-    ActiveComputeController, ComputeController, ComputeControllerResponse, ComputeInstanceId,
+    ActiveComputeController, ComputeController, ComputeControllerResponse,
 };
 use mz_compute_client::response::{PeekResponse, TailResponse};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -114,7 +114,7 @@ enum Readiness {
     /// The storage controller is ready.
     Storage,
     /// The compute controller is ready.
-    Compute(ComputeInstanceId),
+    Compute,
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -161,8 +161,8 @@ where
                 () = self.storage.ready() => {
                     self.readiness = Readiness::Storage;
                 }
-                id = self.compute.ready() => {
-                    self.readiness = Readiness::Compute(id);
+                () = self.compute.ready() => {
+                    self.readiness = Readiness::Compute;
                 }
             }
         }
@@ -182,8 +182,8 @@ where
                 self.storage.process().await?;
                 Ok(None)
             }
-            Readiness::Compute(id) => {
-                let response = self.active_compute().process(id).await?;
+            Readiness::Compute => {
+                let response = self.active_compute().process().await?;
                 Ok(response.map(Into::into))
             }
         }

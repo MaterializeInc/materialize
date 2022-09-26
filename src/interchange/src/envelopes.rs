@@ -147,25 +147,6 @@ pub(crate) fn dbz_envelope(
     vec![("before".into(), row.clone()), ("after".into(), row)]
 }
 
-pub(crate) fn txn_metadata(names_and_types: &mut Vec<(ColumnName, ColumnType)>) {
-    names_and_types.push((
-        "transaction".into(),
-        ColumnType {
-            nullable: false,
-            scalar_type: ScalarType::Record {
-                fields: vec![(
-                    "id".into(),
-                    ColumnType {
-                        scalar_type: ScalarType::String,
-                        nullable: false,
-                    },
-                )],
-                custom_id: Some(TRANSACTION_TYPE_ID),
-            },
-        },
-    ))
-}
-
 pub fn dbz_format(rp: &mut RowPacker, dp: DiffPair<Row>) {
     if let Some(before) = dp.before {
         rp.push_list_with(|rp| rp.extend_by_row(&before));

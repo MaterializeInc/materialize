@@ -43,8 +43,8 @@ pub fn describe_show_create_view(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("View", ScalarType::String.nullable(false))
-            .with_column("Create View", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -77,11 +77,8 @@ pub fn describe_show_create_materialized_view(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Materialized View", ScalarType::String.nullable(false))
-            .with_column(
-                "Create Materialized View",
-                ScalarType::String.nullable(false),
-            ),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -111,8 +108,8 @@ pub fn describe_show_create_table(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Table", ScalarType::String.nullable(false))
-            .with_column("Create Table", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -141,8 +138,8 @@ pub fn describe_show_create_source(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Source", ScalarType::String.nullable(false))
-            .with_column("Create Source", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -171,8 +168,8 @@ pub fn describe_show_create_sink(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Sink", ScalarType::String.nullable(false))
-            .with_column("Create Sink", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -201,8 +198,8 @@ pub fn describe_show_create_index(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Index", ScalarType::String.nullable(false))
-            .with_column("Create Index", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -231,8 +228,8 @@ pub fn describe_show_create_connection(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Connection", ScalarType::String.nullable(false))
-            .with_column("Create Connection", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("create_sql", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -384,7 +381,7 @@ fn show_materialized_views<'a>(
     }
 
     let query = format!(
-        "SELECT clusters.name AS cluster, mviews.name
+        "SELECT mviews.name, clusters.name AS cluster
          FROM mz_materialized_views AS mviews
          JOIN mz_clusters AS clusters
             ON clusters.id = mviews.cluster_id
@@ -451,26 +448,30 @@ pub fn show_indexes<'a>(
     scx: &'a StatementContext<'a>,
     ShowIndexesStatement {
         in_cluster,
-        table_name,
+        on_object,
+        from_schema,
         filter,
     }: ShowIndexesStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filter = vec!["idxs.on_id NOT LIKE 's%'".into()];
 
-    if let Some(table_name) = table_name {
-        let from = scx.get_item_by_resolved_name(&table_name)?;
-        if from.item_type() != CatalogItemType::View
-            && from.item_type() != CatalogItemType::MaterializedView
-            && from.item_type() != CatalogItemType::Source
-            && from.item_type() != CatalogItemType::Table
+    let schema_spec = scx.resolve_optional_schema(&from_schema)?;
+    query_filter.push(format!("objs.schema_id = {}", schema_spec));
+
+    if let Some(on_object) = on_object {
+        let on_item = scx.get_item_by_resolved_name(&on_object)?;
+        if on_item.item_type() != CatalogItemType::View
+            && on_item.item_type() != CatalogItemType::MaterializedView
+            && on_item.item_type() != CatalogItemType::Source
+            && on_item.item_type() != CatalogItemType::Table
         {
             sql_bail!(
                 "cannot show indexes on {} because it is a {}",
-                table_name.full_name_str(),
-                from.item_type(),
+                on_object.full_name_str(),
+                on_item.item_type(),
             );
         }
-        query_filter.push(format!("objs.id = '{}'", from.id()));
+        query_filter.push(format!("objs.id = '{}'", on_item.id()));
     }
 
     if let Some(cluster) = in_cluster {
@@ -479,13 +480,16 @@ pub fn show_indexes<'a>(
 
     let query = format!(
         "SELECT
+            idxs.name AS name,
+            objs.name AS on,
             clusters.name AS cluster,
-            objs.name AS on_name,
-            idxs.name AS key_name,
-            idx_cols.index_position AS seq_in_index,
-            obj_cols.name AS column_name,
-            idx_cols.on_expression AS expression,
-            idx_cols.nullable AS nullable
+            ARRAY_AGG(
+                CASE
+                    WHEN idx_cols.on_expression IS NULL THEN obj_cols.name
+                    ELSE idx_cols.on_expression
+                END
+                ORDER BY idx_cols.index_position ASC
+            ) AS key
         FROM
             mz_catalog.mz_indexes AS idxs
             JOIN mz_catalog.mz_index_columns AS idx_cols ON idxs.id = idx_cols.index_id
@@ -494,7 +498,8 @@ pub fn show_indexes<'a>(
             LEFT JOIN mz_catalog.mz_columns AS obj_cols
                 ON idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         WHERE
-            {}",
+            {}
+        GROUP BY idxs.name, objs.name, clusters.name",
         itertools::join(query_filter.iter(), " AND ")
     );
 
@@ -506,6 +511,22 @@ pub fn show_columns<'a>(
     ShowColumnsStatement { table_name, filter }: ShowColumnsStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let entry = scx.get_item_by_resolved_name(&table_name)?;
+    let full_name = scx.catalog.resolve_full_name(entry.name());
+
+    match entry.item_type() {
+        CatalogItemType::Source
+        | CatalogItemType::Table
+        | CatalogItemType::View
+        | CatalogItemType::MaterializedView => (),
+        ty @ CatalogItemType::Connection
+        | ty @ CatalogItemType::Index
+        | ty @ CatalogItemType::Func
+        | ty @ CatalogItemType::Secret
+        | ty @ CatalogItemType::Type
+        | ty @ CatalogItemType::Sink => {
+            sql_bail!("{full_name} is a {ty} and so does not have columns");
+        }
+    }
 
     let query = format!(
         "SELECT

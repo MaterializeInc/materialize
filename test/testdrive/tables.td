@@ -18,7 +18,7 @@ contains:unknown catalog item 't'
 > CREATE TABLE t (a int, b text NOT NULL)
 
 > SHOW CREATE TABLE t;
-Table   "Create Table"
+name   create_sql
 ------------------------
 materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" \"pg_catalog\".\"int4\", \"b\" \"pg_catalog\".\"text\" NOT NULL)"
 
@@ -59,10 +59,9 @@ name    type
 > CREATE DEFAULT INDEX on t
 
 > SHOW INDEXES FROM t
-cluster on_name  key_name       seq_in_index  column_name  expression  nullable
+name            on          cluster         key
 -----------------------------------------------------------------------------------
-<CLUSTER_NAME> t        t_primary_idx  1             a            <null>      true
-<CLUSTER_NAME> t        t_primary_idx  2             b            <null>      false
+t_primary_idx   t           <CLUSTER_NAME>  {a,b}
 
 > DROP INDEX t_primary_idx
 
@@ -100,8 +99,11 @@ $ kafka-create-topic topic=data
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"id": "valid1", "a": 2, "b": 1}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > SELECT * FROM t CROSS JOIN data
@@ -111,7 +113,12 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 # joining a table with a logging source selects some reasonable timestamp,
 # rather than e.g. blocking forever, or producing an error about being
 # unable to select a timestamp.
-> SELECT * FROM t CROSS JOIN mz_dataflow_operators LIMIT 0
+
+# log sources require a single replica
+$ skip-if
+SELECT ${arg.replicas} > 1
+
+> SELECT * FROM t CROSS JOIN mz_internal.mz_dataflow_operators LIMIT 0
 
 > DROP SOURCE data
 
@@ -194,8 +201,8 @@ contains:null value in column "a" violates not-null constraint
 ! CREATE INDEX ON v (now())
 contains:cannot materialize call to current_timestamp
 
-! CREATE INDEX ON v (mz_logical_timestamp())
-contains:cannot materialize call to mz_logical_timestamp
+! CREATE INDEX ON v (mz_now())
+contains:cannot materialize call to mz_now
 
 ! CREATE INDEX ON v (mz_version())
 contains:cannot materialize call to mz_version
