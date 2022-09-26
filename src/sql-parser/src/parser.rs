@@ -1913,13 +1913,13 @@ impl<'a> Parser<'a> {
         Ok(schema)
     }
 
-    fn parse_envelope(&mut self) -> Result<Envelope<Raw>, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
             // In Platform, `DEBEZIUM UPSERT` is the only available option.
             // Revisit this if we ever change that.
-            let debezium_mode = DbzMode::Upsert;
+            let debezium_mode = DbzMode::Plain;
             Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
             Envelope::Upsert

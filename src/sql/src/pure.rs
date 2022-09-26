@@ -39,8 +39,8 @@ use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, DbzMode, Envelope, Format,
-    ProtobufSchema, Value, WithOptionValue,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value,
+    WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
@@ -67,7 +67,6 @@ pub async fn purify_create_source(
     let CreateSourceStatement {
         connection,
         format,
-        envelope,
         legacy_with_options: with_options,
         include_metadata: _,
         ..
@@ -225,14 +224,7 @@ pub async fn purify_create_source(
         CreateSourceConnection::LoadGenerator { .. } => (),
     }
 
-    purify_source_format(
-        &*catalog,
-        format,
-        connection,
-        &envelope,
-        &connection_context,
-    )
-    .await?;
+    purify_source_format(&*catalog, format, connection, &connection_context).await?;
 
     Ok(stmt)
 }
@@ -241,7 +233,6 @@ async fn purify_source_format(
     catalog: &dyn SessionCatalog,
     format: &mut CreateSourceFormat<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
-    envelope: &Option<Envelope<Aug>>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
@@ -253,15 +244,12 @@ async fn purify_source_format(
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
-            purify_source_format_single(catalog, format, connection, envelope, connection_context)
-                .await?;
+            purify_source_format_single(catalog, format, connection, connection_context).await?;
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
-            purify_source_format_single(catalog, key, connection, envelope, connection_context)
-                .await?;
-            purify_source_format_single(catalog, val, connection, envelope, connection_context)
-                .await?;
+            purify_source_format_single(catalog, key, connection, connection_context).await?;
+            purify_source_format_single(catalog, val, connection, connection_context).await?;
         }
     }
     Ok(())
@@ -271,20 +259,13 @@ async fn purify_source_format_single(
     catalog: &dyn SessionCatalog,
     format: &mut Format<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
-    envelope: &Option<Envelope<Aug>>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     match format {
         Format::Avro(schema) => match schema {
             AvroSchema::Csr { csr_connection } => {
-                purify_csr_connection_avro(
-                    catalog,
-                    connection,
-                    csr_connection,
-                    envelope,
-                    connection_context,
-                )
-                .await?
+                purify_csr_connection_avro(catalog, connection, csr_connection, connection_context)
+                    .await?
             }
             AvroSchema::InlineSchema { schema, .. } => {
                 if let mz_sql_parser::ast::Schema::File(_) = schema {
@@ -300,7 +281,6 @@ async fn purify_source_format_single(
                     catalog,
                     connection,
                     csr_connection,
-                    envelope,
                     connection_context,
                 )
                 .await?;
@@ -346,7 +326,6 @@ async fn purify_csr_connection_proto(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
-    envelope: &Option<Envelope<Aug>>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -388,7 +367,7 @@ async fn purify_csr_connection_proto(
                 .await
                 .ok();
 
-            if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key.is_none() {
+            if key.is_none() {
                 bail!("Key schema is required for ENVELOPE DEBEZIUM");
             }
 
@@ -404,7 +383,6 @@ async fn purify_csr_connection_avro(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionAvro<Aug>,
-    envelope: &Option<Envelope<Aug>>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -447,7 +425,7 @@ async fn purify_csr_connection_avro(
             topic,
         )
         .await?;
-        if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key_schema.is_none() {
+        if key_schema.is_none() {
             bail!("Key schema is required for ENVELOPE DEBEZIUM");
         }
 

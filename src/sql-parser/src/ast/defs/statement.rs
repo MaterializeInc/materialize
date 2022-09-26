@@ -457,7 +457,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub legacy_with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
-    pub envelope: Option<Envelope<T>>,
+    pub envelope: Option<Envelope>,
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
@@ -554,7 +554,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub from: T::ObjectName,
     pub connection: CreateSinkConnection<T>,
     pub format: Option<Format<T>>,
-    pub envelope: Option<Envelope<T>>,
+    pub envelope: Option<Envelope>,
     pub with_options: Vec<CreateSinkOption<T>>,
 }
 
