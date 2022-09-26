@@ -53,6 +53,8 @@ pub struct Metrics {
     /// Metrics for batches written directly on behalf of a user (BatchBuilder
     /// or one of the sugar methods that use it).
     pub user: BatchWriteMetrics,
+    /// Metrics for reading batch parts
+    pub read: BatchPartReadMetrics,
     /// Metrics for compaction.
     pub compaction: CompactionMetrics,
     /// Metrics for garbage collection.
@@ -95,6 +97,7 @@ impl Metrics {
             retries: vecs.retries_metrics(),
             codecs: vecs.codecs_metrics(),
             user: BatchWriteMetrics::new(registry, "user"),
+            read: vecs.batch_part_read_metrics(),
             compaction: CompactionMetrics::new(registry),
             gc: GcMetrics::new(registry),
             lease: LeaseMetrics::new(registry),
@@ -150,6 +153,11 @@ struct MetricsVecs {
     encode_seconds: CounterVec,
     decode_count: IntCounterVec,
     decode_seconds: CounterVec,
+
+    read_part_bytes: IntCounterVec,
+    read_part_goodbytes: IntCounterVec,
+    read_part_count: IntCounterVec,
+    read_part_seconds: CounterVec,
 
     /// A minimal set of metrics imported into honeycomb for alerting.
     alerts_metrics: Arc<AlertsMetrics>,
@@ -265,6 +273,27 @@ impl MetricsVecs {
             decode_seconds: registry.register(metric!(
                 name: "mz_persist_decode_seconds",
                 help: "time spent in op decodes",
+                var_labels: ["op"],
+            )),
+
+            read_part_bytes: registry.register(metric!(
+                name: "mz_persist_read_part_bytes",
+                help: "total encoded size of batch parts read",
+                var_labels: ["op"],
+            )),
+            read_part_goodbytes: registry.register(metric!(
+                name: "mz_persist_read_part_goodbytes",
+                help: "total logical size of batch parts read",
+                var_labels: ["op"],
+            )),
+            read_part_count: registry.register(metric!(
+                name: "mz_persist_read_batch_part_count",
+                help: "count of batch parts read",
+                var_labels: ["op"],
+            )),
+            read_part_seconds: registry.register(metric!(
+                name: "mz_persist_read_batch_part_seconds",
+                help: "time spent reading batch parts",
                 var_labels: ["op"],
             )),
 
@@ -393,6 +422,24 @@ impl MetricsVecs {
             alerts_metrics: Arc::clone(&self.alerts_metrics),
         }
     }
+
+    fn batch_part_read_metrics(&self) -> BatchPartReadMetrics {
+        BatchPartReadMetrics {
+            listen: self.read_metrics("listen"),
+            snapshot: self.read_metrics("snapshot"),
+            batch_fetcher: self.read_metrics("batch_fetcher"),
+            compaction: self.read_metrics("compaction"),
+        }
+    }
+
+    fn read_metrics(&self, op: &str) -> ReadMetrics {
+        ReadMetrics {
+            part_bytes: self.read_part_bytes.with_label_values(&[op]),
+            part_goodbytes: self.read_part_goodbytes.with_label_values(&[op]),
+            part_count: self.read_part_count.with_label_values(&[op]),
+            seconds: self.read_part_seconds.with_label_values(&[op]),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -489,6 +536,22 @@ pub struct RetriesMetrics {
     pub(crate) idempotent_cmd: RetryMetrics,
     pub(crate) next_listen_batch: RetryMetrics,
     pub(crate) snapshot: RetryMetrics,
+}
+
+#[derive(Debug)]
+pub struct BatchPartReadMetrics {
+    pub(crate) listen: ReadMetrics,
+    pub(crate) snapshot: ReadMetrics,
+    pub(crate) batch_fetcher: ReadMetrics,
+    pub(crate) compaction: ReadMetrics,
+}
+
+#[derive(Debug)]
+pub struct ReadMetrics {
+    pub(crate) part_bytes: IntCounter,
+    pub(crate) part_goodbytes: IntCounter,
+    pub(crate) part_count: IntCounter,
+    pub(crate) seconds: Counter,
 }
 
 // This one is Clone in contrast to the others because it has to get moved into
