@@ -54,7 +54,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{write::WriteHandle, PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
@@ -746,7 +746,7 @@ pub struct StorageControllerState<
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct Controller<T: Timestamp + Lattice + Codec64 + mz_repr::TimestampManipulation> {
+pub struct Controller<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
     state: StorageControllerState<T>,
     /// Storage host provisioning and storage object assignment.
     hosts: StorageHosts<T>,
@@ -762,9 +762,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + mz_repr::TimestampManip
     managed_collection_tx: Option<mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>>,
 }
 
-impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + mz_repr::TimestampManipulation>
-    Controller<T>
-{
+impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> Controller<T> {
     async fn open_persist_client(&mut self) -> PersistClient {
         self.persist
             .lock()
@@ -890,12 +888,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp
-        + Lattice
-        + TotalOrder
-        + Codec64
-        + From<EpochMillis>
-        + mz_repr::TimestampManipulation,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1067,21 +1060,38 @@ where
                                     let mut interval = tokio::time::interval(
                                         tokio::time::Duration::from_millis(1_000),
                                     );
+
+                                    // Returns an upper guaranteed to be
+                                    // greater than the current write frontier,
+                                    // either `now` or `write_frontier++`. We
+                                    // prefer `now` because it's likely further
+                                    // in the future, making reading these
+                                    // collections more likely to return
+                                    // quickly.
+                                    macro_rules! max_now_write_frontier {
+                                        ($write_frontier:expr) => {{
+                                            let upper = T::from(now());
+                                            dbg!(if $write_frontier.less_than(&upper) {
+                                                upper
+                                            } else {
+                                                match $write_frontier.elements().iter().min() {
+                                                    Some(upper) => upper.step_forward(),
+                                                    // Closed collection
+                                                    None => continue,
+                                                }
+                                            })
+                                        }};
+                                    }
                                     loop {
                                         tokio::select! {
                                             _ = interval.tick() => {
-                                                let upper = T::from(now());
                                                 let collections = collections
                                                     .lock()
                                                     .await;
                                                 let mut updates = Vec::with_capacity(collections.len());
                                                 for (id, write_frontier) in collections.iter() {
                                                     let write_frontier = write_frontier.lock().await;
-                                                    let upper = if write_frontier.less_than(&upper) {
-                                                        upper.clone()
-                                                    } else {
-                                                        write_frontier.elements()[0].clone()
-                                                    };
+                                                    let upper = max_now_write_frontier!(write_frontier);
 
                                                     updates.push((*id, vec![], upper))
                                                 };
@@ -1090,19 +1100,11 @@ where
                                             },
                                             cmd = rx.recv() => {
                                                 if let Some((id, rows)) = cmd {
-                                                    let now = now();
-                                                    let lower = T::from(now);
-                                                    let upper = T::from(now + 1);
                                                     let collections = collections.lock().await;
                                                     let mut updates = Vec::with_capacity(collections.len());
-                                                    let write_frontier = &collections[&id];
-
-                                                    let write_frontier = write_frontier.lock().await;
-                                                    let upper = if write_frontier.less_than(&upper) {
-                                                        upper.clone()
-                                                    } else {
-                                                        write_frontier.elements().iter().min().unwrap().clone()
-                                                    };
+                                                    let write_frontier = &collections[&id].lock().await;
+                                                    let upper = max_now_write_frontier!(write_frontier);
+                                                    let lower = upper.step_back().expect("upper cannot be T::minimum()");
 
                                                     updates.push((id, rows.into_iter().map(|(row, diff)| Update {
                                                         row,
@@ -1116,11 +1118,7 @@ where
                                                             continue;
                                                         }
                                                         let write_frontier = write_frontier.lock().await;
-                                                        let upper = if write_frontier.less_than(&upper) {
-                                                            upper.clone()
-                                                        } else {
-                                                            write_frontier.elements().iter().min().unwrap().clone()
-                                                        };
+                                                        let upper = max_now_write_frontier!(write_frontier);
 
                                                         updates.push((*id_iter, vec![], upper))
                                                     };
@@ -1517,12 +1515,7 @@ where
 #[async_trait(?Send)]
 impl<T> CollectionManager for Controller<T>
 where
-    T: Timestamp
-        + Lattice
-        + TotalOrder
-        + Codec64
-        + From<EpochMillis>
-        + mz_repr::TimestampManipulation,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1545,15 +1538,17 @@ where
             "cannot truncate collection before it's managed"
         );
 
-        let now = (self.now)();
-        let as_of = T::from(now - 1);
-        let lower = T::from(now);
+        let details = self.introspection_details.lock().await;
+        let write_frontier = details[&global_id].lock().await;
 
-        self.append(vec![(global_id, vec![], lower)])
-            .unwrap()
-            .await
-            .unwrap()
-            .unwrap();
+        let upper = match dbg!(write_frontier.elements().iter().min()) {
+            Some(upper) => upper,
+            None => return,
+        };
+
+        let as_of = dbg!(upper.step_back().unwrap_or(upper.clone()));
+        drop(write_frontier);
+        drop(details);
 
         let mut negate = self.snapshot(global_id, as_of).await.unwrap();
 
@@ -1634,12 +1629,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp
-        + Lattice
-        + TotalOrder
-        + Codec64
-        + From<EpochMillis>
-        + mz_repr::TimestampManipulation,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1686,7 +1676,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + mz_repr::TimestampManipulation,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
