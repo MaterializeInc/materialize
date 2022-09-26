@@ -36,7 +36,7 @@ $ schema-registry-wait-schema schema=postgres.public.alter_allow_nullability-val
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_allow_nullability ALTER COLUMN f1 DROP NOT NULL;
-INSERT INTO alter_allow_nullability VALUES (NULL);
+INSERT INTO alter_allow_nullability VALUES (NULL, 2);
 UPDATE alter_allow_nullability SET f1 = NULL WHERE f1 = 123;
 DELETE FROM alter_allow_nullability WHERE f1 = 234;
 

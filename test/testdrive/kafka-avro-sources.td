@@ -126,7 +126,8 @@ name    type
 # Create a source using an inline schema.
 > CREATE SOURCE data_schema_inline
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}'
+  KEY FORMAT AVRO USING SCHEMA '${schema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 
 > SHOW CREATE SOURCE data_schema_inline

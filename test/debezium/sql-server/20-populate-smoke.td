@@ -12,7 +12,7 @@ server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;U
 
 $ sql-server-execute name=sql-server
 USE test;
-CREATE TABLE t1 (f1 INTEGER);
+CREATE TABLE t1 (f1 INTEGER PRIMARY KEY);
 INSERT INTO t1 VALUES (123);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO t1 VALUES (234);
