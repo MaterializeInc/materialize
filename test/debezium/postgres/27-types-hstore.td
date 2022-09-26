@@ -13,9 +13,9 @@
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE EXTENSION IF NOT EXISTS hstore;
-CREATE TABLE hstore_type (f1 hstore);
+CREATE TABLE hstore_type (f1 hstore, f2 INTEGER PRIMARY KEY);
 ALTER TABLE hstore_type REPLICA IDENTITY FULL;
-INSERT INTO hstore_type VALUES (NULL), ('a=>1'::hstore);
+INSERT INTO hstore_type VALUES (NULL, 0), ('a=>1'::hstore, 1);
 
 $ schema-registry-wait-schema schema=postgres.public.hstore_type-value
 
