@@ -59,7 +59,7 @@ use mz_adapter::{
 };
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::{OpenTelemetryEnableCallback, StderrFilterCallback};
+use mz_ore::tracing::TracingTargetCallbacks;
 use mz_repr::{Datum, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement};
@@ -715,20 +715,17 @@ async fn auth<B>(
 #[derive(Clone)]
 pub struct InternalServer {
     metrics_registry: MetricsRegistry,
-    otel_enable_callback: OpenTelemetryEnableCallback,
-    stderr_filter_callback: StderrFilterCallback,
+    tracing_target_callbacks: TracingTargetCallbacks,
 }
 
 impl InternalServer {
     pub fn new(
         metrics_registry: MetricsRegistry,
-        otel_enable_callback: OpenTelemetryEnableCallback,
-        stderr_filter_callback: StderrFilterCallback,
+        tracing_target_callbacks: TracingTargetCallbacks,
     ) -> Self {
         Self {
             metrics_registry,
-            otel_enable_callback,
-            stderr_filter_callback,
+            tracing_target_callbacks,
         }
     }
 
@@ -748,14 +745,21 @@ impl InternalServer {
             .route(
                 "/api/opentelemetry/config",
                 routing::put(move |payload| async move {
-                    mz_http_util::handle_enable_otel(self.otel_enable_callback, payload).await
+                    mz_http_util::handle_modify_filter_target(
+                        self.tracing_target_callbacks.tracing,
+                        payload,
+                    )
+                    .await
                 }),
             )
             .route(
                 "/api/stderr/config",
                 routing::put(move |payload| async move {
-                    mz_http_util::handle_modify_stderr_filter(self.stderr_filter_callback, payload)
-                        .await
+                    mz_http_util::handle_modify_filter_target(
+                        self.tracing_target_callbacks.stderr,
+                        payload,
+                    )
+                    .await
                 }),
             );
         axum::Server::bind(&addr).serve(router.into_make_service())
