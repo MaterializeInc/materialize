@@ -12,9 +12,9 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE alter_allow_nullability (f1 INTEGER NOT NULL);
+CREATE TABLE alter_allow_nullability (f1 INTEGER NOT NULL, f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_allow_nullability REPLICA IDENTITY FULL;
-INSERT INTO alter_allow_nullability VALUES (123),(234);
+INSERT INTO alter_allow_nullability VALUES (123, 0),(234, 1);
 
 $ schema-registry-wait-schema schema=postgres.public.alter_allow_nullability-value
 
@@ -30,13 +30,13 @@ $ schema-registry-wait-schema schema=postgres.public.alter_allow_nullability-val
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_allow_nullability;
+> SELECT f1 FROM alter_allow_nullability;
 123
 234
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_allow_nullability ALTER COLUMN f1 DROP NOT NULL;
-INSERT INTO alter_allow_nullability VALUES (NULL);
+INSERT INTO alter_allow_nullability VALUES (NULL, 2);
 UPDATE alter_allow_nullability SET f1 = NULL WHERE f1 = 123;
 DELETE FROM alter_allow_nullability WHERE f1 = 234;
 

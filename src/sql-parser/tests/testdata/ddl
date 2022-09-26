@@ -1210,7 +1210,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING C
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [] })
 
 
 parse-statement
@@ -1218,29 +1218,29 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USI
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, seed: None } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, seed: None } })), envelope: Some(Debezium(Plain)), if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")]))), Collection(Value(String("foo")))] })), if_not_exists: false, key_constraint: None, with_options: [] })
+error: Expected end of statement, found left parenthesis
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
+                                                                               ^
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Collection(Value(String("foo"))), Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))] })), if_not_exists: false, key_constraint: None, with_options: [] })
+error: Expected end of statement, found left parenthesis
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+                                                                               ^
 
 # Note that this will error in planninf, as you cannot specify START OFFSET and START TIMESTAMP at the same time
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=2, TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET = 1, START TIMESTAMP = 2, TOPIC = 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: StartOffset, value: Some(Value(Number("1"))) }, KafkaConfigOption { name: StartTimestamp, value: Some(Value(Number("2"))) }, KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Collection(Value(String("foo"))), Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))] })), if_not_exists: false, key_constraint: None, with_options: [] })
+error: Expected end of statement, found left parenthesis
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=2, TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+                                                                                                                  ^
 
 # Note that this will error in planning, as START OFFSET must be an array of nums
 parse-statement

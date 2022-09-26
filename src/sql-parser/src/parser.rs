@@ -1914,39 +1914,13 @@ impl<'a> Parser<'a> {
         Ok(schema)
     }
 
-    fn parse_envelope(&mut self) -> Result<Envelope<Raw>, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
-            let debezium_mode = if self.parse_keyword(UPSERT) {
-                DbzMode::Upsert
-            } else {
-                let tx_metadata = if self.consume_token(&Token::LParen) {
-                    self.expect_keywords(&[TRANSACTION, METADATA])?;
-                    self.expect_token(&Token::LParen)?;
-                    let options = self.parse_comma_separated(|parser| {
-                        match parser.expect_one_of_keywords(&[SOURCE, COLLECTION])? {
-                            SOURCE => {
-                                let _ = parser.consume_token(&Token::Eq);
-                                Ok(DbzTxMetadataOption::Source(parser.parse_raw_name()?))
-                            }
-                            COLLECTION => {
-                                let _ = parser.consume_token(&Token::Eq);
-                                Ok(DbzTxMetadataOption::Collection(
-                                    parser.parse_with_option_value()?,
-                                ))
-                            }
-                            _ => unreachable!(),
-                        }
-                    })?;
-                    self.expect_token(&Token::RParen)?;
-                    self.expect_token(&Token::RParen)?;
-                    options
-                } else {
-                    vec![]
-                };
-                DbzMode::Plain { tx_metadata }
-            };
+            // In Platform, `DEBEZIUM UPSERT` is the only available option.
+            // Revisit this if we ever change that.
+            let debezium_mode = DbzMode::Plain;
             Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
             Envelope::Upsert

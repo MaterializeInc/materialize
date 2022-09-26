@@ -12,9 +12,9 @@ server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;U
 
 $ sql-server-execute name=sql-server
 USE test;
-CREATE TABLE transaction_table1 (f1 VARCHAR(20));
+CREATE TABLE transaction_table1 (f1 VARCHAR(20) PRIMARY KEY);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'transaction_table1', @role_name = 'SA', @supports_net_changes = 0;
-CREATE TABLE transaction_table2 (f1 VARCHAR(20));
+CREATE TABLE transaction_table2 (f1 VARCHAR(20) PRIMARY KEY);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'transaction_table2', @role_name = 'SA', @supports_net_changes = 0;
 
 # Unlike Postgres, SQL server requires that each line is a fully-formed transaction

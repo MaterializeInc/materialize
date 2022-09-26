@@ -67,7 +67,6 @@ Cluster
 Clusters
 Coalesce
 Collate
-Collection
 Columns
 Commit
 Committed

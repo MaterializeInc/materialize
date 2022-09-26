@@ -20,8 +20,9 @@ use anyhow::{anyhow, bail, Context};
 use aws_arn::ResourceName as AmazonResourceName;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{
-    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, KafkaConfigOption,
-    KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, ReaderSchemaSelectionStrategy,
+    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, Envelope,
+    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    ReaderSchemaSelectionStrategy,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -39,8 +40,8 @@ use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, DbzMode, Envelope, Format,
-    ProtobufSchema, Value, WithOptionValue,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value,
+    WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
@@ -241,7 +242,7 @@ async fn purify_source_format(
     catalog: &dyn SessionCatalog,
     format: &mut CreateSourceFormat<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
@@ -271,7 +272,7 @@ async fn purify_source_format_single(
     catalog: &dyn SessionCatalog,
     format: &mut Format<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     match format {
@@ -346,7 +347,7 @@ async fn purify_csr_connection_proto(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -388,8 +389,8 @@ async fn purify_csr_connection_proto(
                 .await
                 .ok();
 
-            if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key.is_none() {
-                bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+            if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key.is_none() {
+                bail!("Key schema is required for ENVELOPE DEBEZIUM");
             }
 
             *seed = Some(CsrSeedProtobuf { value, key });
@@ -404,7 +405,7 @@ async fn purify_csr_connection_avro(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionAvro<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -447,8 +448,8 @@ async fn purify_csr_connection_avro(
             topic,
         )
         .await?;
-        if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key_schema.is_none() {
-            bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+        if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key_schema.is_none() {
+            bail!("Key schema is required for ENVELOPE DEBEZIUM");
         }
 
         *seed = Some(CsrSeedAvro {

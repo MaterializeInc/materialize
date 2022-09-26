@@ -12,8 +12,8 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE array_type (f1 text[]);
-INSERT INTO array_type VALUES ('{foo, null}');
+CREATE TABLE array_type (f1 text[], f2 INTEGER PRIMARY KEY);
+INSERT INTO array_type VALUES ('{foo, null}', 0);
 
 $ schema-registry-wait-schema schema=postgres.public.array_type-value
 

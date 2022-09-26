@@ -424,28 +424,29 @@ impl AstDisplay for SourceIncludeMetadata {
 impl_display!(SourceIncludeMetadata);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Envelope<T: AstInfo> {
+pub enum Envelope {
     None,
-    Debezium(DbzMode<T>),
+    Debezium(DbzMode),
     Upsert,
     CdcV2,
 }
 
-impl<T: AstInfo> Envelope<T> {
+impl Envelope {
     /// `true` iff Materialize is expected to crash or exhibit UB
     /// when attempting to ingest data starting at an offset other than zero.
     pub fn requires_all_input(&self) -> bool {
         match self {
             Envelope::None => false,
-            Envelope::Debezium(DbzMode::Plain { .. }) => true,
-            Envelope::Debezium(DbzMode::Upsert) => false,
+            // TODO[btv] - Adjust this if we change Dbz semantics
+            // (why is this a parser-level concept, anyway? Should it be moved?)
+            Envelope::Debezium(DbzMode::Plain) => false,
             Envelope::Upsert => false,
             Envelope::CdcV2 => true,
         }
     }
 }
 
-impl<T: AstInfo> AstDisplay for Envelope<T> {
+impl AstDisplay for Envelope {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::None => {
@@ -465,7 +466,7 @@ impl<T: AstInfo> AstDisplay for Envelope<T> {
         }
     }
 }
-impl_display_t!(Envelope);
+impl_display!(Envelope);
 
 impl<T: AstInfo> AstDisplay for Format<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
@@ -518,30 +519,23 @@ impl AstDisplay for Compression {
 impl_display!(Compression);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DbzMode<T: AstInfo> {
-    /// `ENVELOPE DEBEZIUM [TRANSACTION METADATA (...)]`
-    Plain {
-        tx_metadata: Vec<DbzTxMetadataOption<T>>,
-    },
-    /// `ENVELOPE DEBEZIUM UPSERT`
-    Upsert,
+pub enum DbzMode {
+    /// There is now only one `DEBEZIUM` envelope,
+    /// which has upsert semantics in sources and classic
+    /// semantics in sinks.
+    Plain,
 }
 
-impl<T: AstInfo> AstDisplay for DbzMode<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+impl AstDisplay for DbzMode {
+    fn fmt<W: fmt::Write>(&self, _f: &mut AstFormatter<W>) {
         match self {
-            Self::Plain { tx_metadata } => {
-                if !tx_metadata.is_empty() {
-                    f.write_str(" (TRANSACTION METADATA (");
-                    f.write_node(&display::comma_separated(tx_metadata));
-                    f.write_str("))");
-                }
-            }
-            Self::Upsert => f.write_str(" UPSERT"),
+            // We interpret the bare keyword `DEBEZIUM` as debezium upsert, so don't
+            // display anything here.
+            Self::Plain => {}
         }
     }
 }
-impl_display_t!(DbzMode);
+impl_display!(DbzMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DbzTxMetadataOption<T: AstInfo> {

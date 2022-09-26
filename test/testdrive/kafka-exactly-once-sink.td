@@ -83,6 +83,16 @@ $ set cdcv2-schema=[
   }
   ]
 
+$ set dbz-key-schema={
+    "type": "record",
+    "name": "Key",
+    "fields": [
+      {
+        "name": "a", "type": "long"
+      }
+    ]
+  }
+
 $ set dbz-schema={
     "type": "record",
     "name": "envelope",
@@ -143,6 +153,9 @@ $ set dbz-schema={
 $ kafka-create-topic topic=input_dbz
 $ kafka-create-topic topic=input_cdcv2
 
+$ kafka-ingest format=avro topic=input_dbz key-format=avro key-schema=${dbz-key-schema} schema=${dbz-schema} timestamp=1
+{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
+
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
@@ -156,7 +169,7 @@ $ kafka-create-topic topic=input_cdcv2
 
 > CREATE SOURCE input_kafka_dbz
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_dbz-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
 
 > CREATE TABLE input_table (a bigint, b bigint)
 
@@ -242,9 +255,6 @@ $ kafka-ingest format=avro topic=input_cdcv2 schema=${cdcv2-schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[1],"counts":[{"time":1,"count":1}]}}
 
-$ kafka-ingest format=avro topic=input_dbz schema=${dbz-schema} timestamp=1
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
-
 # verify output of progress topic with fixed timestamps
 $ kafka-create-topic topic=progress-test-input
 
@@ -279,17 +289,17 @@ $ kafka-verify format=json key=false topic=testdrive-progress-fixed-${testdrive.
 
 $ kafka-create-topic topic=rt-binding-progress-test-input
 
+$ kafka-ingest format=avro topic=rt-binding-progress-test-input key-format=avro key-schema=${dbz-key-schema} schema=${dbz-schema} timestamp=1
+{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
+
 > CREATE SOURCE rt_binding_progress_test_source
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rt-binding-progress-test-input-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${dbz-schema}' ENVELOPE DEBEZIUM
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
 
 > CREATE SINK rt_binding_progress_test_sink FROM rt_binding_progress_test_source
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'rt-binding-progress-test-output-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
-
-$ kafka-ingest format=avro topic=rt-binding-progress-test-input schema=${dbz-schema} timestamp=1
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 $ kafka-verify format=avro sink=materialize.public.rt_binding_progress_test_sink
 {"before": null, "after": {"row": {"a": 1, "b": 1}}}
