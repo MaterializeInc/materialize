@@ -56,6 +56,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
         // method as its HirRelationExpr counterpart
         self.fmt_raw_syntax(f, ctx)
     }
+
     fn fmt_raw_syntax(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -92,8 +93,8 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                 // top to bottom
                 write!(f, "{}Let", ctx.indent)?;
                 self.fmt_attributes(f, ctx)?;
+                ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
                 ctx.indented(|ctx| {
-                    Displayable::from(head).fmt_text(f, ctx)?;
                     writeln!(f, "{}Where", ctx.indent)?;
                     ctx.indented(|ctx| {
                         for (id, value) in bindings.iter().rev() {
