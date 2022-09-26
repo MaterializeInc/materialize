@@ -364,7 +364,7 @@ impl CatalogState {
             let source_name = QualifiedObjectName {
                 qualifiers: ObjectQualifiers {
                     database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+                    schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
                 },
                 item: format!("{}_{}", log.name, replica_id),
             };
@@ -377,7 +377,7 @@ impl CatalogState {
             assert!(name_template.find("{}").is_some());
             let name = name_template.replace("{}", &replica_id.to_string());
             let sql = "CREATE VIEW ".to_string()
-                + MZ_CATALOG_SCHEMA
+                + MZ_INTERNAL_SCHEMA
                 + "."
                 + &name
                 + " AS "
@@ -392,7 +392,7 @@ impl CatalogState {
                         qualifiers: ObjectQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
-                                self.get_mz_catalog_schema_id().clone(),
+                                self.get_mz_internal_schema_id().clone(),
                             ),
                         },
                         item: name,
@@ -610,7 +610,7 @@ impl CatalogState {
                         qualifiers: ObjectQualifiers {
                             database_spec: ResolvedDatabaseSpecifier::Ambient,
                             schema_spec: SchemaSpecifier::Id(
-                                self.get_mz_catalog_schema_id().clone(),
+                                self.get_mz_internal_schema_id().clone(),
                             ),
                         },
                         item: index_name.clone(),
@@ -839,6 +839,10 @@ impl CatalogState {
 
     pub fn get_information_schema_id(&self) -> &SchemaId {
         &self.ambient_schemas_by_name[INFORMATION_SCHEMA]
+    }
+
+    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
+        &self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
     }
 
     pub fn is_system_schema(&self, schema: &str) -> bool {
@@ -2855,6 +2859,10 @@ impl<S: Append> Catalog<S> {
 
     pub fn get_information_schema_id(&self) -> &SchemaId {
         self.state.get_information_schema_id()
+    }
+
+    pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
+        self.state.get_mz_internal_schema_id()
     }
 
     pub fn get_database(&self, id: &DatabaseId) -> &Database {
