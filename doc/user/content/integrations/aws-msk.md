@@ -1,5 +1,5 @@
 ---
-title: "How to connect AWS MSK to Materialize"
+title: "AWS Managed Streaming for Kafka (MSK)"
 description: "How to securely connect an AWS Managed Streaming for Kafka (MSK) cluster as a source to Materialize."
 menu:
   main:
@@ -150,7 +150,7 @@ The process to connect Materialize to Amazon MSK consists of the following steps
           SASL PASSWORD = SECRET msk_password;
 
       CREATE SOURCE <source-name>
-      FROM KAFKA CONNECTION kafka_connection TOPIC '<topic-name>'
+      FROM KAFKA CONNECTION kafka_connection (TOPIC '<topic-name>')
       FORMAT text;
     ```
 

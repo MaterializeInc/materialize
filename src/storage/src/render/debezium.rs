@@ -19,7 +19,7 @@ use timely::dataflow::{Scope, ScopeParent, Stream};
 use mz_expr::EvalError;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 
-use crate::source::DecodeResult;
+use crate::source::types::DecodeResult;
 use crate::types::errors::{DataflowError, EnvelopeError};
 use crate::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,

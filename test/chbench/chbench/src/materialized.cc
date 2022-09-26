@@ -50,7 +50,11 @@ mz::createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::st
     try {
         std::string mat = materialized? "MATERIALIZED" : "";
         std::string consistency = consistencySource.empty()? " " : " with (consistency= '" + consistencySource + "') ";
-        std::string source_creation = "CREATE " + mat + " SOURCE IF NOT EXISTS " + source + " FROM KAFKA BROKER '" + kafkaUrl + "' TOPIC '" + topic + "' " + consistency + " FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '" + registry + "' ENVELOPE DEBEZIUM";
+        std::string csr_conn_creation = "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '" + registry + "'";
+        w.exec0(csr_conn_creation);
+		std::string kafka_conn_creation = "CREATE CONNECTION IF NOT EXISTS kafka_conn FROM KAFKA BROKER '" + kafkaUrl + "'";
+		w.exec0(kafka_conn_creation);
+		std::string source_creation = "CREATE " + mat + " SOURCE IF NOT EXISTS " + source + " FROM KAFKA CONNECTION kafka_conn (TOPIC '" + topic + "') " + consistency + " FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM";
         w.exec0(source_creation);
     } catch (const pqxx::sql_error &e) {
         fprintf(stderr, "Possibly temporary error creating source %s: %s\n", source.c_str(), e.what());

@@ -2,12 +2,12 @@
 name = "mz-pid-file"
 description = "PID file management."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-libc = "0.2.126"
+libc = "0.2.132"
 mz-ore = { path = "../ore", default-features = false }
 
 [dev-dependencies]

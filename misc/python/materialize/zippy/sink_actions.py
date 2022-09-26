@@ -53,19 +53,18 @@ class CreateSink(Action):
         c.testdrive(
             dedent(
                 f"""
-                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', PROGRESS TOPIC 'zippy-{self.sink.name}-${{testdrive.seed}}';
+                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
 
                 > CREATE SINK {self.sink.name} FROM {self.source_view.name}
-                  INTO KAFKA CONNECTION {self.sink.name}_kafka_conn
-                  TOPIC 'sink-{self.sink.name}' WITH (reuse_topic=true)
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+                  INTO KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn;
 
                 # Ingest the sink again in order to be able to validate its contents
 
                 > CREATE SOURCE {self.sink.name}_source
-                  FROM KAFKA CONNECTION {self.sink.name}_kafka_conn
-                  TOPIC 'sink-{self.sink.name}'
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+                  FROM KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE NONE
 
                 # The sink-dervied source has upsert semantics, so produce a "normal" ViewExists output

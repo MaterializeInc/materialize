@@ -23,7 +23,7 @@ bar
 > CREATE SOURCE posix
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'posix' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )
@@ -40,7 +40,7 @@ bar
 > CREATE SOURCE non_posix
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'non-posix' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}'
   )

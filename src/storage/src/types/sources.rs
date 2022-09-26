@@ -10,31 +10,24 @@
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
 use std::collections::{BTreeMap, HashMap};
-use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::BufMut;
-use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
-use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use mz_persist_types::{Codec, Codec64};
-use mz_proto::{any_uuid, TryFromProtoError};
+use mz_persist_types::Codec;
+use mz_proto::TryFromProtoError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::{ColumnType, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::controller::CollectionMetadata;
 use crate::types::connections::aws::AwsConfig;
@@ -49,7 +42,7 @@ pub mod encoding;
 include!(concat!(env!("OUT_DIR"), "/mz_storage.types.sources.rs"));
 
 /// A description of a source ingestion
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct IngestionDescription<S = ()> {
     /// The source description
     pub desc: SourceDesc,
@@ -61,48 +54,27 @@ pub struct IngestionDescription<S = ()> {
     pub typ: RelationType,
 }
 
-impl IngestionDescription<CollectionMetadata> {
-    pub async fn get_resume_upper<T>(&self, persist: Arc<Mutex<PersistClientCache>>) -> Antichain<T>
-    where
-        T: timely::progress::Timestamp + Lattice + Codec64,
-    {
-        let persist = persist
-            .lock()
-            .await
-            .open(self.storage_metadata.persist_location.clone())
-            .await
-            .unwrap();
-        // Calculate the point at which we can resume ingestion computing the greatest
-        // antichain that is less or equal to all state and output shard uppers.
-        let mut resume_upper: Antichain<T> = Antichain::new();
-        let remap_write = persist
-            .open_writer::<(), PartitionId, T, MzOffset>(self.storage_metadata.remap_shard)
-            .await
-            .unwrap();
-        for t in remap_write.upper().elements() {
-            resume_upper.insert(t.clone());
-        }
-        let data_write = persist
-            .open_writer::<SourceData, (), T, Diff>(self.storage_metadata.data_shard)
-            .await
-            .unwrap();
-        for t in data_write.upper().elements() {
-            resume_upper.insert(t.clone());
-        }
+impl<S> Arbitrary for IngestionDescription<S>
+where
+    S: Arbitrary + 'static,
+{
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
 
-        // Check if this ingestion is using any operators that are stateful AND are not
-        // storing their state in persist shards. This whole section should be eventually
-        // removed as we make each operator durably record its state in persist shards.
-        let resume_upper = match self.desc.envelope {
-            // We can only resume with the None envelope, which is stateless,
-            // or with the [Debezium] Upsert envelope, which is easy
-            //   (re-ingest the last emitted state)
-            SourceEnvelope::None(_) => resume_upper,
-            SourceEnvelope::Upsert(_) => resume_upper,
-            // Otherwise re-ingest everything
-            _ => Antichain::from_elem(T::minimum()),
-        };
-        resume_upper
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<SourceDesc>(),
+            any::<BTreeMap<GlobalId, S>>(),
+            any::<S>(),
+            any::<RelationType>(),
+        )
+            .prop_map(|(desc, source_imports, storage_metadata, typ)| Self {
+                desc,
+                source_imports,
+                storage_metadata,
+                typ,
+            })
+            .boxed()
     }
 }
 
@@ -265,24 +237,6 @@ impl AddAssign<u64> for MzOffset {
 impl AddAssign<Self> for MzOffset {
     fn add_assign(&mut self, x: Self) {
         self.offset += x.offset;
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct KafkaOffset {
-    pub offset: i64,
-}
-
-/// Convert from KafkaOffset to MzOffset (1-indexed), failing if the offset
-/// is negative.
-impl TryFrom<KafkaOffset> for MzOffset {
-    type Error = TryFromIntError;
-    fn try_from(kafka_offset: KafkaOffset) -> Result<Self, Self::Error> {
-        Ok(MzOffset {
-            // If the offset is negative, or +1 overflows, then this
-            // fails
-            offset: (kafka_offset.offset + 1).try_into()?,
-        })
     }
 }
 
@@ -1016,9 +970,9 @@ pub struct KafkaSourceConnection {
     pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     // Map from partition -> starting offset
-    pub start_offsets: HashMap<i32, MzOffset>,
+    pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
-    pub cluster_id: Uuid,
+    pub environment_id: String,
     /// If present, include the timestamp as an output column of the source with the given name
     pub include_timestamp: Option<IncludedColumnPos>,
     /// If present, include the partition as an output column of the source with the given name.
@@ -1030,6 +984,12 @@ pub struct KafkaSourceConnection {
     pub include_headers: Option<IncludedColumnPos>,
 }
 
+impl crate::source::types::SourceConnection for KafkaSourceConnection {
+    fn name(&self) -> &'static str {
+        "kafka"
+    }
+}
+
 impl Arbitrary for KafkaSourceConnection {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -1039,9 +999,9 @@ impl Arbitrary for KafkaSourceConnection {
             any::<KafkaConnection>(),
             any::<BTreeMap<String, StringOrSecret>>(),
             any::<String>(),
-            any::<HashMap<i32, MzOffset>>(),
+            any::<HashMap<i32, i64>>(),
             any::<Option<String>>(),
-            any_uuid(),
+            any::<String>(),
             any::<Option<IncludedColumnPos>>(),
             any::<Option<IncludedColumnPos>>(),
             any::<Option<IncludedColumnPos>>(),
@@ -1055,7 +1015,7 @@ impl Arbitrary for KafkaSourceConnection {
                     topic,
                     start_offsets,
                     group_id_prefix,
-                    cluster_id,
+                    environment_id,
                     include_timestamp,
                     include_partition,
                     include_topic,
@@ -1067,7 +1027,7 @@ impl Arbitrary for KafkaSourceConnection {
                     topic,
                     start_offsets,
                     group_id_prefix,
-                    cluster_id,
+                    environment_id,
                     include_timestamp,
                     include_partition,
                     include_topic,
@@ -1089,13 +1049,10 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
                 .map(|(k, v)| (k.clone(), v.into_proto()))
                 .collect(),
             topic: self.topic.clone(),
-            start_offsets: self
-                .start_offsets
-                .iter()
-                .map(|(k, v)| (*k, v.into_proto()))
-                .collect(),
+            start_offsets: self.start_offsets.clone(),
             group_id_prefix: self.group_id_prefix.clone(),
-            cluster_id: Some(self.cluster_id.into_proto()),
+            environment_id: None,
+            environment_name: Some(self.environment_id.into_proto()),
             include_timestamp: self.include_timestamp.into_proto(),
             include_partition: self.include_partition.into_proto(),
             include_topic: self.include_topic.into_proto(),
@@ -1105,11 +1062,6 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
     }
 
     fn from_proto(proto: ProtoKafkaSourceConnection) -> Result<Self, TryFromProtoError> {
-        let start_offsets: Result<_, TryFromProtoError> = proto
-            .start_offsets
-            .into_iter()
-            .map(|(k, v)| MzOffset::from_proto(v).map(|v| (k, v)))
-            .collect();
         let options: Result<_, TryFromProtoError> = proto
             .options
             .into_iter()
@@ -1121,11 +1073,16 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
                 .into_rust_if_some("ProtoKafkaSourceConnection::connection")?,
             options: options?,
             topic: proto.topic,
-            start_offsets: start_offsets?,
+            start_offsets: proto.start_offsets,
             group_id_prefix: proto.group_id_prefix,
-            cluster_id: proto
-                .cluster_id
-                .into_rust_if_some("ProtoPostgresSourceConnection::details")?,
+            environment_id: match (proto.environment_id, proto.environment_name) {
+                (_, Some(name)) => name,
+                (u128, _) => {
+                    let uuid: Uuid =
+                        u128.into_rust_if_some("ProtoKafkaSourceConnection::environment_id")?;
+                    uuid.to_string()
+                }
+            },
             include_timestamp: proto.include_timestamp.into_rust()?,
             include_partition: proto.include_partition.into_rust()?,
             include_topic: proto.include_topic.into_rust()?,
@@ -1167,13 +1124,38 @@ impl RustType<ProtoCompression> for Compression {
 }
 
 /// An external source of updates for a relational collection.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SourceDesc {
     pub connection: SourceConnection,
     pub encoding: encoding::SourceDataEncoding,
     pub envelope: SourceEnvelope,
     pub metadata_columns: Vec<IncludedColumnSource>,
-    pub ts_frequency: Duration,
+    pub timestamp_interval: Duration,
+}
+
+impl Arbitrary for SourceDesc {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<SourceConnection>(),
+            any::<encoding::SourceDataEncoding>(),
+            any::<SourceEnvelope>(),
+            any::<Vec<IncludedColumnSource>>(),
+            any::<Duration>(),
+        )
+            .prop_map(
+                |(connection, encoding, envelope, metadata_columns, timestamp_interval)| Self {
+                    connection,
+                    encoding,
+                    envelope,
+                    metadata_columns,
+                    timestamp_interval,
+                },
+            )
+            .boxed()
+    }
 }
 
 impl RustType<ProtoSourceDesc> for SourceDesc {
@@ -1183,7 +1165,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             encoding: Some(self.encoding.into_proto()),
             envelope: Some(self.envelope.into_proto()),
             metadata_columns: self.metadata_columns.into_proto(),
-            ts_frequency: Some(self.ts_frequency.into_proto()),
+            timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
     }
 
@@ -1199,31 +1181,14 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
                 .envelope
                 .into_rust_if_some("ProtoSourceDesc::envelope")?,
             metadata_columns: proto.metadata_columns.into_rust()?,
-            ts_frequency: proto
-                .ts_frequency
-                .into_rust_if_some("ProtoSourceDesc::ts_frequency")?,
+            timestamp_interval: proto
+                .timestamp_interval
+                .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
         })
     }
 }
 
 impl SourceDesc {
-    /// Returns `true` if this connection yields input data (including
-    /// timestamps) that is stable across restarts. This is important for
-    /// exactly-once Sinks that need to ensure that the same data is written,
-    /// even when failures/restarts happen.
-    pub fn yields_stable_input(&self) -> bool {
-        // Conservatively, set all Kafka/File sources as having stable inputs because
-        // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
-        match self.connection {
-            // TODO(guswynn): does postgres count here as well?
-            SourceConnection::Kafka(_) => true,
-            // Currently, the Kinesis connection assigns "offsets" by counting the message in the order it was received
-            // and this order is not replayable across different reads of the same Kinesis stream.
-            SourceConnection::Kinesis(_) => false,
-            _ => false,
-        }
-    }
-
     /// Returns `true` if this connection yields data that is
     /// append-only/monotonic. Append-monly means the source
     /// never produces retractions.
@@ -1260,10 +1225,6 @@ impl SourceDesc {
 
     pub fn name(&self) -> &'static str {
         self.connection.name()
-    }
-
-    pub fn requires_single_materialization(&self) -> bool {
-        self.connection.requires_single_materialization()
     }
 }
 
@@ -1327,7 +1288,7 @@ impl SourceConnection {
             }) => {
                 let mut items = BTreeMap::new();
                 for (include, ty) in [
-                    (offset, ScalarType::Int64),
+                    (offset, ScalarType::UInt64),
                     (part, ScalarType::Int32),
                     (time, ScalarType::Timestamp),
                     (topic, ScalarType::String),
@@ -1409,12 +1370,13 @@ impl SourceConnection {
 
     /// Returns the name of the external source connection.
     pub fn name(&self) -> &'static str {
+        use crate::source::types::SourceConnection as _;
         match self {
-            SourceConnection::Kafka(_) => "kafka",
-            SourceConnection::Kinesis(_) => "kinesis",
-            SourceConnection::S3(_) => "s3",
-            SourceConnection::Postgres(_) => "postgres",
-            SourceConnection::LoadGenerator(_) => "loadgen",
+            SourceConnection::Kafka(c) => c.name(),
+            SourceConnection::Kinesis(c) => c.name(),
+            SourceConnection::S3(c) => c.name(),
+            SourceConnection::Postgres(c) => c.name(),
+            SourceConnection::LoadGenerator(c) => c.name(),
         }
     }
 
@@ -1432,23 +1394,18 @@ impl SourceConnection {
             SourceConnection::LoadGenerator(_) => None,
         }
     }
-
-    pub fn requires_single_materialization(&self) -> bool {
-        match self {
-            SourceConnection::S3(c) => c.requires_single_materialization(),
-
-            SourceConnection::Kafka(_)
-            | SourceConnection::Kinesis(_)
-            | SourceConnection::Postgres(_)
-            | SourceConnection::LoadGenerator(_) => false,
-        }
-    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnection {
     pub stream_name: String,
     pub aws: AwsConfig,
+}
+
+impl crate::source::types::SourceConnection for KinesisSourceConnection {
+    fn name(&self) -> &'static str {
+        "kinesis"
+    }
 }
 
 impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
@@ -1474,6 +1431,12 @@ pub struct PostgresSourceConnection {
     pub connection: PostgresConnection,
     pub publication: String,
     pub details: PostgresSourceDetails,
+}
+
+impl crate::source::types::SourceConnection for PostgresSourceConnection {
+    fn name(&self) -> &'static str {
+        "postgres"
+    }
 }
 
 impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
@@ -1530,6 +1493,12 @@ pub struct LoadGeneratorSourceConnection {
     pub tick_micros: Option<u64>,
 }
 
+impl crate::source::types::SourceConnection for LoadGeneratorSourceConnection {
+    fn name(&self) -> &'static str {
+        "loadgen"
+    }
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
@@ -1582,6 +1551,12 @@ pub struct S3SourceConnection {
     pub pattern: Option<Glob>,
     pub aws: AwsConfig,
     pub compression: Compression,
+}
+
+impl crate::source::types::SourceConnection for S3SourceConnection {
+    fn name(&self) -> &'static str {
+        "s3"
+    }
 }
 
 fn any_glob() -> impl Strategy<Value = Glob> {
@@ -1646,16 +1621,6 @@ impl RustType<ProtoS3SourceConnection> for S3SourceConnection {
                 .compression
                 .into_rust_if_some("ProtoS3SourceConnection::compression")?,
         })
-    }
-}
-
-impl S3SourceConnection {
-    fn requires_single_materialization(&self) -> bool {
-        // SQS Notifications are not durable, multiple sources depending on them will get
-        // non-intersecting subsets of objects to read
-        self.key_sources
-            .iter()
-            .any(|s| matches!(s, S3KeySource::SqsNotifications { .. }))
     }
 }
 

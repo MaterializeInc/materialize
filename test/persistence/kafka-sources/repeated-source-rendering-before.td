@@ -20,12 +20,19 @@ $ kafka-create-topic topic=re-created partitions=1
 # Make sure that we can render a source (by creating an indexed view), drop
 # it, and render it again.
 
-$ kafka-ingest format=avro topic=re-created schema=${schema} publish=true repeat=10
+$ kafka-ingest format=avro topic=re-created schema=${schema} repeat=10
 {"f1": ${kafka-ingest.iteration}}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE re_created
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-re-created-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-re-created-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
 

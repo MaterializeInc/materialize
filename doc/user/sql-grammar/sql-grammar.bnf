@@ -1,10 +1,12 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 alter_rename ::=
-  'ALTER' ('INDEX' | 'SOURCE' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
+  'ALTER' ('INDEX' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
+alter_source ::=
+  'ALTER' 'SOURCE' 'IF EXISTS'? name 'SET' '(' 'SIZE' value ')'
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
@@ -65,13 +67,11 @@ create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink ::=
     'CREATE SINK' 'IF NOT EXISTS'? sink_name
-    ('IN' 'CLUSTER' cluster_name)?
     'FROM' item_name
     'INTO' sink_kafka_connector
-    ( sink_with_options )?
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
-    ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
+    ('WITH' with_options)?
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -81,17 +81,26 @@ create_source_kafka ::=
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
   )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_kinesis ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
   'FROM' 'KINESIS ARN' arn with_options?
   'FORMAT' format_spec
   ('ENVELOPE NONE')?
+create_source_load_generator ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )*)?
+  'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER')
+  ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+load_generator_option ::=
+    'TICK INTERVAL' interval
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   'PUBLICATION' publication_name
-  ('WITH timestamp_frequency_ms =' int)?
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -143,6 +152,10 @@ discard ::=
   'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
 drop_connection ::=
     'DROP' 'CONNECTION' ('IF EXISTS')? connection_name ('CASCADE' | 'RESTRICT')?
+drop_cluster ::=
+  'DROP' 'CLUSTER' ('IF EXISTS')? cluster_name ('CASCADE' | 'RESTRICT')?
+drop_cluster_replica ::=
+  'DROP' 'CLUSTER' 'REPLICA' ('IF EXISTS')? cluster_name.replica_name ('CASCADE' | 'RESTRICT')?
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_index ::=
@@ -256,9 +269,8 @@ jsonb_agg ::=
 jsonb_object_agg ::=
   'jsonb_object_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 sink_kafka_connector ::=
-    'KAFKA' 'CONNECTION' conn 'TOPIC' topic-prefix
+    'KAFKA' 'CONNECTION' conn (with_options)?
     ('KEY' '(' key_column ( ',' key_column )* ')')?
-    ('CONSISTENCY' '(' 'TOPIC' consistency_topic ('FORMAT' consistency_format_spec)? ')' )?
 list_agg ::=
   'list_agg' '(' value  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 lit_cast ::=
@@ -281,14 +293,22 @@ select_stmt ::=
   ( 'OPTION' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
   ( 'HAVING' expr )?
   ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )?
-  ( 'LIMIT' expr )?
-  ( 'OFFSET' expr )?
+  ( 'LIMIT' integer )?
+  ( 'OFFSET' integer )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
+set_transaction_isolation ::=
+  'SET' 'TRANSACTION_ISOLATION' ( 'TO' | '=' ) isolation_level
 show_columns ::=
   'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)
 show_connections ::=
-  'SHOW' 'FULL'? 'CONNECTIONS'
+  'SHOW' 'CONNECTIONS'
   ('FROM' schema_name)?
+  ('LIKE' 'pattern' | 'WHERE' expr)?
+show_clusters ::=
+  'SHOW' 'CLUSTERS'
+  ('LIKE' 'pattern' | 'WHERE' expr)?
+show_cluster_replicas ::=
+  'SHOW' 'CLUSTER' 'REPLICAS'
   ('LIKE' 'pattern' | 'WHERE' expr)?
 show_create_connection ::=
   'SHOW' 'CREATE' 'CONNECTION' connection_name
@@ -306,29 +326,29 @@ show_create_view ::=
   'SHOW' 'CREATE' 'VIEW' view_name
 show_databases ::=
     'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)?
-show_index ::=
-    'SHOW' 'EXTENDED'? ('INDEX' | 'INDEXES' | 'KEYS')
-    (('FROM' | 'IN') on_name)?
+show_indexes ::=
+    'SHOW' 'INDEXES'
+    ((('FROM' | 'ON') on_name) | ('FROM SCHEMA' schema_name))?
     ('IN' 'CLUSTER' cluster_name)?
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_materialized_views ::=
-    'SHOW' 'FULL'? 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
+    'SHOW' 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_secrets ::=
     'SHOW' 'SECRETS' ('FROM' schema_name)? ('LIKE' 'pattern' | 'WHERE' expr)?
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
-   'SHOW' 'FULL'? 'SINKS' ('FROM' schema_name)?
+   'SHOW' 'SINKS' ('FROM' schema_name)?
 show_sources ::=
-  'SHOW' 'FULL'? 'SOURCES' ('FROM' schema_name)?
+  'SHOW' 'SOURCES' ('FROM' schema_name)?
 show_tables ::=
-  'SHOW' 'EXTENDED'? 'FULL'? 'TABLES' ('FROM' schema_name)?
+  'SHOW' 'TABLES' ('FROM' schema_name)?
 show_types ::=
-  'SHOW' 'EXTENDED'? 'FULL'?
+  'SHOW' 'TYPES' ('FROM' schema_name)?
 show_views ::=
-  'SHOW' 'FULL'? 'VIEWS' ('FROM' schema_name)?
+  'SHOW' 'VIEWS' ('FROM' schema_name)?
 show_objects ::=
-  'SHOW' 'EXTENDED'? 'FULL'?  'OBJECTS' ('FROM' schema_name)?
+  'SHOW' 'OBJECTS' ('FROM' schema_name)?
 string_agg ::=
   'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 table_ref ::=
@@ -388,7 +408,7 @@ update_stmt ::=
   'UPDATE' table_name ('AS'? alias)?
   'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
   'WHERE' condition
-with_options ::= 'WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
+with_options ::= ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 with_options_aws ::= 'WITH' '('
     (
       static_credentials

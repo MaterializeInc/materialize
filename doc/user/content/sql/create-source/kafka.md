@@ -1,6 +1,7 @@
 ---
 title: "CREATE SOURCE: Kafka"
 description: "Connecting Materialize to a Kafka or Redpanda broker"
+pagerank: 10
 menu:
   main:
     parent: 'create-source'
@@ -52,19 +53,23 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 {{% create-source/syntax-connector-details connector="kafka" envelopes="debezium upsert append-only" %}}
 
-### `WITH` options
+### `CONNECTION` options
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
 `client_id`                          | `text`    | Use the supplied value as the Kafka client identifier.
 `group_id_prefix`                    | `text`    | Use the specified prefix in the consumer group ID. The resulting `group.id` looks like `<group_id_prefix>materialize-X-Y`, where `X` and `Y` are values that allow multiple concurrent Kafka consumers from the same topic.
-`ignore_source_keys`                 | `boolean` | Default: `false`. If `true`, do not perform optimizations assuming uniqueness of primary keys in schemas.
 `isolation_level`                    | `text`    | Default: `read_committed`. Controls how to read messages that were transactionally written to Kafka. Supported options are `read_committed` to read only committed messages and `read_uncommitted` to read all messages, including those that are part of an open transaction or were aborted.
 `statistics_interval_ms`             | `int`     | `librdkafka` statistics emit interval in `ms`. A value of 0 disables statistics. Statistics can be queried using the `mz_kafka_source_statistics` system table. Accepts values [0, 86400000].
-`timestamp_frequency_ms`             | `int`     | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently the source advances its timestamp. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
 `topic_metadata_refresh_interval_ms` | `int`     | Default: `300000`. Sets the frequency in `ms` at which the system checks for new partitions. Accepts values [0,3600000].
 `enable_auto_commit`                 | `boolean` | Default: `false`. Controls whether or not Materialize commits read offsets back into Kafka. This is purely for consumer progress monitoring and does not cause Materialize to resume reading from where it left off across restarts.
 `fetch_message_max_bytes` | `int` | Default: `134217728`. Controls the initial maximum number of bytes per topic+partition to request when fetching messages from the broker. If the client encounters a message larger than this value it will gradually try to increase it until the entire message can be fetched. Accepts values [1, 1000000000].
+
+### `WITH` options
+
+Field                                | Value     | Description
+-------------------------------------|-----------|-------------------------------------
+`SIZE`                               | `text`    | Default: `3xsmall`. The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`.
 
 ## Supported formats
 
@@ -88,7 +93,7 @@ To create a source that uses the standard key-value convention to support insert
 
 ```sql
 CREATE SOURCE current_predictions
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'events'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE UPSERT;
 ```
@@ -113,7 +118,7 @@ Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka 
 
 ```sql
 CREATE SOURCE kafka_repl
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'pg_repl.public.table1'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM;
 ```
@@ -136,7 +141,7 @@ The message key is exposed via the `INCLUDE KEY` option. Composite keys are also
 
 ```sql
 CREATE SOURCE kafka_metadata
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE KEY AS renamed_id;
@@ -156,7 +161,7 @@ Message headers are exposed via the `INCLUDE HEADERS` option, and are included a
 
 ```sql
 CREATE SOURCE kafka_metadata
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE HEADERS
   ENVELOPE NONE;
@@ -208,7 +213,7 @@ These metadata fields are exposed via the `INCLUDE PARTITION`, `INCLUDE OFFSET` 
 
 ```sql
 CREATE SOURCE kafka_metadata
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE PARTITION, OFFSET, TIMESTAMP AS ts
   ENVELOPE NONE;
@@ -234,7 +239,7 @@ To start consuming a Kafka stream from a specific offset, you can use the `start
 
 ```sql
 CREATE SOURCE kafka_offset
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'data'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   -- Start reading from the earliest offset in the first partition,
   -- the second partition at 10, and the third partition at 100
   WITH (start_offset=[0,10,100])
@@ -275,7 +280,7 @@ A strategy of `LATEST` (the default) will choose the latest writer schema from t
 
 A connection describes how to connect and authenticate to an external system you want Materialize to read data from.
 
-Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#kafka) documentation page.
+Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
 
 #### Broker
 
@@ -335,7 +340,7 @@ CREATE CONNECTION csr_ssl
 ```sql
 CREATE SOURCE avro_source
   FROM KAFKA
-    CONNECTION kafka_connection TOPIC 'test_topic'
+    CONNECTION kafka_connection (TOPIC 'test_topic')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
@@ -344,7 +349,7 @@ CREATE SOURCE avro_source
 
 ```sql
 CREATE SOURCE json_source
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT BYTES;
 ```
 
@@ -363,7 +368,7 @@ CREATE VIEW jsonified_kafka_source AS
 
 ```sql
 CREATE SOURCE proto_source
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   WITH (cache = true)
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
@@ -373,7 +378,7 @@ CREATE SOURCE proto_source
 
 ```sql
 CREATE SOURCE text_source
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT TEXT
   ENVELOPE UPSERT;
 ```
@@ -383,16 +388,36 @@ CREATE SOURCE text_source
 
 ```sql
 CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
-  FROM KAFKA CONNECTION kafka_connection TOPIC 'test_topic'
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT CSV WITH 3 COLUMNS;
 ```
 
 {{< /tab >}}
 {{< /tabs >}}
 
+### Sizing a source
+
+To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
+
+```sql
+CREATE SOURCE avro_source
+  FROM KAFKA
+    CONNECTION kafka_connection (TOPIC 'test_topic')
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+    WITH (SIZE = 'xsmall');
+```
+
+To resize the source after creation:
+
+```sql
+ALTER SOURCE avro_source SET (SIZE = 'large');
+```
+
+By default, sources are provisioned using the smallest size (`3xsmall`). For more details on sizing sources, check the [`CREATE SOURCE`](../) documentation page.
+
 ## Related pages
 
-- `CREATE SECRET`
+- [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
 - [Using Debezium](/integrations/debezium/)

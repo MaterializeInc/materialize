@@ -125,7 +125,9 @@ where
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         let cmd_parts = self.state.split_command(cmd);
         for (shard, cmd_part) in self.parts.iter_mut().zip(cmd_parts) {
-            shard.send(cmd_part).await?;
+            if let Some(cmd) = cmd_part {
+                shard.send(cmd).await?;
+            }
         }
         Ok(())
     }
@@ -168,7 +170,7 @@ pub trait Partitionable<C, R> {
 /// amalgamates responses from multiple partitions.
 pub trait PartitionedState<C, R>: fmt::Debug + Send {
     /// Splits a command into multiple partitions.
-    fn split_command(&mut self, command: C) -> Vec<C>;
+    fn split_command(&mut self, command: C) -> Vec<Option<C>>;
 
     /// Absorbs a response from a single partition.
     ///

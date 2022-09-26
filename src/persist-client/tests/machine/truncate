@@ -20,6 +20,8 @@ fetch-batch input=b0
 zero 0 1
 one 1 1
 two 2 1
+<run 0>
+part 0
 
 truncate-batch-desc input=b0 output=b1 lower=1 upper=2
 ----
@@ -29,6 +31,8 @@ fetch-batch input=b1
 ----
 <part 0>
 one 1 1
+<run 0>
+part 0
 
 write-batch output=nope lower=1 upper=3
 ----

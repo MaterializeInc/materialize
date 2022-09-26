@@ -9,8 +9,9 @@
 
 //! Abstractions for secure management of user secrets.
 
+use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -45,5 +46,45 @@ pub trait SecretsReader: Debug + Send + Sync {
     async fn read_string(&self, id: GlobalId) -> Result<String, anyhow::Error> {
         let contents = self.read(id).await?;
         String::from_utf8(contents).context("converting secret value to string")
+    }
+}
+
+#[derive(Debug)]
+pub struct InMemorySecretsController {
+    data: Arc<Mutex<HashMap<GlobalId, Vec<u8>>>>,
+}
+
+impl InMemorySecretsController {
+    pub fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl SecretsController for InMemorySecretsController {
+    async fn ensure(&self, id: GlobalId, contents: &[u8]) -> Result<(), anyhow::Error> {
+        self.data.lock().unwrap().insert(id, contents.to_vec());
+        Ok(())
+    }
+
+    async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error> {
+        self.data.lock().unwrap().remove(&id);
+        Ok(())
+    }
+
+    fn reader(&self) -> Arc<dyn SecretsReader> {
+        Arc::new(InMemorySecretsController {
+            data: Arc::clone(&self.data),
+        })
+    }
+}
+
+#[async_trait]
+impl SecretsReader for InMemorySecretsController {
+    async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+        let contents = self.data.lock().unwrap().get(&id).cloned();
+        contents.ok_or_else(|| anyhow::anyhow!("secret does not exist"))
     }
 }

@@ -26,13 +26,10 @@ name       type
 testconn   kafka
 
 > SHOW CONNECTIONS
-testconn
-
-> SHOW FULL CONNECTIONS
-testconn user
+testconn    kafka
 
 > SHOW CREATE CONNECTION testconn
-Connection   "Create Connection"
+name   create_sql
 ---------------------------------
 materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER = '${testdrive.kafka-addr}'"
 
@@ -46,8 +43,7 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 > CREATE SOURCE connection_source (first, second)
-  FROM KAFKA CONNECTION testconn
-  TOPIC 'testdrive-connection_test-${testdrive.seed}'
+  FROM KAFKA CONNECTION testconn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
 
 > SELECT * FROM connection_source
@@ -113,7 +109,7 @@ $ set schema={
 
 $ kafka-create-topic topic=csr_test partitions=1
 
-$ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema} schema=${schema} timestamp=1
 {"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}}
 {"id": 1} {"before": {"row": {"id": 1, "creature": "mudskipper"}}, "after": {"row": {"id": 1, "creature": "salamander"}}}
 {"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}}
@@ -123,8 +119,11 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
   FOR CONFLUENT SCHEMA REGISTRY
     URL '${testdrive.schema-registry-url}'
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE csr_source
-    FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csr_test-${testdrive.seed}'
+    FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
     ENVELOPE DEBEZIUM UPSERT
@@ -134,14 +133,11 @@ id creature
 -----------
 1  lizard
 
-
 > CREATE CONNECTION broker_connection
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
-
 > CREATE SOURCE two_connection_source
-  FROM KAFKA CONNECTION broker_connection
-  TOPIC 'testdrive-csr_test-${testdrive.seed}'
+  FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM UPSERT
 
@@ -156,14 +152,13 @@ contains:depended upon by catalog item 'materialize.public.csr_source'
 > DROP CONNECTION csr_conn CASCADE
 
 ! CREATE SOURCE should_fail
-  FROM KAFKA CONNECTION does_not_exist
-  TOPIC 'error_topic'
+  FROM KAFKA CONNECTION does_not_exist (TOPIC 'testdrive-error_topic-${testdrive.seed}')
   FORMAT TEXT
 contains: unknown catalog item 'does_not_exist'
 
 ! CREATE SOURCE should_fail
-  FROM KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-csr_test-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn
+  (TOPIC 'testdrive-csr_test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION does_not_exist
   ENVELOPE DEBEZIUM UPSERT
 contains: unknown catalog item 'does_not_exist'
@@ -241,7 +236,7 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
     URL '${testdrive.schema-registry-url}'
 
 > CREATE SOURCE import_connection_csr FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
 
 > SELECT importee1::text, importee2::text FROM import_connection_csr
@@ -257,10 +252,10 @@ importee1  importee2
     USER 'user',
     PORT 1
 
-> SELECT name, public_key from mz_ssh_tunnel_connections
-name public_key
+> SELECT name, public_key_1 LIKE 'ssh-ed25519%' public_key_1 from mz_ssh_tunnel_connections
+name public_key_1
 -----------
-ssh_conn TODO
+ssh_conn true
 
 # Test invalid connection parameter combinations
 

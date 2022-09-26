@@ -260,6 +260,16 @@ impl State {
     }
 
     pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
+        let (inner_client, _) = postgres_client(&format!(
+            "postgres://mz_system:materialize@{}",
+            self.materialize_sql_addr_internal
+        ))
+        .await?;
+        inner_client
+            .batch_execute("ALTER SYSTEM RESET ALL")
+            .await
+            .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
+
         for row in self
             .pgclient
             .query("SHOW DATABASES", &[])
@@ -551,6 +561,9 @@ pub(crate) async fn build(
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
                     "kafka-verify-schema" => {
                         Box::new(kafka::build_verify_schema(builtin).map_err(wrap_err)?)
+                    }
+                    "kafka-verify-commit" => {
+                        Box::new(kafka::build_verify_commit(builtin).map_err(wrap_err)?)
                     }
                     "kinesis-create-stream" => {
                         Box::new(kinesis::build_create_stream(builtin).map_err(wrap_err)?)

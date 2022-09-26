@@ -66,7 +66,8 @@ of queries that obey the spacing rules
 
 ```sql
 CREATE TABLE t (a varchar(40));
-CREATE SOURCE test FROM KAFKA BROKER 'localhost:9092' TOPIC 'top' WITH (config_param = 'yes') FORMAT BYTES;
+CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'localhost:9092';
+CREATE SOURCE test FROM KAFKA CONNECTION kafka_conn (TOPIC 'top') LEGACYWITH (config_param = 'yes') FORMAT BYTES;
 SELECT coalesce(1, NULL, 2);
 SELECT CAST (1 AS text); -- note the space after CAST
 SELECT (1 + 2) - (7 * 4);
@@ -76,7 +77,8 @@ and several queries that don't:
 
 ```sql
 CREATE TABLE t (a varchar (40));
-CREATE SOURCE test FROM KAFKA BROKER 'localhost:9092' TOPIC 'top' WITH(tail=true);
+CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'localhost:9092';
+CREATE SOURCE test FROM KAFKA CONNECTION kafka_conn )TOPIC 'top') LEGACYWITH(tail=true);
 SELECT coalesce (1, NULL,2);
 SELECT CAST(1 AS text);
 SELECT 1+2;

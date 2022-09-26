@@ -10,10 +10,9 @@
 //! Connection types.
 
 use std::collections::{BTreeMap, HashSet};
-use std::str::FromStr;
+
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -22,13 +21,12 @@ use tokio_postgres::config::SslMode;
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
-use mz_kafka_util::KafkaAddrs;
+
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
-use mz_sql_parser::ast::KafkaConnectionOptionName;
 
 use crate::types::connections::aws::AwsExternalIdPrefix;
 
@@ -208,51 +206,41 @@ impl From<SaslConfig> for KafkaSecurity {
     }
 }
 
-/// Meant to create an equivalence function between enum-named options and
-/// their free-form `String` counterparts.
-pub trait ConfigKey {
-    fn config_key(&self) -> String;
-}
-
-impl ConfigKey for KafkaConnectionOptionName {
-    fn config_key(&self) -> String {
-        use KafkaConnectionOptionName::*;
-        match self {
-            Broker | Brokers => "bootstrap.servers",
-            SslKey => "ssl.key.pem",
-            SslCertificate => "ssl.certificate.pem",
-            SslCertificateAuthority => "ssl.ca.pem",
-            SaslMechanisms => "sasl.mechanisms",
-            SaslUsername => "sasl.username",
-            SaslPassword => "sasl.password",
-        }
-        .to_string()
-    }
-}
-
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection {
     pub brokers: Vec<String>,
+    pub progress_topic: Option<String>,
     pub security: Option<KafkaSecurity>,
+}
+
+mod kafka_config_keys {
+    pub const BOOTSTRAP_SERVERS: &str = "bootstrap.servers";
+    pub const SASL_MECHANISMS: &str = "sasl.mechanisms";
+    pub const SASL_PASSWORD: &str = "sasl.password";
+    pub const SASL_USERNAME: &str = "sasl.username";
+    pub const SECURITY_PROTOCOL: &str = "security.protocol";
+    pub const SSL_CERTIFICATE: &str = "ssl.certificate.pem";
+    pub const SSL_CERTIFICATE_AUTHORITY: &str = "ssl.ca.pem";
+    pub const SSL_KEY: &str = "ssl.key.pem";
 }
 
 impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
     fn from(v: KafkaConnection) -> Self {
-        use KafkaConnectionOptionName::*;
-        let mut r = BTreeMap::new();
-        r.insert("bootstrap.servers".into(), v.brokers.join(",").into());
+        use kafka_config_keys::*;
+        let mut r: BTreeMap<String, StringOrSecret> = BTreeMap::new();
+        r.insert(BOOTSTRAP_SERVERS.to_owned(), v.brokers.join(",").into());
         match v.security {
             Some(KafkaSecurity::Tls(KafkaTlsConfig {
                 root_cert,
                 identity,
             })) => {
-                r.insert("security.protocol".into(), "SSL".into());
+                r.insert(SECURITY_PROTOCOL.to_owned(), "SSL".into());
                 if let Some(root_cert) = root_cert {
-                    r.insert(SslCertificateAuthority.config_key(), root_cert);
+                    r.insert(SSL_CERTIFICATE_AUTHORITY.to_owned(), root_cert);
                 }
                 if let Some(identity) = identity {
-                    r.insert(SslKey.config_key(), StringOrSecret::Secret(identity.key));
-                    r.insert(SslCertificate.config_key(), identity.cert);
+                    r.insert(SSL_KEY.to_owned(), StringOrSecret::Secret(identity.key));
+                    r.insert(SSL_CERTIFICATE.to_owned(), identity.cert);
                 }
             }
             Some(KafkaSecurity::Sasl(SaslConfig {
@@ -261,83 +249,21 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
                 password,
                 tls_root_cert: certificate_authority,
             })) => {
-                r.insert("security.protocol".into(), "SASL_SSL".into());
+                r.insert(SECURITY_PROTOCOL.to_owned(), "SASL_SSL".into());
                 r.insert(
-                    SaslMechanisms.config_key(),
+                    SASL_MECHANISMS.to_owned(),
                     StringOrSecret::String(mechanisms),
                 );
-                r.insert(SaslUsername.config_key(), username);
-                r.insert(SaslPassword.config_key(), StringOrSecret::Secret(password));
+                r.insert(SASL_USERNAME.to_owned(), username);
+                r.insert(SASL_PASSWORD.to_owned(), StringOrSecret::Secret(password));
                 if let Some(certificate_authority) = certificate_authority {
-                    r.insert(SslCertificateAuthority.config_key(), certificate_authority);
+                    r.insert(SSL_CERTIFICATE_AUTHORITY.to_owned(), certificate_authority);
                 }
             }
             None => {}
         }
 
         r
-    }
-}
-
-impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
-    type Error = anyhow::Error;
-    /// Extracts only the options necessary to create a `KafkaConnection` from
-    /// a `BTreeMap<String, StringOrSecret>`, and returns the remaining
-    /// options.
-    ///
-    /// # Panics
-    /// - If `value` was not sufficiently or incorrectly type checked and
-    ///   parameters expected to reference objects (i.e. secrets) are instead
-    ///   `String`s, or vice versa.
-    fn try_from(map: &mut BTreeMap<String, StringOrSecret>) -> Result<Self, Self::Error> {
-        use KafkaConnectionOptionName::*;
-
-        let key_or_err = |config: &str,
-                          map: &mut BTreeMap<String, StringOrSecret>,
-                          key: KafkaConnectionOptionName| {
-            map.remove(&key.config_key()).ok_or_else(|| {
-                anyhow!(
-                    "invalid {} config: missing {} ({})",
-                    config.to_uppercase(),
-                    key,
-                    key.config_key(),
-                )
-            })
-        };
-
-        let security = if let Some(v) = map.remove("security.protocol") {
-            match v.unwrap_string().to_lowercase().as_str() {
-                config @ "ssl" => Some(KafkaSecurity::Tls(KafkaTlsConfig {
-                    identity: Some(TlsIdentity {
-                        key: key_or_err(config, map, SslKey)?.unwrap_secret(),
-                        cert: key_or_err(config, map, SslCertificate)?,
-                    }),
-                    root_cert: map.remove(&SslCertificateAuthority.config_key()),
-                })),
-                config @ "sasl_ssl" => Some(KafkaSecurity::Sasl(SaslConfig {
-                    mechanisms: key_or_err(config, map, SaslMechanisms)?
-                        .unwrap_string()
-                        .to_string(),
-                    username: key_or_err(config, map, SaslUsername)?,
-                    password: key_or_err(config, map, SaslPassword)?.unwrap_secret(),
-                    tls_root_cert: map.remove(&SslCertificateAuthority.config_key()),
-                })),
-                o => bail!("unsupported security.protocol: {}", o),
-            }
-        } else {
-            None
-        };
-
-        let brokers = match map.remove(&Broker.config_key()) {
-            Some(v) => KafkaAddrs::from_str(&v.unwrap_string())?
-                .to_string()
-                .split(',')
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>(),
-            None => bail!("must specify {}", Broker.config_key()),
-        };
-
-        Ok(KafkaConnection { brokers, security })
     }
 }
 
@@ -408,6 +334,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn into_proto(&self) -> ProtoKafkaConnection {
         ProtoKafkaConnection {
             brokers: self.brokers.into_proto(),
+            progress_topic: self.progress_topic.into_proto(),
             security: self.security.into_proto(),
         }
     }
@@ -415,6 +342,7 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaConnection {
             brokers: proto.brokers,
+            progress_topic: proto.progress_topic,
             security: proto.security.into_rust()?,
         })
     }
@@ -635,8 +563,10 @@ pub struct PostgresConnection {
     pub user: StringOrSecret,
     /// An optional password for authentication.
     pub password: Option<GlobalId>,
-    /// An optional named SSH tunnel connection.
-    pub ssh_tunnel: Option<String>,
+    /// An optional named SSH tunnel connection ID. Used to manage the public key secret.
+    pub ssh_tunnel_id: Option<GlobalId>,
+    /// An optional SSH tunnel connection details.
+    pub ssh_tunnel: Option<SshConnection>,
     /// Whether to use TLS for encryption, authentication, or both.
     pub tls_mode: SslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
@@ -647,7 +577,7 @@ pub struct PostgresConnection {
 }
 
 impl PostgresConnection {
-    pub async fn config(
+    pub async fn postgres_config(
         &self,
         secrets_reader: &dyn mz_secrets::SecretsReader,
     ) -> Result<tokio_postgres::Config, anyhow::Error> {
@@ -674,6 +604,34 @@ impl PostgresConnection {
         }
         Ok(config)
     }
+
+    pub async fn config(
+        &self,
+        secrets_reader: &dyn mz_secrets::SecretsReader,
+    ) -> Result<mz_postgres_util::Config, anyhow::Error> {
+        let ssh_tunnel = if let (Some(ssh_secret_id), Some(ssh_tunnel)) =
+            (self.ssh_tunnel_id, self.ssh_tunnel.as_ref())
+        {
+            let secret = secrets_reader.read(ssh_secret_id).await?;
+            let keyset = mz_ore::ssh_key::SshKeyset::from_bytes(&secret)?;
+            let keypair = keyset.primary().clone();
+            mz_postgres_util::SshTunnelConfig::Tunnel {
+                host: ssh_tunnel.host.clone(),
+                port: ssh_tunnel.port,
+                user: ssh_tunnel.user.clone(),
+                keypair,
+            }
+        } else {
+            mz_postgres_util::SshTunnelConfig::Direct
+        };
+
+        Ok(mz_postgres_util::Config::new(
+            self.postgres_config(secrets_reader).await?,
+            &self.host,
+            self.port,
+            ssh_tunnel,
+        ))
+    }
 }
 
 impl RustType<ProtoPostgresConnection> for PostgresConnection {
@@ -684,6 +642,7 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
             database: self.database.into_proto(),
             user: Some(self.user.into_proto()),
             password: self.password.into_proto(),
+            ssh_tunnel_id: self.ssh_tunnel_id.into_proto(),
             ssh_tunnel: self.ssh_tunnel.into_proto(),
             tls_mode: Some(self.tls_mode.into_proto()),
             tls_root_cert: self.tls_root_cert.into_proto(),
@@ -700,6 +659,7 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
                 .user
                 .into_rust_if_some("ProtoPostgresConnection::user")?,
             password: proto.password.into_rust()?,
+            ssh_tunnel_id: proto.ssh_tunnel_id.into_rust()?,
             ssh_tunnel: proto.ssh_tunnel.into_rust()?,
             tls_mode: proto
                 .tls_mode
@@ -721,7 +681,8 @@ impl Arbitrary for PostgresConnection {
             any::<String>(),
             any::<StringOrSecret>(),
             any::<Option<GlobalId>>(),
-            any::<Option<String>>(),
+            any::<Option<GlobalId>>(),
+            any::<Option<SshConnection>>(),
             any_ssl_mode(),
             any::<Option<StringOrSecret>>(),
             any::<Option<TlsIdentity>>(),
@@ -733,6 +694,7 @@ impl Arbitrary for PostgresConnection {
                     database,
                     user,
                     password,
+                    ssh_tunnel_id,
                     ssh_tunnel,
                     tls_mode,
                     tls_root_cert,
@@ -744,6 +706,7 @@ impl Arbitrary for PostgresConnection {
                         database,
                         user,
                         password,
+                        ssh_tunnel_id,
                         ssh_tunnel,
                         tls_mode,
                         tls_root_cert,
@@ -759,8 +722,42 @@ impl Arbitrary for PostgresConnection {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshConnection {
     pub host: String,
-    pub port: i32,
+    pub port: u16,
     pub user: String,
-    pub public_key: String,
-    pub private_key: GlobalId,
+    pub public_keys: Option<(String, String)>,
+}
+
+use proto_ssh_connection::ProtoPublicKeys;
+
+impl RustType<ProtoPublicKeys> for (String, String) {
+    fn into_proto(&self) -> ProtoPublicKeys {
+        ProtoPublicKeys {
+            primary_public_key: self.0.into_proto(),
+            secondary_public_key: self.1.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoPublicKeys) -> Result<Self, TryFromProtoError> {
+        Ok((proto.primary_public_key, proto.secondary_public_key))
+    }
+}
+
+impl RustType<ProtoSshConnection> for SshConnection {
+    fn into_proto(&self) -> ProtoSshConnection {
+        ProtoSshConnection {
+            host: self.host.into_proto(),
+            port: self.port.into_proto(),
+            user: self.user.into_proto(),
+            public_keys: self.public_keys.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoSshConnection) -> Result<Self, TryFromProtoError> {
+        Ok(SshConnection {
+            host: proto.host,
+            port: proto.port.into_rust()?,
+            user: proto.user,
+            public_keys: proto.public_keys.into_rust()?,
+        })
+    }
 }

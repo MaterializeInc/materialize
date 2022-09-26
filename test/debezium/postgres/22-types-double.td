@@ -18,9 +18,16 @@ INSERT INTO double_type VALUES (NULL), ('Infinity'),('-Infinity'), ('NaN');
 
 $ schema-registry-wait-schema schema=postgres.public.double_type-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE double_type
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.double_type'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.double_type')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > SELECT * FROM double_type;

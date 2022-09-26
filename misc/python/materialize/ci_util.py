@@ -49,23 +49,25 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
     ui.header(f"Uploading report for suite {suite!r} to Buildkite Test Analytics")
     suite = suite.upper().replace("-", "_")
     token = os.environ[f"BUILDKITE_TEST_ANALYTICS_API_KEY_{suite}"]
-    res = requests.post(
-        "https://analytics-api.buildkite.com/v1/uploads",
-        headers={"Authorization": f"Token {token}"},
-        json={
-            "format": "junit",
-            "run_env": {
-                "key": os.environ["BUILDKITE_BUILD_ID"],
-                "CI": "buildkite",
-                "number": os.environ["BUILDKITE_BUILD_NUMBER"],
-                "job_id": os.environ["BUILDKITE_JOB_ID"],
-                "branch": os.environ["BUILDKITE_BRANCH"],
-                "commit_sha": os.environ["BUILDKITE_COMMIT"],
-                "message": os.environ["BUILDKITE_MESSAGE"],
-                "url": os.environ["BUILDKITE_BUILD_URL"],
+    try:
+        res = requests.post(
+            "https://analytics-api.buildkite.com/v1/uploads",
+            headers={"Authorization": f"Token {token}"},
+            json={
+                "format": "junit",
+                "run_env": {
+                    "key": os.environ["BUILDKITE_BUILD_ID"],
+                    "CI": "buildkite",
+                    "number": os.environ["BUILDKITE_BUILD_NUMBER"],
+                    "job_id": os.environ["BUILDKITE_JOB_ID"],
+                    "branch": os.environ["BUILDKITE_BRANCH"],
+                    "commit_sha": os.environ["BUILDKITE_COMMIT"],
+                    "message": os.environ["BUILDKITE_MESSAGE"],
+                    "url": os.environ["BUILDKITE_BUILD_URL"],
+                },
+                "data": junit_report.read_text(),
             },
-            "data": junit_report.read_text(),
-        },
-    )
-    print(res.status_code, res.json())
-    res.raise_for_status()
+        )
+    except Exception as e:
+        print(f"Got exception when uploading analytics: {e}")
+    print(res.status_code, res.text)

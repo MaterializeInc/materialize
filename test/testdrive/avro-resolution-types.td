@@ -17,15 +17,22 @@ $ set double-col={"type": "record", "name": "schema_int_double", "fields": [ {"n
 
 $ kafka-create-topic topic=resolution-int2double
 
-$ kafka-ingest format=avro topic=resolution-int2double schema=${int-col} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-int2double schema=${int-col} timestamp=1
 {"f1": 123}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE resolution_int2double
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-int2double-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-int2double-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=resolution-int2double schema=${double-col} publish=true timestamp=2
+$ kafka-ingest format=avro topic=resolution-int2double schema=${double-col} timestamp=2
 {"f1": 234.456}
 
 ! SELECT * FROM resolution_int2double

@@ -48,6 +48,8 @@ async fn test_stash_sqlite() -> Result<(), anyhow::Error> {
 
 #[tokio::test]
 async fn test_stash_postgres() -> Result<(), anyhow::Error> {
+    mz_ore::test::init_logging();
+
     let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
 
     {

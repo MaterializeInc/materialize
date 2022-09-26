@@ -2,6 +2,7 @@
   {{ $currentPage := . }}
   <nav role="navigation" class="sidebar">
     <ul>
+      <div id="docsearch"></div>
       {{ range .Site.Menus.main.ByWeight }}
       <li class="level-1">
         <a class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">

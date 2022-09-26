@@ -12,7 +12,7 @@ mode cockroach
 statement ok
 CREATE TABLE t (i INT);
 
-# Transactions that don't start with sources or mz_logical_timestamp can later include sources.
+# Transactions that don't start with sources or mz_now can later include sources.
 simple
 BEGIN;
 SELECT row(1, 2);
@@ -35,7 +35,7 @@ SELECT * FROM t
 simple
 ROLLBACK;
 BEGIN;
-SELECT mz_logical_timestamp();
+SELECT mz_now();
 ----
 COMPLETE 0
 COMPLETE 0

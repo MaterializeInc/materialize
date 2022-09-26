@@ -17,15 +17,22 @@ $ set int={"type": "record", "name": "schema_union", "fields": [ {"name": "f1", 
 
 $ kafka-create-topic topic=resolution-unions
 
-$ kafka-ingest format=avro topic=resolution-unions schema=${int} publish=true timestamp=1
+$ kafka-ingest format=avro topic=resolution-unions schema=${int} timestamp=1
 {"f1": 234 }
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE resolution_unions
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-resolution-unions-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-unions-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-$ kafka-ingest format=avro topic=resolution-unions schema=${union-int} publish=true timestamp=2
+$ kafka-ingest format=avro topic=resolution-unions schema=${union-int} timestamp=2
 {"f1": {"int": 123 } }
 
 > SELECT f1 FROM resolution_unions

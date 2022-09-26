@@ -17,9 +17,10 @@
     clippy::cast_sign_loss
 )]
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -41,6 +42,7 @@ use crate::internal::compact::Compactor;
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
+use crate::internal::state_versions::StateVersions;
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
 
@@ -48,6 +50,7 @@ pub mod async_runtime;
 pub mod batch;
 pub mod cache;
 pub mod error;
+pub mod fetch;
 pub mod inspect;
 pub mod read;
 pub mod usage;
@@ -65,7 +68,12 @@ pub(crate) mod internal {
     pub mod metrics;
     pub mod paths;
     pub mod state;
+    pub mod state_diff;
+    pub mod state_versions;
     pub mod trace;
+
+    #[cfg(test)]
+    pub mod datadriven;
 }
 
 // TODO: Remove this in favor of making it possible for all PersistClients to be
@@ -109,8 +117,7 @@ impl PersistLocation {
             &self.consensus_uri,
             config.consensus_connection_pool_max_size,
             metrics.postgres_consensus.clone(),
-        )
-        .await?;
+        )?;
         let consensus = retry_external(&metrics.retries.external.consensus_open, || {
             consensus.clone().open()
         })
@@ -125,6 +132,7 @@ impl PersistLocation {
 /// or otherwise used as an interchange format. It can be parsed back using
 /// [str::parse] or [std::str::FromStr::from_str].
 #[derive(Arbitrary, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct ShardId([u8; 16]);
 
 impl std::fmt::Display for ShardId {
@@ -144,6 +152,20 @@ impl std::str::FromStr for ShardId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         parse_id('s', "ShardId", s).map(ShardId)
+    }
+}
+
+impl From<ShardId> for String {
+    fn from(shard_id: ShardId) -> Self {
+        shard_id.to_string()
+    }
+}
+
+impl TryFrom<String> for ShardId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -175,6 +197,11 @@ pub struct PersistConfig {
     pub batch_builder_max_outstanding_parts: usize,
     /// Whether to physically and logically compact batches in blob storage.
     pub compaction_enabled: bool,
+    /// The upper bound on compaction's memory consumption. The value must be at
+    /// least 4*`blob_target_size`. Increasing this value beyond the minimum allows
+    /// compaction to merge together more runs at once, providing greater
+    /// consolidation of updates, at the cost of greater memory usage.
+    pub compaction_memory_bound_bytes: usize,
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
     /// if the number of inputs is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
@@ -189,6 +216,9 @@ pub struct PersistConfig {
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
+    /// Length of time after a reader's last operation after which the reader
+    /// may be expired.
+    pub reader_lease_duration: Duration,
 }
 
 // Tuning inputs:
@@ -245,17 +275,25 @@ impl PersistConfig {
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
             compaction_enabled: !compaction_disabled,
+            compaction_memory_bound_bytes: 1024 * MB,
             compaction_heuristic_min_inputs: 8,
             compaction_heuristic_min_updates: 1024,
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: Duration::from_secs(60 * 15),
+            reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
         }
     }
 }
 
 impl PersistConfig {
     // Move this to a PersistConfig field when we actually have read leases.
-    pub(crate) const FAKE_READ_LEASE_DURATION: Duration = Duration::from_secs(60);
+    //
+    // MIGRATION: Remove this once we remove the ReaderState <->
+    // ProtoReaderState migration.
+    pub(crate) const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(60 * 15);
+
+    // Tuning notes: Picked arbitrarily.
+    pub(crate) const NEED_ROLLUP_THRESHOLD: u64 = 128;
 }
 
 /// A handle for interacting with the set of persist shard made durable at a
@@ -289,7 +327,7 @@ impl PersistClient {
     ///
     /// This is exposed mostly for testing. Persist users likely want
     /// [crate::cache::PersistClientCache::open].
-    pub async fn new(
+    pub fn new(
         cfg: PersistConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
@@ -352,7 +390,8 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let gc = GarbageCollector::new(
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
             Arc::clone(&self.consensus),
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
@@ -360,13 +399,16 @@ impl PersistClient {
         let mut machine = Machine::new(
             self.cfg.clone(),
             shard_id,
-            Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
+            Arc::new(state_versions),
         )
         .await?;
+        let gc = GarbageCollector::new(machine.clone());
 
         let reader_id = ReaderId::new();
-        let (_, read_cap) = machine.register_reader(&reader_id, (self.cfg.now)()).await;
+        let (_, read_cap) = machine
+            .register_reader(&reader_id, self.cfg.reader_lease_duration, (self.cfg.now)())
+            .await;
         let reader = ReadHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
@@ -375,8 +417,9 @@ impl PersistClient {
             gc,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
-            last_heartbeat: Instant::now(),
+            last_heartbeat: (self.cfg.now)(),
             explicitly_expired: false,
+            leased_seqnos: BTreeMap::new(),
         };
 
         Ok(reader)
@@ -397,7 +440,8 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let gc = GarbageCollector::new(
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
             Arc::clone(&self.consensus),
             Arc::clone(&self.blob),
             Arc::clone(&self.metrics),
@@ -405,16 +449,15 @@ impl PersistClient {
         let mut machine = Machine::new(
             self.cfg.clone(),
             shard_id,
-            Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
+            Arc::new(state_versions),
         )
         .await?;
+        let gc = GarbageCollector::new(machine.clone());
         let writer_id = WriterId::new();
         let compact = self.cfg.compaction_enabled.then(|| {
             Compactor::new(
-                self.cfg.clone(),
-                Arc::clone(&self.blob),
-                Arc::clone(&self.metrics),
+                machine.clone(),
                 Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
             )
@@ -479,6 +522,7 @@ mod tests {
     use mz_persist::workload::DataGenerator;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+    use serde_json::json;
     use timely::progress::Antichain;
     use timely::PartialOrder;
     use tokio::task::JoinHandle;
@@ -542,13 +586,13 @@ mod tests {
         blob: &(dyn Blob + Send + Sync),
         key: &BlobKey,
     ) -> (
-        BlobTraceBatchPart,
+        BlobTraceBatchPart<T>,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
     )
     where
         K: Codec,
         V: Codec,
-        T: Codec64,
+        T: Timestamp + Codec64,
         D: Codec64,
     {
         let value = blob
@@ -668,7 +712,7 @@ mod tests {
             .expect("invalid shard id");
         let client = new_test_client().await;
 
-        let (mut write0, read0) = client
+        let (mut write0, mut read0) = client
             .expect_open::<String, String, u64, i64>(shard_id0)
             .await;
 
@@ -748,7 +792,7 @@ mod tests {
 
         // InvalidUsage from ReadHandle methods.
         {
-            let mut snap = read0
+            let snap = read0
                 .snapshot(Antichain::from_elem(3))
                 .await
                 .expect("cannot serve requested as_of");
@@ -756,16 +800,21 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let (_, mut read1) = client
+            let (_, read1) = client
                 .expect_open::<String, String, u64, i64>(shard_id1)
                 .await;
-            assert_eq!(
-                read1.fetch_batch(snap.pop().unwrap()).await.unwrap_err(),
-                InvalidUsage::BatchNotFromThisShard {
-                    batch_shard: shard_id0,
-                    handle_shard: shard_id1,
-                }
-            );
+            let fetcher1 = read1.clone().await.batch_fetcher().await;
+            for batch in snap {
+                let (batch, res) = fetcher1.fetch_leased_part(batch).await;
+                read0.process_returned_leased_part(batch);
+                assert_eq!(
+                    res.unwrap_err(),
+                    InvalidUsage::BatchNotFromThisShard {
+                        batch_shard: shard_id0,
+                        handle_shard: shard_id1,
+                    }
+                );
+            }
         }
 
         // InvalidUsage from WriteHandle methods.
@@ -1353,7 +1402,7 @@ mod tests {
             .heartbeat_reader(&read.reader_id, now.load(Ordering::SeqCst))
             .await;
         maintenance
-            .perform_awaitable(&read.machine.clone(), &read.gc.clone())
+            .perform(&read.machine.clone(), &read.gc.clone())
             .await;
         let expired_writer_heartbeat = AssertUnwindSafe(write.maybe_heartbeat_writer())
             .catch_unwind()
@@ -1403,6 +1452,39 @@ mod tests {
                 "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-zA-Z], found `O` at 38"
             ))
         );
+    }
+
+    #[test]
+    fn shard_id_human_readable_serde() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct ShardIdContainer {
+            shard_id: ShardId,
+        }
+
+        // roundtrip id through json
+        let id =
+            ShardId::from_str("s00000000-1234-5678-0000-000000000000").expect("valid shard id");
+        assert_eq!(
+            id,
+            serde_json::from_value(serde_json::to_value(id).expect("serializable"))
+                .expect("deserializable")
+        );
+
+        // deserialize a serialized string directly
+        assert_eq!(
+            id,
+            serde_json::from_str("\"s00000000-1234-5678-0000-000000000000\"")
+                .expect("deserializable")
+        );
+
+        // roundtrip shard id through a container type
+        let json = json!({ "shard_id": id });
+        assert_eq!(
+            "{\"shard_id\":\"s00000000-1234-5678-0000-000000000000\"}",
+            &json.to_string()
+        );
+        let container: ShardIdContainer = serde_json::from_value(json).expect("deserializable");
+        assert_eq!(container.shard_id, id);
     }
 
     #[tokio::test(flavor = "multi_thread")]

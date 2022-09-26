@@ -1,6 +1,7 @@
 ---
 title: "CREATE MATERIALIZED VIEW"
 description: "`CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and incrementally updated as new data arrives."
+pagerank: 10
 menu:
   main:
     parent: 'commands'
@@ -20,7 +21,7 @@ resources used for view maintenance from the resources used for query serving.
 
 Field | Use
 ------|-----
-**OR REPLACE** | If a materialized view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views depend on, nor can you replace a non-view object with a view.
+**OR REPLACE** | If a materialized view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a materialized view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
 _view&lowbar;name_ | A name for the materialized view.
 **(** _col_ident_... **)** | Rename the `SELECT` statement's columns to the list of identifiers, both of which must be the same length. Note that this is required for statements that return multiple columns with the same identifier.

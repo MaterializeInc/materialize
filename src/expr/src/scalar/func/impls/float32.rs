@@ -126,6 +126,42 @@ sqlfunc!(
     }
 );
 
+sqlfunc!(
+    #[sqlname = "real_to_uint2"]
+    fn cast_float32_to_uint16(a: f32) -> Result<u16, EvalError> {
+        let f = round_float32(a);
+        if (f >= 0.0) && (f <= (u16::MAX as f32)) {
+            Ok(f as u16)
+        } else {
+            Err(EvalError::UInt16OutOfRange)
+        }
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "real_to_uint4"]
+    fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
+        let f = round_float32(a);
+        if (f >= 0.0) && (f <= (u32::MAX as f32)) {
+            Ok(f as u32)
+        } else {
+            Err(EvalError::UInt32OutOfRange)
+        }
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "real_to_uint8"]
+    fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
+        let f = round_float32(a);
+        if (f >= 0.0) && (f <= (u64::MAX as f32)) {
+            Ok(f as u64)
+        } else {
+            Err(EvalError::UInt64OutOfRange)
+        }
+    }
+);
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastFloat32ToNumeric(pub Option<NumericMaxScale>);
 

@@ -40,6 +40,7 @@ max_sources                 25                     "The maximum number of source
 max_tables                  25                     "The maximum number of tables in the region, across all schemas (Materialize)."
 max_secrets                 100                    "The maximum number of secrets in the region, across all schemas (Materialize)."
 max_roles                   1000                   "The maximum number of roles in the region (Materialize)."
+max_result_size             1073741824             "The maximum size in bytes for a single query's result (Materialize)."
 
 > SET application_name = 'foo'
 

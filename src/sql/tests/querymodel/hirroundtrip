@@ -48,14 +48,14 @@ select a from (select 1 as a, true as b) where b;
 | Project (#0)
 
 round_trip
-select case when not x.a then ltrim('e', x.b) else substr(x.c, 3, 4) end, mz_logical_timestamp()
+select case when not x.a then ltrim('e', x.b) else substr(x.c, 3, 4) end, mz_now()
 from (select false as a, null as b, null as c) x
 ----
 %0 =
 | Constant ()
 | Map false, null
 | Project (#0, #1, #1)
-| Map if NOT(#0) then {ltrim("e", #1)} els {substr(#2, integer_to_bigint(3), integer_to_bigint(4))}, mz_logical_timestamp()
+| Map if NOT(#0) then {ltrim("e", #1)} els {substr(#2, integer_to_bigint(3), integer_to_bigint(4))}, mz_now()
 | Project (#3, #4)
 
 round_trip

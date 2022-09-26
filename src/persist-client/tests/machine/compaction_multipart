@@ -24,6 +24,10 @@ zero 0 1
 one 1 1
 <part 2>
 two 2 1
+<run 0>
+part 0
+part 1
+part 2
 
 write-batch output=b1 lower=3 upper=6 target_size=0
 zero 3 1
@@ -40,16 +44,20 @@ zero 3 1
 one 4 1
 <part 2>
 two 5 1
+<run 0>
+part 0
+part 1
+part 2
 
-compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=0
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6
 ----
-parts=3 len=3
+parts=1 len=3
 
 fetch-batch input=b0_1
 ----
 <part 0>
 one 6 2
-<part 1>
 two 6 2
-<part 2>
 zero 6 2
+<run 0>
+part 0

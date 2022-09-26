@@ -193,7 +193,7 @@ impl Consensus for UnreliableConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
+    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
         self.handle
             .run_op("compare_and_set", || {
                 self.consensus.compare_and_set(key, expected, new)

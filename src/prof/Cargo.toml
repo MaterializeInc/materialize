@@ -2,25 +2,25 @@
 name = "mz-prof"
 description = "CPU and memory profiling tools."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
-anyhow = "1.0.58"
-axum = { version = "0.5.13", features = ["headers"] }
+anyhow = "1.0.65"
+axum = { version = "0.5.16", features = ["headers"] }
 backtrace = "0.3.66"
 cfg-if = "1.0.0"
 headers = "0.3.7"
 http = "0.2.8"
 include_dir = "0.7.2"
-once_cell = "1.13.0"
+once_cell = "1.14.0"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
-pprof = "0.10.0"
-serde = { version = "1.0.140", features = ["derive"] }
+pprof = { git = "https://github.com/MaterializeInc/pprof-rs.git" }
+serde = { version = "1.0.144", features = ["derive"] }
 tempfile = "3.2.0"
 tracing = "0.1.36"
 tokio = { version = "1.19.2", features = ["time"] }
@@ -29,7 +29,7 @@ tokio = { version = "1.19.2", features = ["time"] }
 tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
 
 [build-dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.65"
 mz-npm = { path = "../npm" }
 
 [features]

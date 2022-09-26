@@ -11,14 +11,17 @@
 
 $ kafka-create-topic topic=input-system
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE source_system
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-system-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
   FORMAT BYTES
 
 > CREATE SOURCE source_system_user
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-system-${testdrive.seed}'
-    WITH (timeline = 'user')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
   FORMAT BYTES
+  WITH (TIMELINE 'user')
 
 $ set schema=[
   {
@@ -110,36 +113,28 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":5,"diff":-1}]}
 
 > CREATE SOURCE source_cdcv2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
 
 ! CREATE SOURCE source_cdcv2_system
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (epoch_ms_timeline=false)
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
-contains:unsupported epoch_ms_timeline value
-
-# Can't specify epoch_ms_timeline and timeline.
-! CREATE SOURCE source_cdcv2_system
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (epoch_ms_timeline=false, timeline='user')
-  FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE MATERIALIZE
-contains:unexpected parameters for CREATE SOURCE: epoch_ms_timeline
+  WITH (TIMELINE 'mz_foo')
+contains:unacceptable timeline name "mz_foo"
 
 > CREATE SOURCE source_cdcv2_system
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (epoch_ms_timeline=true)
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'mz_epoch_ms')
 
 > CREATE SOURCE source_cdcv2_user
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-cdcv2-${testdrive.seed}'
-    WITH (timeline='user')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'user')
 
 > CREATE TABLE input_table (a bigint);
 
@@ -160,16 +155,17 @@ contains:multiple timelines within one dataflow are not supported
 > CREATE VIEW values_system_view AS SELECT * FROM input_values_view, source_system;
 > CREATE VIEW values_system_user_view AS SELECT * FROM input_values_view, source_system_user;
 > CREATE VIEW values_cdcv2_view AS SELECT * FROM input_values_view, source_cdcv2;
-> CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM input_values_view, mz_catalog_names, mz_views, mz_dataflow_operators;
+> CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k, l, m, n) AS SELECT * FROM mz_relations, input_values_view, mz_views, mz_internal.mz_dataflow_operators;
 
 # System sources, tables, and logs should be joinable with eachother.
-> CREATE VIEW various_system (a, b, c, d, e, f, g, h, i, j) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators;
+> CREATE VIEW various_system (a, b, c, d, e, f, g, h, i, j, k, l, m) AS SELECT * FROM mz_relations, mz_views, mz_internal.mz_dataflow_operators;
 
 # System things should be joinable only with system sources.
-! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, source_cdcv2;
+! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) AS SELECT * FROM mz_relations, mz_views, mz_internal.mz_dataflow_operators, source_cdcv2;
 contains:multiple timelines within one dataflow are not supported
-> CREATE VIEW various_system_no_cdcv2 (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, source_system;
-> CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, input_table;
+> CREATE VIEW various_system_no_cdcv2 (a, b, c, d, e, f, g, h, i, j, k, l, m, n) AS SELECT * FROM mz_relations, mz_views, mz_internal.mz_dataflow_operators, source_system;
+
+> CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k, l, m, n) AS SELECT * FROM mz_relations, mz_views, mz_internal.mz_dataflow_operators, input_table;
 
 # EXPLAIN should complain too.
 ! EXPLAIN SELECT * FROM source_system, source_cdcv2;

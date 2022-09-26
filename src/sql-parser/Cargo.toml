@@ -3,27 +3,27 @@ name = "mz-sql-parser"
 description = "The lexer and parser for Materialize's SQL dialect."
 version = "0.0.0"
 exclude = ["tests/testdata"]
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
-itertools = "0.10.3"
+enum-kinds = "0.5.1"
+itertools = "0.10.4"
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
-phf = { version = "0.11.0", features = ["uncased"] }
-serde = { version = "1.0.140", features = ["derive"] }
+phf = { version = "0.11.1", features = ["uncased"] }
+serde = { version = "1.0.144", features = ["derive"] }
 tracing = "0.1.36"
 uncased = "0.9.7"
 
 [dev-dependencies]
 datadriven = "0.6.0"
-unicode-width = "0.1.9"
+unicode-width = "0.1.10"
 
 [build-dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.65"
 mz-ore = { path = "../ore", default-features = false }
 mz-walkabout = { path = "../walkabout" }
-phf = { version = "0.11.0", features = ["uncased"] }
-phf_codegen = "0.11.0"
+phf = { version = "0.11.1", features = ["uncased"] }
+phf_codegen = "0.11.1"
 uncased = "0.9.7"

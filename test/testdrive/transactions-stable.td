@@ -34,12 +34,12 @@
 3
 1
 
-> CREATE TABLE dec (d DECIMAL)
+> CREATE TABLE dec (d MZTIMESTAMP)
 
-# Verify that mz_logical_timestamp cannot be used in INSERTs (until
+# Verify that mz_now cannot be used in INSERTs (until
 # we decide what it should do in an INSERT). Previously it could, but
 # would produce different times even in a transaction (hence the test
 # in this file). Although this error message is misleading, we don't
 # expect users to do this, so it's ok for now.
-! INSERT INTO dec VALUES (mz_logical_timestamp())
-contains:calls to mz_logical_timestamp in write statements are not supported
+! INSERT INTO dec VALUES (mz_now())
+contains:calls to mz_now in write statements are not supported

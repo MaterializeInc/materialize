@@ -15,28 +15,24 @@ menu:
 Field | Use
 ------|-----
 _schema&lowbar;name_ | The schema to show views from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-**FULL** | Return details about your views.
 
 ## Details
 
-### Output format for `SHOW FULL VIEWS`
+### Output format for `SHOW VIEWS`
 
-`SHOW FULL VIEWS`'s output is a table, with this structure:
+`SHOW VIEWS`'s output is a table, with this structure:
 
 ```nofmt
- name  | type
--------+------
- ...   | ...
+ name
+-------
+ ...
 ```
 
 Field | Meaning
 ------|--------
 **name** | The name of the view.
-**type** | Whether the view was created by the `user` or the `system`.
 
 ## Examples
-
-### Default behavior
 
 ```sql
 SHOW VIEWS;
@@ -45,17 +41,6 @@ SHOW VIEWS;
   name
 ---------
  my_view
-```
-
-### Show details about views
-
-```sql
-SHOW FULL VIEWS;
-```
-```nofmt
-  name   | type
----------+------
- my_view | user
 ```
 
 ## Related pages

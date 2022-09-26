@@ -89,10 +89,13 @@ $ kafka-create-topic topic=foo
 $ kafka-ingest format=avro topic=foo schema=${schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data_foo
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
-    WITH (timeline='user')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'user')
 
 > CREATE MATERIALIZED VIEW foo AS SELECT a, b FROM data_foo
 

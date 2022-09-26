@@ -21,7 +21,10 @@ use timely::PartialOrder;
 use tracing::warn;
 
 use mz_compute_client::command::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_client::controller::{ComputeController, ComputeInstanceId};
+use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
+use mz_compute_client::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
+};
 use mz_expr::visit::Visit;
 use mz_expr::{
     CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
@@ -29,12 +32,8 @@ use mz_expr::{
 };
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_stash::Append;
-use mz_storage::types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
-};
 
 use crate::catalog::{CatalogItem, CatalogState, MaterializedView, View};
 use crate::coord::ddl::CatalogTxn;
@@ -50,7 +49,7 @@ pub struct DataflowBuilder<'a, T> {
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
-    pub compute: ComputeController<'a, T>,
+    pub compute: ComputeInstanceRef<'a, T>,
     recursion_guard: RecursionGuard,
 }
 
@@ -62,7 +61,7 @@ pub enum ExprPrepStyle<'a> {
     /// The expression is being prepared to run once at the specified logical
     /// time in the specified session.
     OneShot {
-        logical_time: Option<u64>,
+        logical_time: Option<mz_repr::Timestamp>,
         session: &'a Session,
     },
     /// The expression is being prepared for evaluation in an AS OF clause.
@@ -75,7 +74,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.controller.compute(instance).unwrap();
+        let compute = self.controller.compute.instance_ref(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog.state(),
             compute,
@@ -102,9 +101,8 @@ impl<S: Append + 'static> Coordinator<S> {
             dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
         }
         self.controller
-            .compute_mut(instance)
-            .unwrap()
-            .create_dataflows(dataflow_plans)
+            .active_compute()
+            .create_dataflows(instance, dataflow_plans)
             .await
             .unwrap();
         self.initialize_compute_read_policies(
@@ -162,7 +160,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // It should not be possible to request an invalid time. SINK doesn't support
             // AS OF. TAIL and Peek check that their AS OF is >= since.
             assert!(
-                <_ as PartialOrder>::less_equal(&since, as_of),
+                PartialOrder::less_equal(&since, as_of),
                 "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
                 dataflow.debug_name,
                 as_of,
@@ -184,7 +182,7 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.dataflow_client.compute(instance).unwrap();
+        let compute = self.dataflow_client.compute.instance_ref(instance).unwrap();
         DataflowBuilder {
             catalog: self.catalog,
             compute,
@@ -404,7 +402,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 value_desc: mview.desc.clone(),
                 storage_metadata: (),
             }),
-            envelope: None,
             as_of: SinkAsOf {
                 frontier: as_of,
                 strict: false,
@@ -576,7 +573,7 @@ pub fn prep_scalar_expr(
 fn eval_unmaterializable_func(
     state: &CatalogState,
     f: &UnmaterializableFunc,
-    logical_time: Option<u64>,
+    logical_time: Option<mz_repr::Timestamp>,
     session: &Session,
 ) -> Result<MirScalarExpr, AdapterError> {
     let pack_1d_array = |datums: Vec<Datum>| {
@@ -638,10 +635,10 @@ fn eval_unmaterializable_func(
         }
         UnmaterializableFunc::CurrentTimestamp => pack(Datum::from(session.pcx().wall_time)),
         UnmaterializableFunc::CurrentUser => pack(Datum::from(session.user())),
-        UnmaterializableFunc::MzClusterId => pack(Datum::from(state.config().cluster_id)),
-        UnmaterializableFunc::MzLogicalTimestamp => match logical_time {
-            None => coord_bail!("cannot call mz_logical_timestamp in this context"),
-            Some(logical_time) => pack(Datum::from(Numeric::from(logical_time))),
+        UnmaterializableFunc::MzEnvironmentId => pack(Datum::from(&*state.config().environment_id)),
+        UnmaterializableFunc::MzNow => match logical_time {
+            None => coord_bail!("cannot call mz_now in this context"),
+            Some(logical_time) => pack(Datum::MzTimestamp(logical_time)),
         },
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
         UnmaterializableFunc::MzUptime => {

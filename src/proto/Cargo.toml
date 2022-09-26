@@ -3,23 +3,23 @@ name = "mz-proto"
 description = "Protocol buffer libraries for Materialize."
 version = "0.0.0"
 license = "Apache-2.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.65"
 globset = "0.4.9"
 http = "0.2.8"
 mz-ore = { path = "../ore", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
-prost = { version = "0.10.3", features = ["no-recursion-limit"] }
+prost = { version = "0.11.0", features = ["no-recursion-limit"] }
 regex = "1.6.0"
-serde = { version = "1.0.140", features = ["derive"] }
-serde_json = { version = "1.0.82", features = ["arbitrary_precision"] }
+serde_json = { version = "1.0.85", features = ["arbitrary_precision"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
-url = { version = "2.2.2", features = ["serde"] }
+url = { version = "2.3.1", features = ["serde"] }
 uuid = "1.1.2"
 
 [build-dependencies]
-prost-build = { version = "0.10.3", features = ["vendored"] }
+prost-build = "0.11.1"
+protobuf-src = "1.1.0"

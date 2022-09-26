@@ -88,8 +88,8 @@ impl RustType<ProtoJoinPlan> for JoinPlan {
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct JoinClosure {
-    ready_equivalences: Vec<Vec<MirScalarExpr>>,
-    before: mz_expr::SafeMfpPlan,
+    pub ready_equivalences: Vec<Vec<MirScalarExpr>>,
+    pub before: mz_expr::SafeMfpPlan,
 }
 
 impl Arbitrary for JoinClosure {
@@ -277,6 +277,15 @@ impl JoinClosure {
     /// True iff the closure neither filters nor transforms records.
     pub fn is_identity(&self) -> bool {
         self.ready_equivalences.is_empty() && self.before.is_identity()
+    }
+
+    /// Returns true if evaluation could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        self.before.could_error()
+            || self
+                .ready_equivalences
+                .iter()
+                .any(|es| es.iter().any(|e| e.could_error()))
     }
 }
 

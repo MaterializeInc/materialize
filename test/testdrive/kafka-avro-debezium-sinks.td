@@ -11,14 +11,20 @@
 
 # Test a basic sink with multiple rows.
 
+
+
 > CREATE MATERIALIZED VIEW data (a, b) AS VALUES (1, 1), (2, 1), (3, 1), (1, 2)
 
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SINK data_sink FROM data
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}}
@@ -109,37 +115,37 @@ $ kafka-create-topic topic=input
 # input is processed in consistency batches and not all at once
 
 > CREATE SOURCE input
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK non_keyed_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'non-keyed-sink'
-  CONSISTENCY (TOPIC 'non-keyed-sink-consistency') FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-${testdrive.seed}')
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE VIEW max_view AS SELECT a, MAX(b) as b FROM input GROUP BY a
 
 # the sinked relation has the natural primary key (a)
 
 > CREATE SINK non_keyed_sink_of_keyed_relation FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'non-keyed-sink-of-keyed-relation'
-  CONSISTENCY (TOPIC 'non-keyed-sink-of-keyed-relation-consistency') FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-of-keyed-relation-${testdrive.seed}')
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK keyed_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'keyed-sink' KEY (a)
-  CONSISTENCY (TOPIC 'keyed-sink-consistency') FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-${testdrive.seed}') KEY (a)
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK keyed_sink_of_keyed_relation FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'keyed-sink-of-keyed-relation' KEY (b)
-  CONSISTENCY (TOPIC 'keyed-sink-of-keyed-relation-consistency') FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-of-keyed-relation-${testdrive.seed}') KEY (b)
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > CREATE SINK multi_keyed_sink FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'multi-keyed-sink' KEY (b, a)
-  CONSISTENCY (TOPIC 'multi-keyed-sink-consistency') FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'multi-keyed-sink-${testdrive.seed}') KEY (b, a)
+  FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-ingest format=avro topic=input schema=${schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
@@ -162,65 +168,65 @@ a  b
 # transaction appear together as one "bundle" in the output. But there is no
 # guarantee on the order within a transaction.
 
-$ kafka-verify format=avro sink=materialize.public.non_keyed_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.non_keyed_sink sort-messages=true
+1	{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
-$ kafka-verify format=avro sink=materialize.public.non_keyed_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.non_keyed_sink sort-messages=true
+2	{"before": null, "after": {"row": {"a": 3, "b": 1}}}
+2	{"before": null, "after": {"row": {"a": 4, "b": 2}}}
 
-$ kafka-verify format=avro sink=materialize.public.non_keyed_sink sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
-
-# Again, compare split by transaction. See comment just above.
-
-$ kafka-verify format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
-
-$ kafka-verify format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation sort-messages=true
-{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
-
-$ kafka-verify format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation sort-messages=true
-{"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.non_keyed_sink sort-messages=true
+3	{"before": null, "after": {"row": {"a": 1, "b": 7}}}
 
 # Again, compare split by transaction. See comment just above.
 
-$ kafka-verify format=avro sink=materialize.public.keyed_sink sort-messages=true
-{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation sort-messages=true
+1	{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
-$ kafka-verify format=avro sink=materialize.public.keyed_sink sort-messages=true
-{"a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation sort-messages=true
+2	{"before": null, "after": {"row": {"a": 3, "b": 1}}}
+2	{"before": null, "after": {"row": {"a": 4, "b": 2}}}
 
-$ kafka-verify format=avro sink=materialize.public.keyed_sink sort-messages=true
-{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
-
-# Again, compare split by transaction. See comment just above.
-
-$ kafka-verify format=avro sink=materialize.public.keyed_sink_of_keyed_relation sort-messages=true
-{"b": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"b": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
-
-$ kafka-verify format=avro sink=materialize.public.keyed_sink_of_keyed_relation sort-messages=true
-{"b": 1} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"b": 2} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
-
-$ kafka-verify format=avro sink=materialize.public.keyed_sink_of_keyed_relation sort-messages=true
-{"b": 7} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.non_keyed_sink_of_keyed_relation sort-messages=true
+3	{"before": null, "after": {"row": {"a": 1, "b": 7}}}
 
 # Again, compare split by transaction. See comment just above.
 
-$ kafka-verify format=avro sink=materialize.public.multi_keyed_sink sort-messages=true
-{"b": 1, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
-{"b": 2, "a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.keyed_sink sort-messages=true
+1	{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}}
+1	{"a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
-$ kafka-verify format=avro sink=materialize.public.multi_keyed_sink sort-messages=true
-{"b": 1, "a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
-{"b": 2, "a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.keyed_sink sort-messages=true
+2	{"a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}}
+2	{"a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}}
 
-$ kafka-verify format=avro sink=materialize.public.multi_keyed_sink sort-messages=true
-{"b": 7, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.keyed_sink sort-messages=true
+3	{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}}
+
+# Again, compare split by transaction. See comment just above.
+
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.keyed_sink_of_keyed_relation sort-messages=true
+1	{"b": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}}
+1	{"b": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}}
+
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.keyed_sink_of_keyed_relation sort-messages=true
+2	{"b": 1} {"before": null, "after": {"row": {"a": 3, "b": 1}}}
+2	{"b": 2} {"before": null, "after": {"row": {"a": 4, "b": 2}}}
+
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.keyed_sink_of_keyed_relation sort-messages=true
+3	{"b": 7} {"before": null, "after": {"row": {"a": 1, "b": 7}}}
+
+# Again, compare split by transaction. See comment just above.
+
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.multi_keyed_sink sort-messages=true
+1	{"b": 1, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}}
+1	{"b": 2, "a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}}
+
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.multi_keyed_sink sort-messages=true
+2	{"b": 1, "a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}}
+2	{"b": 2, "a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}}
+
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.multi_keyed_sink sort-messages=true
+3	{"b": 7, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}}

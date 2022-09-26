@@ -69,7 +69,7 @@ where
                     let retractions = Variable::new(
                         &mut ok_input.scope(),
                         <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
-                            delay.as_millis() as u64,
+                            delay.try_into().expect("must fit"),
                         ),
                     );
                     let thinned = ok_input.concat(&retractions.negate());

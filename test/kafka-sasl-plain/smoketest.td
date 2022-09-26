@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
+
 $ set schema={
     "name": "row",
     "type": "record",
@@ -17,7 +19,7 @@ $ set schema={
 
 $ kafka-create-topic topic=data
 
-$ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 1}
 
 > CREATE SECRET sasl_password AS 'sekurity'
@@ -37,8 +39,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
     SSL CERTIFICATE AUTHORITY = '${arg.ca}'
 
 > CREATE SOURCE data
-  FROM KAFKA CONNECTION kafka_sasl
-  TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_sasl (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
 
 > SELECT * FROM data
@@ -57,7 +58,7 @@ a
 
 > CREATE SINK data_snk
   FROM data
-  INTO KAFKA CONNECTION kafka_sasl TOPIC 'testdrive-data-${testdrive.seed}'
+  INTO KAFKA CONNECTION kafka_sasl (TOPIC 'testdrive-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
 
 $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
@@ -66,9 +67,8 @@ $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
 
 # Old with options do not work
 ! CREATE SOURCE connector_source
-  FROM KAFKA CONNECTION kafka_sasl
-  TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
+  FROM KAFKA CONNECTION kafka_sasl (TOPIC 'testdrive-data-${testdrive.seed}')
+  LEGACYWITH (
     security_protocol = 'sasl_ssl'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
@@ -85,7 +85,6 @@ contains:unexpected parameters for CREATE SOURCE: security_protocol
 # This ensures that the error is not that the CA was required, but simply that
 # not providing it prohibits connecting.
 ! CREATE SOURCE connector_source
-  FROM KAFKA CONNECTION kafka_sasl_no_ca
-  TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_sasl_no_ca (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
 contains: broker certificate could not be verified

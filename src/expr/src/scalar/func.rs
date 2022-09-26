@@ -66,8 +66,8 @@ pub enum UnmaterializableFunc {
     CurrentSchemasWithoutSystem,
     CurrentTimestamp,
     CurrentUser,
-    MzClusterId,
-    MzLogicalTimestamp,
+    MzEnvironmentId,
+    MzNow,
     MzSessionId,
     MzUptime,
     MzVersion,
@@ -90,11 +90,8 @@ impl UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
             UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
-            UnmaterializableFunc::MzClusterId => ScalarType::Uuid.nullable(false),
-            UnmaterializableFunc::MzLogicalTimestamp => ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
+            UnmaterializableFunc::MzEnvironmentId => ScalarType::String.nullable(false),
+            UnmaterializableFunc::MzNow => ScalarType::MzTimestamp.nullable(false),
             UnmaterializableFunc::MzSessionId => ScalarType::Uuid.nullable(false),
             UnmaterializableFunc::MzUptime => ScalarType::Interval.nullable(true),
             UnmaterializableFunc::MzVersion => ScalarType::String.nullable(false),
@@ -116,8 +113,8 @@ impl fmt::Display for UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => f.write_str("current_timestamp"),
             UnmaterializableFunc::CurrentUser => f.write_str("current_user"),
-            UnmaterializableFunc::MzClusterId => f.write_str("mz_cluster_id"),
-            UnmaterializableFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
+            UnmaterializableFunc::MzEnvironmentId => f.write_str("mz_environment_id"),
+            UnmaterializableFunc::MzNow => f.write_str("mz_now"),
             UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
             UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
             UnmaterializableFunc::MzVersion => f.write_str("mz_version"),
@@ -138,8 +135,8 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
             UnmaterializableFunc::CurrentTimestamp => CurrentTimestamp(()),
             UnmaterializableFunc::CurrentUser => CurrentUser(()),
-            UnmaterializableFunc::MzClusterId => MzClusterId(()),
-            UnmaterializableFunc::MzLogicalTimestamp => MzLogicalTimestamp(()),
+            UnmaterializableFunc::MzEnvironmentId => MzEnvironmentId(()),
+            UnmaterializableFunc::MzNow => MzNow(()),
             UnmaterializableFunc::MzSessionId => MzSessionId(()),
             UnmaterializableFunc::MzUptime => MzUptime(()),
             UnmaterializableFunc::MzVersion => MzVersion(()),
@@ -162,8 +159,8 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                 }
                 CurrentTimestamp(()) => Ok(UnmaterializableFunc::CurrentTimestamp),
                 CurrentUser(()) => Ok(UnmaterializableFunc::CurrentUser),
-                MzClusterId(()) => Ok(UnmaterializableFunc::MzClusterId),
-                MzLogicalTimestamp(()) => Ok(UnmaterializableFunc::MzLogicalTimestamp),
+                MzEnvironmentId(()) => Ok(UnmaterializableFunc::MzEnvironmentId),
+                MzNow(()) => Ok(UnmaterializableFunc::MzNow),
                 MzSessionId(()) => Ok(UnmaterializableFunc::MzSessionId),
                 MzUptime(()) => Ok(UnmaterializableFunc::MzUptime),
                 MzVersion(()) => Ok(UnmaterializableFunc::MzVersion),
@@ -256,6 +253,27 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .map(Datum::from)
 }
 
+fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_uint16()
+        .checked_add(b.unwrap_uint16())
+        .ok_or(EvalError::UInt16OutOfRange)
+        .map(Datum::from)
+}
+
+fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_uint32()
+        .checked_add(b.unwrap_uint32())
+        .ok_or(EvalError::UInt32OutOfRange)
+        .map(Datum::from)
+}
+
+fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_uint64()
+        .checked_add(b.unwrap_uint64())
+        .ok_or(EvalError::UInt64OutOfRange)
+        .map(Datum::from)
+}
+
 fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let a = a.unwrap_float32();
     let b = b.unwrap_float32();
@@ -301,21 +319,19 @@ fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let date = a.unwrap_date();
     let time = b.unwrap_time();
 
-    Datum::Timestamp(
-        NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms_nano(
-            time.hour(),
-            time.minute(),
-            time.second(),
-            time.nanosecond(),
-        ),
-    )
+    Datum::Timestamp(NaiveDate::from(date).and_hms_nano(
+        time.hour(),
+        time.minute(),
+        time.second(),
+        time.nanosecond(),
+    ))
 }
 
 fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, interval.months)?;
     Ok(Datum::Timestamp(
         dt.checked_add_signed(interval.duration_as_chrono())
@@ -524,6 +540,18 @@ fn bit_and_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() & b.unwrap_int64())
 }
 
+fn bit_and_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_uint16() & b.unwrap_uint16())
+}
+
+fn bit_and_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_uint32() & b.unwrap_uint32())
+}
+
+fn bit_and_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_uint64() & b.unwrap_uint64())
+}
+
 fn bit_or_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int16() | b.unwrap_int16())
 }
@@ -536,6 +564,18 @@ fn bit_or_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() | b.unwrap_int64())
 }
 
+fn bit_or_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_uint16() | b.unwrap_uint16())
+}
+
+fn bit_or_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_uint32() | b.unwrap_uint32())
+}
+
+fn bit_or_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_uint64() | b.unwrap_uint64())
+}
+
 fn bit_xor_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int16() ^ b.unwrap_int16())
 }
@@ -546,6 +586,18 @@ fn bit_xor_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
 fn bit_xor_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() ^ b.unwrap_int64())
+}
+
+fn bit_xor_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_uint16() ^ b.unwrap_uint16())
+}
+
+fn bit_xor_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_uint32() ^ b.unwrap_uint32())
+}
+
+fn bit_xor_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_uint64() ^ b.unwrap_uint64())
 }
 
 fn bit_shift_left_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -566,6 +618,27 @@ fn bit_shift_left_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 fn bit_shift_left_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let lhs = a.unwrap_int64();
     let rhs = b.unwrap_int32() as u32;
+    Datum::from(lhs.wrapping_shl(rhs))
+}
+
+fn bit_shift_left_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    // widen to u32 and then cast back to u16 in order emulate the C promotion rules used in by Postgres
+    // when the rhs in the 16-31 range, e.g. (1 << 17 should evaluate to 0)
+    // see https://github.com/postgres/postgres/blob/REL_14_STABLE/src/backend/utils/adt/int.c#L1460-L1476
+    let lhs: u32 = a.unwrap_uint16() as u32;
+    let rhs: u32 = b.unwrap_uint32();
+    Datum::from(lhs.wrapping_shl(rhs) as u16)
+}
+
+fn bit_shift_left_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let lhs = a.unwrap_uint32();
+    let rhs = b.unwrap_uint32();
+    Datum::from(lhs.wrapping_shl(rhs))
+}
+
+fn bit_shift_left_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let lhs = a.unwrap_uint64();
+    let rhs = b.unwrap_uint32();
     Datum::from(lhs.wrapping_shl(rhs))
 }
 
@@ -590,6 +663,27 @@ fn bit_shift_right_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(lhs.wrapping_shr(rhs))
 }
 
+fn bit_shift_right_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    // widen to u32 and then cast back to u16 in order emulate the C promotion rules used in by Postgres
+    // when the rhs in the 16-31 range, e.g. (-32767 >> 17 should evaluate to -1)
+    // see https://github.com/postgres/postgres/blob/REL_14_STABLE/src/backend/utils/adt/int.c#L1460-L1476
+    let lhs = a.unwrap_uint16() as u32;
+    let rhs = b.unwrap_uint32();
+    Datum::from(lhs.wrapping_shr(rhs) as u16)
+}
+
+fn bit_shift_right_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let lhs = a.unwrap_uint32();
+    let rhs = b.unwrap_uint32();
+    Datum::from(lhs.wrapping_shr(rhs))
+}
+
+fn bit_shift_right_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let lhs = a.unwrap_uint64();
+    let rhs = b.unwrap_uint32();
+    Datum::from(lhs.wrapping_shr(rhs))
+}
+
 fn sub_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int16()
         .checked_sub(b.unwrap_int16())
@@ -608,6 +702,27 @@ fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int64()
         .checked_sub(b.unwrap_int64())
         .ok_or(EvalError::NumericFieldOverflow)
+        .map(Datum::from)
+}
+
+fn sub_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_uint16()
+        .checked_sub(b.unwrap_uint16())
+        .ok_or(EvalError::UInt16OutOfRange)
+        .map(Datum::from)
+}
+
+fn sub_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_uint32()
+        .checked_sub(b.unwrap_uint32())
+        .ok_or(EvalError::UInt32OutOfRange)
+        .map(Datum::from)
+}
+
+fn sub_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_uint64()
+        .checked_sub(b.unwrap_uint64())
+        .ok_or(EvalError::UInt64OutOfRange)
         .map(Datum::from)
 }
 
@@ -653,7 +768,7 @@ fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn sub_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from((a.unwrap_date() - b.unwrap_date()).num_days() as i32)
+    Datum::from(a.unwrap_date() - b.unwrap_date())
 }
 
 fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -672,7 +787,7 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let date = a.unwrap_date();
     let interval = b.unwrap_interval();
 
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = NaiveDate::from(date).and_hms(0, 0, 0);
     let dt = interval
         .months
         .checked_neg()
@@ -710,6 +825,27 @@ fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int64()
         .checked_mul(b.unwrap_int64())
         .ok_or(EvalError::NumericFieldOverflow)
+        .map(Datum::from)
+}
+
+fn mul_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_uint16()
+        .checked_mul(b.unwrap_uint16())
+        .ok_or(EvalError::UInt16OutOfRange)
+        .map(Datum::from)
+}
+
+fn mul_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_uint32()
+        .checked_mul(b.unwrap_uint32())
+        .ok_or(EvalError::UInt32OutOfRange)
+        .map(Datum::from)
+}
+
+fn mul_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_uint64()
+        .checked_mul(b.unwrap_uint64())
+        .ok_or(EvalError::UInt64OutOfRange)
         .map(Datum::from)
 }
 
@@ -785,6 +921,33 @@ fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_int64() / b))
+    }
+}
+
+fn div_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let b = b.unwrap_uint16();
+    if b == 0 {
+        Err(EvalError::DivisionByZero)
+    } else {
+        Ok(Datum::from(a.unwrap_uint16() / b))
+    }
+}
+
+fn div_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let b = b.unwrap_uint32();
+    if b == 0 {
+        Err(EvalError::DivisionByZero)
+    } else {
+        Ok(Datum::from(a.unwrap_uint32() / b))
+    }
+}
+
+fn div_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let b = b.unwrap_uint64();
+    if b == 0 {
+        Err(EvalError::DivisionByZero)
+    } else {
+        Ok(Datum::from(a.unwrap_uint64() / b))
     }
 }
 
@@ -880,6 +1043,33 @@ fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_int64() % b))
+    }
+}
+
+fn mod_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let b = b.unwrap_uint16();
+    if b == 0 {
+        Err(EvalError::DivisionByZero)
+    } else {
+        Ok(Datum::from(a.unwrap_uint16() % b))
+    }
+}
+
+fn mod_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let b = b.unwrap_uint32();
+    if b == 0 {
+        Err(EvalError::DivisionByZero)
+    } else {
+        Ok(Datum::from(a.unwrap_uint32() % b))
+    }
+}
+
+fn mod_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let b = b.unwrap_uint64();
+    if b == 0 {
+        Err(EvalError::DivisionByZero)
+    } else {
+        Ok(Datum::from(a.unwrap_uint64() % b))
     }
 }
 
@@ -1251,8 +1441,8 @@ fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             (Datum::JsonNull, Datum::JsonNull) => true,
             (Datum::False, Datum::False) => true,
             (Datum::True, Datum::True) => true,
-            (Datum::Numeric(a), Datum::Numeric(b)) => (a == b),
-            (Datum::String(a), Datum::String(b)) => (a == b),
+            (Datum::Numeric(a), Datum::Numeric(b)) => a == b,
+            (Datum::String(a), Datum::String(b)) => a == b,
             (Datum::List(a), Datum::List(b)) => b
                 .iter()
                 .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false))),
@@ -1644,7 +1834,7 @@ where
 fn extract_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
-        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date())?.into()),
+        Ok(units) => Ok(extract_date_inner(units, b.unwrap_date().into())?.into()),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
@@ -1766,6 +1956,9 @@ pub enum BinaryFunc {
     AddInt16,
     AddInt32,
     AddInt64,
+    AddUInt16,
+    AddUInt32,
+    AddUInt64,
     AddFloat32,
     AddFloat64,
     AddInterval,
@@ -1778,21 +1971,39 @@ pub enum BinaryFunc {
     BitAndInt16,
     BitAndInt32,
     BitAndInt64,
+    BitAndUInt16,
+    BitAndUInt32,
+    BitAndUInt64,
     BitOrInt16,
     BitOrInt32,
     BitOrInt64,
+    BitOrUInt16,
+    BitOrUInt32,
+    BitOrUInt64,
     BitXorInt16,
     BitXorInt32,
     BitXorInt64,
+    BitXorUInt16,
+    BitXorUInt32,
+    BitXorUInt64,
     BitShiftLeftInt16,
     BitShiftLeftInt32,
     BitShiftLeftInt64,
+    BitShiftLeftUInt16,
+    BitShiftLeftUInt32,
+    BitShiftLeftUInt64,
     BitShiftRightInt16,
     BitShiftRightInt32,
     BitShiftRightInt64,
+    BitShiftRightUInt16,
+    BitShiftRightUInt32,
+    BitShiftRightUInt64,
     SubInt16,
     SubInt32,
     SubInt64,
+    SubUInt16,
+    SubUInt32,
+    SubUInt64,
     SubFloat32,
     SubFloat64,
     SubInterval,
@@ -1808,6 +2019,9 @@ pub enum BinaryFunc {
     MulInt16,
     MulInt32,
     MulInt64,
+    MulUInt16,
+    MulUInt32,
+    MulUInt64,
     MulFloat32,
     MulFloat64,
     MulNumeric,
@@ -1815,6 +2029,9 @@ pub enum BinaryFunc {
     DivInt16,
     DivInt32,
     DivInt64,
+    DivUInt16,
+    DivUInt32,
+    DivUInt64,
     DivFloat32,
     DivFloat64,
     DivNumeric,
@@ -1822,6 +2039,9 @@ pub enum BinaryFunc {
     ModInt16,
     ModInt32,
     ModInt64,
+    ModUInt16,
+    ModUInt32,
+    ModUInt64,
     ModFloat32,
     ModFloat64,
     ModNumeric,
@@ -1926,6 +2146,9 @@ impl BinaryFunc {
             BinaryFunc::AddInt16 => eager!(add_int16),
             BinaryFunc::AddInt32 => eager!(add_int32),
             BinaryFunc::AddInt64 => eager!(add_int64),
+            BinaryFunc::AddUInt16 => eager!(add_uint16),
+            BinaryFunc::AddUInt32 => eager!(add_uint32),
+            BinaryFunc::AddUInt64 => eager!(add_uint64),
             BinaryFunc::AddFloat32 => eager!(add_float32),
             BinaryFunc::AddFloat64 => eager!(add_float64),
             BinaryFunc::AddTimestampInterval => {
@@ -1948,21 +2171,39 @@ impl BinaryFunc {
             BinaryFunc::BitAndInt16 => Ok(eager!(bit_and_int16)),
             BinaryFunc::BitAndInt32 => Ok(eager!(bit_and_int32)),
             BinaryFunc::BitAndInt64 => Ok(eager!(bit_and_int64)),
+            BinaryFunc::BitAndUInt16 => Ok(eager!(bit_and_uint16)),
+            BinaryFunc::BitAndUInt32 => Ok(eager!(bit_and_uint32)),
+            BinaryFunc::BitAndUInt64 => Ok(eager!(bit_and_uint64)),
             BinaryFunc::BitOrInt16 => Ok(eager!(bit_or_int16)),
             BinaryFunc::BitOrInt32 => Ok(eager!(bit_or_int32)),
             BinaryFunc::BitOrInt64 => Ok(eager!(bit_or_int64)),
+            BinaryFunc::BitOrUInt16 => Ok(eager!(bit_or_uint16)),
+            BinaryFunc::BitOrUInt32 => Ok(eager!(bit_or_uint32)),
+            BinaryFunc::BitOrUInt64 => Ok(eager!(bit_or_uint64)),
             BinaryFunc::BitXorInt16 => Ok(eager!(bit_xor_int16)),
             BinaryFunc::BitXorInt32 => Ok(eager!(bit_xor_int32)),
             BinaryFunc::BitXorInt64 => Ok(eager!(bit_xor_int64)),
+            BinaryFunc::BitXorUInt16 => Ok(eager!(bit_xor_uint16)),
+            BinaryFunc::BitXorUInt32 => Ok(eager!(bit_xor_uint32)),
+            BinaryFunc::BitXorUInt64 => Ok(eager!(bit_xor_uint64)),
             BinaryFunc::BitShiftLeftInt16 => Ok(eager!(bit_shift_left_int16)),
             BinaryFunc::BitShiftLeftInt32 => Ok(eager!(bit_shift_left_int32)),
             BinaryFunc::BitShiftLeftInt64 => Ok(eager!(bit_shift_left_int64)),
+            BinaryFunc::BitShiftLeftUInt16 => Ok(eager!(bit_shift_left_uint16)),
+            BinaryFunc::BitShiftLeftUInt32 => Ok(eager!(bit_shift_left_uint32)),
+            BinaryFunc::BitShiftLeftUInt64 => Ok(eager!(bit_shift_left_uint64)),
             BinaryFunc::BitShiftRightInt16 => Ok(eager!(bit_shift_right_int16)),
             BinaryFunc::BitShiftRightInt32 => Ok(eager!(bit_shift_right_int32)),
             BinaryFunc::BitShiftRightInt64 => Ok(eager!(bit_shift_right_int64)),
+            BinaryFunc::BitShiftRightUInt16 => Ok(eager!(bit_shift_right_uint16)),
+            BinaryFunc::BitShiftRightUInt32 => Ok(eager!(bit_shift_right_uint32)),
+            BinaryFunc::BitShiftRightUInt64 => Ok(eager!(bit_shift_right_uint64)),
             BinaryFunc::SubInt16 => eager!(sub_int16),
             BinaryFunc::SubInt32 => eager!(sub_int32),
             BinaryFunc::SubInt64 => eager!(sub_int64),
+            BinaryFunc::SubUInt16 => eager!(sub_uint16),
+            BinaryFunc::SubUInt32 => eager!(sub_uint32),
+            BinaryFunc::SubUInt64 => eager!(sub_uint64),
             BinaryFunc::SubFloat32 => eager!(sub_float32),
             BinaryFunc::SubFloat64 => eager!(sub_float64),
             BinaryFunc::SubTimestamp => Ok(eager!(sub_timestamp)),
@@ -1982,6 +2223,9 @@ impl BinaryFunc {
             BinaryFunc::MulInt16 => eager!(mul_int16),
             BinaryFunc::MulInt32 => eager!(mul_int32),
             BinaryFunc::MulInt64 => eager!(mul_int64),
+            BinaryFunc::MulUInt16 => eager!(mul_uint16),
+            BinaryFunc::MulUInt32 => eager!(mul_uint32),
+            BinaryFunc::MulUInt64 => eager!(mul_uint64),
             BinaryFunc::MulFloat32 => eager!(mul_float32),
             BinaryFunc::MulFloat64 => eager!(mul_float64),
             BinaryFunc::MulNumeric => eager!(mul_numeric),
@@ -1989,6 +2233,9 @@ impl BinaryFunc {
             BinaryFunc::DivInt16 => eager!(div_int16),
             BinaryFunc::DivInt32 => eager!(div_int32),
             BinaryFunc::DivInt64 => eager!(div_int64),
+            BinaryFunc::DivUInt16 => eager!(div_uint16),
+            BinaryFunc::DivUInt32 => eager!(div_uint32),
+            BinaryFunc::DivUInt64 => eager!(div_uint64),
             BinaryFunc::DivFloat32 => eager!(div_float32),
             BinaryFunc::DivFloat64 => eager!(div_float64),
             BinaryFunc::DivNumeric => eager!(div_numeric),
@@ -1996,6 +2243,9 @@ impl BinaryFunc {
             BinaryFunc::ModInt16 => eager!(mod_int16),
             BinaryFunc::ModInt32 => eager!(mod_int32),
             BinaryFunc::ModInt64 => eager!(mod_int64),
+            BinaryFunc::ModUInt16 => eager!(mod_uint16),
+            BinaryFunc::ModUInt32 => eager!(mod_uint32),
+            BinaryFunc::ModUInt64 => eager!(mod_uint64),
             BinaryFunc::ModFloat32 => eager!(mod_float32),
             BinaryFunc::ModFloat64 => eager!(mod_float64),
             BinaryFunc::ModNumeric => eager!(mod_numeric),
@@ -2188,6 +2438,21 @@ impl BinaryFunc {
                 ScalarType::Int64.nullable(in_nullable)
             }
 
+            AddUInt16 | SubUInt16 | MulUInt16 | DivUInt16 | ModUInt16 | BitAndUInt16
+            | BitOrUInt16 | BitXorUInt16 | BitShiftLeftUInt16 | BitShiftRightUInt16 => {
+                ScalarType::UInt16.nullable(in_nullable)
+            }
+
+            AddUInt32 | SubUInt32 | MulUInt32 | DivUInt32 | ModUInt32 | BitAndUInt32
+            | BitOrUInt32 | BitXorUInt32 | BitShiftLeftUInt32 | BitShiftRightUInt32 => {
+                ScalarType::UInt32.nullable(in_nullable)
+            }
+
+            AddUInt64 | SubUInt64 | MulUInt64 | DivUInt64 | ModUInt64 | BitAndUInt64
+            | BitOrUInt64 | BitXorUInt64 | BitShiftLeftUInt64 | BitShiftRightUInt64 => {
+                ScalarType::UInt64.nullable(in_nullable)
+            }
+
             AddFloat32 | SubFloat32 | MulFloat32 | DivFloat32 | ModFloat32 => {
                 ScalarType::Float32.nullable(in_nullable)
             }
@@ -2318,6 +2583,9 @@ impl BinaryFunc {
                 | AddInt16
                 | AddInt32
                 | AddInt64
+                | AddUInt16
+                | AddUInt32
+                | AddUInt64
                 | AddFloat32
                 | AddFloat64
                 | AddTimestampInterval
@@ -2329,18 +2597,33 @@ impl BinaryFunc {
                 | BitAndInt16
                 | BitAndInt32
                 | BitAndInt64
+                | BitAndUInt16
+                | BitAndUInt32
+                | BitAndUInt64
                 | BitOrInt16
                 | BitOrInt32
                 | BitOrInt64
+                | BitOrUInt16
+                | BitOrUInt32
+                | BitOrUInt64
                 | BitXorInt16
                 | BitXorInt32
                 | BitXorInt64
+                | BitXorUInt16
+                | BitXorUInt32
+                | BitXorUInt64
                 | BitShiftLeftInt16
                 | BitShiftLeftInt32
                 | BitShiftLeftInt64
+                | BitShiftLeftUInt16
+                | BitShiftLeftUInt32
+                | BitShiftLeftUInt64
                 | BitShiftRightInt16
                 | BitShiftRightInt32
                 | BitShiftRightInt64
+                | BitShiftRightUInt16
+                | BitShiftRightUInt32
+                | BitShiftRightUInt64
                 | SubInterval
                 | MulInterval
                 | DivInterval
@@ -2348,6 +2631,9 @@ impl BinaryFunc {
                 | SubInt16
                 | SubInt32
                 | SubInt64
+                | SubUInt16
+                | SubUInt32
+                | SubUInt64
                 | SubFloat32
                 | SubFloat64
                 | SubTimestamp
@@ -2362,17 +2648,26 @@ impl BinaryFunc {
                 | MulInt16
                 | MulInt32
                 | MulInt64
+                | MulUInt16
+                | MulUInt32
+                | MulUInt64
                 | MulFloat32
                 | MulFloat64
                 | MulNumeric
                 | DivInt16
                 | DivInt32
                 | DivInt64
+                | DivUInt16
+                | DivUInt32
+                | DivUInt64
                 | DivFloat32
                 | DivFloat64
                 | ModInt16
                 | ModInt32
                 | ModInt64
+                | ModUInt16
+                | ModUInt32
+                | ModUInt64
                 | ModFloat32
                 | ModFloat64
                 | ModNumeric
@@ -2385,6 +2680,9 @@ impl BinaryFunc {
             AddInt16
             | AddInt32
             | AddInt64
+            | AddUInt16
+            | AddUInt32
+            | AddUInt64
             | AddFloat32
             | AddFloat64
             | AddTimestampInterval
@@ -2396,18 +2694,33 @@ impl BinaryFunc {
             | BitAndInt16
             | BitAndInt32
             | BitAndInt64
+            | BitAndUInt16
+            | BitAndUInt32
+            | BitAndUInt64
             | BitOrInt16
             | BitOrInt32
             | BitOrInt64
+            | BitOrUInt16
+            | BitOrUInt32
+            | BitOrUInt64
             | BitXorInt16
             | BitXorInt32
             | BitXorInt64
+            | BitXorUInt16
+            | BitXorUInt32
+            | BitXorUInt64
             | BitShiftLeftInt16
             | BitShiftLeftInt32
             | BitShiftLeftInt64
+            | BitShiftLeftUInt16
+            | BitShiftLeftUInt32
+            | BitShiftLeftUInt64
             | BitShiftRightInt16
             | BitShiftRightInt32
             | BitShiftRightInt64
+            | BitShiftRightUInt16
+            | BitShiftRightUInt32
+            | BitShiftRightUInt64
             | SubInterval
             | MulInterval
             | DivInterval
@@ -2415,6 +2728,9 @@ impl BinaryFunc {
             | SubInt16
             | SubInt32
             | SubInt64
+            | SubUInt16
+            | SubUInt32
+            | SubUInt64
             | SubFloat32
             | SubFloat64
             | SubTimestamp
@@ -2429,18 +2745,27 @@ impl BinaryFunc {
             | MulInt16
             | MulInt32
             | MulInt64
+            | MulUInt16
+            | MulUInt32
+            | MulUInt64
             | MulFloat32
             | MulFloat64
             | MulNumeric
             | DivInt16
             | DivInt32
             | DivInt64
+            | DivUInt16
+            | DivUInt32
+            | DivUInt64
             | DivFloat32
             | DivFloat64
             | DivNumeric
             | ModInt16
             | ModInt32
             | ModInt64
+            | ModUInt16
+            | ModUInt32
+            | ModUInt64
             | ModFloat32
             | ModFloat64
             | ModNumeric
@@ -2535,6 +2860,19 @@ impl BinaryFunc {
             _ => None,
         }
     }
+
+    /// Returns true if the function could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        match self {
+            BinaryFunc::Eq
+            | BinaryFunc::NotEq
+            | BinaryFunc::Lt
+            | BinaryFunc::Gte
+            | BinaryFunc::Gt
+            | BinaryFunc::Lte => false,
+            _ => true,
+        }
+    }
 }
 
 impl fmt::Display for BinaryFunc {
@@ -2543,6 +2881,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddInt16 => f.write_str("+"),
             BinaryFunc::AddInt32 => f.write_str("+"),
             BinaryFunc::AddInt64 => f.write_str("+"),
+            BinaryFunc::AddUInt16 => f.write_str("+"),
+            BinaryFunc::AddUInt32 => f.write_str("+"),
+            BinaryFunc::AddUInt64 => f.write_str("+"),
             BinaryFunc::AddFloat32 => f.write_str("+"),
             BinaryFunc::AddFloat64 => f.write_str("+"),
             BinaryFunc::AddNumeric => f.write_str("+"),
@@ -2555,21 +2896,39 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::BitAndInt16 => f.write_str("&"),
             BinaryFunc::BitAndInt32 => f.write_str("&"),
             BinaryFunc::BitAndInt64 => f.write_str("&"),
+            BinaryFunc::BitAndUInt16 => f.write_str("&"),
+            BinaryFunc::BitAndUInt32 => f.write_str("&"),
+            BinaryFunc::BitAndUInt64 => f.write_str("&"),
             BinaryFunc::BitOrInt16 => f.write_str("|"),
             BinaryFunc::BitOrInt32 => f.write_str("|"),
             BinaryFunc::BitOrInt64 => f.write_str("|"),
+            BinaryFunc::BitOrUInt16 => f.write_str("|"),
+            BinaryFunc::BitOrUInt32 => f.write_str("|"),
+            BinaryFunc::BitOrUInt64 => f.write_str("|"),
             BinaryFunc::BitXorInt16 => f.write_str("#"),
             BinaryFunc::BitXorInt32 => f.write_str("#"),
             BinaryFunc::BitXorInt64 => f.write_str("#"),
+            BinaryFunc::BitXorUInt16 => f.write_str("#"),
+            BinaryFunc::BitXorUInt32 => f.write_str("#"),
+            BinaryFunc::BitXorUInt64 => f.write_str("#"),
             BinaryFunc::BitShiftLeftInt16 => f.write_str("<<"),
             BinaryFunc::BitShiftLeftInt32 => f.write_str("<<"),
             BinaryFunc::BitShiftLeftInt64 => f.write_str("<<"),
+            BinaryFunc::BitShiftLeftUInt16 => f.write_str("<<"),
+            BinaryFunc::BitShiftLeftUInt32 => f.write_str("<<"),
+            BinaryFunc::BitShiftLeftUInt64 => f.write_str("<<"),
             BinaryFunc::BitShiftRightInt16 => f.write_str(">>"),
             BinaryFunc::BitShiftRightInt32 => f.write_str(">>"),
             BinaryFunc::BitShiftRightInt64 => f.write_str(">>"),
+            BinaryFunc::BitShiftRightUInt16 => f.write_str(">>"),
+            BinaryFunc::BitShiftRightUInt32 => f.write_str(">>"),
+            BinaryFunc::BitShiftRightUInt64 => f.write_str(">>"),
             BinaryFunc::SubInt16 => f.write_str("-"),
             BinaryFunc::SubInt32 => f.write_str("-"),
             BinaryFunc::SubInt64 => f.write_str("-"),
+            BinaryFunc::SubUInt16 => f.write_str("-"),
+            BinaryFunc::SubUInt32 => f.write_str("-"),
+            BinaryFunc::SubUInt64 => f.write_str("-"),
             BinaryFunc::SubFloat32 => f.write_str("-"),
             BinaryFunc::SubFloat64 => f.write_str("-"),
             BinaryFunc::SubNumeric => f.write_str("-"),
@@ -2585,6 +2944,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MulInt16 => f.write_str("*"),
             BinaryFunc::MulInt32 => f.write_str("*"),
             BinaryFunc::MulInt64 => f.write_str("*"),
+            BinaryFunc::MulUInt16 => f.write_str("*"),
+            BinaryFunc::MulUInt32 => f.write_str("*"),
+            BinaryFunc::MulUInt64 => f.write_str("*"),
             BinaryFunc::MulFloat32 => f.write_str("*"),
             BinaryFunc::MulFloat64 => f.write_str("*"),
             BinaryFunc::MulNumeric => f.write_str("*"),
@@ -2592,6 +2954,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DivInt16 => f.write_str("/"),
             BinaryFunc::DivInt32 => f.write_str("/"),
             BinaryFunc::DivInt64 => f.write_str("/"),
+            BinaryFunc::DivUInt16 => f.write_str("/"),
+            BinaryFunc::DivUInt32 => f.write_str("/"),
+            BinaryFunc::DivUInt64 => f.write_str("/"),
             BinaryFunc::DivFloat32 => f.write_str("/"),
             BinaryFunc::DivFloat64 => f.write_str("/"),
             BinaryFunc::DivNumeric => f.write_str("/"),
@@ -2599,6 +2964,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ModInt16 => f.write_str("%"),
             BinaryFunc::ModInt32 => f.write_str("%"),
             BinaryFunc::ModInt64 => f.write_str("%"),
+            BinaryFunc::ModUInt16 => f.write_str("%"),
+            BinaryFunc::ModUInt32 => f.write_str("%"),
+            BinaryFunc::ModUInt64 => f.write_str("%"),
             BinaryFunc::ModFloat32 => f.write_str("%"),
             BinaryFunc::ModFloat64 => f.write_str("%"),
             BinaryFunc::ModNumeric => f.write_str("%"),
@@ -2707,6 +3075,9 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::AddInt16),
             Just(BinaryFunc::AddInt32),
             Just(BinaryFunc::AddInt64),
+            Just(BinaryFunc::AddUInt16),
+            Just(BinaryFunc::AddUInt32),
+            Just(BinaryFunc::AddUInt64),
             Just(BinaryFunc::AddFloat32),
             Just(BinaryFunc::AddFloat64),
             Just(BinaryFunc::AddInterval),
@@ -2719,21 +3090,39 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::BitAndInt16),
             Just(BinaryFunc::BitAndInt32),
             Just(BinaryFunc::BitAndInt64),
+            Just(BinaryFunc::BitAndUInt16),
+            Just(BinaryFunc::BitAndUInt32),
+            Just(BinaryFunc::BitAndUInt64),
             Just(BinaryFunc::BitOrInt16),
             Just(BinaryFunc::BitOrInt32),
             Just(BinaryFunc::BitOrInt64),
+            Just(BinaryFunc::BitOrUInt16),
+            Just(BinaryFunc::BitOrUInt32),
+            Just(BinaryFunc::BitOrUInt64),
             Just(BinaryFunc::BitXorInt16),
             Just(BinaryFunc::BitXorInt32),
             Just(BinaryFunc::BitXorInt64),
+            Just(BinaryFunc::BitXorUInt16),
+            Just(BinaryFunc::BitXorUInt32),
+            Just(BinaryFunc::BitXorUInt64),
             Just(BinaryFunc::BitShiftLeftInt16),
             Just(BinaryFunc::BitShiftLeftInt32),
             Just(BinaryFunc::BitShiftLeftInt64),
+            Just(BinaryFunc::BitShiftLeftUInt16),
+            Just(BinaryFunc::BitShiftLeftUInt32),
+            Just(BinaryFunc::BitShiftLeftUInt64),
             Just(BinaryFunc::BitShiftRightInt16),
             Just(BinaryFunc::BitShiftRightInt32),
             Just(BinaryFunc::BitShiftRightInt64),
+            Just(BinaryFunc::BitShiftRightUInt16),
+            Just(BinaryFunc::BitShiftRightUInt32),
+            Just(BinaryFunc::BitShiftRightUInt64),
             Just(BinaryFunc::SubInt16),
             Just(BinaryFunc::SubInt32),
             Just(BinaryFunc::SubInt64),
+            Just(BinaryFunc::SubUInt16),
+            Just(BinaryFunc::SubUInt32),
+            Just(BinaryFunc::SubUInt64),
             Just(BinaryFunc::SubFloat32),
             Just(BinaryFunc::SubFloat64),
             Just(BinaryFunc::SubInterval),
@@ -2749,6 +3138,9 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::MulInt16),
             Just(BinaryFunc::MulInt32),
             Just(BinaryFunc::MulInt64),
+            Just(BinaryFunc::MulUInt16),
+            Just(BinaryFunc::MulUInt32),
+            Just(BinaryFunc::MulUInt64),
             Just(BinaryFunc::MulFloat32),
             Just(BinaryFunc::MulFloat64),
             Just(BinaryFunc::MulNumeric),
@@ -2756,6 +3148,9 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::DivInt16),
             Just(BinaryFunc::DivInt32),
             Just(BinaryFunc::DivInt64),
+            Just(BinaryFunc::DivUInt16),
+            Just(BinaryFunc::DivUInt32),
+            Just(BinaryFunc::DivUInt64),
             Just(BinaryFunc::DivFloat32),
             Just(BinaryFunc::DivFloat64),
             Just(BinaryFunc::DivNumeric),
@@ -2763,6 +3158,9 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::ModInt16),
             Just(BinaryFunc::ModInt32),
             Just(BinaryFunc::ModInt64),
+            Just(BinaryFunc::ModUInt16),
+            Just(BinaryFunc::ModUInt32),
+            Just(BinaryFunc::ModUInt64),
             Just(BinaryFunc::ModFloat32),
             Just(BinaryFunc::ModFloat64),
             Just(BinaryFunc::ModNumeric),
@@ -2854,6 +3252,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::AddInt16 => AddInt16(()),
             BinaryFunc::AddInt32 => AddInt32(()),
             BinaryFunc::AddInt64 => AddInt64(()),
+            BinaryFunc::AddUInt16 => AddUint16(()),
+            BinaryFunc::AddUInt32 => AddUint32(()),
+            BinaryFunc::AddUInt64 => AddUint64(()),
             BinaryFunc::AddFloat32 => AddFloat32(()),
             BinaryFunc::AddFloat64 => AddFloat64(()),
             BinaryFunc::AddInterval => AddInterval(()),
@@ -2866,21 +3267,39 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::BitAndInt16 => BitAndInt16(()),
             BinaryFunc::BitAndInt32 => BitAndInt32(()),
             BinaryFunc::BitAndInt64 => BitAndInt64(()),
+            BinaryFunc::BitAndUInt16 => BitAndUint16(()),
+            BinaryFunc::BitAndUInt32 => BitAndUint32(()),
+            BinaryFunc::BitAndUInt64 => BitAndUint64(()),
             BinaryFunc::BitOrInt16 => BitOrInt16(()),
             BinaryFunc::BitOrInt32 => BitOrInt32(()),
             BinaryFunc::BitOrInt64 => BitOrInt64(()),
+            BinaryFunc::BitOrUInt16 => BitOrUint16(()),
+            BinaryFunc::BitOrUInt32 => BitOrUint32(()),
+            BinaryFunc::BitOrUInt64 => BitOrUint64(()),
             BinaryFunc::BitXorInt16 => BitXorInt16(()),
             BinaryFunc::BitXorInt32 => BitXorInt32(()),
             BinaryFunc::BitXorInt64 => BitXorInt64(()),
+            BinaryFunc::BitXorUInt16 => BitXorUint16(()),
+            BinaryFunc::BitXorUInt32 => BitXorUint32(()),
+            BinaryFunc::BitXorUInt64 => BitXorUint64(()),
             BinaryFunc::BitShiftLeftInt16 => BitShiftLeftInt16(()),
             BinaryFunc::BitShiftLeftInt32 => BitShiftLeftInt32(()),
             BinaryFunc::BitShiftLeftInt64 => BitShiftLeftInt64(()),
+            BinaryFunc::BitShiftLeftUInt16 => BitShiftLeftUint16(()),
+            BinaryFunc::BitShiftLeftUInt32 => BitShiftLeftUint32(()),
+            BinaryFunc::BitShiftLeftUInt64 => BitShiftLeftUint64(()),
             BinaryFunc::BitShiftRightInt16 => BitShiftRightInt16(()),
             BinaryFunc::BitShiftRightInt32 => BitShiftRightInt32(()),
             BinaryFunc::BitShiftRightInt64 => BitShiftRightInt64(()),
+            BinaryFunc::BitShiftRightUInt16 => BitShiftRightUint16(()),
+            BinaryFunc::BitShiftRightUInt32 => BitShiftRightUint32(()),
+            BinaryFunc::BitShiftRightUInt64 => BitShiftRightUint64(()),
             BinaryFunc::SubInt16 => SubInt16(()),
             BinaryFunc::SubInt32 => SubInt32(()),
             BinaryFunc::SubInt64 => SubInt64(()),
+            BinaryFunc::SubUInt16 => SubUint16(()),
+            BinaryFunc::SubUInt32 => SubUint32(()),
+            BinaryFunc::SubUInt64 => SubUint64(()),
             BinaryFunc::SubFloat32 => SubFloat32(()),
             BinaryFunc::SubFloat64 => SubFloat64(()),
             BinaryFunc::SubInterval => SubInterval(()),
@@ -2896,6 +3315,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::MulInt16 => MulInt16(()),
             BinaryFunc::MulInt32 => MulInt32(()),
             BinaryFunc::MulInt64 => MulInt64(()),
+            BinaryFunc::MulUInt16 => MulUint16(()),
+            BinaryFunc::MulUInt32 => MulUint32(()),
+            BinaryFunc::MulUInt64 => MulUint64(()),
             BinaryFunc::MulFloat32 => MulFloat32(()),
             BinaryFunc::MulFloat64 => MulFloat64(()),
             BinaryFunc::MulNumeric => MulNumeric(()),
@@ -2903,6 +3325,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::DivInt16 => DivInt16(()),
             BinaryFunc::DivInt32 => DivInt32(()),
             BinaryFunc::DivInt64 => DivInt64(()),
+            BinaryFunc::DivUInt16 => DivUint16(()),
+            BinaryFunc::DivUInt32 => DivUint32(()),
+            BinaryFunc::DivUInt64 => DivUint64(()),
             BinaryFunc::DivFloat32 => DivFloat32(()),
             BinaryFunc::DivFloat64 => DivFloat64(()),
             BinaryFunc::DivNumeric => DivNumeric(()),
@@ -2910,6 +3335,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::ModInt16 => ModInt16(()),
             BinaryFunc::ModInt32 => ModInt32(()),
             BinaryFunc::ModInt64 => ModInt64(()),
+            BinaryFunc::ModUInt16 => ModUint16(()),
+            BinaryFunc::ModUInt32 => ModUint32(()),
+            BinaryFunc::ModUInt64 => ModUint64(()),
             BinaryFunc::ModFloat32 => ModFloat32(()),
             BinaryFunc::ModFloat64 => ModFloat64(()),
             BinaryFunc::ModNumeric => ModNumeric(()),
@@ -3000,6 +3428,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 AddInt16(()) => Ok(BinaryFunc::AddInt16),
                 AddInt32(()) => Ok(BinaryFunc::AddInt32),
                 AddInt64(()) => Ok(BinaryFunc::AddInt64),
+                AddUint16(()) => Ok(BinaryFunc::AddUInt16),
+                AddUint32(()) => Ok(BinaryFunc::AddUInt32),
+                AddUint64(()) => Ok(BinaryFunc::AddUInt64),
                 AddFloat32(()) => Ok(BinaryFunc::AddFloat32),
                 AddFloat64(()) => Ok(BinaryFunc::AddFloat64),
                 AddInterval(()) => Ok(BinaryFunc::AddInterval),
@@ -3012,21 +3443,39 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 BitAndInt16(()) => Ok(BinaryFunc::BitAndInt16),
                 BitAndInt32(()) => Ok(BinaryFunc::BitAndInt32),
                 BitAndInt64(()) => Ok(BinaryFunc::BitAndInt64),
+                BitAndUint16(()) => Ok(BinaryFunc::BitAndUInt16),
+                BitAndUint32(()) => Ok(BinaryFunc::BitAndUInt32),
+                BitAndUint64(()) => Ok(BinaryFunc::BitAndUInt64),
                 BitOrInt16(()) => Ok(BinaryFunc::BitOrInt16),
                 BitOrInt32(()) => Ok(BinaryFunc::BitOrInt32),
                 BitOrInt64(()) => Ok(BinaryFunc::BitOrInt64),
+                BitOrUint16(()) => Ok(BinaryFunc::BitOrUInt16),
+                BitOrUint32(()) => Ok(BinaryFunc::BitOrUInt32),
+                BitOrUint64(()) => Ok(BinaryFunc::BitOrUInt64),
                 BitXorInt16(()) => Ok(BinaryFunc::BitXorInt16),
                 BitXorInt32(()) => Ok(BinaryFunc::BitXorInt32),
                 BitXorInt64(()) => Ok(BinaryFunc::BitXorInt64),
+                BitXorUint16(()) => Ok(BinaryFunc::BitXorUInt16),
+                BitXorUint32(()) => Ok(BinaryFunc::BitXorUInt32),
+                BitXorUint64(()) => Ok(BinaryFunc::BitXorUInt64),
                 BitShiftLeftInt16(()) => Ok(BinaryFunc::BitShiftLeftInt16),
                 BitShiftLeftInt32(()) => Ok(BinaryFunc::BitShiftLeftInt32),
                 BitShiftLeftInt64(()) => Ok(BinaryFunc::BitShiftLeftInt64),
+                BitShiftLeftUint16(()) => Ok(BinaryFunc::BitShiftLeftUInt16),
+                BitShiftLeftUint32(()) => Ok(BinaryFunc::BitShiftLeftUInt32),
+                BitShiftLeftUint64(()) => Ok(BinaryFunc::BitShiftLeftUInt64),
                 BitShiftRightInt16(()) => Ok(BinaryFunc::BitShiftRightInt16),
                 BitShiftRightInt32(()) => Ok(BinaryFunc::BitShiftRightInt32),
                 BitShiftRightInt64(()) => Ok(BinaryFunc::BitShiftRightInt64),
+                BitShiftRightUint16(()) => Ok(BinaryFunc::BitShiftRightUInt16),
+                BitShiftRightUint32(()) => Ok(BinaryFunc::BitShiftRightUInt32),
+                BitShiftRightUint64(()) => Ok(BinaryFunc::BitShiftRightUInt64),
                 SubInt16(()) => Ok(BinaryFunc::SubInt16),
                 SubInt32(()) => Ok(BinaryFunc::SubInt32),
                 SubInt64(()) => Ok(BinaryFunc::SubInt64),
+                SubUint16(()) => Ok(BinaryFunc::SubUInt16),
+                SubUint32(()) => Ok(BinaryFunc::SubUInt32),
+                SubUint64(()) => Ok(BinaryFunc::SubUInt64),
                 SubFloat32(()) => Ok(BinaryFunc::SubFloat32),
                 SubFloat64(()) => Ok(BinaryFunc::SubFloat64),
                 SubInterval(()) => Ok(BinaryFunc::SubInterval),
@@ -3042,6 +3491,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 MulInt16(()) => Ok(BinaryFunc::MulInt16),
                 MulInt32(()) => Ok(BinaryFunc::MulInt32),
                 MulInt64(()) => Ok(BinaryFunc::MulInt64),
+                MulUint16(()) => Ok(BinaryFunc::MulUInt16),
+                MulUint32(()) => Ok(BinaryFunc::MulUInt32),
+                MulUint64(()) => Ok(BinaryFunc::MulUInt64),
                 MulFloat32(()) => Ok(BinaryFunc::MulFloat32),
                 MulFloat64(()) => Ok(BinaryFunc::MulFloat64),
                 MulNumeric(()) => Ok(BinaryFunc::MulNumeric),
@@ -3049,6 +3501,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 DivInt16(()) => Ok(BinaryFunc::DivInt16),
                 DivInt32(()) => Ok(BinaryFunc::DivInt32),
                 DivInt64(()) => Ok(BinaryFunc::DivInt64),
+                DivUint16(()) => Ok(BinaryFunc::DivUInt16),
+                DivUint32(()) => Ok(BinaryFunc::DivUInt32),
+                DivUint64(()) => Ok(BinaryFunc::DivUInt64),
                 DivFloat32(()) => Ok(BinaryFunc::DivFloat32),
                 DivFloat64(()) => Ok(BinaryFunc::DivFloat64),
                 DivNumeric(()) => Ok(BinaryFunc::DivNumeric),
@@ -3056,6 +3511,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 ModInt16(()) => Ok(BinaryFunc::ModInt16),
                 ModInt32(()) => Ok(BinaryFunc::ModInt32),
                 ModInt64(()) => Ok(BinaryFunc::ModInt64),
+                ModUint16(()) => Ok(BinaryFunc::ModUInt16),
+                ModUint32(()) => Ok(BinaryFunc::ModUInt32),
+                ModUint64(()) => Ok(BinaryFunc::ModUInt64),
                 ModFloat32(()) => Ok(BinaryFunc::ModFloat32),
                 ModFloat64(()) => Ok(BinaryFunc::ModFloat64),
                 ModNumeric(()) => Ok(BinaryFunc::ModNumeric),
@@ -3158,16 +3616,23 @@ trait LazyUnaryFunc {
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError>;
 
-    /// The output ColumnType of this function
+    /// The output ColumnType of this function.
     fn output_type(&self, input_type: ColumnType) -> ColumnType;
 
-    /// Whether this function will produce NULL on NULL input
+    /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
 
-    /// Whether this function will produce NULL on non-NULL input
+    /// Whether this function will produce NULL on non-NULL input.
     fn introduces_nulls(&self) -> bool;
 
-    /// Whether this function preserves uniqueness
+    /// Whether this function preserves uniqueness.
+    ///
+    /// Uniqueness is preserved when `if f(x) = f(y) then x = y` is true. This
+    /// is used by the optimizer when a guarantee can be made that a collection
+    /// with unique items will stay unique when mapped by this function.
+    ///
+    /// Functions should conservatively return `false` unless they are certain
+    /// the above property is true.
     fn preserves_uniqueness(&self) -> bool;
 }
 
@@ -3243,6 +3708,9 @@ derive_unary!(
     BitNotInt16,
     BitNotInt32,
     BitNotInt64,
+    BitNotUint16,
+    BitNotUint32,
+    BitNotUint64,
     NegInt16,
     NegInt32,
     NegInt64,
@@ -3266,6 +3734,9 @@ derive_unary!(
     CastInt16ToFloat64,
     CastInt16ToInt32,
     CastInt16ToInt64,
+    CastInt16ToUint16,
+    CastInt16ToUint32,
+    CastInt16ToUint64,
     CastInt16ToString,
     CastInt2VectorToArray,
     CastInt32ToBool,
@@ -3275,6 +3746,9 @@ derive_unary!(
     CastInt32ToPgLegacyChar,
     CastInt32ToInt16,
     CastInt32ToInt64,
+    CastInt32ToUint16,
+    CastInt32ToUint32,
+    CastInt32ToUint64,
     CastInt32ToString,
     CastOidToInt32,
     CastOidToInt64,
@@ -3287,6 +3761,9 @@ derive_unary!(
     CastRegTypeToOid,
     CastInt64ToInt16,
     CastInt64ToInt32,
+    CastInt64ToUint16,
+    CastInt64ToUint32,
+    CastInt64ToUint64,
     CastInt16ToNumeric,
     CastInt32ToNumeric,
     CastInt64ToBool,
@@ -3295,9 +3772,36 @@ derive_unary!(
     CastInt64ToFloat64,
     CastInt64ToOid,
     CastInt64ToString,
+    CastUint16ToUint32,
+    CastUint16ToUint64,
+    CastUint16ToInt32,
+    CastUint16ToInt64,
+    CastUint16ToNumeric,
+    CastUint16ToFloat32,
+    CastUint16ToFloat64,
+    CastUint16ToString,
+    CastUint32ToUint16,
+    CastUint32ToUint64,
+    CastUint32ToInt32,
+    CastUint32ToInt64,
+    CastUint32ToNumeric,
+    CastUint32ToFloat32,
+    CastUint32ToFloat64,
+    CastUint32ToString,
+    CastUint64ToUint16,
+    CastUint64ToUint32,
+    CastUint64ToInt32,
+    CastUint64ToInt64,
+    CastUint64ToNumeric,
+    CastUint64ToFloat32,
+    CastUint64ToFloat64,
+    CastUint64ToString,
     CastFloat32ToInt16,
     CastFloat32ToInt32,
     CastFloat32ToInt64,
+    CastFloat32ToUint16,
+    CastFloat32ToUint32,
+    CastFloat32ToUint64,
     CastFloat32ToFloat64,
     CastFloat32ToString,
     CastFloat32ToNumeric,
@@ -3305,6 +3809,9 @@ derive_unary!(
     CastFloat64ToInt16,
     CastFloat64ToInt32,
     CastFloat64ToInt64,
+    CastFloat64ToUint16,
+    CastFloat64ToUint32,
+    CastFloat64ToUint64,
     CastFloat64ToFloat32,
     CastFloat64ToString,
     CastNumericToFloat32,
@@ -3312,13 +3819,28 @@ derive_unary!(
     CastNumericToInt16,
     CastNumericToInt32,
     CastNumericToInt64,
+    CastNumericToUint16,
+    CastNumericToUint32,
+    CastNumericToUint64,
     CastNumericToString,
+    CastMzTimestampToString,
+    CastStringToMzTimestamp,
+    CastUint64ToMzTimestamp,
+    CastUint32ToMzTimestamp,
+    CastInt64ToMzTimestamp,
+    CastInt32ToMzTimestamp,
+    CastNumericToMzTimestamp,
+    CastTimestampToMzTimestamp,
+    CastTimestampTzToMzTimestamp,
     CastStringToBool,
     CastStringToPgLegacyChar,
     CastStringToBytes,
     CastStringToInt16,
     CastStringToInt32,
     CastStringToInt64,
+    CastStringToUint16,
+    CastStringToUint32,
+    CastStringToUint64,
     CastStringToInt2Vector,
     CastStringToOid,
     CastStringToFloat32,
@@ -3453,7 +3975,8 @@ derive_unary!(
     RescaleNumeric,
     PgColumnSize,
     MzRowSize,
-    MzTypeName
+    MzTypeName,
+    StepMzTimestamp
 );
 
 impl UnaryFunc {
@@ -3466,6 +3989,14 @@ impl UnaryFunc {
             UnaryFunc::IsTrue(_) => Some("TRUE"),
             UnaryFunc::IsFalse(_) => Some("FALSE"),
             _ => None,
+        }
+    }
+
+    /// Returns true if the function could introduce an error on non-error input.
+    pub fn could_error(&self) -> bool {
+        match self {
+            UnaryFunc::IsNull(_) | UnaryFunc::CastVarCharToString(_) | UnaryFunc::Not(_) => false,
+            _ => true,
         }
     }
 }
@@ -3490,6 +4021,9 @@ impl Arbitrary for UnaryFunc {
             BitNotInt16::arbitrary().prop_map_into(),
             BitNotInt32::arbitrary().prop_map_into(),
             BitNotInt64::arbitrary().prop_map_into(),
+            BitNotUint16::arbitrary().prop_map_into(),
+            BitNotUint32::arbitrary().prop_map_into(),
+            BitNotUint64::arbitrary().prop_map_into(),
             NegInt16::arbitrary().prop_map_into(),
             NegInt32::arbitrary().prop_map_into(),
             NegInt64::arbitrary().prop_map_into(),
@@ -3513,6 +4047,9 @@ impl Arbitrary for UnaryFunc {
             CastInt16ToFloat64::arbitrary().prop_map_into(),
             CastInt16ToInt32::arbitrary().prop_map_into(),
             CastInt16ToInt64::arbitrary().prop_map_into(),
+            CastInt16ToUint16::arbitrary().prop_map_into(),
+            CastInt16ToUint32::arbitrary().prop_map_into(),
+            CastInt16ToUint64::arbitrary().prop_map_into(),
             CastInt16ToString::arbitrary().prop_map_into(),
             CastInt2VectorToArray::arbitrary().prop_map_into(),
             CastInt32ToBool::arbitrary().prop_map_into(),
@@ -3522,6 +4059,9 @@ impl Arbitrary for UnaryFunc {
             CastInt32ToPgLegacyChar::arbitrary().prop_map_into(),
             CastInt32ToInt16::arbitrary().prop_map_into(),
             CastInt32ToInt64::arbitrary().prop_map_into(),
+            CastInt32ToUint16::arbitrary().prop_map_into(),
+            CastInt32ToUint32::arbitrary().prop_map_into(),
+            CastInt32ToUint64::arbitrary().prop_map_into(),
             CastInt32ToString::arbitrary().prop_map_into(),
             CastOidToInt32::arbitrary().prop_map_into(),
             CastOidToInt64::arbitrary().prop_map_into(),
@@ -3534,6 +4074,9 @@ impl Arbitrary for UnaryFunc {
             CastRegTypeToOid::arbitrary().prop_map_into(),
             CastInt64ToInt16::arbitrary().prop_map_into(),
             CastInt64ToInt32::arbitrary().prop_map_into(),
+            CastInt64ToUint16::arbitrary().prop_map_into(),
+            CastInt64ToUint32::arbitrary().prop_map_into(),
+            CastInt64ToUint64::arbitrary().prop_map_into(),
             any::<Option<NumericMaxScale>>()
                 .prop_map(|i| UnaryFunc::CastInt16ToNumeric(CastInt16ToNumeric(i))),
             any::<Option<NumericMaxScale>>()
@@ -3545,9 +4088,39 @@ impl Arbitrary for UnaryFunc {
             CastInt64ToFloat64::arbitrary().prop_map_into(),
             CastInt64ToOid::arbitrary().prop_map_into(),
             CastInt64ToString::arbitrary().prop_map_into(),
+            CastUint16ToUint32::arbitrary().prop_map_into(),
+            CastUint16ToUint64::arbitrary().prop_map_into(),
+            CastUint16ToInt32::arbitrary().prop_map_into(),
+            CastUint16ToInt64::arbitrary().prop_map_into(),
+            any::<Option<NumericMaxScale>>()
+                .prop_map(|i| UnaryFunc::CastUint16ToNumeric(CastUint16ToNumeric(i))),
+            CastUint16ToFloat32::arbitrary().prop_map_into(),
+            CastUint16ToFloat64::arbitrary().prop_map_into(),
+            CastUint16ToString::arbitrary().prop_map_into(),
+            CastUint32ToUint16::arbitrary().prop_map_into(),
+            CastUint32ToUint64::arbitrary().prop_map_into(),
+            CastUint32ToInt32::arbitrary().prop_map_into(),
+            CastUint32ToInt64::arbitrary().prop_map_into(),
+            any::<Option<NumericMaxScale>>()
+                .prop_map(|i| UnaryFunc::CastUint32ToNumeric(CastUint32ToNumeric(i))),
+            CastUint32ToFloat32::arbitrary().prop_map_into(),
+            CastUint32ToFloat64::arbitrary().prop_map_into(),
+            CastUint32ToString::arbitrary().prop_map_into(),
+            CastUint64ToUint16::arbitrary().prop_map_into(),
+            CastUint64ToUint32::arbitrary().prop_map_into(),
+            CastUint64ToInt32::arbitrary().prop_map_into(),
+            CastUint64ToInt64::arbitrary().prop_map_into(),
+            any::<Option<NumericMaxScale>>()
+                .prop_map(|i| UnaryFunc::CastUint64ToNumeric(CastUint64ToNumeric(i))),
+            CastUint64ToFloat32::arbitrary().prop_map_into(),
+            CastUint64ToFloat64::arbitrary().prop_map_into(),
+            CastUint64ToString::arbitrary().prop_map_into(),
             CastFloat32ToInt16::arbitrary().prop_map_into(),
             CastFloat32ToInt32::arbitrary().prop_map_into(),
             CastFloat32ToInt64::arbitrary().prop_map_into(),
+            CastFloat32ToUint16::arbitrary().prop_map_into(),
+            CastFloat32ToUint32::arbitrary().prop_map_into(),
+            CastFloat32ToUint64::arbitrary().prop_map_into(),
             CastFloat32ToFloat64::arbitrary().prop_map_into(),
             CastFloat32ToString::arbitrary().prop_map_into(),
             any::<Option<NumericMaxScale>>()
@@ -3557,6 +4130,9 @@ impl Arbitrary for UnaryFunc {
             CastFloat64ToInt16::arbitrary().prop_map_into(),
             CastFloat64ToInt32::arbitrary().prop_map_into(),
             CastFloat64ToInt64::arbitrary().prop_map_into(),
+            CastFloat64ToUint16::arbitrary().prop_map_into(),
+            CastFloat64ToUint32::arbitrary().prop_map_into(),
+            CastFloat64ToUint64::arbitrary().prop_map_into(),
             CastFloat64ToFloat32::arbitrary().prop_map_into(),
             CastFloat64ToString::arbitrary().prop_map_into(),
             CastNumericToFloat32::arbitrary().prop_map_into(),
@@ -3564,6 +4140,9 @@ impl Arbitrary for UnaryFunc {
             CastNumericToInt16::arbitrary().prop_map_into(),
             CastNumericToInt32::arbitrary().prop_map_into(),
             CastNumericToInt64::arbitrary().prop_map_into(),
+            CastNumericToUint16::arbitrary().prop_map_into(),
+            CastNumericToUint32::arbitrary().prop_map_into(),
+            CastNumericToUint64::arbitrary().prop_map_into(),
             CastNumericToString::arbitrary().prop_map_into(),
             CastStringToBool::arbitrary().prop_map_into(),
             CastStringToPgLegacyChar::arbitrary().prop_map_into(),
@@ -3571,6 +4150,9 @@ impl Arbitrary for UnaryFunc {
             CastStringToInt16::arbitrary().prop_map_into(),
             CastStringToInt32::arbitrary().prop_map_into(),
             CastStringToInt64::arbitrary().prop_map_into(),
+            CastStringToUint16::arbitrary().prop_map_into(),
+            CastStringToUint32::arbitrary().prop_map_into(),
+            CastStringToUint64::arbitrary().prop_map_into(),
             CastStringToInt2Vector::arbitrary().prop_map_into(),
             CastStringToOid::arbitrary().prop_map_into(),
             CastStringToFloat32::arbitrary().prop_map_into(),
@@ -3752,6 +4334,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::BitNotInt16(_) => BitNotInt16(()),
             UnaryFunc::BitNotInt32(_) => BitNotInt32(()),
             UnaryFunc::BitNotInt64(_) => BitNotInt64(()),
+            UnaryFunc::BitNotUint16(_) => BitNotUint16(()),
+            UnaryFunc::BitNotUint32(_) => BitNotUint32(()),
+            UnaryFunc::BitNotUint64(_) => BitNotUint64(()),
             UnaryFunc::NegInt16(_) => NegInt16(()),
             UnaryFunc::NegInt32(_) => NegInt32(()),
             UnaryFunc::NegInt64(_) => NegInt64(()),
@@ -3775,6 +4360,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastInt16ToFloat64(_) => CastInt16ToFloat64(()),
             UnaryFunc::CastInt16ToInt32(_) => CastInt16ToInt32(()),
             UnaryFunc::CastInt16ToInt64(_) => CastInt16ToInt64(()),
+            UnaryFunc::CastInt16ToUint16(_) => CastInt16ToUint16(()),
+            UnaryFunc::CastInt16ToUint32(_) => CastInt16ToUint32(()),
+            UnaryFunc::CastInt16ToUint64(_) => CastInt16ToUint64(()),
             UnaryFunc::CastInt16ToString(_) => CastInt16ToString(()),
             UnaryFunc::CastInt2VectorToArray(_) => CastInt2VectorToArray(()),
             UnaryFunc::CastInt32ToBool(_) => CastInt32ToBool(()),
@@ -3784,6 +4372,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastInt32ToPgLegacyChar(_) => CastInt32ToPgLegacyChar(()),
             UnaryFunc::CastInt32ToInt16(_) => CastInt32ToInt16(()),
             UnaryFunc::CastInt32ToInt64(_) => CastInt32ToInt64(()),
+            UnaryFunc::CastInt32ToUint16(_) => CastInt32ToUint16(()),
+            UnaryFunc::CastInt32ToUint32(_) => CastInt32ToUint32(()),
+            UnaryFunc::CastInt32ToUint64(_) => CastInt32ToUint64(()),
             UnaryFunc::CastInt32ToString(_) => CastInt32ToString(()),
             UnaryFunc::CastOidToInt32(_) => CastOidToInt32(()),
             UnaryFunc::CastOidToInt64(_) => CastOidToInt64(()),
@@ -3796,6 +4387,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastRegTypeToOid(_) => CastRegTypeToOid(()),
             UnaryFunc::CastInt64ToInt16(_) => CastInt64ToInt16(()),
             UnaryFunc::CastInt64ToInt32(_) => CastInt64ToInt32(()),
+            UnaryFunc::CastInt64ToUint16(_) => CastInt64ToUint16(()),
+            UnaryFunc::CastInt64ToUint32(_) => CastInt64ToUint32(()),
+            UnaryFunc::CastInt64ToUint64(_) => CastInt64ToUint64(()),
             UnaryFunc::CastInt16ToNumeric(func) => CastInt16ToNumeric(func.0.into_proto()),
             UnaryFunc::CastInt32ToNumeric(func) => CastInt32ToNumeric(func.0.into_proto()),
             UnaryFunc::CastInt64ToBool(_) => CastInt64ToBool(()),
@@ -3804,9 +4398,36 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastInt64ToFloat64(_) => CastInt64ToFloat64(()),
             UnaryFunc::CastInt64ToOid(_) => CastInt64ToOid(()),
             UnaryFunc::CastInt64ToString(_) => CastInt64ToString(()),
+            UnaryFunc::CastUint16ToUint32(_) => CastUint16ToUint32(()),
+            UnaryFunc::CastUint16ToUint64(_) => CastUint16ToUint64(()),
+            UnaryFunc::CastUint16ToInt32(_) => CastUint16ToInt32(()),
+            UnaryFunc::CastUint16ToInt64(_) => CastUint16ToInt64(()),
+            UnaryFunc::CastUint16ToNumeric(func) => CastUint16ToNumeric(func.0.into_proto()),
+            UnaryFunc::CastUint16ToFloat32(_) => CastUint16ToFloat32(()),
+            UnaryFunc::CastUint16ToFloat64(_) => CastUint16ToFloat64(()),
+            UnaryFunc::CastUint16ToString(_) => CastUint16ToString(()),
+            UnaryFunc::CastUint32ToUint16(_) => CastUint32ToUint16(()),
+            UnaryFunc::CastUint32ToUint64(_) => CastUint32ToUint64(()),
+            UnaryFunc::CastUint32ToInt32(_) => CastUint32ToInt32(()),
+            UnaryFunc::CastUint32ToInt64(_) => CastUint32ToInt64(()),
+            UnaryFunc::CastUint32ToNumeric(func) => CastUint32ToNumeric(func.0.into_proto()),
+            UnaryFunc::CastUint32ToFloat32(_) => CastUint32ToFloat32(()),
+            UnaryFunc::CastUint32ToFloat64(_) => CastUint32ToFloat64(()),
+            UnaryFunc::CastUint32ToString(_) => CastUint32ToString(()),
+            UnaryFunc::CastUint64ToUint16(_) => CastUint64ToUint16(()),
+            UnaryFunc::CastUint64ToUint32(_) => CastUint64ToUint32(()),
+            UnaryFunc::CastUint64ToInt32(_) => CastUint64ToInt32(()),
+            UnaryFunc::CastUint64ToInt64(_) => CastUint64ToInt64(()),
+            UnaryFunc::CastUint64ToNumeric(func) => CastUint64ToNumeric(func.0.into_proto()),
+            UnaryFunc::CastUint64ToFloat32(_) => CastUint64ToFloat32(()),
+            UnaryFunc::CastUint64ToFloat64(_) => CastUint64ToFloat64(()),
+            UnaryFunc::CastUint64ToString(_) => CastUint64ToString(()),
             UnaryFunc::CastFloat32ToInt16(_) => CastFloat32ToInt16(()),
             UnaryFunc::CastFloat32ToInt32(_) => CastFloat32ToInt32(()),
             UnaryFunc::CastFloat32ToInt64(_) => CastFloat32ToInt64(()),
+            UnaryFunc::CastFloat32ToUint16(_) => CastFloat32ToUint16(()),
+            UnaryFunc::CastFloat32ToUint32(_) => CastFloat32ToUint32(()),
+            UnaryFunc::CastFloat32ToUint64(_) => CastFloat32ToUint64(()),
             UnaryFunc::CastFloat32ToFloat64(_) => CastFloat32ToFloat64(()),
             UnaryFunc::CastFloat32ToString(_) => CastFloat32ToString(()),
             UnaryFunc::CastFloat32ToNumeric(func) => CastFloat32ToNumeric(func.0.into_proto()),
@@ -3814,6 +4435,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastFloat64ToInt16(_) => CastFloat64ToInt16(()),
             UnaryFunc::CastFloat64ToInt32(_) => CastFloat64ToInt32(()),
             UnaryFunc::CastFloat64ToInt64(_) => CastFloat64ToInt64(()),
+            UnaryFunc::CastFloat64ToUint16(_) => CastFloat64ToUint16(()),
+            UnaryFunc::CastFloat64ToUint32(_) => CastFloat64ToUint32(()),
+            UnaryFunc::CastFloat64ToUint64(_) => CastFloat64ToUint64(()),
             UnaryFunc::CastFloat64ToFloat32(_) => CastFloat64ToFloat32(()),
             UnaryFunc::CastFloat64ToString(_) => CastFloat64ToString(()),
             UnaryFunc::CastNumericToFloat32(_) => CastNumericToFloat32(()),
@@ -3821,6 +4445,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastNumericToInt16(_) => CastNumericToInt16(()),
             UnaryFunc::CastNumericToInt32(_) => CastNumericToInt32(()),
             UnaryFunc::CastNumericToInt64(_) => CastNumericToInt64(()),
+            UnaryFunc::CastNumericToUint16(_) => CastNumericToUint16(()),
+            UnaryFunc::CastNumericToUint32(_) => CastNumericToUint32(()),
+            UnaryFunc::CastNumericToUint64(_) => CastNumericToUint64(()),
             UnaryFunc::CastNumericToString(_) => CastNumericToString(()),
             UnaryFunc::CastStringToBool(_) => CastStringToBool(()),
             UnaryFunc::CastStringToPgLegacyChar(_) => CastStringToPgLegacyChar(()),
@@ -3828,6 +4455,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastStringToInt16(_) => CastStringToInt16(()),
             UnaryFunc::CastStringToInt32(_) => CastStringToInt32(()),
             UnaryFunc::CastStringToInt64(_) => CastStringToInt64(()),
+            UnaryFunc::CastStringToUint16(_) => CastStringToUint16(()),
+            UnaryFunc::CastStringToUint32(_) => CastStringToUint32(()),
+            UnaryFunc::CastStringToUint64(_) => CastStringToUint64(()),
             UnaryFunc::CastStringToInt2Vector(_) => CastStringToInt2Vector(()),
             UnaryFunc::CastStringToOid(_) => CastStringToOid(()),
             UnaryFunc::CastStringToFloat32(_) => CastStringToFloat32(()),
@@ -3999,6 +4629,16 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::PgColumnSize(_) => PgColumnSize(()),
             UnaryFunc::MzRowSize(_) => MzRowSize(()),
             UnaryFunc::MzTypeName(_) => MzTypeName(()),
+            UnaryFunc::CastMzTimestampToString(_) => CastMzTimestampToString(()),
+            UnaryFunc::CastStringToMzTimestamp(_) => CastStringToMzTimestamp(()),
+            UnaryFunc::CastUint64ToMzTimestamp(_) => CastUint64ToMzTimestamp(()),
+            UnaryFunc::CastUint32ToMzTimestamp(_) => CastUint32ToMzTimestamp(()),
+            UnaryFunc::CastInt64ToMzTimestamp(_) => CastInt64ToMzTimestamp(()),
+            UnaryFunc::CastInt32ToMzTimestamp(_) => CastInt32ToMzTimestamp(()),
+            UnaryFunc::CastNumericToMzTimestamp(_) => CastNumericToMzTimestamp(()),
+            UnaryFunc::CastTimestampToMzTimestamp(_) => CastTimestampToMzTimestamp(()),
+            UnaryFunc::CastTimestampTzToMzTimestamp(_) => CastTimestampTzToMzTimestamp(()),
+            UnaryFunc::StepMzTimestamp(_) => StepMzTimestamp(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -4014,6 +4654,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 BitNotInt16(()) => Ok(impls::BitNotInt16.into()),
                 BitNotInt32(()) => Ok(impls::BitNotInt32.into()),
                 BitNotInt64(()) => Ok(impls::BitNotInt64.into()),
+                BitNotUint16(()) => Ok(impls::BitNotUint16.into()),
+                BitNotUint32(()) => Ok(impls::BitNotUint32.into()),
+                BitNotUint64(()) => Ok(impls::BitNotUint64.into()),
                 NegInt16(()) => Ok(impls::NegInt16.into()),
                 NegInt32(()) => Ok(impls::NegInt32.into()),
                 NegInt64(()) => Ok(impls::NegInt64.into()),
@@ -4037,6 +4680,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastInt16ToFloat64(()) => Ok(impls::CastInt16ToFloat64.into()),
                 CastInt16ToInt32(()) => Ok(impls::CastInt16ToInt32.into()),
                 CastInt16ToInt64(()) => Ok(impls::CastInt16ToInt64.into()),
+                CastInt16ToUint16(()) => Ok(impls::CastInt16ToUint16.into()),
+                CastInt16ToUint32(()) => Ok(impls::CastInt16ToUint32.into()),
+                CastInt16ToUint64(()) => Ok(impls::CastInt16ToUint64.into()),
                 CastInt16ToString(()) => Ok(impls::CastInt16ToString.into()),
                 CastInt2VectorToArray(()) => Ok(impls::CastInt2VectorToArray.into()),
                 CastInt32ToBool(()) => Ok(impls::CastInt32ToBool.into()),
@@ -4046,6 +4692,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastInt32ToPgLegacyChar(()) => Ok(impls::CastInt32ToPgLegacyChar.into()),
                 CastInt32ToInt16(()) => Ok(impls::CastInt32ToInt16.into()),
                 CastInt32ToInt64(()) => Ok(impls::CastInt32ToInt64.into()),
+                CastInt32ToUint16(()) => Ok(impls::CastInt32ToUint16.into()),
+                CastInt32ToUint32(()) => Ok(impls::CastInt32ToUint32.into()),
+                CastInt32ToUint64(()) => Ok(impls::CastInt32ToUint64.into()),
                 CastInt32ToString(()) => Ok(impls::CastInt32ToString.into()),
                 CastOidToInt32(()) => Ok(impls::CastOidToInt32.into()),
                 CastOidToInt64(()) => Ok(impls::CastOidToInt64.into()),
@@ -4058,6 +4707,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastRegTypeToOid(()) => Ok(impls::CastRegTypeToOid.into()),
                 CastInt64ToInt16(()) => Ok(impls::CastInt64ToInt16.into()),
                 CastInt64ToInt32(()) => Ok(impls::CastInt64ToInt32.into()),
+                CastInt64ToUint16(()) => Ok(impls::CastInt64ToUint16.into()),
+                CastInt64ToUint32(()) => Ok(impls::CastInt64ToUint32.into()),
+                CastInt64ToUint64(()) => Ok(impls::CastInt64ToUint64.into()),
                 CastInt16ToNumeric(max_scale) => {
                     Ok(impls::CastInt16ToNumeric(max_scale.into_rust()?).into())
                 }
@@ -4072,9 +4724,42 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastInt64ToFloat64(()) => Ok(impls::CastInt64ToFloat64.into()),
                 CastInt64ToOid(()) => Ok(impls::CastInt64ToOid.into()),
                 CastInt64ToString(()) => Ok(impls::CastInt64ToString.into()),
+                CastUint16ToUint32(()) => Ok(impls::CastUint16ToUint32.into()),
+                CastUint16ToUint64(()) => Ok(impls::CastUint16ToUint64.into()),
+                CastUint16ToInt32(()) => Ok(impls::CastUint16ToInt32.into()),
+                CastUint16ToInt64(()) => Ok(impls::CastUint16ToInt64.into()),
+                CastUint16ToNumeric(max_scale) => {
+                    Ok(impls::CastUint16ToNumeric(max_scale.into_rust()?).into())
+                }
+                CastUint16ToFloat32(()) => Ok(impls::CastUint16ToFloat32.into()),
+                CastUint16ToFloat64(()) => Ok(impls::CastUint16ToFloat64.into()),
+                CastUint16ToString(()) => Ok(impls::CastUint16ToString.into()),
+                CastUint32ToUint16(()) => Ok(impls::CastUint32ToUint16.into()),
+                CastUint32ToUint64(()) => Ok(impls::CastUint32ToUint64.into()),
+                CastUint32ToInt32(()) => Ok(impls::CastUint32ToInt32.into()),
+                CastUint32ToInt64(()) => Ok(impls::CastUint32ToInt64.into()),
+                CastUint32ToNumeric(max_scale) => {
+                    Ok(impls::CastUint32ToNumeric(max_scale.into_rust()?).into())
+                }
+                CastUint32ToFloat32(()) => Ok(impls::CastUint32ToFloat32.into()),
+                CastUint32ToFloat64(()) => Ok(impls::CastUint32ToFloat64.into()),
+                CastUint32ToString(()) => Ok(impls::CastUint32ToString.into()),
+                CastUint64ToUint16(()) => Ok(impls::CastUint64ToUint16.into()),
+                CastUint64ToUint32(()) => Ok(impls::CastUint64ToUint32.into()),
+                CastUint64ToInt32(()) => Ok(impls::CastUint64ToInt32.into()),
+                CastUint64ToInt64(()) => Ok(impls::CastUint64ToInt64.into()),
+                CastUint64ToNumeric(max_scale) => {
+                    Ok(impls::CastUint64ToNumeric(max_scale.into_rust()?).into())
+                }
+                CastUint64ToFloat32(()) => Ok(impls::CastUint64ToFloat32.into()),
+                CastUint64ToFloat64(()) => Ok(impls::CastUint64ToFloat64.into()),
+                CastUint64ToString(()) => Ok(impls::CastUint64ToString.into()),
                 CastFloat32ToInt16(()) => Ok(impls::CastFloat32ToInt16.into()),
                 CastFloat32ToInt32(()) => Ok(impls::CastFloat32ToInt32.into()),
                 CastFloat32ToInt64(()) => Ok(impls::CastFloat32ToInt64.into()),
+                CastFloat32ToUint16(()) => Ok(impls::CastFloat32ToUint16.into()),
+                CastFloat32ToUint32(()) => Ok(impls::CastFloat32ToUint32.into()),
+                CastFloat32ToUint64(()) => Ok(impls::CastFloat32ToUint64.into()),
                 CastFloat32ToFloat64(()) => Ok(impls::CastFloat32ToFloat64.into()),
                 CastFloat32ToString(()) => Ok(impls::CastFloat32ToString.into()),
                 CastFloat32ToNumeric(max_scale) => {
@@ -4086,6 +4771,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastFloat64ToInt16(()) => Ok(impls::CastFloat64ToInt16.into()),
                 CastFloat64ToInt32(()) => Ok(impls::CastFloat64ToInt32.into()),
                 CastFloat64ToInt64(()) => Ok(impls::CastFloat64ToInt64.into()),
+                CastFloat64ToUint16(()) => Ok(impls::CastFloat64ToUint16.into()),
+                CastFloat64ToUint32(()) => Ok(impls::CastFloat64ToUint32.into()),
+                CastFloat64ToUint64(()) => Ok(impls::CastFloat64ToUint64.into()),
                 CastFloat64ToFloat32(()) => Ok(impls::CastFloat64ToFloat32.into()),
                 CastFloat64ToString(()) => Ok(impls::CastFloat64ToString.into()),
                 CastNumericToFloat32(()) => Ok(impls::CastNumericToFloat32.into()),
@@ -4093,6 +4781,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastNumericToInt16(()) => Ok(impls::CastNumericToInt16.into()),
                 CastNumericToInt32(()) => Ok(impls::CastNumericToInt32.into()),
                 CastNumericToInt64(()) => Ok(impls::CastNumericToInt64.into()),
+                CastNumericToUint16(()) => Ok(impls::CastNumericToUint16.into()),
+                CastNumericToUint32(()) => Ok(impls::CastNumericToUint32.into()),
+                CastNumericToUint64(()) => Ok(impls::CastNumericToUint64.into()),
                 CastNumericToString(()) => Ok(impls::CastNumericToString.into()),
                 CastStringToBool(()) => Ok(impls::CastStringToBool.into()),
                 CastStringToPgLegacyChar(()) => Ok(impls::CastStringToPgLegacyChar.into()),
@@ -4100,6 +4791,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastStringToInt16(()) => Ok(impls::CastStringToInt16.into()),
                 CastStringToInt32(()) => Ok(impls::CastStringToInt32.into()),
                 CastStringToInt64(()) => Ok(impls::CastStringToInt64.into()),
+                CastStringToUint16(()) => Ok(impls::CastStringToUint16.into()),
+                CastStringToUint32(()) => Ok(impls::CastStringToUint32.into()),
+                CastStringToUint64(()) => Ok(impls::CastStringToUint64.into()),
                 CastStringToInt2Vector(()) => Ok(impls::CastStringToInt2Vector.into()),
                 CastStringToOid(()) => Ok(impls::CastStringToOid.into()),
                 CastStringToFloat32(()) => Ok(impls::CastStringToFloat32.into()),
@@ -4316,6 +5010,17 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 PgColumnSize(()) => Ok(impls::PgColumnSize.into()),
                 MzRowSize(()) => Ok(impls::MzRowSize.into()),
                 MzTypeName(()) => Ok(impls::MzTypeName.into()),
+
+                CastMzTimestampToString(()) => Ok(impls::CastMzTimestampToString.into()),
+                CastStringToMzTimestamp(()) => Ok(impls::CastStringToMzTimestamp.into()),
+                CastUint64ToMzTimestamp(()) => Ok(impls::CastUint64ToMzTimestamp.into()),
+                CastUint32ToMzTimestamp(()) => Ok(impls::CastUint32ToMzTimestamp.into()),
+                CastInt64ToMzTimestamp(()) => Ok(impls::CastInt64ToMzTimestamp.into()),
+                CastInt32ToMzTimestamp(()) => Ok(impls::CastInt32ToMzTimestamp.into()),
+                CastNumericToMzTimestamp(()) => Ok(impls::CastNumericToMzTimestamp.into()),
+                CastTimestampToMzTimestamp(()) => Ok(impls::CastTimestampToMzTimestamp.into()),
+                CastTimestampTzToMzTimestamp(()) => Ok(impls::CastTimestampTzToMzTimestamp.into()),
+                StepMzTimestamp(()) => Ok(impls::StepMzTimestamp.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
@@ -4850,7 +5555,11 @@ where
         Int16 => Ok(strconv::format_int16(buf, d.unwrap_int16())),
         Int32 => Ok(strconv::format_int32(buf, d.unwrap_int32())),
         Int64 => Ok(strconv::format_int64(buf, d.unwrap_int64())),
-        Oid | RegClass | RegProc | RegType => Ok(strconv::format_oid(buf, d.unwrap_uint32())),
+        UInt16 => Ok(strconv::format_uint16(buf, d.unwrap_uint16())),
+        UInt32 | Oid | RegClass | RegProc | RegType => {
+            Ok(strconv::format_uint32(buf, d.unwrap_uint32()))
+        }
+        UInt64 => Ok(strconv::format_uint64(buf, d.unwrap_uint64())),
         Float32 => Ok(strconv::format_float32(buf, d.unwrap_float32())),
         Float64 => Ok(strconv::format_float64(buf, d.unwrap_float64())),
         Numeric { .. } => Ok(strconv::format_numeric(buf, &d.unwrap_numeric())),
@@ -4911,6 +5620,7 @@ where
         Int2Vector => strconv::format_legacy_vector(buf, &d.unwrap_array().elements(), |buf, d| {
             stringify_datum(buf.nonnull_buffer(), d, &ScalarType::Int16)
         }),
+        MzTimestamp { .. } => Ok(strconv::format_mztimestamp(buf, d.unwrap_mztimestamp())),
     }
 }
 
@@ -5589,6 +6299,38 @@ impl VariadicFunc {
         }
     }
 
+    pub fn is_associative(&self) -> bool {
+        match self {
+            VariadicFunc::Coalesce
+            | VariadicFunc::Greatest
+            | VariadicFunc::Least
+            | VariadicFunc::Concat
+            | VariadicFunc::And
+            | VariadicFunc::Or => true,
+
+            VariadicFunc::MakeTimestamp
+            | VariadicFunc::PadLeading
+            | VariadicFunc::Substr
+            | VariadicFunc::Replace
+            | VariadicFunc::JsonbBuildArray
+            | VariadicFunc::JsonbBuildObject
+            | VariadicFunc::ArrayCreate { elem_type: _ }
+            | VariadicFunc::ArrayToString { elem_type: _ }
+            | VariadicFunc::ArrayIndex { offset: _ }
+            | VariadicFunc::ListCreate { elem_type: _ }
+            | VariadicFunc::RecordCreate { field_names: _ }
+            | VariadicFunc::ListIndex
+            | VariadicFunc::ListSliceLinear
+            | VariadicFunc::SplitPart
+            | VariadicFunc::RegexpMatch
+            | VariadicFunc::HmacString
+            | VariadicFunc::HmacBytes
+            | VariadicFunc::ErrorIfNull
+            | VariadicFunc::DateBinTimestamp
+            | VariadicFunc::DateBinTimestampTz => false,
+        }
+    }
+
     pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
         use VariadicFunc::*;
         let in_nullable = input_types.iter().any(|t| t.nullable);
@@ -5722,6 +6464,15 @@ impl VariadicFunc {
             VariadicFunc::And => MirScalarExpr::literal_false(),
             VariadicFunc::Or => MirScalarExpr::literal_true(),
             _ => unreachable!(),
+        }
+    }
+
+    /// Returns true if the function could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        match self {
+            VariadicFunc::And | VariadicFunc::Or => false,
+            // All other cases are unknown
+            _ => true,
         }
     }
 }
@@ -5951,7 +6702,6 @@ mod test {
         let mut rti = mz_lowertest::ReflectedTypeInfo::default();
         UnaryFunc::add_to_reflected_type_info(&mut rti);
         for (variant, (_, f_types)) in rti.enum_dict["UnaryFunc"].iter() {
-            println!("f_types {:?}", f_types);
             if f_types.is_empty() {
                 let unary_unit_variant: UnaryFunc =
                     serde_json::from_str(&format!("\"{}\"", variant)).unwrap();

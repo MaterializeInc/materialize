@@ -32,13 +32,20 @@ $ set schema={
 $ kafka-create-topic topic=multipart-key
 
 # Ingest data where the first or the second part of the key has high cardinality
-$ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10000
+$ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "KEY1", "f2": "${kafka-ingest.iteration}"} {"f3": "KEY1", "f4": "${kafka-ingest.iteration}"}
 {"f1": "${kafka-ingest.iteration}", "f2": "KEY2"} {"f3": "${kafka-ingest.iteration}", "f4": "KEY2"}
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE multipart_key
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-multipart-key-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multipart-key-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
 > SELECT COUNT(*) FROM multipart_key;

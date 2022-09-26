@@ -9,6 +9,7 @@
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
+use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeField;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
@@ -27,7 +28,7 @@ fn test_parse_date() {
     run_test_parse_date("2001 02 03", NaiveDate::from_ymd(2001, 2, 3));
     run_test_parse_date("2001-02-03 04:05:06.789", NaiveDate::from_ymd(2001, 2, 3));
     fn run_test_parse_date(s: &str, n: NaiveDate) {
-        assert_eq!(strconv::parse_date(s).unwrap(), n);
+        assert_eq!(NaiveDate::from(strconv::parse_date(s).unwrap()), n);
     }
 }
 
@@ -509,7 +510,7 @@ fn test_format_date() {
 
     fn run_test_format_date(n: NaiveDate, e: &str) {
         let mut buf = String::new();
-        strconv::format_date(&mut buf, n);
+        strconv::format_date(&mut buf, Date::try_from(n).unwrap());
         assert_eq!(buf, e);
     }
 }

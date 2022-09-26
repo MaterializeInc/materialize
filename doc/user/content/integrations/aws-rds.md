@@ -1,5 +1,5 @@
 ---
-title: "How to connect AWS RDS to Materialize"
+title: "AWS RDS (PostgreSQL)"
 description: "How to connect Amazon RDS managed PostgreSQL as a source to Materialize"
 menu:
   main:

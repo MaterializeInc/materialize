@@ -13,7 +13,7 @@ Materialize is **wire-compatible** with PostgreSQL, which means that PHP applica
 
 ## Connect
 
-To [connect](https://www.php.net/manual/en/ref.pdo-pgsql.connection.php) to a local Materialize instance using `PDO_PGSQL`:
+To [connect](https://www.php.net/manual/en/ref.pdo-pgsql.connection.php) to Materialize using `PDO_PGSQL`:
 
 ```php
 <?php
@@ -35,7 +35,7 @@ function connect(string $host, int $port, string $db, string $user, string $pass
     }
 }
 
-$connection = connect('localhost', 6875, 'materialize', 'materialize', 'materialize');
+$connection = connect('MATERIALIZE_HOST', 6875, 'materialize', 'MATERIALIZE_USERNAME', 'MATERIALIZE_PASSWORD');
 ```
 
 You can add the above code to a `config.php` file and then include it in your application with `require 'connect.php';`.
@@ -101,7 +101,7 @@ An `mz_diff` value of `-1` indicates Materialize is deleting one row with the in
 
 Querying Materialize is identical to querying a PostgreSQL database: PHP executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
-Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
 To query a view `my_view` using a `SELECT` statement:
 

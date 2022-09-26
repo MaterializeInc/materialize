@@ -73,12 +73,13 @@ Commit
 Committed
 Compaction
 Compression
+Compute
 Confluent
 Connection
 Connections
-Consistency
 Constraint
 Copy
+Count
 Counter
 Create
 Cross
@@ -119,8 +120,8 @@ Except
 Execute
 Exists
 Explain
-Extended
 Extract
+Factor
 False
 Fetch
 Fields
@@ -135,8 +136,8 @@ Format
 Forward
 From
 Full
+Fullname
 Generator
-Granularity
 Graph
 Greatest
 Group
@@ -152,6 +153,7 @@ Hours
 Id
 Idempotence
 If
+Ignore
 Ilike
 In
 Include
@@ -182,6 +184,7 @@ Latest
 Leading
 Least
 Left
+Legacywith
 Level
 Like
 Limit
@@ -242,6 +245,7 @@ Position
 Postgres
 Preceding
 Precision
+Prefix
 Prepare
 Primary
 Progress
@@ -264,13 +268,16 @@ Repeatable
 Replace
 Replica
 Replicas
+Replication
 Reset
 Restrict
+Retention
 Returning
 Right
 Role
 Roles
 Rollback
+Rotate
 Row
 Rows
 S3
@@ -319,6 +326,7 @@ Then
 Tick
 Ties
 Time
+Timeline
 Timeout
 Timestamp
 Timing
@@ -360,6 +368,7 @@ Wire
 With
 Without
 Work
+Workers
 Write
 Year
 Years

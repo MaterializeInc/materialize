@@ -411,15 +411,21 @@ impl<'a> ViewExplanation<'a> {
                 }
                 Ok(())
             }
-            JoinImplementation::IndexedFilter(_, key, val) => {
+            JoinImplementation::IndexedFilter(_, key, vals) => {
                 writeln!(
                     f,
                     "IndexedFilter {}",
                     separated(
-                        " AND ",
-                        key.iter()
-                            .zip(val.unpack().into_iter())
-                            .map(|(k, v)| format!("{} = {}", k, v))
+                        " OR ",
+                        vals.iter().map(|row| format!(
+                            "({})",
+                            separated(
+                                " AND ",
+                                key.iter()
+                                    .zip(row.unpack().into_iter())
+                                    .map(|(k, v)| format!("{} = {}", k, v))
+                            )
+                        ))
                     )
                 )
             }

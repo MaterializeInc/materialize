@@ -90,7 +90,7 @@ impl PostgresConsensusConfig {
         "MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL";
 
     /// Returns a new [PostgresConsensusConfig] for use in production.
-    pub async fn new(
+    pub fn new(
         url: &str,
         connection_pool_max_size: usize,
         metrics: PostgresConsensusMetrics,
@@ -111,7 +111,7 @@ impl PostgresConsensusConfig {
     /// with a valid connection url [1].
     ///
     /// [1]: https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url
-    pub async fn new_for_test() -> Result<Option<Self>, Error> {
+    pub fn new_for_test() -> Result<Option<Self>, Error> {
         let url = match std::env::var(Self::EXTERNAL_TESTS_POSTGRES_URL) {
             Ok(url) => url,
             Err(_) => {
@@ -126,8 +126,7 @@ impl PostgresConsensusConfig {
             &url,
             2,
             PostgresConsensusMetrics::new(&MetricsRegistry::new()),
-        )
-        .await?;
+        )?;
         Ok(Some(config))
     }
 }
@@ -330,7 +329,7 @@ impl Consensus for PostgresConsensus {
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
-    ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
+    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -378,13 +377,14 @@ impl Consensus for PostgresConsensus {
         if result == 1 {
             Ok(Ok(()))
         } else {
-            // It's safe to call head in a subsequent transaction rather than doing
+            // It's safe to call scan in a subsequent transaction rather than doing
             // so directly in the same transaction because, once a given (seqno, data)
             // pair exists for our shard, we enforce the invariants that
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(key).await?;
+            let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
+            let current = self.scan(key, from).await?;
             Ok(Err(current))
         }
     }
@@ -408,15 +408,7 @@ impl Consensus for PostgresConsensus {
                 data: Bytes::from(data),
             });
         }
-
-        if results.is_empty() {
-            Err(ExternalError::from(anyhow!(
-                "sequence number lower bound too high for scan: {:?}",
-                from
-            )))
-        } else {
-            Ok(results)
-        }
+        Ok(results)
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
@@ -466,7 +458,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn postgres_consensus() -> Result<(), ExternalError> {
-        let config = match PostgresConsensusConfig::new_for_test().await? {
+        let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,
             None => {
                 info!(

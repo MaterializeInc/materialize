@@ -17,11 +17,15 @@ one 1 1
 ----
 parts=1 len=1
 
-compare-and-append input=b0
+register-writer writer_id=w11111111-1111-1111-1111-111111111111
 ----
-ok
+v2 [0]
 
-register-listen output=l0 as-of=0
+compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v3 [2]
+
+register-listen output=l0 as_of=0
 ----
 ok
 
@@ -35,9 +39,9 @@ two 2 1
 ----
 parts=1 len=1
 
-compare-and-append input=b1
+compare-and-append input=b1 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-ok
+v6 [3]
 
 compact output=b0_1 inputs=(b0,b1)  lower=0 upper=3 since=0
 ----
@@ -53,14 +57,14 @@ threeD 3 1
 ----
 parts=1 len=4
 
-compare-and-append input=b2
+compare-and-append input=b2 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-ok
+v7 [4]
 
 # Now apply the merged batch.
 apply-merge-res input=b0_1
 ----
-true
+v8 true
 
 # Finally, verify that the listener correctly skips [1, 2) when it grabs the
 # merged batch. Without the fix, this also gets a "one 1 1" line.

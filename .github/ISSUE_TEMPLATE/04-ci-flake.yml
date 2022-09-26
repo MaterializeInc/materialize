@@ -1,0 +1,46 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+name: "Internal: CI flake"
+description: >
+  A CI job that failed but eventually passed after retry.
+title: "<TEST-NAME> is flaky"
+labels: [C-bug, C-triage, ci-flake]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Sorry about the CI flake. Thank you for taking the time to file an issue!
+
+        Take a moment to search for an existing issue based on the error message. Or look at all existing issues with the [ci-flake](https://github.com/MaterializeInc/materialize/labels/ci-flake) label.
+  - type: input
+    id: buildkite
+    attributes:
+      label: Buildkite link
+      description: |
+        Provide a link to the failed Buildkite job.
+      placeholder: https://buildkite.com/materialize/tests/builds/...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: |
+        Include the most relevant log output from the failure. This helps others find this issue if they experience the same flake.
+
+        If Materialize crashed, include the panic message and the full backtrace. If a test assertion failed, include the full text of the message. For some CI jobs, the most relevant log output is emitted to a services.log file, which you can download from the Artifacts tab.
+      render: source
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Additional thoughts
+      description: |
+        Share any additional context or insights you have about this CI flake.

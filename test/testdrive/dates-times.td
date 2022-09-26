@@ -38,8 +38,11 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"d": 18135, "ts": 1566865029000000}
 {"d": 0, "ts": 65000000}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW data_view as SELECT * from data
@@ -51,7 +54,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 # Since the latest record in the topic is 10, the logical timestamp at which
 # we read should be 10 - 1.
 # This is no longer true after timestamping - commenting out
-#> SELECT mz_logical_timestamp() FROM data_view LIMIT 1
+#> SELECT mz_now() FROM data_view LIMIT 1
 #9
 
 > SELECT INTERVAL '1' SECOND

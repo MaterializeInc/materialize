@@ -42,6 +42,11 @@ CREATE VIEWS FROM "mz_source"
 ("public"."foo" AS "foo", "otherschema"."foo" AS "foo2");
 ```
 
+### Load generators
+
+For certain [load generator sources](/sql/create-source/load-generator), `CREATE
+VIEWS` will split the source into multiple views.
+
 ### Temporary views
 
 The `TEMP`/`TEMPORARY` keyword creates temporary views. Temporary views are
@@ -78,3 +83,4 @@ CREATE VIEWS FROM "mz_source"
 ## Related pages
 
 - [`CREATE SOURCE FROM POSTGRES`](/sql/create-source/postgres/)
+- [`CREATE SOURCE FROM LOAD GENERATOR`](/sql/create-source/load-generator/)

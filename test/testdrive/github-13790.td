@@ -9,6 +9,10 @@
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/13790
 
+# The contents of the introspection tables depend on the replica size and number of replicas
+$ skip-if
+SELECT ${arg.replica-size} > 1 OR ${arg.replicas} > 1;
+
 > CREATE TABLE t (a int)
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
@@ -18,11 +22,11 @@
 
 > SELECT time > 0
   FROM
-    mz_materialized_views AS views,
-    mz_materializations AS mats,
-    mz_materialization_frontiers AS frontiers
+    mz_catalog.mz_materialized_views AS views,
+    mz_internal.mz_materializations AS mats,
+    mz_internal.mz_materialization_frontiers AS frontiers
   WHERE
     views.name = 'mv' AND
-    views.id = mats.global_id AND
-    mats.global_id = frontiers.global_id
+    views.id = mats.object_id AND
+    mats.object_id = frontiers.object_id
 true

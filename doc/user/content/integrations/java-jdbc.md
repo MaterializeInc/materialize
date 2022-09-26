@@ -13,7 +13,7 @@ Materialize is **wire-compatible** with PostgreSQL, which means that Java applic
 
 ## Connect
 
-To [connect](https://jdbc.postgresql.org/documentation/head/connect.html) to a local Materialize instance using the PostgreSQL JDBC Driver:
+To [connect](https://jdbc.postgresql.org/documentation/head/connect.html) to Materialize using the PostgreSQL JDBC Driver:
 
 ```java
 import java.sql.Connection;
@@ -23,9 +23,9 @@ import java.util.Properties;
 
 public class App {
 
-    private final String url = "jdbc:postgresql://localhost:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize
@@ -36,7 +36,7 @@ public class App {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
-        props.setProperty("ssl","false");
+        props.setProperty("ssl","true");
         Connection conn = null;
         try {
             conn = DriverManager.getConnection(url, props);
@@ -73,9 +73,9 @@ import java.sql.Statement;
 
 public class App {
 
-    private final String url = "jdbc:postgresql://localhost:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize
@@ -86,7 +86,7 @@ public class App {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
-        props.setProperty("ssl","false");
+        props.setProperty("ssl","true");
 
         return DriverManager.getConnection(url, props);
 
@@ -132,7 +132,7 @@ A `mz_diff` value of `-1` indicates that Materialize is deleting one row with th
 
 Querying Materialize is identical to querying a PostgreSQL database: Java executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
-Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
 To query a view `my_view` using a `SELECT` statement:
 
@@ -146,9 +146,9 @@ import java.sql.Statement;
 
 public class App {
 
-    private final String url = "jdbc:postgresql://localhost:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize
@@ -159,7 +159,7 @@ public class App {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
-        props.setProperty("ssl","false");
+        props.setProperty("ssl","true");
 
         return DriverManager.getConnection(url, props);
 
@@ -206,9 +206,9 @@ import java.sql.PreparedStatement;
 
 public class App {
 
-    private final String url = "jdbc:postgresql://localhost:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize
@@ -219,7 +219,7 @@ public class App {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
-        props.setProperty("ssl","false");
+        props.setProperty("ssl","true");
 
         return DriverManager.getConnection(url, props);
 
@@ -265,9 +265,9 @@ import java.sql.PreparedStatement;
 
 public class App {
 
-    private final String url = "jdbc:postgresql://localhost:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize
@@ -278,7 +278,7 @@ public class App {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
-        props.setProperty("ssl","false");
+        props.setProperty("ssl","true");
 
         return DriverManager.getConnection(url, props);
 

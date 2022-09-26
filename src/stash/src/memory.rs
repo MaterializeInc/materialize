@@ -105,8 +105,8 @@ impl<S: Stash> Stash for Memory<S> {
                 .get()
                 .iter()
                 .map(|((k, v), ts, diff)| {
-                    let k: K = K::decode(k)?;
-                    let v: V = V::decode(v)?;
+                    let k: K = serde_json::from_slice(k)?;
+                    let v: V = serde_json::from_slice(v)?;
                     Ok(((k, v), *ts, *diff))
                 })
                 .collect::<Result<Vec<_>, StashError>>()?,
@@ -116,11 +116,9 @@ impl<S: Stash> Stash for Memory<S> {
                     entries
                         .iter()
                         .map(|((k, v), ts, diff)| {
-                            let mut k_buf = Vec::new();
-                            let mut v_buf = Vec::new();
-                            k.encode(&mut k_buf);
-                            v.encode(&mut v_buf);
-                            ((k_buf, v_buf), *ts, *diff)
+                            let key = serde_json::to_vec(k).expect("must serialize");
+                            let value = serde_json::to_vec(v).expect("must serialize");
+                            ((key, value), *ts, *diff)
                         })
                         .collect(),
                 );
@@ -156,11 +154,9 @@ impl<S: Stash> Stash for Memory<S> {
         let local_entries: Vec<_> = entries
             .iter()
             .map(|((k, v), ts, diff)| {
-                let mut k_buf = Vec::new();
-                let mut v_buf = Vec::new();
-                k.encode(&mut k_buf);
-                v.encode(&mut v_buf);
-                ((k_buf, v_buf), *ts, *diff)
+                let key = serde_json::to_vec(k).expect("must serialize");
+                let value = serde_json::to_vec(v).expect("must serialize");
+                ((key, value), *ts, *diff)
             })
             .collect();
         self.stash.update_many(collection, entries).await?;
@@ -291,7 +287,11 @@ impl<S: Append> Append for Memory<S> {
                 .insert(batch.collection_id, batch.compact.clone());
             // Only update the memory cache if it's already present.
             if let Some(entry) = self.entries.get_mut(&batch.collection_id) {
-                entry.extend(batch.entries.clone());
+                entry.extend(batch.entries.iter().map(|((key, value), ts, diff)| {
+                    let key = serde_json::to_vec(key).expect("must serialise");
+                    let value = serde_json::to_vec(value).expect("must serialize");
+                    ((key, value), *ts, *diff)
+                }));
             }
         }
         Ok(())

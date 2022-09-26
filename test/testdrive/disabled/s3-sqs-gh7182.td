@@ -24,7 +24,7 @@ $ s3-add-notifications bucket=${buk} queue=${buk} sqs-validation-timeout=5m
   FROM S3
   DISCOVER OBJECTS MATCHING '**/*.csv' USING
   SQS NOTIFICATIONS 'testdrive-${buk}-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
     access_key_id = '${testdrive.aws-access-key-id}',
@@ -39,7 +39,7 @@ $ s3-add-notifications bucket=${buk} queue=${buk} sqs-validation-timeout=5m
   FROM S3
   DISCOVER OBJECTS MATCHING '**/*.csv' USING
   SQS NOTIFICATIONS 'testdrive-${buk}-${testdrive.seed}'
-  WITH (
+  LEGACYWITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
     access_key_id = '${testdrive.aws-access-key-id}',

@@ -27,7 +27,8 @@ query T multiline
 EXPLAIN SELECT DISTINCT r0 FROM (SELECT DISTINCT f1 + 1 as r0, f0 FROM t)
 ----
 Source materialize.public.t (u1):
-| Project (#1)
+| Map dummy, dummy
+| Project (#3, #1, #4)
 
 Query:
 %0 =
@@ -41,7 +42,8 @@ query T multiline
 EXPLAIN SELECT DISTINCT f1 FROM (SELECT DISTINCT f0, f1 FROM t)
 ----
 Source materialize.public.t (u1):
-| Project (#1)
+| Map dummy, dummy
+| Project (#3, #1, #4)
 
 Query:
 %0 =
@@ -55,7 +57,8 @@ query T multiline
 EXPLAIN SELECT DISTINCT FROM (SELECT DISTINCT f0, f1 FROM t)
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy, dummy
+| Project (#3..=#5)
 
 Query:
 %0 =
@@ -69,7 +72,8 @@ query T multiline
 EXPLAIN SELECT DISTINCT FROM (SELECT DISTINCT f0 FROM (SELECT DISTINCT f0, f1 FROM t));
 ----
 Source materialize.public.t (u1):
-| Project ()
+| Map dummy, dummy, dummy
+| Project (#3..=#5)
 
 Query:
 %0 =
@@ -83,7 +87,8 @@ query T multiline
 EXPLAIN SELECT f0 FROM (SELECT f0 FROM t GROUP BY f1 / 10, f0) GROUP BY f0;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy, dummy
+| Project (#0, #3, #4)
 
 Query:
 %0 =
@@ -97,7 +102,8 @@ query T multiline
 EXPLAIN SELECT f0 / 20 FROM (SELECT f0 / 10 AS f0 FROM t GROUP BY f0 / 10) GROUP BY f0 / 20;
 ----
 Source materialize.public.t (u1):
-| Project (#0)
+| Map dummy, dummy
+| Project (#0, #3, #4)
 
 Query:
 %0 =

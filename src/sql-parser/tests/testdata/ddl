@@ -403,169 +403,11 @@ CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
 CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE
-----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS crobat ENVELOPE NONE
-----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS crobat ENVELOPE NONE
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: Some(Ident("crobat")) }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP ENVELOPE NONE
-----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP ENVELOPE NONE
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Timestamp, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE PARTITION ENVELOPE NONE
-----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE PARTITION ENVELOPE NONE
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Partition, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TOPIC ENVELOPE NONE
-----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TOPIC ENVELOPE NONE
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Topic, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS mykey, TIMESTAMP, PARTITION, TOPIC as kafka_topic ENVELOPE NONE
-----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY AS mykey, TIMESTAMP, PARTITION, TOPIC AS kafka_topic ENVELOPE NONE
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: Some(Ident("mykey")) }, SourceIncludeMetadata { ty: Timestamp, alias: None }, SourceIncludeMetadata { ty: Partition, alias: None }, SourceIncludeMetadata { ty: Topic, alias: Some(Ident("kafka_topic")) }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' INCLUDE KEY ENVELOPE NONE
-----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' INCLUDE KEY ENVELOPE NONE
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } }), value: Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } }) }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE UPSERT
-----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE UPSERT
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } })), envelope: Some(Upsert), if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
-----
-error: Expected end of statement, found FORMAT
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
-                                                                                                                  ^
-
-parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (CONFLUENT WIRE FORMAT = false) ENVELOPE NONE
-----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (CONFLUENT WIRE FORMAT = false) ENVELOPE NONE
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(InlineSchema { schema: Inline("string"), with_options: [AvroSchemaOption { name: ConfluentWireFormat, value: Some(Value(Boolean(false))) }] })), envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [] })
-
-
-parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SEKRET)
-----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = sekret)
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [WithOption { key: Ident("a"), value: Some(Ident(Ident("sekret"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET)
-----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = secret)
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [WithOption { key: Ident("a"), value: Some(Ident(Ident("secret"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
-----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [WithOption { key: Ident("a"), value: Some(Secret(Name(UnresolvedObjectName([Ident("a")])))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement roundtrip
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET)
-----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = secret)
-
-parse-statement roundtrip
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
-----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
-
-parse-statement
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a.b.c)
-----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a.b.c)
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [WithOption { key: Ident("a"), value: Some(Secret(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
-
-parse-statement
-CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-----
-CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [Ident("a"), Ident("b")], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }), with_options: [] })
-
-parse-statement
-CREATE SOURCE source (a, PRIMARY KEY (a) NOT ENFORCED, b) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-----
-CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [Ident("a"), Ident("b")], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }), with_options: [] })
-
-parse-statement
-CREATE SOURCE source (PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-----
-CREATE SOURCE source (PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }), with_options: [] })
-
-parse-statement
-CREATE SOURCE source (PRIMARY, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-----
-CREATE SOURCE source (primary, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [Ident("primary")], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "broker" }, topic: "topic", key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("a")] }), with_options: [] })
-
-parse-statement
-CREATE SOURCE source PRIMARY KEY (a) NOT ENFORCED FROM KAFKA BROKER 'broker' TOPIC 'topic'
-----
-error: Expected FROM, found PRIMARY
-CREATE SOURCE source PRIMARY KEY (a) NOT ENFORCED FROM KAFKA BROKER 'broker' TOPIC 'topic'
-                     ^
-
-parse-statement
-CREATE SOURCE source (PRIMARY KEY () NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-----
-error: Expected identifier, found right parenthesis
-CREATE SOURCE source (PRIMARY KEY () NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-                                   ^
-
-parse-statement
-CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED, PRIMARY KEY (b) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-----
-error: Multiple key constraints not allowed
-CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED, PRIMARY KEY (b) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
-                                                          ^
-
-parse-statement
 CREATE CONNECTION pgconn FOR postgres HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun
 ----
 CREATE CONNECTION pgconn FOR POSTGRES HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Ident(Ident("tun"))) }] }, if_not_exists: false })
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("pgconn")]), connection: Postgres { with_options: [PostgresConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, PostgresConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, PostgresConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, PostgresConnectionOption { name: SshTunnel, value: Some(Object(Name(UnresolvedObjectName([Ident("tun")])))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red';
@@ -575,67 +417,39 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red'
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC 'topic') FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' WITH (replication_factor = 7, retention_ms = 10000, retention_bytes = 10000000000) FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (REPLICATION FACTOR = 7, RETENTION MS = 10000, RETENTION BYTES = 10000000000, TOPIC = 'topic') FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: None, consistency: None }, with_options: [WithOption { key: Ident("replication_factor"), value: Some(Value(Number("7"))) }, WithOption { key: Ident("retention_ms"), value: Some(Value(Number("10000"))) }, WithOption { key: Ident("retention_bytes"), value: Some(Value(Number("10000000000"))) }], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: ReplicationFactor, value: Some(Value(Number("7"))) }, KafkaConfigOption { name: RetentionMs, value: Some(Value(Number("10000"))) }, KafkaConfigOption { name: RetentionBytes, value: Some(Value(Number("10000000000"))) }, KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }) }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) NOT ENFORCED FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) NOT ENFORCED FORMAT BYTES WITH SNAPSHOT
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY (a, b) NOT ENFORCED FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }), consistency: None }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: true }) }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
+error: Expected end of statement, found identifier "consistency"
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
+                                                                              ^
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency') FORMAT BYTES
-----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency') FORMAT BYTES WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: None }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
-
-parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' CONSISTENCY FORMAT BYTES) FORMAT BYTES
-----
-error: Expected right parenthesis, found CONSISTENCY
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' CONSISTENCY FORMAT BYTES) FORMAT BYTES
-                                                                                                             ^
-
-parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES
-----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT BYTES) FORMAT BYTES WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Bytes) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
-
-parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username=user)) FORMAT BYTES
-----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username = user)) FORMAT BYTES WITH SNAPSHOT
-=>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), if_not_exists: false, from: Name(UnresolvedObjectName([Ident("bar")])), connection: Kafka { connection: Reference { connection: Name(UnresolvedObjectName([Ident("baz")])), with_options: [] }, topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: Inline { url: "http://localhost:8081" }, key_strategy: None, value_strategy: None, seed: None, with_options: [WithOption { key: Ident("username"), value: Some(Ident(Ident("user"))) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None })
-
-parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY FORMAT BYTES
 ----
 error: Expected end of statement, found KEY
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz TOPIC 'topic' KEY FORMAT BYTES
-                                                                 ^
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') KEY FORMAT BYTES
+                                                                   ^
 
 parse-statement
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
@@ -1027,7 +841,7 @@ ALTER INDEX name RESET (property = true)
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error: Expected one of SIZE or REMOTE, found identifier "property"
+error: Expected one of IGNORE or REMOTE or SIZE or TIMELINE or TIMESTAMP, found identifier "property"
 ALTER SOURCE name SET (property = true)
                        ^
 
@@ -1110,46 +924,46 @@ CREATE CLUSTER cluster REPLICAS ()
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([])] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL '1s'
 ----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL '1s'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(String("1s")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(String("1s")))] })
 
 parse-statement
-CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s', REPLICAS ()
+CREATE CLUSTER cluster INTROSPECTION INTERVAL '1s', REPLICAS ()
 ----
-CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s', REPLICAS ()
+CREATE CLUSTER cluster INTROSPECTION INTERVAL '1s', REPLICAS ()
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [IntrospectionGranularity(Value(String("1s"))), Replicas([])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [IntrospectionInterval(Value(String("1s"))), Replicas([])] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = '1s'
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL = '1s'
 ----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL '1s'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(String("1s")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(String("1s")))] })
 
 parse-statement
-CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION GRANULARITY = '1s'
+CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION INTERVAL = '1s'
 ----
 error: Expected one of REPLICAS or INTROSPECTION, found WITH
-CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION GRANULARITY = '1s'
+CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION INTERVAL = '1s'
                        ^
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = 0
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL = 0
 ----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY 0
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL 0
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(Number("0")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(Number("0")))] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = NULL
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL = NULL
 ----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY NULL
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION INTERVAL NULL
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(Null))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionInterval(Value(Null))] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (), BADOPT
@@ -1166,11 +980,11 @@ CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1']))
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }] }])] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')), INTROSPECTION INTERVAL '1s'
 ----
-error: Expected end of statement, found INTROSPECTION
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
-                                                                     ^
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1']), b (SIZE = '1')), INTROSPECTION INTERVAL '1s'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }]), IntrospectionInterval(Value(String("1s")))] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], SIZE '1'))
@@ -1178,6 +992,13 @@ CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], SIZE '1'))
 CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1'], SIZE = '1'))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])] })
+
+parse-statement
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1:2400', 'host2:2400'], COMPUTE ['host1:2401', 'host2:2401'], WORKERS '1'))
+----
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1:2400', 'host2:2400'], COMPUTE = ['host1:2401', 'host2:2401'], WORKERS = '1'))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1:2400"), String("host2:2400")]))) }, ReplicaOption { name: Compute, value: Some(Value(Array([String("host1:2401"), String("host2:2401")]))) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])] })
 
 parse-statement
 CREATE CLUSTER REPLICA replica REMOTE ['host1']
@@ -1326,7 +1147,7 @@ SHOW SECRETS
 ----
 SHOW SECRETS
 =>
-ShowObjects(ShowObjectsStatement { object_type: Secret, from: None, in_cluster: None, extended: false, full: false, filter: None })
+Show(ShowObjects(ShowObjectsStatement { object_type: Secret, from: None, in_cluster: None, filter: None }))
 
 parse-statement
 ALTER SECRET secret RENAME TO secret2
@@ -1350,6 +1171,13 @@ CREATE CONNECTION conn1 FOR KAFKA BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CE
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(Value(String("kafka:1234"))) }, KafkaConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, KafkaConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }] }, if_not_exists: false })
 
 parse-statement
+CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', PROGRESS TOPIC 'my-materialize-progress-topic';
+----
+CREATE CONNECTION conn1 FOR KAFKA BROKER = 'kafka:1234', PROGRESS TOPIC = 'my-materialize-progress-topic'
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Kafka { with_options: [KafkaConnectionOption { name: Broker, value: Some(Value(String("kafka:1234"))) }, KafkaConnectionOption { name: ProgressTopic, value: Some(Value(String("my-materialize-progress-topic"))) }] }, if_not_exists: false })
+
+parse-statement
 DROP CONNECTION conn1
 ----
 DROP CONNECTION conn1
@@ -1357,11 +1185,11 @@ DROP CONNECTION conn1
 DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [UnresolvedObjectName([Ident("conn1")])], cascade: false })
 
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') LEGACYWITH (consistency = 'lug') FORMAT BYTES
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') LEGACYWITH (consistency = 'lug') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL 'http://localhost:8081', USERNAME 'user', PASSWORD 'word'
@@ -1371,33 +1199,56 @@ CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL = 'http://localhost:80
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }, CsrConnectionOption { name: Username, value: Some(Value(String("user"))) }, CsrConnectionOption { name: Password, value: Some(Value(String("word"))) }] }, if_not_exists: false })
 
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, key_strategy: None, value_strategy: None, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
 
 
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn2")])) }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedObjectName([Ident("conn2")])), options: [] }, seed: None } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")]))), Collection(Value(String("foo")))] })), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")]))), Collection(Value(String("foo")))] })), if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 ----
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Reference { connection: Name(UnresolvedObjectName([Ident("conn1")])), with_options: [] }, topic: "baz", key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Collection(Value(String("foo"))), Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))] })), if_not_exists: false, key_constraint: None, with_options: [] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Collection(Value(String("foo"))), Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))] })), if_not_exists: false, key_constraint: None, with_options: [] })
+
+# Note that this will error in planninf, as you cannot specify START OFFSET and START TIMESTAMP at the same time
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=2, TOPIC 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET = 1, START TIMESTAMP = 2, TOPIC = 'baz') ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedObjectName([Ident("conn1")])), options: [KafkaConfigOption { name: StartOffset, value: Some(Value(Number("1"))) }, KafkaConfigOption { name: StartTimestamp, value: Some(Value(Number("2"))) }, KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), legacy_with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Collection(Value(String("foo"))), Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))] })), if_not_exists: false, key_constraint: None, with_options: [] })
+
+# Note that this will error in planning, as START OFFSET must be an array of nums
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+----
+error: Expected one of IGNORE or REMOTE or SIZE or TIMELINE or TIMESTAMP, found START
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+                                                     ^
+
+parse-statement
+CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE 'johto:42', SIZE large)
+----
+error: Expected CONNECTION, found BROKER
+CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE 'johto:42', SIZE large)
+                                ^
 
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah'
@@ -1420,69 +1271,21 @@ CREATE SOURCE lg FROM LOAD GENERATOR COUNTER TICK INTERVAL = '1s'
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }] }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
+# Ensure that we can parse REMOTE with pg
 parse-statement
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH ()
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' with (REMOTE 'johto:42');
 ----
-error: Expected one of SIZE or REMOTE, found right parenthesis
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH ()
-                                                                                                                                  ^
-
-parse-statement
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (A = 2)
-----
-error: Expected one of SIZE or REMOTE, found identifier "a"
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (A = 2)
-                                                                                                                                  ^
-
-parse-statement
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE = 2)
-----
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE = 2)
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' WITH (REMOTE = 'johto:42')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(Number("2"))) }] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
 
+# Ensure that we can parse legacy and non-legacy options
 parse-statement
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE = '2')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' legacywith (a = 'hmm') with (REMOTE 'johto:42');
 ----
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE = '2')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn PUBLICATION 'red' LEGACYWITH (a = 'hmm') WITH (REMOTE = 'johto:42')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("2"))) }] })
-
-parse-statement
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE = large)
-----
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE = large)
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }] })
-
-parse-statement
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE large)
-----
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE = large)
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }] })
-
-parse-statement
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE 'johto:42')
-----
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE = 'johto:42')
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
-
-
-parse-statement
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE large, REMOTE 'johto:42')
-----
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE = large, REMOTE = 'johto:42')
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }, CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
-
-parse-statement
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE 'johto:42', SIZE large)
-----
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (REMOTE = 'johto:42', SIZE = large)
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("golbat")]), col_names: [], connection: Kafka(KafkaSourceConnection { connection: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), legacy_with_options: [], include_metadata: [SourceIncludeMetadata { ty: Key, alias: None }], format: KeyValue { key: Text, value: Text }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }, CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }] })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), publication: "red", details: None }, legacy_with_options: [WithOption { key: Ident("a"), value: Some(Value(String("hmm"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
 
 parse-statement
 ALTER SYSTEM SET wal_level TO logical

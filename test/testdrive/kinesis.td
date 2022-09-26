@@ -44,7 +44,7 @@ contains:dns error: failed to lookup address information: Name or service not kn
 > CREATE SOURCE f
   FROM KINESIS CONNECTION kinesis_conn
   ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
-  WITH (endpoint = '${testdrive.aws-endpoint}')
+  LEGACYWITH (endpoint = '${testdrive.aws-endpoint}')
   FORMAT BYTES;
 
 > CREATE MATERIALIZED VIEW f_view

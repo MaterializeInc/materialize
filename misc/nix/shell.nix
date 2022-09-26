@@ -7,7 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-with import <nixpkgs> {};
+{ pkgs ? import <nixpkgs> {} }:
+with pkgs;
 
 let
     target-analyzer = builtins.toString ./../../.rust-analyzer/target;
@@ -18,13 +19,13 @@ in
 stdenv.mkDerivation rec {
   name = "materialize";
   buildInputs = with pkgs; [
-      clang_13
+      clang_14
       cmake
       rustup
       openssl
       postgresql
       pkg-config
-      lld_13
+      lld_14
       python39
       scoped-rust-analyzer
   ];

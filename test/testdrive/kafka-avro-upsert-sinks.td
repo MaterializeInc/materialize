@@ -9,6 +9,8 @@
 
 # Test Avro UPSERT sinks.
 
+
+
 # sinking directly from an UPSERT source with multi-part key
 
 $ set upsert-keyschema={
@@ -31,29 +33,32 @@ $ set upsert-schema={
 
 $ kafka-create-topic topic=upsert-avro
 
-$ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema} publish=true
+$ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema}
 {"key1": "fish", "key2": 2} {"f1": "fish", "f2": 1000}
 {"key1": "fisch", "key2": 42} {"f1": "fish", "f2": 1000}
 
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
 > CREATE SOURCE upsert_input
-  FROM KAFKA CONNECTION kafka_conn TOPIC
-  'testdrive-upsert-avro-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-avro-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE SINK upsert_input_sink FROM upsert_input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'upsert-input-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink-${testdrive.seed}')
   KEY (key1, key2)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 $ kafka-verify format=avro sink=materialize.public.upsert_input_sink sort-messages=true
 {"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "fish", "f2": 1000}
 {"key1": "fish", "key2": 2} {"key1": "fish", "key2": 2, "f1": "fish", "f2": 1000}
 
-$ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema} publish=true
+$ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema}
 {"key1": "fisch", "key2": 42} {"f1": "richtig, fisch", "f2": 2000}
 
 $ kafka-verify format=avro sink=materialize.public.upsert_input_sink
@@ -137,24 +142,22 @@ $ kafka-create-topic topic=input
 
 # (PRIMARY KEY (id) NOT ENFORCED)
 > CREATE SOURCE input
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE MATERIALIZED VIEW input_keyed AS SELECT a, max(b) as b FROM input GROUP BY a
 
 > CREATE SINK input_sink FROM input_keyed
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
-  CONSISTENCY (TOPIC 'input-sink-consistency')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 # requesting to key by (a, b) is fine when (a) is a unique key
 
 > CREATE SINK input_sink_multiple_keys FROM input_keyed
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (b, a)
-  CONSISTENCY (TOPIC 'input-sink-consistency')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-multikey-${testdrive.seed}') KEY (b, a)
   FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 $ kafka-ingest format=avro topic=input schema=${schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
@@ -177,60 +180,60 @@ a  b
 # transaction appear together as one "bundle" in the output. But there is no
 # guarantee on the order within a transaction.
 
-$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 1, "transaction": {"id": "1"}}
-{"a": 2} {"a": 2, "b": 2, "transaction": {"id": "1"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink sort-messages=true
+1	{"a": 1} {"a": 1, "b": 1}
+1	{"a": 2} {"a": 2, "b": 2}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
-{"a": 3} {"a": 3, "b": 1, "transaction": {"id": "2"}}
-{"a": 4} {"a": 4, "b": 2, "transaction": {"id": "2"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink sort-messages=true
+2	{"a": 3} {"a": 3, "b": 1}
+2	{"a": 4} {"a": 4, "b": 2}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 7, "transaction": {"id": "3"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink sort-messages=true
+3	{"a": 1} {"a": 1, "b": 7}
 
 # Again, compare split by transaction. See comment just above.
 
-$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
-{"a": 1, "b": 1} {"a": 1, "b": 1, "transaction": {"id": "1"}}
-{"a": 2, "b": 2} {"a": 2, "b": 2, "transaction": {"id": "1"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
+1	{"a": 1, "b": 1} {"a": 1, "b": 1}
+1	{"a": 2, "b": 2} {"a": 2, "b": 2}
 
-$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
-{"a": 3, "b": 1} {"a": 3, "b": 1, "transaction": {"id": "2"}}
-{"a": 4, "b": 2} {"a": 4, "b": 2, "transaction": {"id": "2"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
+2	{"a": 3, "b": 1} {"a": 3, "b": 1}
+2	{"a": 4, "b": 2} {"a": 4, "b": 2}
 
 # missing key denotes DELETE
 
-$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
-{"a": 1, "b": 1}
-{"a": 1, "b": 7} {"a": 1, "b": 7, "transaction": {"id": "3"}}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
+3 {"a": 1, "b": 1}
+3	{"a": 1, "b": 7} {"a": 1, "b": 7}
 
 # verify if/when input deletions are emitted to an UPSERT sink
 
 $ kafka-create-topic topic=input-with-deletions
 
 > CREATE SOURCE input_with_deletions
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-input-with-deletions-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-with-deletions-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE MATERIALIZED VIEW input_with_deletions_keyed AS SELECT a, max(b) as b FROM input_with_deletions GROUP BY a
 
 > CREATE SINK input_with_deletions_sink FROM input_with_deletions_keyed
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-with-deletions-${testdrive.seed}') KEY (a)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":1}]}}
 
-$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 1}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+1	{"a": 1} {"a": 1, "b": 1}
 
 $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 {"array":[{"data":{"a":1,"b":2},"time":2,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[2],"upper":[3],"counts":[{"time":2,"count":1}]}}
 
-$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 2}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+2	{"a": 1} {"a": 1, "b": 2}
 
 # deletion of the "shadowed" input should not cause downstream updates
 
@@ -252,8 +255,8 @@ $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 {"array":[{"data":{"a":1,"b":2},"time":5,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[5],"upper":[6],"counts":[{"time":5,"count":2}]}}
 
-$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 2}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+5	{"a": 1} {"a": 1, "b": 2}
 
 $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 {"array":[{"data":{"a":1,"b":2},"time":6,"diff":-1}]}
@@ -261,57 +264,57 @@ $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 
 # removing the occluding input should "reveal" the previous input again
 #
-$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 1}
+$ kafka-verify headers=materialize-timestamp format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+6	{"a": 1} {"a": 1, "b": 1}
 
 # NOT ENFORCED Keys
 
 $ kafka-create-topic topic=non-keyed-input
 
 > CREATE SOURCE non_keyed_input
-  FROM KAFKA CONNECTION kafka_conn TOPIC 'testdrive-non-keyed-input-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-keyed-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE SINK not_enforced_key FROM non_keyed_input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'not-enforced-sink' KEY (a) NOT ENFORCED
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'not-enforced-sink-${testdrive.seed}') KEY (a) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 # Bad upsert keys
 
 ! CREATE SINK invalid_key FROM input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 contains:Invalid upsert key: (a), there are no valid keys
 
 ! CREATE SINK another_invalid_key FROM input_keyed
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (b)
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (b)
   FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 contains:Invalid upsert key: (b), valid keys are: (a)
 
 > CREATE MATERIALIZED VIEW input_keyed_ab AS SELECT a, b FROM input GROUP BY a, b
 
 ! CREATE SINK invalid_sub_key FROM input_keyed_ab
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (a)
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 contains:Invalid upsert key: (a), valid keys are: (a, b)
 
 ! CREATE SINK another_invalid_sub_key FROM input_keyed_ab
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'input-sink' KEY (b)
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (b)
   FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 contains:Invalid upsert key: (b), valid keys are: (a, b)
 
 ! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-sink-${testdrive.seed}')
   KEY (key1)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 contains:Invalid upsert key: (key1), valid keys are: (key1, key2)
 
 ! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
-  INTO KAFKA CONNECTION kafka_conn TOPIC 'data-sink'
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-sink-${testdrive.seed}')
   KEY (key2)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 contains:Invalid upsert key: (key2), valid keys are: (key1, key2)

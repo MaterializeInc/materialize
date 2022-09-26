@@ -9,6 +9,16 @@
 
 # Test that Kafka sources with no format are disallowed.
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 ! CREATE SOURCE s
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 contains:Source format must be specified
+
+> CREATE CONNECTION no_topic
+  FOR KAFKA BROKER '';
+
+! CREATE SOURCE s
+  FROM KAFKA CONNECTION no_topic
+contains:KAFKA CONNECTION without TOPIC

@@ -15,7 +15,7 @@ from packaging import version
 
 from materialize.mzcompose import Service, ServiceConfig
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
 
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
 # minor version in the release series, and minor versions have been known to
@@ -139,7 +139,6 @@ class Computed(Service):
     def __init__(
         self,
         name: str = "computed",
-        peers: Optional[List[str]] = [],
         hostname: Optional[str] = None,
         image: Optional[str] = None,
         ports: List[int] = [2100, 2102],
@@ -147,7 +146,6 @@ class Computed(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        workers: Optional[int] = None,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
@@ -178,13 +176,6 @@ class Computed(Service):
                 command_list.append(options)
             else:
                 command_list.extend(options)
-
-        if workers:
-            command_list.append(f"--workers {workers}")
-
-        if peers:
-            command_list.append(f"--process {peers.index(name)}")
-            command_list.append(" ".join(f"{peer}:2102" for peer in peers))
 
         command_list.append(f"--secrets-reader {secrets_reader}")
         command_list.append(
@@ -336,7 +327,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v22.1.6",
+        version: str = "v22.2.3",
         auto_create_topics: bool = False,
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
@@ -771,5 +762,20 @@ class Metabase(Service):
             config={
                 "image": "metabase/metabase:v0.41.4",
                 "ports": ["3000"],
+            },
+        )
+
+
+class SshBastionHost(Service):
+    def __init__(self, name: str = "ssh-bastion-host") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": "panubo/sshd:1.5.0",
+                "ports": ["22"],
+                "environment": [
+                    "SSH_USERS=mz:1000:1000",
+                    "TCP_FORWARDING=true",
+                ],
             },
         )

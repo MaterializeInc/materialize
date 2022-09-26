@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -121,6 +122,24 @@ impl RustType<ProtoPredicate> for (usize, MirScalarExpr) {
                 .predicate
                 .into_rust_if_some("ProtoPredicate::predicate")?,
         ))
+    }
+}
+
+impl Display for MapFilterProject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "MapFilterProject(")?;
+        writeln!(f, "  expressions:")?;
+        self.expressions
+            .iter()
+            .enumerate()
+            .try_for_each(|(i, e)| writeln!(f, "    #{} <- {},", i + self.input_arity, e))?;
+        writeln!(f, "  predicates:")?;
+        self.predicates
+            .iter()
+            .try_for_each(|(before, p)| write!(f, "    <before: {}> {},", before, p))?;
+        writeln!(f, "  projection: {:?}", self.projection)?;
+        writeln!(f, "  input_arity: {}", self.input_arity)?;
+        writeln!(f, ")")
     }
 }
 
@@ -440,6 +459,60 @@ impl MapFilterProject {
         Self::new(self.projection.len())
             .filter(temporal_predicates)
             .project(0..old_projection_len)
+    }
+
+    /// Extracts common expressions from multiple `Self` into a result `Self`.
+    ///
+    /// The argument `mfps` are mutated so that each are functionaly equivalent to their
+    /// corresponding input, when composed atop the resulting `Self`.
+    pub fn extract_common(mfps: &mut [&mut Self]) -> Self {
+        match mfps.len() {
+            0 => {
+                panic!("Cannot call method on empty arguments");
+            }
+            1 => {
+                let output_arity = mfps[0].projection.len();
+                std::mem::replace(&mut mfps[0], MapFilterProject::new(output_arity))
+            }
+            _ => {
+                // Prepare a return `Self`.
+                let input_arity = mfps[0].input_arity;
+                let mut result_mfp = MapFilterProject::new(input_arity);
+
+                // Naive strategy:
+                // First, look for identical predicates and extract them.
+                // Then, look for unused columns and project them away.
+
+                // First, look for identical predicates and extract them.
+                // The trouble here is CSE, as predicates may not "look"
+                // identical despite being identical.
+                // unimplemented!()
+
+                // Then, look for unused columns and project them away.
+                let mut common_demand = HashSet::new();
+                for mfp in mfps.iter() {
+                    common_demand.extend(mfp.demand());
+                }
+                // columns in `common_demand` must be retained, but others
+                // may be discarded.
+                let common_demand = (0..input_arity)
+                    .filter(|x| common_demand.contains(x))
+                    .collect::<Vec<_>>();
+                let remap = common_demand
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(new, old)| (old, new))
+                    .collect::<HashMap<_, _>>();
+                for mfp in mfps.iter_mut() {
+                    mfp.permute(remap.clone(), common_demand.len());
+                }
+                result_mfp = result_mfp.project(common_demand);
+
+                // Return the resulting MFP.
+                result_mfp
+            }
+        }
     }
 
     /// Returns `self`, and leaves behind an identity operator that acts on its output.
@@ -1048,13 +1121,27 @@ impl MapFilterProject {
             }
         }
         // Inline expressions per `should_inline`.
+        self.perform_inlining(should_inline);
+        // We can only inline column references in `self.projection`, but we should.
+        for proj in self.projection.iter_mut() {
+            if *proj >= self.input_arity {
+                if let MirScalarExpr::Column(i) = self.expressions[*proj - self.input_arity] {
+                    *proj = i;
+                }
+            }
+        }
+    }
+
+    /// Inlines those expressions that are indicated by should_inline.
+    /// See `inline_expressions` for usage.
+    pub fn perform_inlining(&mut self, should_inline: Vec<bool>) {
         for index in 0..self.expressions.len() {
             let (prior, expr) = self.expressions.split_at_mut(index);
             #[allow(deprecated)]
             expr[0].visit_mut_post_nolimit(&mut |e| {
                 if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
-                        *e = prior[*i - input_arity].clone();
+                        *e = prior[*i - self.input_arity].clone();
                     }
                 }
             });
@@ -1065,18 +1152,10 @@ impl MapFilterProject {
             pred.visit_mut_post_nolimit(&mut |e| {
                 if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
-                        *e = expressions[*i - input_arity].clone();
+                        *e = expressions[*i - self.input_arity].clone();
                     }
                 }
             });
-        }
-        // We can only inline column references in `self.projection`, but we should.
-        for proj in self.projection.iter_mut() {
-            if *proj >= self.input_arity {
-                if let MirScalarExpr::Column(i) = self.expressions[*proj - self.input_arity] {
-                    *proj = i;
-                }
-            }
         }
     }
 
@@ -1314,8 +1393,7 @@ pub mod plan {
     use serde::{Deserialize, Serialize};
 
     use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-    use mz_repr::adt::numeric::Numeric;
-    use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
+    use mz_repr::{Datum, Diff, Row, RowArena};
 
     use crate::{
         func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
@@ -1422,6 +1500,12 @@ pub mod plan {
             }
             Ok(true)
         }
+
+        /// Returns true if evaluation could introduce an error on non-error inputs.
+        pub fn could_error(&self) -> bool {
+            self.mfp.predicates.iter().any(|(_pos, e)| e.could_error())
+                || self.mfp.expressions.iter().any(|e| e.could_error())
+        }
     }
 
     impl std::ops::Deref for SafeMfpPlan {
@@ -1437,17 +1521,17 @@ pub mod plan {
     /// structure, and it is best to do that once and re-use the results.
     ///
     /// There are restrictions on the temporal predicates we currently support.
-    /// They must directly constrain `MzLogicalTimestamp` from below or above,
-    /// by expressions that do not themselves contain `MzLogicalTimestamp`.
+    /// They must directly constrain `MzNow` from below or above,
+    /// by expressions that do not themselves contain `MzNow`.
     /// Conjunctions of such constraints are also ok.
     #[derive(Arbitrary, Clone, Debug, PartialEq)]
     pub struct MfpPlan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
         mfp: SafeMfpPlan,
-        /// Expressions that when evaluated lower-bound `MzLogicalTimestamp`.
+        /// Expressions that when evaluated lower-bound `MzNow`.
         #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
         lower_bounds: Vec<MirScalarExpr>,
-        /// Expressions that when evaluated upper-bound `MzLogicalTimestamp`.
+        /// Expressions that when evaluated upper-bound `MzNow`.
         #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
         upper_bounds: Vec<MirScalarExpr>,
     }
@@ -1473,18 +1557,18 @@ pub mod plan {
     impl MfpPlan {
         /// Partitions `predicates` into non-temporal, and lower and upper temporal bounds.
         ///
-        /// The first returned list is of predicates that do not contain `mz_logical_timestamp`.
+        /// The first returned list is of predicates that do not contain `mz_now`.
         /// The second and third returned lists contain expressions that, once evaluated, lower
         /// and upper bound the validity interval of a record, respectively. These second two
         /// lists are populated only by binary expressions of the form
         /// ```ignore
-        /// mz_logical_timestamp cmp_op expr
+        /// mz_now cmp_op expr
         /// ```
-        /// where `cmp_op` is a comparison operator and `expr` does not contain `mz_logical_timestamp`.
+        /// where `cmp_op` is a comparison operator and `expr` does not contain `mz_now`.
         ///
-        /// If any unsupported expression is found, for example one that uses `mz_logical_timestamp`
+        /// If any unsupported expression is found, for example one that uses `mz_now`
         /// in an unsupported position, an error is returned.
-        pub(crate) fn create_from(mut mfp: MapFilterProject) -> Result<Self, String> {
+        pub fn create_from(mut mfp: MapFilterProject) -> Result<Self, String> {
             let mut lower_bounds = Vec::new();
             let mut upper_bounds = Vec::new();
 
@@ -1513,9 +1597,7 @@ pub mod plan {
                     // Attempt to put `LogicalTimestamp` in the first argument position.
                     if !expr1.contains_temporal()
                         && *expr2
-                            == MirScalarExpr::CallUnmaterializable(
-                                UnmaterializableFunc::MzLogicalTimestamp,
-                            )
+                            == MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
                     {
                         std::mem::swap(&mut expr1, &mut expr2);
                         func = match func {
@@ -1536,50 +1618,37 @@ pub mod plan {
                     // Error if MLT is referenced in an unsupported position.
                     if expr2.contains_temporal()
                         || *expr1
-                            != MirScalarExpr::CallUnmaterializable(
-                                UnmaterializableFunc::MzLogicalTimestamp,
-                            )
+                            != MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
                     {
                         return Err(format!(
-                            "Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: {}",
+                            "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mztimestamp-castable expression. Expression found: {}",
                             MirScalarExpr::CallBinary { func, expr1, expr2 },
                             ));
                     }
 
-                    // We'll need to use this a fair bit.
-                    let decimal_one = MirScalarExpr::literal_ok(
-                        Datum::from(Numeric::from(1)),
-                        ScalarType::Numeric { max_scale: None },
-                    );
-
-                    // TODO(#7611): Truncate any significant fractional digits
-                    // from positive values of `expr2`, while keeping the sign
-                    // of negative values intact. (Negative values are never
-                    // chosen as valid bounds, so their resultant values matter
-                    // little, but we do want to know they were negative.)
-                    let expr2_floor = expr2.call_unary(UnaryFunc::FloorNumeric(func::FloorNumeric));
-
                     // LogicalTimestamp <OP> <EXPR2> for several supported operators.
                     match func {
                         BinaryFunc::Eq => {
-                            // Lower bound of expr, upper bound of expr+1
-                            lower_bounds.push((expr2_floor).clone());
-                            upper_bounds
-                                .push(expr2_floor.call_binary(decimal_one, BinaryFunc::AddNumeric));
+                            lower_bounds.push(*expr2.clone());
+                            upper_bounds.push(
+                                expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
+                            );
                         }
                         BinaryFunc::Lt => {
-                            upper_bounds.push(expr2_floor);
+                            upper_bounds.push(*expr2.clone());
                         }
                         BinaryFunc::Lte => {
-                            upper_bounds
-                                .push(expr2_floor.call_binary(decimal_one, BinaryFunc::AddNumeric));
+                            upper_bounds.push(
+                                expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
+                            );
                         }
                         BinaryFunc::Gt => {
-                            lower_bounds
-                                .push(expr2_floor.call_binary(decimal_one, BinaryFunc::AddNumeric));
+                            lower_bounds.push(
+                                expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
+                            );
                         }
                         BinaryFunc::Gte => {
-                            lower_bounds.push(expr2_floor);
+                            lower_bounds.push(*expr2.clone());
                         }
                         _ => {
                             return Err(format!(
@@ -1590,7 +1659,7 @@ pub mod plan {
                     }
                 } else {
                     return Err(format!(
-                        "Unsupported temporal predicate. Note: `mz_logical_timestamp()` must be directly compared to a numeric non-temporal expression; if it is compared to a non-numeric type, consider casting that type to numeric. Expression found: {}",
+                        "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mztimestamp-castable type. Expression found: {}",
                         predicate,
                         ));
                 }
@@ -1608,6 +1677,19 @@ pub mod plan {
             self.mfp.mfp.is_identity()
                 && self.lower_bounds.is_empty()
                 && self.upper_bounds.is_empty()
+        }
+
+        /// Returns `self`, and leaves behind an identity operator that acts on its output.
+        pub fn take(&mut self) -> Self {
+            let mut identity = Self {
+                mfp: SafeMfpPlan {
+                    mfp: MapFilterProject::new(self.mfp.projection.len()),
+                },
+                lower_bounds: Default::default(),
+                upper_bounds: Default::default(),
+            };
+            std::mem::swap(self, &mut identity);
+            identity
         }
 
         /// Attempt to convert self into a non-temporal MapFilterProject plan.
@@ -1629,12 +1711,13 @@ pub mod plan {
         ///
         /// The `row_builder` is not cleared first, but emptied if the function
         /// returns an iterator with any `Ok(_)` element.
-        pub fn evaluate<'b, 'a: 'b, E: From<EvalError>>(
+        pub fn evaluate<'b, 'a: 'b, E: From<EvalError>, V: Fn(&mz_repr::Timestamp) -> bool>(
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
             time: mz_repr::Timestamp,
             diff: Diff,
+            valid_time: V,
             row_builder: &mut Row,
         ) -> impl Iterator<Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>>
         {
@@ -1650,9 +1733,8 @@ pub mod plan {
                 }
             }
 
-            // Lower and upper bounds. If set, the value indicates the respective
-            // bound. If not set, indicates "larger than `u64::MAX`".
-            let mut lower_bound = Some(time);
+            // Lower and upper bounds.
+            let mut lower_bound = time;
             let mut upper_bound = None;
 
             // Track whether we have seen a null in either bound, as this should
@@ -1662,43 +1744,26 @@ pub mod plan {
             // Advance our lower bound to be at least the result of any lower bound
             // expressions.
             for l in self.lower_bounds.iter() {
-                // If the lower bound already exceeds a `u64`, we needn't check more.
-                if lower_bound.is_some() {
-                    match l.eval(datums, &arena) {
-                        Err(e) => {
-                            return Some(Err((e.into(), time, diff)))
-                                .into_iter()
-                                .chain(None.into_iter());
-                        }
-                        Ok(Datum::Numeric(d)) => {
-                            // If the number is negative, it cannot improve the initial
-                            // value of `Some(time)`.
-                            if !d.0.is_negative() {
-                                // An `Ok` conversion is a valid upper bound, and an `Err` error
-                                // indicates a value above `u64::MAX`. The `ok()` method does the
-                                // conversion we want to an `Option<u64>`.
-                                let v = u64::try_from(d.0).ok();
-                                // Update `lower_bound` to be the maximum with `v`, where a `None`
-                                // value is treated as larger than `Some(_)` values.
-                                lower_bound = match (lower_bound, v) {
-                                    (None, _) => None,
-                                    (_, None) => None,
-                                    (x, y) => x.max(y),
-                                };
-                            }
-                        }
-                        Ok(Datum::Null) => {
-                            null_eval = true;
-                        }
-                        x => {
-                            panic!("Non-decimal value in temporal predicate: {:?}", x);
-                        }
+                match l.eval(datums, &arena) {
+                    Err(e) => {
+                        return Some(Err((e.into(), time, diff)))
+                            .into_iter()
+                            .chain(None.into_iter());
+                    }
+                    Ok(Datum::MzTimestamp(d)) => {
+                        lower_bound = lower_bound.max(d);
+                    }
+                    Ok(Datum::Null) => {
+                        null_eval = true;
+                    }
+                    x => {
+                        panic!("Non-mztimestamp value in temporal predicate: {:?}", x);
                     }
                 }
             }
 
-            // If the lower bound exceeds `u64::MAX` the update cannot appear in the output.
-            if lower_bound.is_none() {
+            // If the lower bound exceeds our `until` frontier, it should not appear in the output.
+            if !valid_time(&lower_bound) {
                 return None.into_iter().chain(None.into_iter());
             }
 
@@ -1706,71 +1771,64 @@ pub mod plan {
             for u in self.upper_bounds.iter() {
                 // We can cease as soon as the lower and upper bounds match,
                 // as the update will certainly not be produced in that case.
-                if upper_bound != lower_bound {
+                if upper_bound != Some(lower_bound) {
                     match u.eval(datums, &arena) {
                         Err(e) => {
                             return Some(Err((e.into(), time, diff)))
                                 .into_iter()
                                 .chain(None.into_iter());
                         }
-                        Ok(Datum::Numeric(d)) => {
-                            // If the upper bound is negative, it is impossible to satisfy.
-                            // We set the upper bound to the lower bound to indicate this.
-                            if d.0.is_negative() {
-                                upper_bound = lower_bound;
+                        Ok(Datum::MzTimestamp(d)) => {
+                            if let Some(upper) = upper_bound {
+                                upper_bound = Some(upper.min(d));
                             } else {
-                                // An `Ok` conversion is a valid upper bound, and an `Err` error
-                                // indicates a value above `u64::MAX`. The `ok()` method does the
-                                // conversion we want to an `Option<u64>`.
-                                let v = u64::try_from(d.0).ok();
-                                // Update `upper_bound` to be the minimum with `v`, where a `None`
-                                // value is treated as larger than `Some(_)` values.
-                                upper_bound = match (upper_bound, v) {
-                                    (None, x) => x,
-                                    (x, None) => x,
-                                    (x, y) => x.min(y),
-                                };
-                                // Force the upper bound to be at least the lower bound.
-                                // The `is_some()` test is required as `None < Some(_)`,
-                                // and we do not want to set `None` to `Some(_)`.
-                                if upper_bound.is_some() && upper_bound < lower_bound {
-                                    upper_bound = lower_bound;
-                                }
+                                upper_bound = Some(d);
+                            };
+                            // Force the upper bound to be at least the lower
+                            // bound. The `is_some()` test should always be true
+                            // due to the above block, but maintain it here in
+                            // case that changes. It's hopefully optimized away.
+                            if upper_bound.is_some() && upper_bound < Some(lower_bound) {
+                                upper_bound = Some(lower_bound);
                             }
                         }
                         Ok(Datum::Null) => {
                             null_eval = true;
                         }
                         x => {
-                            panic!("Non-decimal value in temporal predicate: {:?}", x);
+                            panic!("Non-mztimestamp value in temporal predicate: {:?}", x);
                         }
                     }
                 }
             }
 
+            // If the upper bound exceeds our `until` frontier, it should not appear in the output.
+            if let Some(upper) = &mut upper_bound {
+                if !valid_time(upper) {
+                    upper_bound = None;
+                }
+            }
+
             // Produce an output only if the upper bound exceeds the lower bound,
             // and if we did not encounter a `null` in our evaluation.
-            if lower_bound != upper_bound && !null_eval {
+            if Some(lower_bound) != upper_bound && !null_eval {
                 row_builder
                     .packer()
                     .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
-                let (lower_opt, upper_opt) = match (lower_bound, upper_bound) {
-                    (Some(lower_bound), Some(upper_bound)) => (
-                        Some(Ok((row_builder.clone(), lower_bound, diff))),
-                        Some(Ok((row_builder.clone(), upper_bound, -diff))),
-                    ),
-                    (Some(lower_bound), None) => {
-                        (Some(Ok((row_builder.clone(), lower_bound, diff))), None)
-                    }
-                    (None, Some(upper_bound)) => {
-                        (None, Some(Ok((row_builder.clone(), upper_bound, -diff))))
-                    }
-                    _ => (None, None),
-                };
-                lower_opt.into_iter().chain(upper_opt.into_iter())
+                let upper_opt =
+                    upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
+                let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
+                lower.into_iter().chain(upper_opt.into_iter())
             } else {
                 None.into_iter().chain(None.into_iter())
             }
+        }
+
+        /// Returns true if evaluation could introduce an error on non-error inputs.
+        pub fn could_error(&self) -> bool {
+            self.mfp.could_error()
+                || self.lower_bounds.iter().any(|e| e.could_error())
+                || self.upper_bounds.iter().any(|e| e.could_error())
         }
     }
 }

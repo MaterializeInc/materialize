@@ -36,12 +36,15 @@ from materialize.cloudtest.k8s import K8sService, K8sStatefulSet
 class EnvironmentdService(K8sService):
     def __init__(self) -> None:
         service_port = V1ServicePort(name="sql", port=6875)
+        internal_port = V1ServicePort(name="internal", port=6877)
         self.service = V1Service(
             api_version="v1",
             kind="Service",
             metadata=V1ObjectMeta(name="environmentd", labels={"app": "environmentd"}),
             spec=V1ServiceSpec(
-                type="NodePort", ports=[service_port], selector={"app": "environmentd"}
+                type="NodePort",
+                ports=[service_port, internal_port],
+                selector={"app": "environmentd"},
             ),
         )
 
@@ -85,6 +88,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--persist-consensus-url=postgres://postgres@postgres.default?options=--search_path=consensus",
                 "--adapter-stash-url=postgres://postgres@postgres.default?options=--search_path=catalog",
                 "--storage-stash-url=postgres://postgres@postgres.default?options=--search_path=storage",
+                "--internal-sql-listen-addr=0.0.0.0:6877",
                 "--unsafe-mode",
             ],
             env=env,

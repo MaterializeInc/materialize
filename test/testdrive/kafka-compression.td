@@ -15,8 +15,11 @@ $ kafka-ingest format=bytes topic=gzip timestamp=1
 hello
 world
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE gzip
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-gzip-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-gzip-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM gzip
 hello
@@ -29,7 +32,7 @@ hello
 world
 
 > CREATE SOURCE snappy
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-snappy-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snappy-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM snappy
 hello
@@ -42,7 +45,7 @@ hello
 world
 
 > CREATE SOURCE lz4
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-lz4-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-lz4-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM lz4
 hello

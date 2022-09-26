@@ -18,9 +18,16 @@ INSERT INTO decimal_type VALUES (NULL), (NULL), (12.345), ('NaN');
 
 $ schema-registry-wait-schema schema=postgres.public.decimal_type-value
 
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${testdrive.schema-registry-url}';
+
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE decimal_type
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.decimal_type'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_type')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 # NaN arrives as NULL

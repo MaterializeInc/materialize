@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// `EnumKind` and various macros unconditionally introduce lifetimes.
+// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
+// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
 use std::fmt::{self, Write};
@@ -15,7 +16,7 @@ use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
@@ -30,6 +31,7 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::{Array, ArrayDimension};
 use crate::adt::char::{Char, CharLength};
+use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
@@ -60,14 +62,18 @@ pub enum Datum<'a> {
     Int64(i64),
     /// An 8-bit unsigned integer.
     UInt8(u8),
+    /// An 16-bit unsigned integer.
+    UInt16(u16),
     /// A 32-bit unsigned integer.
     UInt32(u32),
+    /// A 64-bit unsigned integer.
+    UInt64(u64),
     /// A 32-bit floating point number.
     Float32(OrderedFloat<f32>),
     /// A 64-bit floating point number.
     Float64(OrderedFloat<f64>),
     /// A date.
-    Date(NaiveDate),
+    Date(Date),
     /// A time.
     Time(NaiveTime),
     /// A date and time, without a timezone.
@@ -99,6 +105,7 @@ pub enum Datum<'a> {
     JsonNull,
     /// A universally unique identifier.
     Uuid(Uuid),
+    MzTimestamp(crate::Timestamp),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -142,10 +149,12 @@ impl<'a> Serialize for Datum<'a> {
             Int32(i) => serializer.serialize_i32(*i),
             Int64(i) => serializer.serialize_i64(*i),
             UInt8(u) => serializer.serialize_u8(*u),
+            UInt16(u) => serializer.serialize_u16(*u),
             UInt32(u) => serializer.serialize_u32(*u),
+            UInt64(u) => serializer.serialize_u64(*u),
             Float32(f) => serializer.serialize_f32(**f),
             Float64(f) => serializer.serialize_f64(**f),
-            Date(d) => d.serialize(serializer),
+            Date(d) => chrono::NaiveDate::from(d).serialize(serializer),
             Time(t) => t.serialize(serializer),
             Timestamp(ts) => ts.serialize(serializer),
             TimestampTz(tstz) => tstz.serialize(serializer),
@@ -157,6 +166,7 @@ impl<'a> Serialize for Datum<'a> {
             Map(m) => m.serialize(serializer),
             Numeric(n) => serializer.serialize_str(&n.to_string()),
             Uuid(u) => u.serialize(serializer),
+            MzTimestamp(t) => serializer.serialize_str(&t.to_string()),
             Dummy => serializer.serialize_str("Dummy"),
             JsonNull => serializer.serialize_str("JsonNull"),
             Null => serializer.serialize_none(),
@@ -293,6 +303,69 @@ impl TryFrom<Datum<'_>> for Option<i64> {
     }
 }
 
+impl TryFrom<Datum<'_>> for u16 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::UInt16(u) => Ok(u),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<u16> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::UInt16(u) => Ok(Some(u)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for u32 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::UInt32(u) => Ok(u),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<u32> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::UInt32(u) => Ok(Some(u)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for u64 {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::UInt64(u) => Ok(u),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<u64> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::UInt64(u) => Ok(Some(u)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl TryFrom<Datum<'_>> for NaiveDateTime {
     type Error = ();
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
@@ -372,7 +445,7 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Unwraps the 8-bit integer value within this datum.
+    /// Unwraps the 8-bit unsigned integer value within this datum.
     ///
     /// # Panics
     ///
@@ -385,7 +458,20 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Unwraps the 64-bit integer value within this datum.
+    /// Unwraps the 16-bit unsigned integer value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::UInt16`].
+    #[track_caller]
+    pub fn unwrap_uint16(&self) -> u16 {
+        match self {
+            Datum::UInt16(u) => *u,
+            _ => panic!("Datum::unwrap_uint16 called on {:?}", self),
+        }
+    }
+
+    /// Unwraps the 32-bit unsigned integer value within this datum.
     ///
     /// # Panics
     ///
@@ -395,6 +481,19 @@ impl<'a> Datum<'a> {
         match self {
             Datum::UInt32(u) => *u,
             _ => panic!("Datum::unwrap_uint32 called on {:?}", self),
+        }
+    }
+
+    /// Unwraps the 64-bit unsigned integer value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::UInt64`].
+    #[track_caller]
+    pub fn unwrap_uint64(&self) -> u64 {
+        match self {
+            Datum::UInt64(u) => *u,
+            _ => panic!("Datum::unwrap_uint64 called on {:?}", self),
         }
     }
 
@@ -446,14 +545,14 @@ impl<'a> Datum<'a> {
     ///
     /// Panics if the datum is not [`Datum::Date`].
     #[track_caller]
-    pub fn unwrap_date(&self) -> chrono::NaiveDate {
+    pub fn unwrap_date(&self) -> Date {
         match self {
             Datum::Date(d) => *d,
             _ => panic!("Datum::unwrap_date called on {:?}", self),
         }
     }
 
-    /// Unwraps the time value within this datum.
+    /// Unwraps the time vaqlue within this datum.
     ///
     /// # Panics
     ///
@@ -596,6 +695,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the mz_repr::Timestamp value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::MzTimestamp`].
+    #[track_caller]
+    pub fn unwrap_mztimestamp(&self) -> crate::Timestamp {
+        match self {
+            Datum::MzTimestamp(t) => *t,
+            _ => panic!("Datum::unwrap_mztimestamp called on {:?}", self),
+        }
+    }
+
     /// Reports whether this datum is an instance of the specified column type.
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
@@ -632,11 +744,16 @@ impl<'a> Datum<'a> {
                     (Datum::Int64(_), _) => false,
                     (Datum::UInt8(_), ScalarType::PgLegacyChar) => true,
                     (Datum::UInt8(_), _) => false,
+                    (Datum::UInt16(_), ScalarType::UInt16) => true,
+                    (Datum::UInt16(_), _) => false,
                     (Datum::UInt32(_), ScalarType::Oid) => true,
                     (Datum::UInt32(_), ScalarType::RegClass) => true,
                     (Datum::UInt32(_), ScalarType::RegProc) => true,
                     (Datum::UInt32(_), ScalarType::RegType) => true,
+                    (Datum::UInt32(_), ScalarType::UInt32) => true,
                     (Datum::UInt32(_), _) => false,
+                    (Datum::UInt64(_), ScalarType::UInt64) => true,
+                    (Datum::UInt64(_), _) => false,
                     (Datum::Float32(_), ScalarType::Float32) => true,
                     (Datum::Float32(_), _) => false,
                     (Datum::Float64(_), ScalarType::Float64) => true,
@@ -689,6 +806,8 @@ impl<'a> Datum<'a> {
                     (Datum::JsonNull, _) => false,
                     (Datum::Numeric(_), ScalarType::Numeric { .. }) => true,
                     (Datum::Numeric(_), _) => false,
+                    (Datum::MzTimestamp(_), ScalarType::MzTimestamp) => true,
+                    (Datum::MzTimestamp(_), _) => false,
                 }
             }
         }
@@ -729,6 +848,24 @@ impl<'a> From<i64> for Datum<'a> {
     }
 }
 
+impl<'a> From<u16> for Datum<'a> {
+    fn from(u: u16) -> Datum<'a> {
+        Datum::UInt16(u)
+    }
+}
+
+impl<'a> From<u32> for Datum<'a> {
+    fn from(u: u32) -> Datum<'a> {
+        Datum::UInt32(u)
+    }
+}
+
+impl<'a> From<u64> for Datum<'a> {
+    fn from(u: u64) -> Datum<'a> {
+        Datum::UInt64(u)
+    }
+}
+
 impl<'a> From<OrderedFloat<f32>> for Datum<'a> {
     fn from(f: OrderedFloat<f32>) -> Datum<'a> {
         Datum::Float32(f)
@@ -755,6 +892,12 @@ impl<'a> From<f64> for Datum<'a> {
 
 impl<'a> From<i128> for Datum<'a> {
     fn from(d: i128) -> Datum<'a> {
+        Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
+    }
+}
+
+impl<'a> From<u128> for Datum<'a> {
+    fn from(d: u128) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(Numeric::try_from(d).unwrap()))
     }
 }
@@ -790,8 +933,8 @@ impl<'a> From<&'a [u8]> for Datum<'a> {
     }
 }
 
-impl<'a> From<NaiveDate> for Datum<'a> {
-    fn from(d: NaiveDate) -> Datum<'a> {
+impl<'a> From<Date> for Datum<'a> {
+    fn from(d: Date) -> Datum<'a> {
         Datum::Date(d)
     }
 }
@@ -817,6 +960,11 @@ impl<'a> From<DateTime<Utc>> for Datum<'a> {
 impl<'a> From<Uuid> for Datum<'a> {
     fn from(uuid: Uuid) -> Datum<'a> {
         Datum::Uuid(uuid)
+    }
+}
+impl<'a> From<crate::Timestamp> for Datum<'a> {
+    fn from(ts: crate::Timestamp) -> Datum<'a> {
+        Datum::MzTimestamp(ts)
     }
 }
 
@@ -863,7 +1011,9 @@ impl fmt::Display for Datum<'_> {
             Datum::Int32(num) => write!(f, "{}", num),
             Datum::Int64(num) => write!(f, "{}", num),
             Datum::UInt8(num) => write!(f, "{}", num),
+            Datum::UInt16(num) => write!(f, "{}", num),
             Datum::UInt32(num) => write!(f, "{}", num),
+            Datum::UInt64(num) => write!(f, "{}", num),
             Datum::Float32(num) => write!(f, "{}", num),
             Datum::Float64(num) => write!(f, "{}", num),
             Datum::Date(d) => write!(f, "{}", d),
@@ -906,6 +1056,7 @@ impl fmt::Display for Datum<'_> {
                 f.write_str("}")
             }
             Datum::Numeric(n) => write!(f, "{}", n.0.to_standard_notation_string()),
+            Datum::MzTimestamp(t) => write!(f, "{}", t),
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
         }
@@ -930,12 +1081,14 @@ impl From<&Datum<'_>> for serde_json::Value {
             Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
             Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
             Datum::UInt8(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::UInt16(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
             Datum::UInt32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            Datum::UInt64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
             Datum::Float32(n) => float_to_json(n.into_inner() as f64),
             Datum::Float64(n) => float_to_json(n.into_inner()),
             Datum::Numeric(d) => {
                 // serde_json requires floats to be finite
-                if d.0.is_infinite() {
+                if !d.0.is_finite() {
                     serde_json::Value::String(d.0.to_string())
                 } else {
                     serde_json::Value::Number(
@@ -966,6 +1119,7 @@ impl From<&Datum<'_>> for serde_json::Value {
             | Datum::Time(_)
             | Datum::Timestamp(_)
             | Datum::TimestampTz(_)
+            | Datum::MzTimestamp(_)
             | Datum::Uuid(_) => serde_json::Value::String(datum.to_string()),
         }
     }
@@ -988,6 +1142,12 @@ pub enum ScalarType {
     Int32,
     /// The type of [`Datum::Int64`].
     Int64,
+    /// The type of [`Datum::UInt16`].
+    UInt16,
+    /// The type of [`Datum::UInt32`].
+    UInt32,
+    /// The type of [`Datum::UInt64`].
+    UInt64,
     /// The type of [`Datum::Float32`].
     Float32,
     /// The type of [`Datum::Float64`].
@@ -1087,6 +1247,8 @@ pub enum ScalarType {
     /// A vector on small ints; this is a legacy type in PG used primarily in
     /// the catalog.
     Int2Vector,
+    /// A Materialize timestamp.
+    MzTimestamp,
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
@@ -1120,6 +1282,9 @@ impl RustType<ProtoScalarType> for ScalarType {
                 ScalarType::Int16 => Int16(()),
                 ScalarType::Int32 => Int32(()),
                 ScalarType::Int64 => Int64(()),
+                ScalarType::UInt16 => UInt16(()),
+                ScalarType::UInt32 => UInt32(()),
+                ScalarType::UInt64 => UInt64(()),
                 ScalarType::Float32 => Float32(()),
                 ScalarType::Float64 => Float64(()),
                 ScalarType::Date => Date(()),
@@ -1165,6 +1330,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                     value_type: Some(value_type.into_proto()),
                     custom_id: custom_id.map(|id| id.into_proto()),
                 })),
+                ScalarType::MzTimestamp => MzTimestamp(()),
             }),
         }
     }
@@ -1181,6 +1347,9 @@ impl RustType<ProtoScalarType> for ScalarType {
             Int16(()) => Ok(ScalarType::Int16),
             Int32(()) => Ok(ScalarType::Int32),
             Int64(()) => Ok(ScalarType::Int64),
+            UInt16(()) => Ok(ScalarType::UInt16),
+            UInt32(()) => Ok(ScalarType::UInt32),
+            UInt64(()) => Ok(ScalarType::UInt64),
             Float32(()) => Ok(ScalarType::Float32),
             Float64(()) => Ok(ScalarType::Float64),
             Date(()) => Ok(ScalarType::Date),
@@ -1233,6 +1402,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                 ),
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
+            MzTimestamp(()) => Ok(ScalarType::MzTimestamp),
         }
     }
 }
@@ -1335,14 +1505,18 @@ impl_datum_type_copy!(f64, Float64);
 impl_datum_type_copy!(i16, Int16);
 impl_datum_type_copy!(i32, Int32);
 impl_datum_type_copy!(i64, Int64);
+impl_datum_type_copy!(u16, UInt16);
+impl_datum_type_copy!(u32, UInt32);
+impl_datum_type_copy!(u64, UInt64);
 impl_datum_type_copy!(Interval, Interval);
-impl_datum_type_copy!(NaiveDate, Date);
+impl_datum_type_copy!(Date, Date);
 impl_datum_type_copy!(NaiveTime, Time);
 impl_datum_type_copy!(NaiveDateTime, Timestamp);
 impl_datum_type_copy!(DateTime<Utc>, TimestampTz);
 impl_datum_type_copy!(Uuid, Uuid);
 impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
+impl_datum_type_copy!(crate::Timestamp, MzTimestamp);
 
 impl<'a, E> DatumType<'a, E> for Datum<'a> {
     fn nullable() -> bool {
@@ -2170,7 +2344,7 @@ pub enum PropDatum {
     Float32(f32),
     Float64(f64),
 
-    Date(chrono::NaiveDate),
+    Date(Date),
     Time(chrono::NaiveTime),
     Timestamp(chrono::NaiveDateTime),
     TimestampTz(chrono::DateTime<chrono::Utc>),
@@ -2203,7 +2377,7 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         any::<i64>().prop_map(PropDatum::Int64),
         any::<f32>().prop_map(PropDatum::Float32),
         any::<f64>().prop_map(PropDatum::Float64),
-        add_arb_duration(chrono::NaiveDate::from_ymd(2000, 1, 1)).prop_map(PropDatum::Date),
+        arb_date().prop_map(PropDatum::Date),
         add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropDatum::Time),
         add_arb_duration(chrono::NaiveDateTime::from_timestamp(0, 0))
             .prop_map(PropDatum::Timestamp),
@@ -2291,6 +2465,12 @@ fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDic
             row.packer().push_dict(entry_iter.into_iter());
             PropDict(row, entries)
         })
+        .boxed()
+}
+
+fn arb_date() -> BoxedStrategy<Date> {
+    (Date::LOW_DAYS..Date::HIGH_DAYS)
+        .prop_map(move |days| Date::from_pg_epoch(days).unwrap())
         .boxed()
 }
 

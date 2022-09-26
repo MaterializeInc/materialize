@@ -11,23 +11,26 @@
 # Make sure that FETCH-ing using multiple cursors from different sources works as expected
 #
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
 
 $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "type": "int"} ] }
 
 $ kafka-create-topic topic=fetch-concurrent-two-sources
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE fetch_concurrent_two_sources1
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}'
-  WITH( timestamp_frequency_ms = 100 )
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+  WITH (TIMESTAMP INTERVAL '100ms')
 
 > CREATE SOURCE fetch_concurrent_two_sources2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}'
-  WITH( timestamp_frequency_ms = 100 )
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+  WITH (TIMESTAMP INTERVAL '100ms')
 
 > CREATE MATERIALIZED VIEW fetch_concurrent_two_sources1_view AS SELECT * FROM fetch_concurrent_two_sources1 ORDER BY f1;
 

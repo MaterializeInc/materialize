@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDateTime;
 use mz_avro::types::AvroMap;
 use mz_avro::{types::DecimalValue, types::Value, Schema};
 use once_cell::sync::Lazy;
@@ -329,7 +329,7 @@ static VALID_LOGICAL_TYPES: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
         // Date logical type
         (
             r#"{"type": "int", "logicalType": "date"}"#,
-            Value::Date(NaiveDate::from_ymd(2020, 7, 13)),
+            Value::Date(365 * 50 + 120),
         ),
         // Time millis logical type
         (

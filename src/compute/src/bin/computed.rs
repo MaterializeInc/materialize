@@ -11,10 +11,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process;
 
-use anyhow::{bail, Context};
 use axum::routing;
-use mz_compute::server::CommunicationConfig;
-use mz_service::secrets::SecretsReaderCliArgs;
 use once_cell::sync::Lazy;
 use tracing::info;
 
@@ -26,7 +23,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_pid_file::PidFile;
 use mz_service::grpc::GrpcServer;
-use mz_storage::types::connections::ConnectionContext;
+use mz_service::secrets::SecretsReaderCliArgs;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -36,6 +33,9 @@ use mz_storage::types::connections::ConnectionContext;
 // [0]: https://github.com/jemalloc/jemalloc/issues/26
 // [1]: https://github.com/jemalloc/jemalloc/issues/843
 // [2]: https://github.com/jemalloc/jemalloc/issues/1467
+//
+// Furthermore, as of Aug. 2022, some engineers are using profiling
+// tools, e.g. `heaptrack`, that only work with the system allocator.
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -66,26 +66,6 @@ struct Args {
     )]
     internal_http_listen_addr: SocketAddr,
 
-    // === Dataflow options. ===
-    /// Number of dataflow worker threads.
-    #[clap(long, env = "WORKERS", value_name = "N", default_value = "1")]
-    workers: usize,
-    /// Number of this computed process.
-    #[clap(long, env = "PROCESS", value_name = "P")]
-    process: Option<usize>,
-    /// The addresses of all computed processes in the cluster.
-    #[clap(env = "ADDRESSES", use_value_delimiter = true)]
-    addresses: Vec<String>,
-
-    // === Cloud options. ===
-    /// An external ID to be supplied to all AWS AssumeRole operations.
-    ///
-    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    // TODO(benesch): remove this when external sinks are moved to the storage
-    // layer.
-    #[clap(long, value_name = "ID")]
-    aws_external_id: Option<String>,
-
     // === Process orchestrator options. ===
     /// Where to write a PID lock file.
     ///
@@ -114,37 +94,15 @@ async fn main() {
     }
 }
 
-fn create_communication_config(args: &Args) -> Result<CommunicationConfig, anyhow::Error> {
-    let process = match args.process {
-        None => 0,
-        Some(process) if process >= args.addresses.len() => {
-            bail!(
-                "process index {process} out of range [0, {})",
-                args.addresses.len()
-            );
-        }
-        Some(process) => process,
-    };
-    Ok(CommunicationConfig {
-        threads: args.workers,
-        process,
-        addresses: args.addresses.clone(),
-    })
-}
-
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-    let otel_enable_callback = mz_ore::tracing::configure("computed", &args.tracing).await?;
+    let (otel_enable_callback, stderr_filter_callback) =
+        mz_ore::tracing::configure("computed", &args.tracing).await?;
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
         _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
     }
-
-    if args.workers == 0 {
-        bail!("--workers must be greater than 0");
-    }
-    let comm_config = create_communication_config(&args)?;
 
     info!("about to bind to {:?}", args.controller_listen_addr);
 
@@ -175,34 +133,32 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                             mz_http_util::handle_enable_otel(otel_enable_callback, payload).await
                         }),
                     )
+                    .route(
+                        "/api/stderr/config",
+                        routing::put(move |payload| async move {
+                            mz_http_util::handle_modify_stderr_filter(
+                                stderr_filter_callback,
+                                payload,
+                            )
+                            .await
+                        }),
+                    )
                     .into_make_service(),
             ),
         );
     }
 
-    let secrets_reader = args
-        .secrets
-        .load()
-        .await
-        .context("loading secrets reader")?;
     let config = mz_compute::server::Config {
         build_info: &BUILD_INFO,
-        workers: args.workers,
-        comm_config,
         metrics_registry,
         now: SYSTEM_TIME.clone(),
-        connection_context: ConnectionContext::from_cli_args(
-            &args.tracing.log_filter.inner,
-            args.aws_external_id,
-            secrets_reader,
-        ),
     };
 
-    let (_server, client) = mz_compute::server::serve(config)?;
+    let (_server, client_builder) = mz_compute::server::serve(config)?;
     GrpcServer::serve(
         args.controller_listen_addr,
         BUILD_INFO.semver_version(),
-        client,
+        client_builder,
         ProtoComputeServer::new,
     )
     .await

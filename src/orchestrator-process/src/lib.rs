@@ -158,12 +158,13 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let full_id = format!("{}-{}", self.namespace, id);
         let mut supervisors = self.supervisors.lock().expect("lock poisoned");
-        if supervisors.contains_key(id) {
-            unimplemented!("ProcessOrchestrator does not yet support updating existing services");
-        }
+        let handles = supervisors.entry(id.to_string()).or_default();
+
+        // Drop the supervisors for any processes we no longer need.
+        handles.truncate(scale_in.get());
+
         let path = self.image_dir.join(image);
         let mut processes = vec![];
-        let mut handles = vec![];
 
         let mut system = None;
 
@@ -184,6 +185,24 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                 PidFile::read(&pid_file_location),
                 PortMetadataFile::read(&port_metadata_file_location),
             ) {
+                if i < handles.len() {
+                    // We're already supervising this one!
+                    assert_eq!(
+                        port_metadata.len(),
+                        ports_in.len(),
+                        "can't change the service ports"
+                    );
+                    for port in &ports_in {
+                        assert!(
+                            port_metadata.contains_key(&port.name),
+                            "port file must have port for {}",
+                            &port.name
+                        );
+                    }
+                    processes.push(port_metadata);
+                    continue;
+                }
+
                 let system = system.get_or_insert_with(|| {
                     sysinfo::System::new_with_specifics(
                         RefreshKind::new().with_processes(Default::default()),
@@ -237,7 +256,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             .iter()
             .map(|ports| ("localhost".to_string(), ports.clone()))
             .collect::<Vec<_>>();
-        for i in 0..(scale_in.get()) {
+        for i in 0..scale_in.get() {
             if !processes_exist[i] {
                 let mut args = args(&ServiceAssignments {
                     listen_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -271,7 +290,6 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                 ))));
             }
         }
-        supervisors.insert(id.into(), handles);
         Ok(Box::new(ProcessService { processes }))
     }
 

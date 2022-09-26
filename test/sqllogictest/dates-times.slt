@@ -10,9 +10,9 @@
 mode cockroach
 
 statement ok
-CREATE VIEW logical_timestamp_view AS SELECT mz_logical_timestamp()
+CREATE VIEW logical_timestamp_view AS SELECT mz_now()
 
-# Equivalent to running `SELECT mz_logical_timestamp()` directly IF AND ONLY IF
+# Equivalent to running `SELECT mz_now()` directly IF AND ONLY IF
 # there are no other objects in the same time domain, and has the same somewhat
 # confusing output when there are no dependencies on any views. If there are
 # other objects in the same time domain as the view, they will dictate what is
@@ -1318,3 +1318,30 @@ select '0001-02-24 03:04:05.6789'::timestamp - interval '-2147483648 MONTHS'
 
 query error interval out of range
 select '0001-02-24 03:04:05.6789 +00:00'::timestamptz - interval '-2147483648 MONTHS'
+
+# Infinity dates not supported.
+query error invalid input syntax for type date
+select 'infinity'::date
+
+# We don't support BC parsing or 6 digit dates, so do some jank.
+
+query T
+select ('0001-01-01'::date - '4713years 1months 7days')::date
+----
+4714-11-24 BC
+
+query T
+select ('0001-01-01'::date + '262142years 11months 30days')::date
+----
+262143-12-31
+
+query error date out of range
+select ('0001-01-01'::date - '4713years 1months 8days')::date
+
+query error timestamp out of range
+select ('0001-01-01'::date + '262142years 11months 30days')::date + '1day'
+
+query II
+select ('0001-01-01'::date - '4713years 1months 7days')::date - ('0001-01-01'::date + '262142years 11months 30days')::date, ('0001-01-01'::date + '262142years 11months 30days')::date - ('0001-01-01'::date - '4713years 1months 7days')::date
+----
+-97467189 97467189

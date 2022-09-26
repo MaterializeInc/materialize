@@ -55,6 +55,11 @@ pub fn render<G>(
     let mut input = persist_op.new_input(&source_data.inner, Exchange::new(move |_| hashed_id));
 
     let current_upper = Rc::clone(&storage_state.source_uppers[&src_id]);
+    if !active_write_worker {
+        // This worker is not writing, so make sure it's "taken out" of the
+        // calculation by advancing to the empty frontier.
+        current_upper.borrow_mut().clear();
+    }
 
     let weak_token = Rc::downgrade(&token);
 
@@ -85,11 +90,14 @@ pub fn render<G>(
             while scheduler.notified().await {
                 let input_upper = frontiers.borrow()[0].clone();
 
-                if !active_write_worker
-                    || weak_token.upgrade().is_none()
-                    || current_upper.borrow().is_empty()
-                {
+                if weak_token.upgrade().is_none() || current_upper.borrow().is_empty() {
                     return;
+                }
+
+                if !active_write_worker {
+                    // We cannot simply return because that would block the
+                    // frontier from advancing for the one active write worker.
+                    continue;
                 }
 
                 while let Some((_cap, data)) = input.next() {
@@ -158,7 +166,7 @@ pub fn render<G>(
                         let new_upper = if i == finalized_batch_count - 1 {
                             input_upper.clone()
                         } else {
-                            Antichain::from_elem(ts + 1)
+                            Antichain::from_elem(ts.step_forward())
                         };
 
                         let mut batch = stashed_batches

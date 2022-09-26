@@ -75,7 +75,7 @@ steps:
     command: bin/check
     env:
       CARGO_INCREMENTAL: "0"
-      RUSTUP_TOOLCHAIN: $ENVIRONMENTD_RUST_VERSION
+      RUSTUP_TOOLCHAIN: $RUST_VERSION
     inputs:
       - Cargo.lock
       - "**/Cargo.toml"
@@ -409,6 +409,17 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: ssh-connection
+    label: SSH connection tests
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/ssh-connection]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: ssh-connection
+    agents:
+      queue: linux-x86_64
+
   - id: kafka-resumption
     label: Kafka resumption tests
     depends_on: build-x86_64
@@ -447,10 +458,11 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 10
     inputs: [test/persist]
-    artifact_paths: junit_mzcompose_*.xml
+    artifact_paths: [test/persist/maelstrom/**/*.log, junit_mzcompose_*.xml]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persist
+          args: [--consensus=mem, --blob=mem]
     agents:
       queue: linux-x86_64
 
@@ -529,7 +541,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres]
+          args: [--scenario=RestartSourcePostgres, --check=DebeziumPostgres, --check=PgCdc]
 
   - id: cloudtest
     label: Cloudtest
@@ -537,9 +549,6 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_cloudtest_*.xml
     inputs: [test/cloudtest]
-    # TODO: re-enable cloudtest.
-    # See: https://github.com/MaterializeInc/materialize/issues/14359
-    soft_fail: true
     plugins:
       - ./ci/plugins/cloudtest:
           args: [test/cloudtest/]

@@ -111,6 +111,27 @@ where
     }
 }
 
+/// Give na closure, it creates a Display that simply calls the given closure when fmt'd.
+pub fn closure_to_display<F>(fun: F) -> impl fmt::Display
+where
+    F: Fn(&mut fmt::Formatter) -> fmt::Result,
+{
+    struct Mapped<F> {
+        fun: F,
+    }
+
+    impl<F> fmt::Display for Mapped<F>
+    where
+        F: Fn(&mut fmt::Formatter) -> fmt::Result,
+    {
+        fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            (self.fun)(formatter)
+        }
+    }
+
+    Mapped { fun }
+}
+
 /// Creates a type whose [`fmt::Display`] implementation outputs each item in
 /// `iter` separated by `separator`.
 pub fn separated<'a, I>(separator: &'a str, iter: I) -> impl fmt::Display + 'a

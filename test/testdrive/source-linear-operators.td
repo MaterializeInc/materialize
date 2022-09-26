@@ -29,8 +29,11 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 {"a": {"long": 3}, "b": {"long": 1}, "c": {"long": 3}, "d": {"long": 5}}
 {"a": {"long": 1}, "b": {"long": 2}, "c": {"long": 2}, "d": {"long": 3}}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 $ set-regex match=u\d+ replacement=UID
@@ -62,14 +65,16 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy, dummy, dummy
 | Filter (#1 = 1)
-| Project (#1)
+| Project (#4, #1, #5, #6)
 
 View materialize.public.v (UID):
 %0 =
 | Get materialize.public.data (UID)
 | Filter (#1 = 1)
 | Project (#1)
+
 
 > SELECT * FROM v
 1
@@ -87,8 +92,9 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy
 | Filter (#0 = 1), (#3 = 4)
-| Project (#0, #1, #3)
+| Project (#0, #1, #4, #3)
 
 View materialize.public.v (UID):
 %0 =
@@ -108,8 +114,9 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy, dummy
 | Filter (#0 = 1), (#3 = 4)
-| Project (#0, #3)
+| Project (#0, #4, #5, #3)
 
 View materialize.public.v (UID):
 %0 =
@@ -127,7 +134,8 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
-| Project (#0, #1, #3)
+| Map dummy
+| Project (#0, #1, #4, #3)
 
 View materialize.public.v (UID):
 %0 =
@@ -161,8 +169,9 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy
 | Filter (#3 = 4)
-| Project (#0, #1, #3)
+| Project (#0, #1, #4, #3)
 
 View materialize.public.v (UID):
 %0 =
@@ -192,8 +201,9 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy, dummy
 | Filter (#0) IS NOT NULL
-| Project (#0, #2)
+| Project (#0, #4, #2, #5)
 
 View materialize.public.v (UID):
 %0 = Let l0 =
@@ -229,8 +239,9 @@ View materialize.public.v (UID):
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
+| Map dummy
 | Filter (#0 = 1)
-| Project (#0..=#2)
+| Project (#0..=#2, #4)
 
 View materialize.public.v (UID):
 %0 =
@@ -267,7 +278,7 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
 {"a": {"long": 2}, "b": {"long": 1}, "c": {"long": 5}, "d": null}
 
 > CREATE SOURCE data2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE VIEW v as SELECT a, c FROM data EXCEPT ALL SELECT a, c FROM data2 where d is null
@@ -275,11 +286,13 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
 
 ? EXPLAIN PLAN FOR VIEW v;
 Source materialize.public.data (UID):
-| Project (#0, #2)
+| Map dummy, dummy
+| Project (#0, #4, #2, #5)
 
 Source materialize.public.data2 (UID):
+| Map dummy
 | Filter (#3) IS NULL
-| Project (#0, #2, #3)
+| Project (#0, #4, #2, #3)
 
 View materialize.public.v (UID):
 %0 =

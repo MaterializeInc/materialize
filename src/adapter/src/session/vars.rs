@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use const_format::concatcp;
 use once_cell::sync::Lazy;
+use serde::Serialize;
 use uncased::UncasedStr;
 
 use mz_ore::cast;
@@ -173,71 +174,81 @@ const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     description: "Sets the current transaction's isolation level (PostgreSQL).",
 };
 
-const MAX_TABLES: ServerVar<i32> = ServerVar {
+const MAX_TABLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_tables"),
     value: &25,
     description: "The maximum number of tables in the region, across all schemas (Materialize).",
 };
 
-const MAX_SOURCES: ServerVar<i32> = ServerVar {
+const MAX_SOURCES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sources"),
     value: &25,
     description: "The maximum number of sources in the region, across all schemas (Materialize).",
 };
 
-const MAX_SINKS: ServerVar<i32> = ServerVar {
+const MAX_SINKS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sinks"),
     value: &25,
     description: "The maximum number of sinks in the region, across all schemas (Materialize).",
 };
 
-const MAX_MATERIALIZED_VIEWS: ServerVar<i32> = ServerVar {
+const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_materialized_views"),
     value: &100,
     description:
         "The maximum number of materialized views in the region, across all schemas (Materialize).",
 };
 
-const MAX_CLUSTERS: ServerVar<i32> = ServerVar {
+const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_clusters"),
     value: &10,
     description: "The maximum number of clusters in the region (Materialize).",
 };
 
-const MAX_REPLICAS_PER_CLUSTER: ServerVar<i32> = ServerVar {
+const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_replicas_per_cluster"),
     value: &5,
     description: "The maximum number of replicas of a single cluster (Materialize).",
 };
 
-const MAX_DATABASES: ServerVar<i32> = ServerVar {
+const MAX_DATABASES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_databases"),
     value: &1000,
     description: "The maximum number of databases in the region (Materialize).",
 };
 
-const MAX_SCHEMAS_PER_DATABASE: ServerVar<i32> = ServerVar {
+const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_schemas_per_database"),
     value: &1000,
     description: "The maximum number of schemas in a database (Materialize).",
 };
 
-const MAX_OBJECTS_PER_SCHEMA: ServerVar<i32> = ServerVar {
+const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_objects_per_schema"),
     value: &1000,
     description: "The maximum number of objects in a schema (Materialize).",
 };
 
-const MAX_SECRETS: ServerVar<i32> = ServerVar {
+const MAX_SECRETS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_secrets"),
     value: &100,
     description: "The maximum number of secrets in the region, across all schemas (Materialize).",
 };
 
-const MAX_ROLES: ServerVar<i32> = ServerVar {
+const MAX_ROLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_roles"),
     value: &1000,
     description: "The maximum number of roles in the region (Materialize).",
+};
+
+// Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
+// query.
+// TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
+pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_result_size"),
+    // 1 GiB
+    value: &1_073_741_824,
+    description: "The maximum size in bytes for a single query's result (Materialize).",
 };
 
 /// Session variables.
@@ -747,17 +758,18 @@ impl SessionVars {
 /// See [`SessionVars`] for more details on the Materialize configuration model.
 #[derive(Debug, Clone)]
 pub struct SystemVars {
-    max_tables: SystemVar<i32>,
-    max_sources: SystemVar<i32>,
-    max_sinks: SystemVar<i32>,
-    max_materialized_views: SystemVar<i32>,
-    max_clusters: SystemVar<i32>,
-    max_replicas_per_cluster: SystemVar<i32>,
-    max_databases: SystemVar<i32>,
-    max_schemas_per_database: SystemVar<i32>,
-    max_objects_per_schema: SystemVar<i32>,
-    max_secrets: SystemVar<i32>,
-    max_roles: SystemVar<i32>,
+    max_tables: SystemVar<u32>,
+    max_sources: SystemVar<u32>,
+    max_sinks: SystemVar<u32>,
+    max_materialized_views: SystemVar<u32>,
+    max_clusters: SystemVar<u32>,
+    max_replicas_per_cluster: SystemVar<u32>,
+    max_databases: SystemVar<u32>,
+    max_schemas_per_database: SystemVar<u32>,
+    max_objects_per_schema: SystemVar<u32>,
+    max_secrets: SystemVar<u32>,
+    max_roles: SystemVar<u32>,
+    max_result_size: SystemVar<u32>,
 }
 
 impl Default for SystemVars {
@@ -774,6 +786,7 @@ impl Default for SystemVars {
             max_objects_per_schema: SystemVar::new(&MAX_OBJECTS_PER_SCHEMA),
             max_secrets: SystemVar::new(&MAX_SECRETS),
             max_roles: SystemVar::new(&MAX_ROLES),
+            max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
         }
     }
 }
@@ -794,6 +807,7 @@ impl SystemVars {
             &self.max_objects_per_schema,
             &self.max_secrets,
             &self.max_roles,
+            &self.max_result_size,
         ]
         .into_iter()
     }
@@ -831,6 +845,8 @@ impl SystemVars {
             Ok(&self.max_secrets)
         } else if name == MAX_ROLES.name {
             Ok(&self.max_roles)
+        } else if name == MAX_RESULT_SIZE.name {
+            Ok(&self.max_result_size)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -866,6 +882,8 @@ impl SystemVars {
             self.max_secrets.set(value)
         } else if name == MAX_ROLES.name {
             self.max_roles.set(value)
+        } else if name == MAX_RESULT_SIZE.name {
+            self.max_result_size.set(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -899,6 +917,8 @@ impl SystemVars {
             self.max_secrets.reset()
         } else if name == MAX_ROLES.name {
             self.max_roles.reset()
+        } else if name == MAX_RESULT_SIZE.name {
+            self.max_result_size.reset()
         } else {
             return Err(AdapterError::UnknownParameter(name.into()));
         }
@@ -906,58 +926,63 @@ impl SystemVars {
     }
 
     /// Returns the value of the `max_tables` configuration parameter.
-    pub fn max_tables(&self) -> i32 {
+    pub fn max_tables(&self) -> u32 {
         *self.max_tables.value()
     }
 
     /// Returns the value of the `max_sources` configuration parameter.
-    pub fn max_sources(&self) -> i32 {
+    pub fn max_sources(&self) -> u32 {
         *self.max_sources.value()
     }
 
     /// Returns the value of the `max_sinks` configuration parameter.
-    pub fn max_sinks(&self) -> i32 {
+    pub fn max_sinks(&self) -> u32 {
         *self.max_sinks.value()
     }
 
     /// Returns the value of the `max_materialized_views` configuration parameter.
-    pub fn max_materialized_views(&self) -> i32 {
+    pub fn max_materialized_views(&self) -> u32 {
         *self.max_materialized_views.value()
     }
 
     /// Returns the value of the `max_clusters` configuration parameter.
-    pub fn max_clusters(&self) -> i32 {
+    pub fn max_clusters(&self) -> u32 {
         *self.max_clusters.value()
     }
 
     /// Returns the value of the `max_replicas_per_cluster` configuration parameter.
-    pub fn max_replicas_per_cluster(&self) -> i32 {
+    pub fn max_replicas_per_cluster(&self) -> u32 {
         *self.max_replicas_per_cluster.value()
     }
 
     /// Returns the value of the `max_databases` configuration parameter.
-    pub fn max_databases(&self) -> i32 {
+    pub fn max_databases(&self) -> u32 {
         *self.max_databases.value()
     }
 
     /// Returns the value of the `max_schemas_per_database` configuration parameter.
-    pub fn max_schemas_per_database(&self) -> i32 {
+    pub fn max_schemas_per_database(&self) -> u32 {
         *self.max_schemas_per_database.value()
     }
 
     /// Returns the value of the `max_objects_per_schema` configuration parameter.
-    pub fn max_objects_per_schema(&self) -> i32 {
+    pub fn max_objects_per_schema(&self) -> u32 {
         *self.max_objects_per_schema.value()
     }
 
     /// Returns the value of the `max_secrets` configuration parameter.
-    pub fn max_secrets(&self) -> i32 {
+    pub fn max_secrets(&self) -> u32 {
         *self.max_secrets.value()
     }
 
     /// Returns the value of the `max_roles` configuration parameter.
-    pub fn max_roles(&self) -> i32 {
+    pub fn max_roles(&self) -> u32 {
         *self.max_roles.value()
+    }
+
+    /// Returns the value of the `max_result_size` configuration parameter.
+    pub fn max_result_size(&self) -> u32 {
+        *self.max_result_size.value()
     }
 }
 
@@ -988,7 +1013,7 @@ pub trait Var: fmt::Debug {
 
 /// A `ServerVar` is the default value for a configuration parameter.
 #[derive(Debug)]
-struct ServerVar<V>
+pub struct ServerVar<V>
 where
     V: fmt::Debug + ?Sized + 'static,
 {
@@ -1222,6 +1247,18 @@ impl Value for i32 {
     }
 }
 
+impl Value for u32 {
+    const TYPE_NAME: &'static str = "unsigned integer";
+
+    fn parse(s: &str) -> Result<u32, ()> {
+        s.parse().map_err(|_| ())
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
 const SEC_TO_MIN: u64 = 60u64;
 const SEC_TO_HOUR: u64 = 60u64 * 60;
 const SEC_TO_DAY: u64 = 60u64 * 60 * 24;
@@ -1429,6 +1466,15 @@ pub enum ClientSeverity {
     /// Sends only NOTICE, WARNING, INFO, ERROR, FATAL and PANIC level messages.
     /// Not listed as a valid value, but accepted by Postgres
     Info,
+}
+
+impl Serialize for ClientSeverity {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
 }
 
 impl ClientSeverity {

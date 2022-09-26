@@ -31,26 +31,10 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Localstack(),
-    Computed(
-        name="computed_1",
-        options="--workers 2 --process 0 computed_1:2102 computed_2:2102 ",
-        ports=[2100, 2102],
-    ),
-    Computed(
-        name="computed_2",
-        options="--workers 2 --process 1 computed_1:2102 computed_2:2102",
-        ports=[2100, 2102],
-    ),
-    Computed(
-        name="computed_3",
-        options="--workers 2 --process 0 computed_3:2102 computed_4:2102",
-        ports=[2100, 2102],
-    ),
-    Computed(
-        name="computed_4",
-        options="--workers 2 --process 1 computed_3:2102 computed_4:2102",
-        ports=[2100, 2102],
-    ),
+    Computed(name="computed_1"),
+    Computed(name="computed_2"),
+    Computed(name="computed_3"),
+    Computed(name="computed_4"),
     Materialized(),
     Redpanda(),
     Testdrive(
@@ -70,12 +54,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
         "test-cluster",
         "test-github-12251",
-        "test-github-13603",
         "test-remote-storaged",
         "test-drop-default-cluster",
         "test-upsert",
         "test-resource-limits",
-        "test-builtin-migration",
+        "test-invalid-computed-reuse",
+        # Disabled to permit a breaking change.
+        # See: https://materializeinc.slack.com/archives/C02FWJ94HME/p1661288774456699?thread_ts=1661288684.301649&cid=C02FWJ94HME
+        # "test-builtin-migration",
+        "pg-snapshot-resumption",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -104,7 +91,12 @@ def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> Non
     c.up("computed_2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
-        "CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100', 'computed_2:2100']));"
+        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            REMOTE ['computed_1:2100', 'computed_2:2100'],
+            COMPUTE ['computed_1:2102', 'computed_2:2102'],
+            WORKERS 2
+            ));
+    """
     )
     c.run("testdrive", *args.glob)
 
@@ -112,7 +104,11 @@ def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> Non
     c.up("computed_3")
     c.up("computed_4")
     c.sql(
-        "CREATE CLUSTER REPLICA cluster1.replica2 REMOTE ['computed_3:2100', 'computed_4:2100']"
+        """CREATE CLUSTER REPLICA cluster1.replica2
+            REMOTE ['computed_3:2100', 'computed_4:2100'],
+            COMPUTE ['computed_3:2102', 'computed_4:2102'],
+            WORKERS 2
+    """
     )
     c.run("testdrive", *args.glob)
 
@@ -126,27 +122,39 @@ def workflow_test_cluster(c: Composition, parser: WorkflowArgumentParser) -> Non
     c.run("testdrive", *args.glob)
 
 
-def workflow_test_github_13603(c: Composition) -> None:
-    """Test that multi woker replicas terminate eagerly upon rehydration"""
+def workflow_test_invalid_computed_reuse(c: Composition) -> None:
+    """Ensure computeds correctly crash if used in unsupported communication config"""
     c.down(destroy_volumes=True)
     c.up("materialized")
     c.wait_for_materialized()
 
+    # Create a remote cluster and verify that tests pass.
     c.up("computed_1")
     c.up("computed_2")
+    c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
-        "CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100', 'computed_2:2100']));"
+        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            REMOTE ['computed_1:2100', 'computed_2:2100'],
+            COMPUTE ['computed_1:2102', 'computed_2:2102'],
+            WORKERS 2
+            ));
+    """
+    )
+    c.sql("DROP CLUSTER cluster1 CASCADE;")
+
+    # Note the different WORKERS argument
+    c.sql(
+        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            REMOTE ['computed_1:2100', 'computed_2:2100'],
+            COMPUTE ['computed_1:2102', 'computed_2:2102'],
+            WORKERS 1
+            ));
+    """
     )
 
-    c.kill("materialized")
-    c.up("materialized")
-    c.wait_for_materialized()
-
-    # Ensure the computeds have crashed
+    # This should ensure that computed crashed (and does not just hang forever)
     c1 = c.invoke("logs", "computed_1", capture=True)
     assert "panicked" in c1.stdout
-    c2 = c.invoke("logs", "computed_2", capture=True)
-    assert "panicked" in c2.stdout
 
 
 def workflow_test_github_12251(c: Composition) -> None:
@@ -159,7 +167,7 @@ def workflow_test_github_12251(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100']));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1:2100'], WORKERS 2));
         SET cluster = cluster1;
         """
     )
@@ -339,3 +347,44 @@ def workflow_test_builtin_migration(c: Composition) -> None:
     """
             )
         )
+
+
+def workflow_pg_snapshot_resumption(c: Composition) -> None:
+    """Test creating sources in a remote storaged process."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        # Start postgres for the pg source
+        Postgres(),
+        Testdrive(no_reset=True),
+        Storaged(environment=["FAILPOINTS=pg_snapshot_failure=return"]),
+    ):
+        dependencies = [
+            "materialized",
+            "postgres",
+            "storaged",
+        ]
+        c.start_and_wait_for_tcp(
+            services=dependencies,
+        )
+
+        c.run("testdrive", "pg-snapshot-resumption/01-configure-postgres.td")
+        c.run("testdrive", "pg-snapshot-resumption/02-create-sources.td")
+
+        # Temporarily disabled because it is timing out.
+        # https://github.com/MaterializeInc/materialize/issues/14533
+        # # storaged should crash
+        # c.run("testdrive", "pg-snapshot-resumption/03-while-storaged-down.td")
+
+        print("Sleeping to ensure that storaged crashes")
+        time.sleep(10)
+
+        with c.override(
+            # turn off the failpoint
+            Storaged()
+        ):
+            c.start_and_wait_for_tcp(
+                services=["storaged"],
+            )
+            c.run("testdrive", "pg-snapshot-resumption/04-verify-data.td")

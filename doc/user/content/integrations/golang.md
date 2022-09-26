@@ -13,7 +13,7 @@ Materialize is **wire-compatible** with PostgreSQL, which means that Go applicat
 
 ## Connect
 
-To [connect](https://pkg.go.dev/github.com/jackc/pgx#ConnConfig) to a local Materialize instance using `pgx`, you can use either a URI or DSN [connection string](https://pkg.go.dev/github.com/jackc/pgx#ParseConnectionString):
+To [connect](https://pkg.go.dev/github.com/jackc/pgx#ConnConfig) to Materialize using `pgx`, you can use either a URI or DSN [connection string](https://pkg.go.dev/github.com/jackc/pgx#ParseConnectionString):
 
 ```go
 package main
@@ -27,7 +27,7 @@ import (
 func main() {
 
 	ctx := context.Background()
-	connStr := "postgres://materialize@localhost:6875/materialize?sslmode=disable"
+	connStr := "postgres://MATERIALIZE_USERNAME:APP_SPECIFIC_PASSWORD@MATERIALIZE_HOST:6875/materialize"
 
 	conn, err := pgx.Connect(ctx, connStr)
 	if err != nil {
@@ -98,7 +98,7 @@ An `MzDiff` value of `-1` indicates that Materialize is deleting one row with th
 
 Querying Materialize is identical to querying a PostgreSQL database: Go executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
-Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+Because Materialize maintains results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
 To query a view `my_view` using a `SELECT` statement:
 

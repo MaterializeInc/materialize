@@ -194,6 +194,11 @@ CAST(id AS decimal)
 ----
 id::numeric
 
+parse-scalar roundtrip
+date('t')
+----
+'t'::date
+
 # Extract
 
 parse-scalar

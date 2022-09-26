@@ -2,17 +2,17 @@
 name = "mz-pgtest"
 description = "Postgres wire protocol test framework."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
-bytes = "1.2.0"
-clap = { version = "3.2.14", features = ["derive"] }
+anyhow = "1.0.65"
+bytes = "1.2.1"
+clap = { version = "3.2.20", features = ["derive"] }
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 mz-ore = { path = "../ore" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-serde = { version = "1.0.140", features = ["derive"] }
-serde_json = "1.0.82"
+serde = { version = "1.0.144", features = ["derive"] }
+serde_json = "1.0.85"
