@@ -472,19 +472,14 @@ impl CatalogState {
             .flatten()
     }
 
-    /// Associates a name, `GlobalId`, and entry. Returns the previous
-    /// `GlobalId` associated with that name, if any.
-    ///
-    /// The returned value is useful only in the case of builtin types, which
-    /// do not otherwise go through name resolution to ensure the desired name
-    /// is not occupied.
+    /// Associates a name, `GlobalId`, and entry.
     fn insert_item(
         &mut self,
         id: GlobalId,
         oid: u32,
         name: QualifiedObjectName,
         item: CatalogItem,
-    ) -> Option<GlobalId> {
+    ) {
         if !id.is_system() && !item.is_placeholder() {
             info!(
                 "create {} {} ({})",
@@ -540,9 +535,14 @@ impl CatalogState {
             schema.items.insert(entry.name.item.clone(), entry.id)
         };
 
+        assert!(
+            prev_id.is_none(),
+            "builtin name collision on {:?}",
+            entry.name.item.clone()
+        );
+
         self.entry_by_id.insert(entry.id, entry);
 
-        prev_id
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
@@ -1650,11 +1650,14 @@ struct AllocatedBuiltinSystemIds<T> {
     new_builtins: Vec<(T, GlobalId)>,
     migrated_builtins: Vec<(GlobalId, u64)>,
 }
-/// Objects are uniquely defined by the (schema_name, object_type, object_name)
-/// tuple.
-/// As such, a name can only be used once for a given schema and object type.
-/// The same name can be used for multiple catalog item types, such as for a
-/// type and a function.
+
+/// Functions can share the same name as any other catalog item type
+/// within a given schema.
+/// For example, a function can have the same name as a type, e.g.
+/// 'date'.
+/// As such, system objects are keyed in the catalog storage by the
+/// tuple (schema_name, object_type, object_name), which is guaranteed
+/// to be unique.
 pub struct SystemObjectMapping {
     schema_name: String,
     object_type: CatalogItemType,
@@ -1905,12 +1908,12 @@ impl<S: Append> Catalog<S> {
                 },
                 item: builtin.name().into(),
             };
-            let prev_id = match builtin {
+            match builtin {
                 Builtin::Log(log) => {
                     let oid = catalog.allocate_oid().await?;
                     catalog
                         .state
-                        .insert_item(id, oid, name.clone(), CatalogItem::Log(log))
+                        .insert_item(id, oid, name.clone(), CatalogItem::Log(log));
                 }
 
                 Builtin::Table(table) => {
@@ -1926,7 +1929,7 @@ impl<S: Append> Catalog<S> {
                             conn_id: None,
                             depends_on: vec![],
                         }),
-                    )
+                    );
                 }
 
                 Builtin::View(view) => {
@@ -1943,7 +1946,7 @@ impl<S: Append> Catalog<S> {
                                     {:?}\n\n\
                                     make sure that the schema name is specified in the builtin view's create sql statement.",
                                 view.name, e
-                            )
+                            );
                         });
                     let oid = catalog.allocate_oid().await?;
                     catalog.state.insert_item(id, oid, name, item)
@@ -1958,7 +1961,7 @@ impl<S: Append> Catalog<S> {
                         oid,
                         name.clone(),
                         CatalogItem::Func(Func { inner: func.inner }),
-                    )
+                    );
                 }
 
                 Builtin::StorageCollection(coll) => {
@@ -1968,15 +1971,9 @@ impl<S: Append> Catalog<S> {
                         oid,
                         name.clone(),
                         CatalogItem::StorageCollection(coll),
-                    )
+                    );
                 }
             };
-
-            assert!(
-                prev_id.is_none(),
-                "builtin name collision on {:?}",
-                builtin.name()
-            );
         }
         let new_system_id_mappings = new_builtins
             .iter()
@@ -2245,7 +2242,7 @@ impl<S: Append> Catalog<S> {
         // Insert into catalog
         for typ in builtin_types {
             let element_id = name_to_id_map[typ.name];
-            let prev_id = self.state.insert_item(
+            self.state.insert_item(
                 element_id,
                 typ.oid,
                 QualifiedObjectName {
@@ -2260,12 +2257,6 @@ impl<S: Append> Catalog<S> {
                     details: typ.details.clone(),
                     depends_on: vec![],
                 }),
-            );
-
-            assert!(
-                prev_id.is_none(),
-                "builtin name collision on {:?}",
-                typ.name
             );
         }
 
