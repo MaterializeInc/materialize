@@ -357,6 +357,13 @@ impl<S: Append + 'static> Coordinator<S> {
             response.send();
         }
 
+        // Advancing timelines will update all timeline read holds, and update the read timestamps
+        // of non-realtime timelines. There are no guarantees that we need to provide with the
+        // ordering of advancing timelines and user transactions. Updating read holds are only to
+        // allow compaction and free some memory. Non-realtime timelines can only be written to by
+        // upstream sources, which we don't provide ordering guarantees for with respect to user
+        // transactions. We send the `AdvanceTimelines` message here out of convenience, because we
+        // know at least the real-time timeline will have a read hold that can be updated.
         self.internal_cmd_tx
             .send(Message::AdvanceTimelines)
             .expect("sending to self.internal_cmd_tx cannot fail");
