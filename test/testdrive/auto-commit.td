@@ -7,9 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# This testdrive file uses the deprecated syntax, but is otherwise identical to upsert-kafka-new.td
-#
-# This file can be deleted when/if we finish the deprecation and perform the removal of the old syntax.
+# Test that auto-commit for kafka sources works.
+# This test should probably be removed.
 
 $ kafka-create-topic topic=auto_topic partitions=1
 
