@@ -1,10 +1,6 @@
 ---
-title: "How to connect DigitalOcean Managed PostgreSQL to Materialize"
+title: "DigitalOcean Managed PostgreSQL"
 description: "How to connect DigitalOcean Managed PostgreSQL as a source to Materialize."
-menu:
-  main:
-    parent: "integration-guides"
-    name: "DigitalOcean PostgreSQL"
 ---
 
 Materialize can read data from DigitalOcean Managed PostgreSQL via the direct [Postgres Source](/sql/create-source/postgres/).

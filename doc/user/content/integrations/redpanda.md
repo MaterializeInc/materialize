@@ -1,5 +1,5 @@
 ---
-title: "How to use Redpanda with Materialize"
+title: "Redpanda"
 description: "Get details about using Materialize with Redpanda"
 aliases:
   /third-party/redpanda/

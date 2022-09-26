@@ -1,5 +1,5 @@
 ---
-title: "How to connect Redpanda Cloud to Materialize"
+title: "Redpanda Cloud"
 description: "How to securely connect a Redpanda Cloud cluster as a source to Materialize."
 menu:
   main:

@@ -1,5 +1,5 @@
 ---
-title: "How to connect Azure Database for PostgreSQL to Materialize"
+title: "Azure Database for PostgreSQL"
 description: "How to connect Azure Database for PostgreSQL as a source to Materialize."
 menu:
   main:
