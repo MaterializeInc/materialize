@@ -31,6 +31,7 @@ use async_trait::async_trait;
 use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 use itertools::Itertools;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -756,7 +757,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64> {
     /// A persist client used to write to storage collections
     persist: Arc<Mutex<PersistClientCache>>,
     now: NowFn,
-    introspection_collections: Arc<Mutex<HashMap<IntrospectionType, GlobalId>>>,
+    introspection_collections: HashMap<IntrospectionType, GlobalId>,
+    introspection_details: Arc<Mutex<HashMap<GlobalId, Arc<Mutex<Antichain<T>>>>>>,
     managed_collection_tx: Option<mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>>,
 }
 
@@ -1047,7 +1049,7 @@ where
                         if self.managed_collection_tx.is_none() {
                             // Set up automatic timestamp advancer
                             let now = self.now.clone();
-                            let collections = Arc::clone(&self.introspection_collections);
+                            let collections = Arc::clone(&self.introspection_details);
                             let write_handle = Arc::clone(&self.state.persist_write_handles);
                             let (tx, mut rx) = mpsc::channel(1);
                             self.managed_collection_tx = Some(tx);
@@ -1062,36 +1064,59 @@ where
                                         tokio::select! {
                                             _ = interval.tick() => {
                                                 let upper = T::from(now());
-                                                let updates = collections
+                                                let collections = collections
                                                     .lock()
-                                                    .await
-                                                    .values()
-                                                    .map(|id| (*id, vec![], upper.clone()))
-                                                    .collect::<Vec<_>>();
+                                                    .await;
+                                                let mut updates = Vec::with_capacity(collections.len());
+                                                for (id, write_frontier) in collections.iter() {
+                                                    let write_frontier = write_frontier.lock().await;
+                                                    let upper = if write_frontier.less_than(&upper) {
+                                                        upper.clone()
+                                                    } else {
+                                                        write_frontier.elements()[0].clone()
+                                                    };
+
+                                                    updates.push((*id, vec![], upper))
+                                                };
                                                 // When advancing timestamps, errors don't matter
                                                 let _ = write_handle.append(updates).await;
                                             },
                                             cmd = rx.recv() => {
                                                 if let Some((id, rows)) = cmd {
                                                     let now = now();
-                                                    let lower = T::from(now - 1);
-                                                    let upper = T::from(now);
-                                                    let mut updates = vec![(id, rows.into_iter().map(|(row, diff)| Update {
+                                                    let lower = T::from(now);
+                                                    let upper = T::from(now + 1);
+                                                    let collections = collections.lock().await;
+                                                    let mut updates = Vec::with_capacity(collections.len());
+                                                    let write_frontier = &collections[&id];
+
+                                                    let write_frontier = write_frontier.lock().await;
+                                                    let upper = if write_frontier.less_than(&upper) {
+                                                        upper.clone()
+                                                    } else {
+                                                        write_frontier.elements().iter().min().unwrap().clone()
+                                                    };
+
+                                                    updates.push((id, rows.into_iter().map(|(row, diff)| Update {
                                                         row,
                                                         diff,
                                                         timestamp: lower.clone()
-                                                    }).collect::<Vec<_>>(), upper.clone())];
+                                                    }).collect::<Vec<_>>(), upper.clone()));
 
-                                                    updates.append(&mut collections
-                                                        .lock()
-                                                        .await
-                                                        .values()
-                                                        .filter_map(|inner_id| if id == *inner_id {
-                                                            None
+
+                                                    for (id_iter, write_frontier) in collections.iter() {
+                                                        if &id == id_iter {
+                                                            continue;
+                                                        }
+                                                        let write_frontier = write_frontier.lock().await;
+                                                        let upper = if write_frontier.less_than(&upper) {
+                                                            upper.clone()
                                                         } else {
-                                                            Some((*inner_id, vec![], upper.clone()))
-                                                        })
-                                                        .collect::<Vec<_>>());
+                                                            write_frontier.elements().iter().min().unwrap().clone()
+                                                        };
+
+                                                        updates.push((*id_iter, vec![], upper))
+                                                    };
 
                                                     write_handle.append(updates).await.unwrap().unwrap();
                                                 }
@@ -1101,13 +1126,18 @@ where
                                 },
                             );
                         }
-                        let curr = self.introspection_collections.lock().await.insert(i, id);
+                        let curr = self.introspection_collections.insert(i, id);
                         assert!(
                             curr.is_none(),
                             "IntrospectionType {:?} previously assigned to GlobalId {:?}",
                             i,
                             curr
                         );
+
+                        self.introspection_details
+                            .lock()
+                            .await
+                            .insert(id, Arc::clone(&self.state.collections[&id].write_frontier));
 
                         match i {
                             IntrospectionType::ShardMapping => {
@@ -1317,8 +1347,13 @@ where
     ) -> Result<(), StorageError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
-            if let Ok(mut updates) =
-                self.generate_new_capability_for_collection(id, |c| c.read_policy = policy)
+            if let Ok(mut updates) = self
+                .generate_new_capability_for_collection(id, |c| {
+                    Box::pin(async {
+                        c.read_policy = policy;
+                    })
+                })
+                .await
             {
                 if !updates.is_empty() {
                     read_capability_changes.insert(id, updates);
@@ -1363,12 +1398,16 @@ where
         }
 
         for (id, new_upper) in collections {
+            let new_upper = new_upper.cloned();
             let mut update = self
                 .generate_new_capability_for_collection(id, |c| {
-                    if let Some(new_upper) = new_upper {
-                        c.write_frontier.join_assign(new_upper);
-                    }
+                    Box::pin(async {
+                        if let Some(new_upper) = new_upper {
+                            c.write_frontier.lock().await.join_assign(&new_upper);
+                        }
+                    })
                 })
+                .await
                 .expect("Collection previously validated to exist");
             if !update.is_empty() {
                 read_capability_changes.insert(id, update);
@@ -1490,11 +1529,7 @@ where
     /// - If any fetched key or value from the collection is an error.
     async fn truncate_managed_collection(&mut self, global_id: GlobalId) {
         assert!(
-            self.introspection_collections
-                .lock()
-                .await
-                .values()
-                .contains(&global_id),
+            self.introspection_collections.values().contains(&global_id),
             "cannot truncate collection before it's managed"
         );
 
@@ -1518,7 +1553,7 @@ where
     }
 
     async fn initialize_shard_mapping(&mut self) {
-        let id = self.introspection_collections.lock().await[&IntrospectionType::ShardMapping];
+        let id = self.introspection_collections[&IntrospectionType::ShardMapping];
 
         // Pack updates into rows
         let mut row_buf = Row::default();
@@ -1550,8 +1585,6 @@ where
     async fn register_shard_mapping(&mut self, global_id: GlobalId, shard_id: ShardId) {
         let id = match self
             .introspection_collections
-            .lock()
-            .await
             .get(&IntrospectionType::ShardMapping)
         {
             Some(id) => *id,
@@ -1577,11 +1610,7 @@ where
     ///   managed.
     async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         assert!(
-            self.introspection_collections
-                .lock()
-                .await
-                .values()
-                .contains(&id),
+            self.introspection_collections.values().contains(&id),
             "cannot append collection before it's managed"
         );
 
@@ -1630,7 +1659,8 @@ where
             persist_location,
             persist: persist_clients,
             now,
-            introspection_collections: Arc::new(Mutex::new(HashMap::new())),
+            introspection_collections: HashMap::new(),
+            introspection_details: Arc::new(Mutex::new(HashMap::new())),
             managed_collection_tx: None,
         };
         c
@@ -1668,27 +1698,28 @@ where
 
     // Should only fail if collection doesn't exist. N.B. We can't just take in
     // the mut ref because then the borrow checker wouldn't let us read state.
-    fn generate_new_capability_for_collection<F>(
+    async fn generate_new_capability_for_collection<F>(
         &mut self,
         id: GlobalId,
         f: F,
     ) -> Result<ChangeBatch<<Self as StorageController>::Timestamp>, StorageError>
     where
-        F: FnOnce(&mut CollectionState<<Self as StorageController>::Timestamp>),
+        F: FnOnce(&mut CollectionState<<Self as StorageController>::Timestamp>) -> BoxFuture<()>,
     {
         let collection = self
             .state
             .collections
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))?;
-        f(collection);
+
+        f(collection).await;
 
         let mut update = ChangeBatch::new();
 
         // Get read policy sent from the coordinator
         let mut new_read_capability = collection
             .read_policy
-            .frontier(collection.write_frontier.borrow());
+            .frontier(collection.write_frontier.lock().await.borrow());
 
         // Also consider the write frontier of any exports.  It's worth adding a
         // quick note on write frontiers here.
@@ -1748,7 +1779,10 @@ pub struct CollectionState<T> {
     pub read_policy: ReadPolicy<T>,
 
     /// Reported write frontier.
-    pub write_frontier: Antichain<T>,
+    ///
+    /// This is also used to persist the collection's timestamp for use in
+    /// introspection/managed collections.
+    pub write_frontier: Arc<Mutex<Antichain<T>>>,
 
     pub collection_metadata: CollectionMetadata,
 }
@@ -1767,7 +1801,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
-            write_frontier: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier: Arc::new(Mutex::new(Antichain::from_elem(Timestamp::minimum()))),
             collection_metadata: metadata,
         }
     }

@@ -33,7 +33,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ///
     /// The set of storage and compute IDs used when determining the timestamp
     /// are also returned.
-    pub(crate) fn determine_timestamp(
+    pub(crate) async fn determine_timestamp(
         &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
@@ -103,7 +103,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 candidate.advance_by(since.borrow());
             }
             if when.advance_to_upper() {
-                let upper = self.largest_not_in_advance_of_upper(&id_bundle);
+                let upper = self.largest_not_in_advance_of_upper(&id_bundle).await;
                 candidate.join_assign(&upper);
             }
         }
@@ -200,7 +200,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ///
     /// Times that are not greater or equal to this frontier are complete for all collections
     /// identified as arguments.
-    pub(crate) fn least_valid_write(
+    pub(crate) async fn least_valid_write(
         &self,
         id_bundle: &CollectionIdBundle,
     ) -> Antichain<mz_repr::Timestamp> {
@@ -213,6 +213,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         .collection(*id)
                         .unwrap()
                         .write_frontier
+                        .lock()
+                        .await
                         .iter()
                         .cloned(),
                 );
@@ -240,11 +242,11 @@ impl<S: Append + 'static> Coordinator<S> {
     ///
     /// Times that are not greater to this frontier are complete for all collections
     /// identified as arguments.
-    pub(crate) fn largest_not_in_advance_of_upper(
+    pub(crate) async fn largest_not_in_advance_of_upper(
         &self,
         id_bundle: &CollectionIdBundle,
     ) -> mz_repr::Timestamp {
-        let upper = self.least_valid_write(&id_bundle);
+        let upper = self.least_valid_write(&id_bundle).await;
 
         // We peek at the largest element not in advance of `upper`, which
         // involves a subtraction. If `upper` contains a zero timestamp there

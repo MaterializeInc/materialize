@@ -365,7 +365,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     // advance of any object's upper. This is the largest timestamp that is closed
                     // to writes.
                     let id_bundle = self.ids_in_timeline(&timeline);
-                    self.largest_not_in_advance_of_upper(&id_bundle)
+                    self.largest_not_in_advance_of_upper(&id_bundle).await
                 };
                 oracle
                     .apply_write(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
