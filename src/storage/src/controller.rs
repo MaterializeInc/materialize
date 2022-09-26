@@ -1065,6 +1065,8 @@ where
                                         tokio::time::Duration::from_millis(1_000),
                                     );
 
+                                    let mut max_ts = T::minimum();
+
                                     // Returns an upper guaranteed to be
                                     // greater than the current write frontier,
                                     // either `now` or `write_frontier++`. We
@@ -1073,13 +1075,12 @@ where
                                     // collections more likely to return
                                     // quickly.
                                     macro_rules! max_now_write_frontier {
-                                        ($write_frontier:expr) => {{
-                                            let upper = T::from(now());
-                                            if $write_frontier.less_than(&upper) {
-                                                upper
+                                        ($write_frontier:expr, $now:expr) => {{
+                                            if $write_frontier.less_than(&$now) {
+                                                $now
                                             } else {
                                                 match $write_frontier.elements().iter().min() {
-                                                    Some(upper) => upper.step_forward(),
+                                                    Some(upper) => upper.clone(),
                                                     // Closed collection
                                                     None => continue,
                                                 }
@@ -1089,43 +1090,37 @@ where
                                     loop {
                                         tokio::select! {
                                             _ = interval.tick() => {
-                                                let collections = collections
-                                                    .lock()
-                                                    .await;
-                                                let mut updates = Vec::with_capacity(collections.len());
-                                                for (id, write_frontier) in collections.iter() {
+                                                let collections = collections.lock().await;
+                                                let now = T::from(now());
+                                                let mut upper_candidate = T::minimum();
+                                                for (_, write_frontier) in collections.iter() {
                                                     let write_frontier = write_frontier.lock().await;
-                                                    let upper = max_now_write_frontier!(write_frontier);
-
-                                                    updates.push((*id, vec![], upper))
+                                                    let upper = max_now_write_frontier!(write_frontier, now.clone());
+                                                    upper_candidate = std::cmp::max(upper_candidate, upper);
                                                 };
+
+                                                max_ts = std::cmp::max(upper_candidate, max_ts.step_forward());
+
+                                                let updates = collections.iter().map(|(id, _)| {
+                                                    (*id, vec![], max_ts.clone())
+                                                }).collect::<Vec<_>>();
+
                                                 // When advancing timestamps, errors don't matter
                                                 let _ = write_handle.append(updates).await;
                                             },
                                             cmd = rx.recv() => {
                                                 if let Some((id, rows)) = cmd {
                                                     let collections = collections.lock().await;
-                                                    let mut updates = Vec::with_capacity(collections.len());
                                                     let write_frontier = &collections[&id].lock().await;
-                                                    let upper = max_now_write_frontier!(write_frontier);
-                                                    let lower = upper.step_back().expect("upper cannot be T::minimum()");
+                                                    let upper_candidate = dbg!(max_now_write_frontier!(write_frontier, T::from(now())));
+                                                    max_ts = std::cmp::max(upper_candidate, max_ts.step_forward());
+                                                    let lower = dbg!(max_ts.step_back().expect("upper cannot be T::minimum()"));
 
-                                                    updates.push((id, rows.into_iter().map(|(row, diff)| Update {
+                                                    let updates = vec![(id, rows.into_iter().map(|(row, diff)| Update {
                                                         row,
                                                         diff,
                                                         timestamp: lower.clone()
-                                                    }).collect::<Vec<_>>(), upper.clone()));
-
-
-                                                    for (id_iter, write_frontier) in collections.iter() {
-                                                        if &id == id_iter {
-                                                            continue;
-                                                        }
-                                                        let write_frontier = write_frontier.lock().await;
-                                                        let upper = max_now_write_frontier!(write_frontier);
-
-                                                        updates.push((*id_iter, vec![], upper))
-                                                    };
+                                                    }).collect::<Vec<_>>(), max_ts.clone())];
 
                                                     write_handle.append(updates).await.unwrap().unwrap();
                                                 }
