@@ -22,11 +22,11 @@ SELECT ${arg.replica-size} > 1 OR ${arg.replicas} > 1;
 
 > SELECT time > 0
   FROM
-    mz_catalog.mz_materialized_views AS views,
-    mz_internal.mz_materializations AS mats,
-    mz_internal.mz_materialization_frontiers AS frontiers
+    mz_materialized_views AS views,
+    mz_internal.mz_compute_exports AS compute_exports,
+    mz_internal.mz_compute_frontiers AS frontiers
   WHERE
     views.name = 'mv' AND
-    views.id = mats.object_id AND
-    mats.object_id = frontiers.object_id
+    views.id = compute_exports.export_id AND
+    compute_exports.export_id = frontiers.export_id
 true

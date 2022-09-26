@@ -32,7 +32,7 @@ This source provides timestamp-based progress, which reveals not the
 volume of data, but how closely the contents track source timestamps.
 ```sql
 -- For each materialization, the next timestamp to be added.
-select * from mz_internal.mz_materialization_frontiers;
+select * from mz_internal.mz_compute_frontiers;
 ```
 
 ### Why is Materialize running so slowly?

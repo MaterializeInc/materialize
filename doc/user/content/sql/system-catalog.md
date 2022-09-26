@@ -446,44 +446,44 @@ Field           | Type       | Meaning
 `dataflow_id`   | [`bigint`] | The ID of the dataflow hosting the operator.
 `dataflow_name` | [`text`]   | The name of the dataflow hosting the operator.
 
-### `mz_materializations`
+### `mz_compute_exports`
 
-The `mz_materializations` source describes the dataflows created by indexes and materialized views in the system.
+The `mz_compute_exports` source describes the dataflows created by indexes and materialized views in the system.
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`object_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the corresponding [dataflow].
 
-### `mz_materialization_frontiers`
+### `mz_compute_frontiers`
 
-The `mz_materialization_frontiers` view describes the frontier for each
+The `mz_compute_frontiers` view describes the frontier for each
 [dataflow] in the system across all workers. The frontier describes the earliest
 timestamp at which the output of the dataflow may change; data prior to that
 timestamp is sealed.
 
 For per-worker frontier information, see
-[`mz_worker_materialization_frontiers`](#mz_worker_materialization_frontiers).
+[`mz_worker_compute_frontiers`](#mz_worker_compute_frontiers).
 
 Field        | Type       | Meaning
 -------------|------------|--------
-`object_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
-`time`       | [`mztimestamp`] | The next timestamp at which the materialization may change.
+`export_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`time`       | [`mztimestamp`] | The next timestamp at which the output may change.
 
-### `mz_materialization_source_frontiers`
+### `mz_compute_import_frontiers`
 
-The `mz_materialization_source_frontiers` view describes the frontiers for every
-storage source used in a [dataflow] in the system across all workers. The frontier
+The `mz_compute_import_frontiers` view describes the frontiers for every
+source object used in a [dataflow] in the system across all workers. The frontier
 describes the earliest timestamp at which the output of the source instantiation
 at the dataflow layer may change; data prior to that timestamp is sealed.
 
 For per-worker frontier information, see
-[`mz_worker_materialization_source_frontiers`](#mz_worker_materialization_source_frontiers).
+[`mz_worker_compute_import_frontiers`](#mz_worker_compute_import_frontiers).
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`object_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
-`source_id` | [`text`]   | The ID of the input storage source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
 `time`      | [`mztimestamp`] | The next timestamp at which the source instantiation may change.
 
 ### `mz_message_counts`
@@ -599,65 +599,65 @@ Field       | Type       | Meaning
 `requested` | [`bigint`] | The requested length of the park event.
 `count`     | [`bigint`] | The number of park events in this bucket.
 
-### `mz_worker_materialization_delays`
+### `mz_worker_compute_delays`
 
-The `mz_worker_materialization_delays` source provides, for each worker,
-a histogram of wall-clock delays between observations of storage source frontier
+The `mz_worker_compute_delays` source provides, for each worker,
+a histogram of wall-clock delays between observations of source object frontier
 advancements at the dataflow layer and the advancements of the corresponding
 [dataflow] frontiers.
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`object_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
-`source_id` | [`text`]   | The ID of the input storage source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `delay_ns`  | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`     | [`bigint`] | The (noncumulative) count of delay measurements in this bucket.
 
-### `mz_worker_materialization_dependencies`
+### `mz_worker_compute_dependencies`
 
-The `mz_worker_materialization_dependencies` source describes the dependency structure
+The `mz_worker_compute_dependencies` source describes the dependency structure
 between each [dataflow] and the sources of their data. To create a complete dependency
 structure, the `import_id` column includes other dataflows.
 
 Field      | Type       | Meaning
 -----------|------------|--------
-`export_id`| [`text`]   | The ID of the object that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
-`import_id`| [`text`]   | The ID of the storage source. Corresponds to [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materializations.object_id`](#mz_materializations).
+`export_id`| [`text`]   | The ID of the object that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`import_id`| [`text`]   | The ID of the source object for the dataflow. Corresponds to [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id`| [`bigint`] | The ID of the worker thread hosting the dataflow.
 
-### `mz_worker_materialization_frontiers`
+### `mz_worker_compute_frontiers`
 
-The `mz_worker_materialization_frontiers` source describes each worker's
+The `mz_worker_compute_frontiers` source describes each worker's
 frontier for each [dataflow] in the system. The frontier describes the earliest
 timestamp at which the output of the dataflow may change; data prior to that
 timestamp is sealed.
 
 For frontier information aggregated across all workers, see
-[`mz_materialization_frontiers`](#mz_materialization_frontiers).
+[`mz_compute_frontiers`](#mz_compute_frontiers).
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`object_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
+`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mztimestamp`] | The next timestamp at which the dataflow may change.
 
-### `mz_worker_materialization_source_frontiers`
+### `mz_worker_compute_import_frontiers`
 
-The `mz_worker_materialization_source_frontiers` source describes the frontiers that
-each worker is aware of for every storage source used in a [dataflow] in the system. The
+The `mz_worker_compute_import_frontiers` source describes the frontiers that
+each worker is aware of for every source object used in a [dataflow] in the system. The
 frontier describes the earliest timestamp at which the output of the source instantiation
 at the dataflow layer may change; data prior to that timestamp is sealed.
 
 For frontier information aggregated across all workers, see
-[`mz_materialization_source_frontiers`](#mz_materialization_source_frontiers).
+[`mz_compute_import_frontiers`](#mz_compute_import_frontiers).
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`object_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
-`source_id` | [`text`]   | The ID of the input storage source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`source_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
-`time`      | [`mztimestamp`] | The next timestamp at which the source instantiation may change.
+`time`      | [`mztimestamp`] | The next timestamp at which the dataflow may change.
 
 ## `information_schema`
 
