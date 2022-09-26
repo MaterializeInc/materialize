@@ -3068,14 +3068,6 @@ impl<S: Append> Catalog<S> {
 
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
-            && matches!(
-                item.typ(),
-                SqlCatalogItemType::View
-                    | SqlCatalogItemType::MaterializedView
-                    | SqlCatalogItemType::Source
-                    | SqlCatalogItemType::Sink
-                    | SqlCatalogItemType::Index
-            )
     }
 
     fn resolve_full_name_detail(
@@ -3301,12 +3293,16 @@ impl<S: Append> Catalog<S> {
 
         fn sql_type_to_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
             match sql_type {
-                SqlCatalogItemType::View => ObjectType::View,
-                SqlCatalogItemType::MaterializedView => ObjectType::MaterializedView,
-                SqlCatalogItemType::Source => ObjectType::Source,
-                SqlCatalogItemType::Sink => ObjectType::Sink,
+                SqlCatalogItemType::Connection => ObjectType::Connection,
+                SqlCatalogItemType::Func => ObjectType::Func,
                 SqlCatalogItemType::Index => ObjectType::Index,
-                _ => unreachable!(),
+                SqlCatalogItemType::MaterializedView => ObjectType::MaterializedView,
+                SqlCatalogItemType::Secret => ObjectType::Secret,
+                SqlCatalogItemType::Sink => ObjectType::Sink,
+                SqlCatalogItemType::Source => ObjectType::Source,
+                SqlCatalogItemType::Table => ObjectType::Table,
+                SqlCatalogItemType::Type => ObjectType::Type,
+                SqlCatalogItemType::View => ObjectType::View,
             }
         }
 

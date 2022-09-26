@@ -99,11 +99,16 @@ serde_plain::derive_display_from_serialize!(EventType);
 pub enum ObjectType {
     Cluster,
     ClusterReplica,
+    Connection,
+    Func,
     Index,
+    MaterializedView,
+    Secret,
     Sink,
     Source,
+    Table,
+    Type,
     View,
-    MaterializedView,
 }
 
 impl ObjectType {
@@ -111,11 +116,16 @@ impl ObjectType {
         match self {
             ObjectType::Cluster => "Cluster",
             ObjectType::ClusterReplica => "Cluster Replica",
+            ObjectType::Connection => "Connection",
+            ObjectType::Func => "Function",
             ObjectType::Index => "Index",
+            ObjectType::MaterializedView => "Materialized View",
+            ObjectType::Secret => "Secret",
             ObjectType::Sink => "Sink",
             ObjectType::Source => "Source",
+            ObjectType::Table => "Table",
+            ObjectType::Type => "Type",
             ObjectType::View => "View",
-            ObjectType::MaterializedView => "Materialized View",
         }
     }
 }
