@@ -1075,6 +1075,10 @@ pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
+        .with_column(
+            "brokers",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
         .with_column("progress_topic", ScalarType::String.nullable(true)),
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {

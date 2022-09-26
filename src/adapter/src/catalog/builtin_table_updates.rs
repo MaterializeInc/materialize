@@ -367,9 +367,20 @@ impl CatalogState {
             Some(ref topic) => Datum::String(&topic),
             None => Datum::Null,
         };
+        let mut row = Row::default();
+        row.packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: kafka.brokers.len(),
+                }],
+                kafka.brokers.iter().map(|id| Datum::String(&id)),
+            )
+            .unwrap();
+        let brokers = row.unpack_first();
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_KAFKA_CONNECTIONS),
-            row: Row::pack_slice(&[Datum::String(&id.to_string()), progress_topic]),
+            row: Row::pack_slice(&[Datum::String(&id.to_string()), brokers, progress_topic]),
             diff,
         }]
     }
