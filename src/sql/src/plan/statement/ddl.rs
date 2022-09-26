@@ -459,19 +459,6 @@ pub fn plan_create_source(
                 sql_bail!("INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE");
             }
 
-            if !include_metadata.is_empty()
-                && matches!(envelope, Envelope::Debezium(DbzMode::Plain { .. }))
-            {
-                for kind in include_metadata {
-                    if !matches!(kind.ty, SourceIncludeMetadataType::Key) {
-                        sql_bail!(
-                            "INCLUDE {} with Debezium requires UPSERT semantics",
-                            kind.ty
-                        );
-                    }
-                }
-            }
-
             for (pos, item) in include_metadata.iter().cloned().enumerate() {
                 match item.ty {
                     SourceIncludeMetadataType::Timestamp => {
