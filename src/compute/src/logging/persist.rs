@@ -46,7 +46,7 @@ pub(crate) fn persist_sink<G>(
         target_id,
         crate::compute_state::SinkToken {
             token: Box::new(token),
-            is_tail: false,
+            is_subscribe: false,
         },
     );
 }

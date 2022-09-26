@@ -109,7 +109,7 @@ impl<T: CoordTimestamp> Session<T> {
             // - Currently in `READ ONLY`
             // - Already performed a query
             let read_write_prohibited = match txn.ops {
-                TransactionOps::Peeks(_) | TransactionOps::Tail => {
+                TransactionOps::Peeks(_) | TransactionOps::Subscribe => {
                     txn.access == Some(TransactionAccessMode::ReadOnly)
                 }
                 TransactionOps::None | TransactionOps::Writes(_) => false,
@@ -238,7 +238,9 @@ impl<T: CoordTimestamp> Session<T> {
                         }
                         _ => return Err(AdapterError::ReadOnlyTransaction),
                     },
-                    TransactionOps::Tail => return Err(AdapterError::TailOnlyTransaction),
+                    TransactionOps::Subscribe => {
+                        return Err(AdapterError::SubscribeOnlyTransaction)
+                    }
                     TransactionOps::Writes(txn_writes) => match add_ops {
                         TransactionOps::Writes(mut add_writes) => {
                             // We should have already checked the access above, but make sure we don't miss
@@ -693,13 +695,13 @@ pub enum TransactionOps<T> {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
     None,
-    /// This transaction has had a peek (`SELECT`, `TAIL`). If the inner value
+    /// This transaction has had a peek (`SELECT`, `SUBSCRIBE`). If the inner value
     /// is Some, it must only do other peeks. However, if the value is None
     /// (i.e. the values are constants), the transaction can still perform
     /// writes.
     Peeks(Option<T>),
-    /// This transaction has done a TAIL and must do nothing else.
-    Tail,
+    /// This transaction has done a `SUBSCRIBE` and must do nothing else.
+    Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
     /// only do other writes, or reads whose timestamp is None (i.e. constants).
     Writes(Vec<WriteOp>),

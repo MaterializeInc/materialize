@@ -1157,15 +1157,17 @@ where
                 }
                 command_complete!()
             }
-            ExecuteResponse::Tailing { rx } => {
+            ExecuteResponse::Subscribing { rx } => {
                 if fetch_portal_name.is_none() {
                     let mut msg = ErrorResponse::notice(
                         SqlState::WARNING,
-                        "streaming TAIL rows directly requires a client that does not buffer output",
+                        "streaming SUBSCRIBE rows directly requires a client that does not buffer output",
                     );
                     if self.adapter_client.session().vars().application_name() == "psql" {
-                        msg.hint =
-                            Some("Wrap your TAIL statement in `COPY (TAIL ...) TO STDOUT`.".into())
+                        msg.hint = Some(
+                            "Wrap your SUBSCRIBE statement in `COPY (SUBSCRIBE ...) TO STDOUT`."
+                                .into(),
+                        )
                     }
                     self.send(msg).await?;
                     self.conn.flush().await?;
@@ -1187,7 +1189,7 @@ where
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 let rows: RowBatchStream = match *resp {
-                    ExecuteResponse::Tailing { rx } => rx,
+                    ExecuteResponse::Subscribing { rx } => rx,
                     ExecuteResponse::SendingRows {
                         future: rows_rx,
                         span,

@@ -37,7 +37,7 @@ use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{
     ActiveComputeController, ComputeController, ComputeControllerResponse,
 };
-use mz_compute_client::response::{PeekResponse, TailResponse};
+use mz_compute_client::response::{PeekResponse, SubscribeResponse};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::Orchestrator;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -81,8 +81,8 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// back into coord. This allows coord traces to be children of work
     /// done in compute!
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// The worker's next response to a specified tail.
-    TailResponse(GlobalId, TailResponse<T>),
+    /// The worker's next response to a specified subscribe.
+    SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// Notification that we have received a message from the given compute replica
     /// at the given time.
     ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
@@ -94,8 +94,8 @@ impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
             ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
                 ControllerResponse::PeekResponse(uuid, peek, otel_ctx)
             }
-            ComputeControllerResponse::TailResponse(id, tail) => {
-                ControllerResponse::TailResponse(id, tail)
+            ComputeControllerResponse::SubscribeResponse(id, tail) => {
+                ControllerResponse::SubscribeResponse(id, tail)
             }
             ComputeControllerResponse::ReplicaHeartbeat(id, when) => {
                 ControllerResponse::ComputeReplicaHeartbeat(id, when)

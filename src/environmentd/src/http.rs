@@ -289,7 +289,7 @@ impl AuthedClient {
                     execute_response,
                     ExecuteResponseKind::Fetch
                         | ExecuteResponseKind::SetVariable
-                        | ExecuteResponseKind::Tailing
+                        | ExecuteResponseKind::Subscribing
                         | ExecuteResponseKind::CopyTo
                         | ExecuteResponseKind::CopyFrom
                         | ExecuteResponseKind::Raise
@@ -545,7 +545,7 @@ impl AuthedClient {
             }
             res @ (ExecuteResponse::Fetch { .. }
             | ExecuteResponse::SetVariable { .. }
-            | ExecuteResponse::Tailing { .. }
+            | ExecuteResponse::Subscribing { .. }
             | ExecuteResponse::CopyTo { .. }
             | ExecuteResponse::CopyFrom { .. }
             | ExecuteResponse::Raise { .. }

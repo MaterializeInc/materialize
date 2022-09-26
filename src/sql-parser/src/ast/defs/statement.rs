@@ -81,7 +81,7 @@ pub enum Statement<T: AstInfo> {
     SetTransaction(SetTransactionStatement),
     Commit(CommitStatement),
     Rollback(RollbackStatement),
-    Tail(TailStatement<T>),
+    Subscribe(SubscribeStatement<T>),
     Explain(ExplainStatement<T>),
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement<T>),
@@ -137,7 +137,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::SetTransaction(stmt) => f.write_node(stmt),
             Statement::Commit(stmt) => f.write_node(stmt),
             Statement::Rollback(stmt) => f.write_node(stmt),
-            Statement::Tail(stmt) => f.write_node(stmt),
+            Statement::Subscribe(stmt) => f.write_node(stmt),
             Statement::Explain(stmt) => f.write_node(stmt),
             Statement::Declare(stmt) => f.write_node(stmt),
             Statement::Close(stmt) => f.write_node(stmt),
@@ -208,7 +208,7 @@ pub enum CopyRelation<T: AstInfo> {
         columns: Vec<Ident>,
     },
     Select(SelectStatement<T>),
-    Tail(TailStatement<T>),
+    Subscribe(SubscribeStatement<T>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -312,7 +312,7 @@ impl<T: AstInfo> AstDisplay for CopyStatement<T> {
                 f.write_node(query);
                 f.write_str(")");
             }
-            CopyRelation::Tail(query) => {
+            CopyRelation::Subscribe(query) => {
                 f.write_str("(");
                 f.write_node(query);
                 f.write_str(")");
@@ -1824,28 +1824,28 @@ impl AstDisplay for RollbackStatement {
 impl_display!(RollbackStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TailOptionName {
+pub enum SubscribeOptionName {
     Snapshot,
     Progress,
 }
 
-impl AstDisplay for TailOptionName {
+impl AstDisplay for SubscribeOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            TailOptionName::Snapshot => f.write_str("SNAPSHOT"),
-            TailOptionName::Progress => f.write_str("PROGRESS"),
+            SubscribeOptionName::Snapshot => f.write_str("SNAPSHOT"),
+            SubscribeOptionName::Progress => f.write_str("PROGRESS"),
         }
     }
 }
-impl_display!(TailOptionName);
+impl_display!(SubscribeOptionName);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TailOption<T: AstInfo> {
-    pub name: TailOptionName,
+pub struct SubscribeOption<T: AstInfo> {
+    pub name: SubscribeOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for TailOption<T> {
+impl<T: AstInfo> AstDisplay for SubscribeOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
         if let Some(v) = &self.value {
@@ -1854,19 +1854,19 @@ impl<T: AstInfo> AstDisplay for TailOption<T> {
         }
     }
 }
-impl_display_t!(TailOption);
+impl_display_t!(SubscribeOption);
 
-/// `TAIL`
+/// `SUBSCRIBE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TailStatement<T: AstInfo> {
-    pub relation: TailRelation<T>,
-    pub options: Vec<TailOption<T>>,
+pub struct SubscribeStatement<T: AstInfo> {
+    pub relation: SubscribeRelation<T>,
+    pub options: Vec<SubscribeOption<T>>,
     pub as_of: Option<AsOf<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for TailStatement<T> {
+impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("TAIL ");
+        f.write_str("SUBSCRIBE ");
         f.write_node(&self.relation);
         if !self.options.is_empty() {
             f.write_str(" WITH (");
@@ -1879,19 +1879,19 @@ impl<T: AstInfo> AstDisplay for TailStatement<T> {
         }
     }
 }
-impl_display_t!(TailStatement);
+impl_display_t!(SubscribeStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TailRelation<T: AstInfo> {
+pub enum SubscribeRelation<T: AstInfo> {
     Name(T::ObjectName),
     Query(Query<T>),
 }
 
-impl<T: AstInfo> AstDisplay for TailRelation<T> {
+impl<T: AstInfo> AstDisplay for SubscribeRelation<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            TailRelation::Name(name) => f.write_node(name),
-            TailRelation::Query(query) => {
+            SubscribeRelation::Name(name) => f.write_node(name),
+            SubscribeRelation::Query(query) => {
                 f.write_str("(");
                 f.write_node(query);
                 f.write_str(")");
@@ -1899,7 +1899,7 @@ impl<T: AstInfo> AstDisplay for TailRelation<T> {
         }
     }
 }
-impl_display_t!(TailRelation);
+impl_display_t!(SubscribeRelation);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExplainStatement<T: AstInfo> {

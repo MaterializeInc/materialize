@@ -29,7 +29,7 @@ use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
 use mz_compute_client::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, TailSinkConnection,
+    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
@@ -54,8 +54,8 @@ use mz_sql::plan::{
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom,
-    TailPlan, View,
+    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
@@ -80,7 +80,7 @@ use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
     WriteOp,
 };
-use crate::tail::PendingTail;
+use crate::subscribe::PendingSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
 use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
 
@@ -237,9 +237,10 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::Peek(plan) => {
                 tx.send(self.sequence_peek(&mut session, plan).await, session);
             }
-            Plan::Tail(plan) => {
+            Plan::Subscribe(plan) => {
                 tx.send(
-                    self.sequence_tail(&mut session, plan, depends_on).await,
+                    self.sequence_subscribe(&mut session, plan, depends_on)
+                        .await,
                     session,
                 );
             }
@@ -2117,13 +2118,13 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    async fn sequence_tail(
+    async fn sequence_subscribe(
         &mut self,
         session: &mut Session,
-        plan: TailPlan,
+        plan: SubscribePlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let TailPlan {
+        let SubscribePlan {
             from,
             with_snapshot,
             when,
@@ -2136,16 +2137,16 @@ impl<S: Append + 'static> Coordinator<S> {
             .resolve_compute_instance(session.vars().cluster())?
             .id;
 
-        // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
+        // SUBSCRIBE AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
         if when == QueryWhen::Immediately {
-            // If this isn't a TAIL AS OF, the TAIL can be in a transaction if it's the
+            // If this isn't a SUBSCRIBE AS OF, the SUBSCRIBE can be in a transaction if it's the
             // only operation.
-            session.add_transaction_ops(TransactionOps::Tail)?;
+            session.add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
         let make_sink_desc = |coord: &mut Coordinator<S>, from, from_desc, uses| {
-            // Determine the frontier of updates to tail *from*.
+            // Determine the frontier of updates to subscribe *from*.
             // Updates greater or equal to this frontier will be produced.
             let id_bundle = coord
                 .index_oracle(compute_instance)
@@ -2157,7 +2158,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
-                connection: ComputeSinkConnection::Tail(TailSinkConnection::default()),
+                connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
                 as_of: SinkAsOf {
                     frontier: Antichain::from_elem(timestamp),
                     strict: !with_snapshot,
@@ -2166,7 +2167,7 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let dataflow = match from {
-            TailFrom::Id(from_id) => {
+            SubscribeFrom::Id(from_id) => {
                 let from = self.catalog.get_entry(&from_id);
                 let from_desc = from
                     .desc(
@@ -2178,16 +2179,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     .into_owned();
                 let sink_id = self.catalog.allocate_user_id().await?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
-                let sink_name = format!("tail-{}", sink_id);
+                let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(compute_instance)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
             }
-            TailFrom::Query { expr, desc } => {
+            SubscribeFrom::Query { expr, desc } => {
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
-                let mut dataflow = DataflowDesc::new(format!("tail-{}", id));
+                let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(compute_instance);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
                 dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
@@ -2202,11 +2203,11 @@ impl<S: Append + 'static> Coordinator<S> {
         });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
-        self.pending_tails
-            .insert(*sink_id, PendingTail::new(tx, emit_progress, arity));
+        self.pending_subscribes
+            .insert(*sink_id, PendingSubscribe::new(tx, emit_progress, arity));
         self.ship_dataflow(dataflow, compute_instance).await;
 
-        let resp = ExecuteResponse::Tailing { rx };
+        let resp = ExecuteResponse::Subscribing { rx };
         match copy_to {
             None => Ok(resp),
             Some(format) => Ok(ExecuteResponse::CopyTo {

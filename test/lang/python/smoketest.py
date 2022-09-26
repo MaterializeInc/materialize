@@ -49,18 +49,18 @@ class SmokeTest(unittest.TestCase):
         results = [[c1, c2] for c1, c2 in engine.execute("VALUES (1, 2), (3, 4)")]
         self.assertEqual(results, [[1, 2], [3, 4]])
 
-    def test_psycopg2_tail(self) -> None:
-        """Test TAIL with psycopg2 via server cursors."""
+    def test_psycopg2_subscribe(self) -> None:
+        """Test SUBSCRIBE with psycopg2 via server cursors."""
         with psycopg2.connect(MATERIALIZED_URL) as conn:
             conn.set_session(autocommit=True)
             with conn.cursor() as cur:
                 # Create a table with one row of data.
-                cur.execute("CREATE TABLE psycopg2_tail (a int, b text)")
-                cur.execute("INSERT INTO psycopg2_tail VALUES (1, 'a')")
+                cur.execute("CREATE TABLE psycopg2_subscribe (a int, b text)")
+                cur.execute("INSERT INTO psycopg2_subscribe VALUES (1, 'a')")
                 conn.set_session(autocommit=False)
 
-                # Start a tail using the binary copy protocol.
-                cur.execute("DECLARE cur CURSOR FOR TAIL psycopg2_tail")
+                # Start SUBSCRIBE using the binary copy protocol.
+                cur.execute("DECLARE cur CURSOR FOR SUBSCRIBE psycopg2_subscribe")
                 cur.execute("FETCH ALL cur")
 
                 # Validate the first row, but ignore the timestamp column.
@@ -75,7 +75,7 @@ class SmokeTest(unittest.TestCase):
                 with psycopg2.connect(MATERIALIZED_URL) as conn2:
                     conn2.set_session(autocommit=True)
                     with conn2.cursor() as cur2:
-                        cur2.execute("INSERT INTO psycopg2_tail VALUES (2, 'b')")
+                        cur2.execute("INSERT INTO psycopg2_subscribe VALUES (2, 'b')")
 
                 # Validate the new row, again ignoring the timestamp column.
                 cur.execute("FETCH ALL cur")
@@ -85,19 +85,19 @@ class SmokeTest(unittest.TestCase):
                 self.assertEqual(b, "b")
                 self.assertEqual(cur.fetchone(), None)
 
-    def test_psycopg3_tail_copy(self) -> None:
-        """Test tail with psycopg3 via its new binary COPY decoding support."""
+    def test_psycopg3_subscribe_copy(self) -> None:
+        """Test SUBSCRIBE with psycopg3 via its new binary COPY decoding support."""
         with psycopg3.connect(MATERIALIZED_URL) as conn:
             conn.autocommit = True
             with conn.cursor() as cur:
                 # Create a table with one row of data.
-                cur.execute("CREATE TABLE psycopg3_tail_copy (a int, b text)")
-                cur.execute("INSERT INTO psycopg3_tail_copy VALUES (1, 'a')")
+                cur.execute("CREATE TABLE psycopg3_subscribe_copy (a int, b text)")
+                cur.execute("INSERT INTO psycopg3_subscribe_copy VALUES (1, 'a')")
                 conn.autocommit = False
 
-                # Start a tail using the binary copy protocol.
+                # Start a subscribe using the binary copy protocol.
                 with cur.copy(
-                    "COPY (TAIL psycopg3_tail_copy) TO STDOUT (FORMAT BINARY)"
+                    "COPY (SUBSCRIBE psycopg3_subscribe_copy) TO STDOUT (FORMAT BINARY)"
                 ) as copy:
                     copy.set_types(
                         [
@@ -120,7 +120,7 @@ class SmokeTest(unittest.TestCase):
                         conn2.autocommit = True
                         with conn2.cursor() as cur2:
                             cur2.execute(
-                                "INSERT INTO psycopg3_tail_copy VALUES (2, 'b')"
+                                "INSERT INTO psycopg3_subscribe_copy VALUES (2, 'b')"
                             )
 
                     # Validate the new row, again ignoring the timestamp column.
@@ -129,7 +129,7 @@ class SmokeTest(unittest.TestCase):
                     self.assertEqual(a, 2)
                     self.assertEqual(b, "b")
 
-                    # The tail won't end until we send a cancel request.
+                    # The subscribe won't end until we send a cancel request.
                     conn.cancel()
                     with self.assertRaises(Exception) as context:
                         copy.read_row()
@@ -141,18 +141,18 @@ class SmokeTest(unittest.TestCase):
     # There might be problem with stream and the cancellation message. Skip until
     # resolved.
     @unittest.skip("https://github.com/psycopg/psycopg3/issues/30")
-    def test_psycopg3_tail_stream(self) -> None:
-        """Test tail with psycopg3 via its new streaming query support."""
+    def test_psycopg3_subscribe_stream(self) -> None:
+        """Test subscribe with psycopg3 via its new streaming query support."""
         with psycopg3.connect(MATERIALIZED_URL) as conn:
             conn.autocommit = True
             with conn.cursor() as cur:
                 # Create a table with one row of data.
-                cur.execute("CREATE TABLE psycopg3_tail_stream (a int, b text)")
-                cur.execute("INSERT INTO psycopg3_tail_stream VALUES (1, 'a')")
+                cur.execute("CREATE TABLE psycopg3_subscribe_stream (a int, b text)")
+                cur.execute("INSERT INTO psycopg3_subscribe_stream VALUES (1, 'a')")
                 conn.autocommit = False
 
-                # Start a tail using the streaming query API.
-                stream = cur.stream("TAIL psycopg3_tail_stream")
+                # Start a subscribe using the streaming query API.
+                stream = cur.stream("SUBSCRIBE psycopg3_subscribe_stream")
 
                 # Validate the first row, but ignore the timestamp column.
                 (ts, diff, a, b) = next(stream)
@@ -165,7 +165,9 @@ class SmokeTest(unittest.TestCase):
                 with psycopg3.connect(MATERIALIZED_URL) as conn2:
                     conn2.autocommit = True
                     with conn2.cursor() as cur2:
-                        cur2.execute("INSERT INTO psycopg3_tail_stream VALUES (2, 'b')")
+                        cur2.execute(
+                            "INSERT INTO psycopg3_subscribe_stream VALUES (2, 'b')"
+                        )
 
                 # Validate the new row, again ignoring the timestamp column.
                 (ts, diff, a, b) = next(stream)
@@ -173,6 +175,6 @@ class SmokeTest(unittest.TestCase):
                 self.assertEqual(a, 2)
                 self.assertEqual(b, "b")
 
-                # The tail won't end until we send a cancel request.
+                # The subscribe won't end until we send a cancel request.
                 conn.cancel()
                 self.assertEqual(next(stream, None), None)

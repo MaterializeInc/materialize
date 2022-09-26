@@ -271,7 +271,7 @@ Using dbt in a streaming context means that you're able to run data quality and 
      unique_avg_bid_symbol
     ```
 
-With continuous testing in place, you can then build alerts off of the test materialized views using any common PostgreSQL-compatible [client library](/integrations/#client-libraries-and-orms) and [`TAIL`](/sql/tail/) (see the [Python cheatsheet](/integrations/python/#stream) for a reference implementation).
+With continuous testing in place, you can then build alerts off of the test materialized views using any common PostgreSQL-compatible [client library](/integrations/#client-libraries-and-orms) and [`SUBSCRIBE`](/sql/subscribe/) (see the [Python cheatsheet](/integrations/python/#stream) for a reference implementation).
 
 ### Documentation
 

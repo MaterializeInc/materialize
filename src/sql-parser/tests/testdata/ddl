@@ -690,53 +690,60 @@ DROP INDEX IF EXISTS myschema.myindex
 DropObjects(DropObjectsStatement { object_type: Index, if_exists: true, names: [UnresolvedObjectName([Ident("myschema"), Ident("myindex")])], cascade: false })
 
 parse-statement
-TAIL foo.bar
+SUBSCRIBE foo.bar
 ----
-TAIL foo.bar
+SUBSCRIBE foo.bar
 =>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: None })
 
 parse-statement
-TAIL foo.bar AS OF 123
+SUBSCRIBE TO foo.bar
 ----
-TAIL foo.bar AS OF 123
+SUBSCRIBE foo.bar
 =>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Value(Number("123")))) })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: None })
 
 parse-statement
-TAIL foo.bar AS OF now()
+SUBSCRIBE foo.bar AS OF 123
 ----
-TAIL foo.bar AS OF now()
+SUBSCRIBE foo.bar AS OF 123
 =>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Value(Number("123")))) })
 
 parse-statement
-TAIL foo.bar WITH (SNAPSHOT) AS OF now()
+SUBSCRIBE foo.bar AS OF now()
 ----
-TAIL foo.bar WITH (SNAPSHOT) AS OF now()
+SUBSCRIBE foo.bar AS OF now()
 =>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [TailOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
 
 parse-statement
-TAIL foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
+SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
+----
+SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
+
+parse-statement
+SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
 ----
 error: Expected one of PROGRESS or SNAPSHOT, found identifier "timestamps"
-TAIL foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
-                                     ^
+SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
+                                          ^
 
 parse-statement
-TAIL foo.bar WITH (SNAPSHOT false)
+SUBSCRIBE foo.bar WITH (SNAPSHOT false)
 ----
-TAIL foo.bar WITH (SNAPSHOT = false)
+SUBSCRIBE foo.bar WITH (SNAPSHOT = false)
 =>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [TailOption { name: Snapshot, value: Some(Value(Boolean(false))) }], as_of: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: Some(Value(Boolean(false))) }], as_of: None })
 
 parse-statement
-TAIL (SELECT * FROM a)
+SUBSCRIBE (SELECT * FROM a)
 ----
-TAIL (SELECT * FROM a)
+SUBSCRIBE (SELECT * FROM a)
 =>
-Tail(TailStatement { relation: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None })
+Subscribe(SubscribeStatement { relation: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None })
 
 parse-statement
 CREATE TABLE public.customer (

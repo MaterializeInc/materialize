@@ -86,7 +86,7 @@ where
             sink_id,
             SinkToken {
                 token: Box::new(needed_tokens),
-                is_tail: matches!(sink.connection, ComputeSinkConnection::Tail(_)),
+                is_subscribe: matches!(sink.connection, ComputeSinkConnection::Subscribe(_)),
             },
         );
     }
@@ -116,7 +116,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     match connection {
-        ComputeSinkConnection::Tail(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::Persist(connection) => Box::new(connection.clone()),
     }
 }

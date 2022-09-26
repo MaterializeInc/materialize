@@ -15,7 +15,7 @@ In Materialize, `now()` doesn't represent the system time, as it does in most sy
 
 ## Internal debugging
 
-`mz_logical_timestamp()` can be useful if you need to understand the time up to which data has been ingested by `materialized`. It corresponds to the timestamp column of [TAIL](/sql/tail). Generally a `CREATE SOURCE` command will cause Materialize to ingest data and produce timestamps that correspond to milliseconds since the Unix epoch.
+`mz_logical_timestamp()` can be useful if you need to understand the time up to which data has been ingested by `materialized`. It corresponds to the timestamp column of [`SUBSCRIBE`](/sql/subscribe). Generally a `CREATE SOURCE` command will cause Materialize to ingest data and produce timestamps that correspond to milliseconds since the Unix epoch.
 
 ## Temporal filters
 

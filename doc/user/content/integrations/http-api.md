@@ -30,7 +30,7 @@ The API:
     - `COPY`
     - `DECLARE`
     - `SET`
-    - `TAIL`
+    - `SUBSCRIBE`
 
 ### Transactional semantics
 

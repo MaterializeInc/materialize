@@ -9,7 +9,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Observe the retraction of records from a TAIL stream
+# Observe the retraction of records from a SUBSCRIBE stream
 #
 
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
@@ -29,7 +29,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL v1;
+> DECLARE c CURSOR FOR SUBSCRIBE v1;
 
 > FETCH 2 c;
 <TIMESTAMP> 2 123
