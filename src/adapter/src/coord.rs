@@ -232,6 +232,7 @@ pub struct Config<S> {
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
+    pub segment_api_key: Option<String>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -356,6 +357,9 @@ pub struct Coordinator<S> {
     storage_usage_client: StorageUsageClient,
     /// The interval at which to collect storage usage information.
     storage_usage_collection_interval: Duration,
+
+    /// Segment analytics client.
+    segment_client: Option<mz_segment::Client>,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -817,6 +821,7 @@ pub async fn serve<S: Append + 'static>(
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
+        segment_api_key,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -898,6 +903,9 @@ pub async fn serve<S: Append + 'static>(
                 );
             }
 
+            let segment_client =
+                handle.block_on(async { segment_api_key.map(mz_segment::Client::new) });
+
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
@@ -921,6 +929,7 @@ pub async fn serve<S: Append + 'static>(
                 transient_replica_metadata: HashMap::new(),
                 storage_usage_client,
                 storage_usage_collection_interval,
+                segment_client,
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));

@@ -374,6 +374,9 @@ pub struct Args {
         default_value = "3600s"
     )]
     storage_usage_collection_interval_sec: Duration,
+    /// An API key for Segment. Enables export of audit events to Segment.
+    #[clap(long, env = "SEGMENT_API_KEY")]
+    segment_api_key: Option<String>,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -706,6 +709,7 @@ max log level: {max_log_level}",
         otel_enable_callback,
         stderr_filter_callback,
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
+        segment_api_key: args.segment_api_key,
     }))?;
 
     println!(

@@ -82,6 +82,16 @@ pub enum EventType {
     Alter,
 }
 
+impl EventType {
+    pub fn as_title_case(&self) -> &'static str {
+        match self {
+            EventType::Create => "Created",
+            EventType::Drop => "Dropped",
+            EventType::Alter => "Altered",
+        }
+    }
+}
+
 serde_plain::derive_display_from_serialize!(EventType);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -94,6 +104,20 @@ pub enum ObjectType {
     Source,
     View,
     MaterializedView,
+}
+
+impl ObjectType {
+    pub fn as_title_case(&self) -> &'static str {
+        match self {
+            ObjectType::Cluster => "Cluster",
+            ObjectType::ClusterReplica => "Cluster Replica",
+            ObjectType::Index => "Index",
+            ObjectType::Sink => "Sink",
+            ObjectType::Source => "Source",
+            ObjectType::View => "View",
+            ObjectType::MaterializedView => "Materialized View",
+        }
+    }
 }
 
 serde_plain::derive_display_from_serialize!(ObjectType);
