@@ -13,12 +13,12 @@ Materialize is **wire-compatible** with PostgreSQL, which means that Ruby applic
 
 ## Connect
 
-To connect to a local instance of Materialize using `pg`:
+To connect to Materialize using `pg`:
 
 ```ruby
 require 'pg'
 
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 ```
 
 If you don't have a `pg` gem, you can install it with:
@@ -37,7 +37,7 @@ To read a stream of updates from an existing materialized view, open a long-live
 require 'pg'
 
 # Locally running instance:
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 conn.exec('BEGIN')
 conn.exec('DECLARE c CURSOR FOR TAIL my_view')
 
@@ -68,14 +68,14 @@ An `mz_diff` value of `-1` indicates Materialize is deleting one row with the in
 
 Querying Materialize is identical to querying a PostgreSQL database: Ruby executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
-Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
 To query a view `my_view` using a `SELECT` statement:
 
 ```ruby
 require 'pg'
 
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 
 res  = conn.exec('SELECT * FROM my_view')
 
@@ -95,7 +95,7 @@ Most data in Materialize will stream in via an external system, but a [table](/s
 ```ruby
 require 'pg'
 
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 
 conn.exec("INSERT INTO my_table (my_column) VALUES ('some_value')")
 
@@ -115,7 +115,7 @@ Typically, you create sources, views, and indexes when deploying Materialize, bu
 ```ruby
 require 'pg'
 
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 
 # Create a source
 src = conn.exec(
@@ -138,7 +138,7 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
 ```ruby
 require 'pg'
 
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 
 # Create a view
 view = conn.exec(
