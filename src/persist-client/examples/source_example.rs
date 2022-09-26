@@ -199,7 +199,7 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
     let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable))
         as Arc<dyn Consensus + Send + Sync>;
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    PersistClient::new(config, blob, consensus, metrics, cpu_heavy_runtime).await
+    PersistClient::new(config, blob, consensus, metrics, cpu_heavy_runtime)
 }
 
 mod api {

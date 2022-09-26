@@ -477,9 +477,11 @@ impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalcu
         remap_write.fetch_recent_upper().await;
         data_write.fetch_recent_upper().await;
 
-        self.collection_metadata
-            .get_resume_upper_from_handles(remap_write, data_write, &self.source_envelope)
-            .await
+        self.collection_metadata.get_resume_upper_from_handles(
+            remap_write,
+            data_write,
+            &self.source_envelope,
+        )
     }
 }
 
@@ -487,7 +489,7 @@ impl CollectionMetadata {
     /// Calculate the point at which we can resume ingestion computing the greatest
     /// antichain that is less or equal to all state and output shard uppers,
     /// using pre-existing `WriteHandle`s
-    pub async fn get_resume_upper_from_handles<T>(
+    pub fn get_resume_upper_from_handles<T>(
         &self,
         remap_write: &mut WriteHandle<(), PartitionId, T, MzOffset>,
         data_write: &mut WriteHandle<SourceData, (), T, Diff>,
@@ -563,7 +565,6 @@ impl CollectionMetadata {
     {
         let (mut remap_write, mut data_write) = self.get_write_handles(persist).await;
         self.get_resume_upper_from_handles(&mut remap_write, &mut data_write, source_envelope)
-            .await
     }
 }
 

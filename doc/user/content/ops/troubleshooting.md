@@ -32,7 +32,7 @@ This source provides timestamp-based progress, which reveals not the
 volume of data, but how closely the contents track source timestamps.
 ```sql
 -- For each materialization, the next timestamp to be added.
-select * from mz_compute_frontiers;
+select * from mz_internal.mz_compute_frontiers;
 ```
 
 ### Why is Materialize running so slowly?
@@ -44,8 +44,8 @@ take the largest total amount of time.
 ```sql
 -- Extract raw elapsed time information, by worker
 select mdo.id, mdo.name, mdo.worker_id, mse.elapsed_ns
-from mz_scheduling_elapsed as mse,
-     mz_dataflow_operators as mdo
+from mz_internal.mz_scheduling_elapsed as mse,
+     mz_internal.mz_dataflow_operators as mdo
 where
     mse.id = mdo.id and
     mse.worker_id = mdo.worker_id
@@ -55,8 +55,8 @@ order by elapsed_ns desc;
 ```sql
 -- Extract raw elapsed time information, summed across workers
 select mdo.id, mdo.name, sum(mse.elapsed_ns) as elapsed_ns
-from mz_scheduling_elapsed as mse,
-     mz_dataflow_operators as mdo
+from mz_internal.mz_scheduling_elapsed as mse,
+     mz_internal.mz_dataflow_operators as mdo
 where
     mse.id = mdo.id and
     mse.worker_id = mdo.worker_id
@@ -77,8 +77,8 @@ and incriminate the subject.
 ```sql
 -- Extract raw scheduling histogram information, by worker.
 select mdo.id, mdo.name, mdo.worker_id, msh.duration_ns, count
-from mz_scheduling_histogram as msh,
-     mz_dataflow_operators as mdo
+from mz_internal.mz_scheduling_histogram as msh,
+     mz_internal.mz_dataflow_operators as mdo
 where
     msh.id = mdo.id and
     msh.worker_id = mdo.worker_id
@@ -88,8 +88,8 @@ order by msh.duration_ns desc;
 ```sql
 -- Extract raw scheduling histogram information, summed across workers.
 select mdo.id, mdo.name, msh.duration_ns, sum(msh.count) count
-from mz_scheduling_histogram as msh,
-     mz_dataflow_operators as mdo
+from mz_internal.mz_scheduling_histogram as msh,
+     mz_internal.mz_dataflow_operators as mdo
 where
     msh.id = mdo.id and
     msh.worker_id = mdo.worker_id
@@ -110,8 +110,8 @@ number, and anything significantly larger is probably a bug.
 ```sql
 -- Extract arrangement records and batches, by worker.
 select mdo.id, mdo.name, mdo.worker_id, mas.records, mas.batches
-from mz_arrangement_sizes as mas,
-     mz_dataflow_operators as mdo
+from mz_internal.mz_arrangement_sizes as mas,
+     mz_internal.mz_dataflow_operators as mdo
 where
     mas.operator_id = mdo.id and
     mas.worker_id = mdo.worker_id
@@ -121,8 +121,8 @@ order by mas.records desc;
 ```sql
 -- Extract arrangement records and batches, summed across workers.
 select mdo.id, mdo.name, sum(mas.records) as records, sum(mas.batches) as batches
-from mz_arrangement_sizes as mas,
-     mz_dataflow_operators as mdo
+from mz_internal.mz_arrangement_sizes as mas,
+     mz_internal.mz_dataflow_operators as mdo
 where
     mas.operator_id = mdo.id and
     mas.worker_id = mdo.worker_id
@@ -138,7 +138,7 @@ by Materialize should correlate with the number of arrangement records that are
 displayed by either the visual interface or the SQL queries.
 
 The memory usage visualization is available at `http://<materialized
-host>:6875/memory`.
+host>:6876/memory`.
 
 ### Is work distributed equally across workers?
 
@@ -162,7 +162,7 @@ select
     id,
     avg(elapsed_ns) as avg_ns
 from
-    mz_scheduling_elapsed
+    mz_internal.mz_scheduling_elapsed
 group by
     id;
 
@@ -177,9 +177,9 @@ select
     avg_ns,
     elapsed_ns/avg_ns as ratio
 from
-    mz_scheduling_elapsed mse,
+    mz_internal.mz_scheduling_elapsed mse,
     avg_elapsed_by_id aebi,
-    mz_dataflow_operator_dataflows dod
+    mz_internal.mz_dataflow_operator_dataflows dod
 where
     mse.id = aebi.id and
     mse.elapsed_ns > 2 * aebi.avg_ns and
@@ -196,7 +196,7 @@ defined by positions `0..n-1`. The example SQL query and result below shows an
 operator whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
 ```sql
-select * from mz_dataflow_addresses where id=515 and worker_id=0;
+select * from mz_internal.mz_dataflow_addresses where id=515 and worker_id=0;
 ```
 ```
  id  | worker_id | address
@@ -220,15 +220,15 @@ SELECT
     mdo.id as id,
     mdo.name as name
 FROM
-    mz_dataflow_addresses mda,
+    mz_internal.mz_dataflow_addresses mda,
     -- source of operator names
-    mz_dataflow_operators mdo,
+    mz_internal.mz_dataflow_operators mdo,
     -- view containing operators representing entire dataflows
     (SELECT
       mda.id as dataflow_operator,
       mda.address[1] as dataflow_address
     FROM
-      mz_dataflow_addresses mda
+      mz_internal.mz_dataflow_addresses mda
     WHERE
       mda.worker_id = 0
       AND list_length(mda.address) = 1) dataflows
@@ -267,7 +267,7 @@ Every time `TAIL` is invoked, a dataflow using the `Dataflow: tail` prefix is cr
 -- Report the number of tails running
 SELECT count(1) FROM (
     SELECT id
-    FROM mz_dataflows
+    FROM mz_internal.mz_dataflows
     WHERE substring(name, 0, 15) = 'Dataflow: tail'
     GROUP BY id
 );

@@ -2,8 +2,8 @@
 name = "mz-s3-datagen"
 description = "Generate S3 test data."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

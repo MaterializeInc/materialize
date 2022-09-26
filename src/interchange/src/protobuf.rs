@@ -85,7 +85,7 @@ impl Decoder {
     }
 
     /// Decodes the encoded Protobuf message into a [`Row`].
-    pub async fn decode(&mut self, mut bytes: &[u8]) -> Result<Option<Row>, anyhow::Error> {
+    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<Option<Row>, anyhow::Error> {
         if self.confluent_wire_format {
             // We support Protobuf schema evolution by ignoring the schema that
             // the message was written with and attempting to decode into the

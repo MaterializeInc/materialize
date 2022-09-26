@@ -1225,8 +1225,9 @@ dependencies = [
 
 [[package]]
 name = "criterion"
-version = "0.3.6"
-source = "git+https://github.com/bheisler/criterion.rs.git?branch=version-0.4#935c6327e152e44f2b9178797682b9b99b5123a5"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7c76e09c1aae2bc52b3d2f29e13c6572553b30c4aa1b8a49fd70de6412654cb"
 dependencies = [
  "anes",
  "atty",
@@ -1252,8 +1253,9 @@ dependencies = [
 
 [[package]]
 name = "criterion-plot"
-version = "0.4.5"
-source = "git+https://github.com/bheisler/criterion.rs.git?branch=version-0.4#935c6327e152e44f2b9178797682b9b99b5123a5"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
 dependencies = [
  "cast",
  "itertools",
@@ -3160,7 +3162,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.27.0-dev"
+version = "0.27.0-alpha.22.post"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3257,7 +3259,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.27.0-dev"
+version = "0.27.0-alpha.22.post"
 dependencies = [
  "anyhow",
  "askama",
@@ -4228,7 +4230,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storaged"
-version = "0.27.0-dev"
+version = "0.27.0-alpha.22.post"
 dependencies = [
  "anyhow",
  "axum",

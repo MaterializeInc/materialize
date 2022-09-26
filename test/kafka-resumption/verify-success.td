@@ -13,8 +13,8 @@ Hanover,PA,17331
 
 
 $ kafka-verify format=avro sink=materialize.public.output sort-messages=true
-{"before": null, "after": {"row": {"city": "Brooklyn", "state": "NY", "zip": "11217", "offset":3}}}
-{"before": null, "after": {"row": {"city": "Hanover", "state": "PA", "zip": "17331", "offset":4}}}
-{"before": null, "after": {"row": {"city": "New York", "state": "NY", "zip": "10004", "offset":1}}}
-{"before": null, "after": {"row": {"city": "Rochester", "state": "NY", "zip": "14618", "offset":0}}}
-{"before": null, "after": {"row": {"city": "San Francisco", "state": "CA", "zip": "94114", "offset":2}}}
+{"before": null, "after": {"row": {"city": "Brooklyn", "state": "NY", "zip": "11217", "offset":[0,0,0,0,0,0,0,3]}}}
+{"before": null, "after": {"row": {"city": "Hanover", "state": "PA", "zip": "17331", "offset":[0,0,0,0,0,0,0,4]}}}
+{"before": null, "after": {"row": {"city": "New York", "state": "NY", "zip": "10004", "offset":[0,0,0,0,0,0,0,1]}}}
+{"before": null, "after": {"row": {"city": "Rochester", "state": "NY", "zip": "14618", "offset":[0,0,0,0,0,0,0,0]}}}
+{"before": null, "after": {"row": {"city": "San Francisco", "state": "CA", "zip": "94114", "offset":[0,0,0,0,0,0,0,2]}}}

@@ -10,7 +10,7 @@
 MZFROM ubuntu-base
 
 RUN apt-get update \
-    && apt-get -qy install ca-certificates curl tini \
+    && apt-get -qy install ca-certificates curl tini ssh \
     && groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
     && mkdir /mzdata \

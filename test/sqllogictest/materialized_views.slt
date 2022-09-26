@@ -346,7 +346,7 @@ mv_primary_idx  mv  default {?column?}
 # Test: Creating materialized views that depend on log sources is forbidden.
 
 statement error materialized view objects cannot depend on log sources
-CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT * FROM mz_dataflow_operators;
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT * FROM mz_internal.mz_dataflow_operators;
 
 
 # Test: Attempting to use view commands on materialized views gives helpful errors.

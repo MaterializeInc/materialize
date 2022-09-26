@@ -26,8 +26,7 @@ pub async fn fetch_current_state(
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Metrics::new(&cfg, &MetricsRegistry::new());
-    let consensus =
-        ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus).await?;
+    let consensus = ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus)?;
     let consensus = consensus.clone().open().await?;
 
     if let Some(data) = consensus.head(&shard_id.to_string()).await? {
@@ -45,8 +44,7 @@ pub async fn fetch_state_diffs(
 ) -> Result<Vec<impl serde::Serialize>, anyhow::Error> {
     let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Metrics::new(&cfg, &MetricsRegistry::new());
-    let consensus =
-        ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus).await?;
+    let consensus = ConsensusConfig::try_from(&consensus_uri, 1, metrics.postgres_consensus)?;
     let consensus = consensus.clone().open().await?;
 
     let mut states = vec![];

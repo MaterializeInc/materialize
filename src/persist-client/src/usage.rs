@@ -11,12 +11,13 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::info;
 
 use crate::{retry_external, Metrics, ShardId};
 use mz_persist::location::{Blob, ExternalError};
 
 use crate::cache::PersistClientCache;
-use crate::internal::paths::{BlobKey, BlobKeyPrefix};
+use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
 
 /// Provides access to storage usage metrics for a specific Blob
 #[derive(Clone, Debug)]
@@ -55,19 +56,53 @@ impl StorageUsageClient {
             &self.metrics.retries.external.storage_usage_shard_size,
             || async {
                 let mut shard_sizes = HashMap::new();
+                let mut batch_part_bytes = 0;
+                let mut batch_part_count = 0;
+                let mut rollup_size = 0;
+                let mut rollup_count = 0;
+                let mut total_size = 0;
+                let mut total_count = 0;
                 self.blob
                     .list_keys_and_metadata(&BlobKeyPrefix::All.to_string(), &mut |metadata| {
                         match BlobKey::parse_ids(metadata.key) {
-                            Ok((shard, _)) => {
+                            Ok((shard, partial_blob_key)) => {
                                 *shard_sizes.entry(Some(shard)).or_insert(0) +=
                                     metadata.size_in_bytes;
+
+                                match partial_blob_key {
+                                    PartialBlobKey::Batch(_, _) => {
+                                        batch_part_bytes += metadata.size_in_bytes;
+                                        batch_part_count += 1;
+                                    }
+                                    PartialBlobKey::Rollup(_, _) => {
+                                        rollup_size += metadata.size_in_bytes;
+                                        rollup_count += 1;
+                                    }
+                                }
                             }
                             _ => {
+                                info!("unknown blob: {}: {}", metadata.key, metadata.size_in_bytes);
                                 *shard_sizes.entry(None).or_insert(0) += metadata.size_in_bytes;
                             }
                         }
+                        total_size += metadata.size_in_bytes;
+                        total_count += 1;
                     })
                     .await?;
+
+                self.metrics
+                    .audit
+                    .blob_batch_part_bytes
+                    .set(batch_part_bytes);
+                self.metrics
+                    .audit
+                    .blob_batch_part_count
+                    .set(batch_part_count);
+                self.metrics.audit.blob_rollup_bytes.set(rollup_size);
+                self.metrics.audit.blob_rollup_count.set(rollup_count);
+                self.metrics.audit.blob_bytes.set(total_size);
+                self.metrics.audit.blob_count.set(total_count);
+
                 Ok(shard_sizes)
             },
         )

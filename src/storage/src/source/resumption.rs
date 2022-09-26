@@ -38,7 +38,8 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 ///
 /// This is useful when a source is finite or finishes for other reasons.
 pub fn resumption_operator<G, R>(
-    config: RawSourceCreationConfig<G>,
+    scope: &G,
+    config: RawSourceCreationConfig,
     calc: R,
 ) -> (timely::dataflow::Stream<G, ()>, Handle<G, ()>)
 where
@@ -47,7 +48,6 @@ where
 {
     let RawSourceCreationConfig {
         id: source_id,
-        scope,
         worker_count,
         worker_id,
         storage_metadata,
@@ -61,7 +61,7 @@ where
     // TODO(guswynn): remove this clone, `Feedback::feedback` erroneously requires `&mut Scope`,
     // but only needs to clone the scope.
     let (source_reader_feedback_handle, source_reader_feedback_stream) =
-        config.scope.clone().feedback(Timestamp::new(1));
+        scope.clone().feedback(Timestamp::new(1));
 
     let chosen_worker = (source_id.hashed() % worker_count as u64) as usize;
     let active_worker = chosen_worker == worker_id;

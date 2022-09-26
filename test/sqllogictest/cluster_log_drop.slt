@@ -30,7 +30,7 @@ SELECT (SELECT COUNT(*) FROM mz_catalog.mz_sources WHERE name NOT LIKE '%_1') - 
 query T rowsort
 SELECT (SELECT COUNT(*) FROM mz_catalog.mz_views WHERE name NOT LIKE '%_1') - (SELECT COUNT(*) FROM mz_catalog.mz_views WHERE name LIKE '%_1');
 ----
-28
+27
 
 
 # The default cluster also has log sources, thus we should have one set active at boot.
@@ -93,10 +93,10 @@ CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
 
 # We have to guess the identifier 4 here, it should match c1.r1 at this point
 statement ok
-CREATE VIEW v1 AS SELECT * FROM mz_catalog.mz_peek_active_4;
+CREATE VIEW v1 AS SELECT * FROM mz_internal.mz_peek_active_4;
 
 statement ok
-CREATE VIEW w1 AS SELECT * FROM mz_catalog.mz_compute_frontiers_4;
+CREATE VIEW w1 AS SELECT * FROM mz_internal.mz_compute_frontiers_4;
 
 statement ok
 CREATE VIEW v11 AS SELECT * FROM v1;
@@ -105,10 +105,10 @@ statement ok
 CREATE VIEW w11 AS SELECT * FROM w1;
 
 statement ok
-CREATE VIEW v2 AS SELECT * FROM mz_catalog.mz_peek_active_5;
+CREATE VIEW v2 AS SELECT * FROM mz_internal.mz_peek_active_5;
 
 statement ok
-CREATE VIEW w2 AS SELECT * FROM mz_catalog.mz_compute_frontiers_5;
+CREATE VIEW w2 AS SELECT * FROM mz_internal.mz_compute_frontiers_5;
 
 statement ok
 CREATE VIEW v21 AS SELECT * FROM v2;

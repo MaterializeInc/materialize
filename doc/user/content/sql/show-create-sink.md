@@ -1,10 +1,9 @@
 ---
 title: "SHOW CREATE SINK"
 description: "`SHOW CREATE SINK` returns the statement used to create the sink."
-draft: true
-#menu:
-  #main:
-    #parent: commands
+menu:
+  main:
+    parent: commands
 ---
 
 `SHOW CREATE SINK` returns the DDL statement used to create the sink.

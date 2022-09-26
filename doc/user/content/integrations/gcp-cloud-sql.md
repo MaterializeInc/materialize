@@ -1,5 +1,5 @@
 ---
-title: "How to connect GCP Cloud SQL to Materialize"
+title: "GCP Cloud SQL (PostgreSQL)"
 description: "How to connect GCP Cloud SQL as a source to Materialize."
 menu:
   main:

@@ -15,3 +15,10 @@
 ! CREATE SOURCE s
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 contains:Source format must be specified
+
+> CREATE CONNECTION no_topic
+  FOR KAFKA BROKER '';
+
+! CREATE SOURCE s
+  FROM KAFKA CONNECTION no_topic
+contains:KAFKA CONNECTION without TOPIC

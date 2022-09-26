@@ -16,66 +16,66 @@ SELECT ${arg.replicas} > 1
 
 $ set-regex match=s\d+ replacement=SID
 
-> CREATE VIEW count_operates AS SELECT count(*) FROM mz_dataflow_operators;
+> CREATE VIEW count_operates AS SELECT count(*) FROM mz_internal.mz_dataflow_operators;
 > SELECT count(*) FROM count_operates;
 1
 
-> CREATE VIEW count_channels AS SELECT count(*) FROM mz_dataflow_channels;
+> CREATE VIEW count_channels AS SELECT count(*) FROM mz_internal.mz_dataflow_channels;
 > SELECT count(*) FROM count_channels;
 1
 
-> CREATE VIEW count_elapsed AS SELECT count(*) FROM mz_scheduling_elapsed;
+> CREATE VIEW count_elapsed AS SELECT count(*) FROM mz_internal.mz_scheduling_elapsed;
 > SELECT count(*) FROM count_elapsed;
 1
 
-> CREATE VIEW count_histogram AS SELECT count(*) FROM mz_scheduling_histogram;
+> CREATE VIEW count_histogram AS SELECT count(*) FROM mz_internal.mz_scheduling_histogram;
 > SELECT count(*) FROM count_histogram;
 1
 
-> CREATE VIEW count_arrangement AS SELECT count(*) FROM mz_arrangement_sizes;
+> CREATE VIEW count_arrangement AS SELECT count(*) FROM mz_internal.mz_arrangement_sizes;
 > SELECT count(*) FROM count_arrangement;
 1
 
-> CREATE VIEW count_materializations AS SELECT count(*) FROM mz_compute_exports;
+> CREATE VIEW count_materializations AS SELECT count(*) FROM mz_internal.mz_compute_exports;
 > SELECT count(*) FROM count_materializations;
 1
 
-> CREATE VIEW count_frontiers AS SELECT count(*) FROM mz_compute_frontiers;
+> CREATE VIEW count_frontiers AS SELECT count(*) FROM mz_internal.mz_compute_frontiers;
 > SELECT count(*) FROM count_frontiers;
 1
 
-> CREATE VIEW count_source_frontiers AS SELECT count(*) FROM mz_compute_import_frontiers;
+> CREATE VIEW count_source_frontiers AS SELECT count(*) FROM mz_internal.mz_compute_import_frontiers;
 > SELECT count(*) FROM count_source_frontiers;
 1
 
-> CREATE VIEW count_frontier_delays AS SELECT count(*) FROM mz_worker_compute_delays;
+> CREATE VIEW count_frontier_delays AS SELECT count(*) FROM mz_internal.mz_worker_compute_delays;
 > SELECT count(*) FROM count_frontier_delays;
 1
 
-> CREATE VIEW count_dependencies AS SELECT count(*) FROM mz_worker_compute_dependencies;
+> CREATE VIEW count_dependencies AS SELECT count(*) FROM mz_internal.mz_worker_compute_dependencies;
 > SELECT count(*) FROM count_dependencies;
 1
 
-> CREATE VIEW count_peeks AS SELECT count(*) FROM mz_peek_active;
+> CREATE VIEW count_peeks AS SELECT count(*) FROM mz_internal.mz_peek_active;
 > SELECT count(*) FROM count_peeks;
 1
 
-> CREATE VIEW count_peek_durations AS SELECT count(*) FROM mz_peek_durations;
+> CREATE VIEW count_peek_durations AS SELECT count(*) FROM mz_internal.mz_peek_durations;
 > SELECT count(*) FROM count_peek_durations;
 1
 
-> CREATE VIEW count_messages AS SELECT count(*) FROM mz_message_counts;
+> CREATE VIEW count_messages AS SELECT count(*) FROM mz_internal.mz_message_counts;
 > SELECT count(*) FROM count_messages;
 1
 
-! DROP SCHEMA mz_catalog
-contains:cannot drop schema mz_catalog because it is required by the database system
+! DROP SCHEMA mz_internal
+contains:cannot drop schema mz_internal because it is required by the database system
 
-! DROP VIEW mz_peek_durations
-contains:cannot drop item mz_catalog.mz_peek_durations because it is required by the database system
+! DROP VIEW mz_internal.mz_peek_durations
+contains:cannot drop item mz_internal.mz_peek_durations because it is required by the database system
 
-! DROP SOURCE mz_worker_compute_delays
-contains:cannot drop item mz_catalog.mz_worker_compute_delays because it is required by the database system
+! DROP SOURCE mz_internal.mz_worker_compute_delays
+contains:cannot drop item mz_internal.mz_worker_compute_delays because it is required by the database system
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)

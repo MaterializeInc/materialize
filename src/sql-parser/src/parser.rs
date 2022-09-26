@@ -4700,16 +4700,11 @@ impl<'a> Parser<'a> {
             }
             let in_cluster = self.parse_optional_in_cluster()?;
 
-            let filter = if self.parse_keyword(WHERE) {
-                Some(ShowStatementFilter::Where(self.parse_expr()?))
-            } else {
-                None
-            };
             Ok(ShowStatement::ShowIndexes(ShowIndexesStatement {
                 on_object,
                 from_schema,
                 in_cluster,
-                filter,
+                filter: self.parse_show_statement_filter()?,
             }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(ShowStatement::ShowCreateView(ShowCreateViewStatement {

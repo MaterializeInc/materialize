@@ -2,8 +2,8 @@
 name = "mz-adapter"
 description = "Materialize's adapter layer."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -58,7 +58,7 @@ uncased = "0.9.7"
 uuid = { version = "1.1.2", features = ["v4"] }
 
 [dev-dependencies]
-criterion = { git = "https://github.com/bheisler/criterion.rs.git", branch = "version-0.4", features = ["async_tokio"] }
+criterion = { version = "0.4.0", features = ["async_tokio"] }
 datadriven = "0.6.0"
 
 [[bench]]
