@@ -9,6 +9,12 @@
 
 # Test support for Avro sources without using the Confluent Schema Registry.
 
+$ set key-schema={
+    "type": "record",
+    "name": "Key",
+    "fields": [{"name": "a", "type": "long"}]
+  }
+
 $ set schema={
     "type": "record",
     "name": "envelope",
@@ -114,7 +120,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 ! CREATE SOURCE invalid_with_option
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   LEGACYWITH (badoption = true)
-  KEY FORMAT AVRO USING SCHEMA '${schema}'
+  KEY FORMAT AVRO USING SCHEMA '${key-schema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 contains:unexpected parameters for CREATE SOURCE: badoption
