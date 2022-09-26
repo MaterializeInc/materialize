@@ -441,6 +441,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     .encode_seconds
                     .inc_by(start.elapsed().as_secs_f64());
 
+                let start = Instant::now();
                 let payload_len = buf.len();
                 let () = retry_external(&metrics.retries.external.batch_set, || async {
                     blob.set(&key, Bytes::clone(&buf), Atomicity::RequireAtomic)
@@ -448,6 +449,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 })
                 .instrument(trace_span!("batch::set", payload_len))
                 .await;
+                batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
                 batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
                 batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
                 payload_len
@@ -457,6 +459,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         self.writing_parts.push_back((partial_key, handle));
 
         while self.writing_parts.len() > self.max_outstanding {
+            batch_metrics.write_stalls.inc();
             let (key, handle) = self
                 .writing_parts
                 .pop_front()

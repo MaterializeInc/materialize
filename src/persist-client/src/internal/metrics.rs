@@ -560,6 +560,8 @@ pub struct ReadMetrics {
 pub struct BatchWriteMetrics {
     pub(crate) bytes: IntCounter,
     pub(crate) goodbytes: IntCounter,
+    pub(crate) seconds: Counter,
+    pub(crate) write_stalls: IntCounter,
 }
 
 impl BatchWriteMetrics {
@@ -572,6 +574,14 @@ impl BatchWriteMetrics {
             goodbytes: registry.register(metric!(
                 name: format!("mz_persist_{}_goodbytes", name),
                 help: format!("total logical size of {} batches written", name),
+            )),
+            seconds: registry.register(metric!(
+                name: format!("mz_persist_{}_write_batch_part_seconds", name),
+                help: format!("time spent writing {} batches", name),
+            )),
+            write_stalls: registry.register(metric!(
+                name: format!("mz_persist_{}_write_stall_count", name),
+                help: format!("count of {} writes stalling to await max outstanding reqs", name),
             )),
         }
     }
