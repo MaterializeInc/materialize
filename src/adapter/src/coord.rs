@@ -169,6 +169,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
     ),
+    AdvanceTimelines,
     ComputeInstanceStatus(ComputeInstanceEvent),
     RemovePendingPeeks {
         conn_id: ConnectionId,

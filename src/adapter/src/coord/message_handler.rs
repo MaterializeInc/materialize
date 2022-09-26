@@ -55,8 +55,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.try_group_commit().await;
             }
             Message::GroupCommitApply(timestamp, responses, write_lock_guard) => {
-                self.group_commit_apply(timestamp, responses, false, write_lock_guard)
+                self.group_commit_apply(timestamp, responses, write_lock_guard)
                     .await;
+            }
+            Message::AdvanceTimelines => {
+                self.advance_timelines().await;
             }
             Message::ComputeInstanceStatus(status) => {
                 self.message_compute_instance_status(status).await
