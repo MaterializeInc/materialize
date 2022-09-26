@@ -39,7 +39,7 @@ true
   FROM
     mz_materialized_views AS views,
     mz_internal.mz_compute_exports AS compute_exports,
-    mz_internal.mz_compute_import_frontiers AS import_frontiers,
+    mz_internal.mz_compute_import_frontiers AS import_frontiers
   WHERE
     views.name = 'mv' AND
     views.id = compute_exports.export_id AND
