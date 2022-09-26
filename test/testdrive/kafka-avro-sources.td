@@ -130,28 +130,10 @@ name    type
 ------------
 
 
-# Create a source using an inline schema.
-> CREATE SOURCE data_schema_inline
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-  KEY FORMAT AVRO USING SCHEMA '${schema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
-
-> SHOW CREATE SOURCE data_schema_inline
-name   create_sql
-------------------------
-materialize.public.data_schema_inline "CREATE SOURCE \"materialize\".\"public\".\"data_schema_inline\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM"
-
-> SELECT a, b, json, c, d, e::text, f::text FROM data_schema_inline
-a  b  json                     c            d             e                   f
-------------------------------------------------------------------------------------
-1  1  null                     True         False         "(42,86.5,)"        <null>
-2  3  "{\"hello\":\"world\"}"  False        FileNotFound  "(43,,\"(44,-1)\")" (45,-2)
--1  7 "[1,2,3]"                FileNotFound True          <null>              <null>
-
 ! CREATE SOURCE fast_forwarded
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[2], TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}'
+  KEY FORMAT AVRO USING SCHEMA '${key-schema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 contains:START OFFSET is not supported with ENVELOPE DEBEZIUM
 
@@ -429,7 +411,7 @@ $ kafka-create-topic topic=new-dbz-data partitions=1
 
 # We don't do anything sensible yet for snapshot "true" or "last", so just test that those are ingested.
 
-$ kafka-ingest format=avro topic=new-dbz-data schema=${new-dbz-schema} timestamp=1
+$ kafka-ingest format=avro topic=new-dbz-data key-format=avro key-schema=${key-schema} schema=${new-dbz-schema} timestamp=1
 {"before": null, "after": {"row":{"a": 9, "b": 10}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": {"string": "true"}}, "op": "r"}
 {"before": null, "after": {"row":{"a": 11, "b": 11}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": {"string": "last"}}, "op": "r"}
 {"before": null, "after": {"row":{"a": 14, "b": 6}}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": null}, "op": "c"}
@@ -440,7 +422,8 @@ $ kafka-ingest format=avro topic=new-dbz-data schema=${new-dbz-schema} timestamp
 
 > CREATE SOURCE new_dbz
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-new-dbz-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
+  KEY FORMAT AVRO USING SCHEMA '${key-schema}'
+  VALUE FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM new_dbz
@@ -548,7 +531,8 @@ $ kafka-ingest format=avro topic=pg-dbz-data schema=${pg-dbz-schema} timestamp=1
 
 > CREATE SOURCE pg_dbz
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
+  KEY FORMAT AVRO USING SCHEMA '${key-schema}'
+  VALUE FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM pg_dbz
@@ -659,7 +643,8 @@ $ kafka-ingest format=avro topic=ms-dbz-data schema=${ms-dbz-schema} timestamp=1
 
 > CREATE SOURCE ms_dbz
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
+  KEY FORMAT AVRO USING SCHEMA '${key-schema}'
+  VALUE FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM ms_dbz
@@ -670,7 +655,8 @@ a b
 
 > CREATE SOURCE ms_dbz_uncommitted
   FROM KAFKA CONNECTION kafka_conn (ISOLATION LEVEL = 'read_uncommitted', TOPIC 'testdrive-ms-dbz-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
+  KEY FORMAT AVRO USING SCHEMA '${key-schema}'
+  VALUE FORMAT AVRO USING SCHEMA '${ms-dbz-schema}'
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM ms_dbz_uncommitted

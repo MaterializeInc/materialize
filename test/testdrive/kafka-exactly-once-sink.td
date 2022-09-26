@@ -153,6 +153,9 @@ $ set dbz-schema={
 $ kafka-create-topic topic=input_dbz
 $ kafka-create-topic topic=input_cdcv2
 
+$ kafka-ingest format=avro topic=input_dbz key-format=avro key-schema=${dbz-key-schema} schema=${dbz-schema} timestamp=1
+{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
+
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
@@ -251,9 +254,6 @@ contains:input_values_view is a view, which cannot be exported as a sink
 $ kafka-ingest format=avro topic=input_cdcv2 schema=${cdcv2-schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[1],"counts":[{"time":1,"count":1}]}}
-
-$ kafka-ingest format=avro topic=input_dbz key-format=avro key-schema=${dbz-key-schema} schema=${dbz-schema} timestamp=1
-{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 # verify output of progress topic with fixed timestamps
 $ kafka-create-topic topic=progress-test-input

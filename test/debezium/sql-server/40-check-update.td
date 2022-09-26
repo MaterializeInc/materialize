@@ -36,13 +36,14 @@ USE test;
 UPDATE update_table_pk SET value_col = 'value_new' WHERE key_col = 'key1';
 UPDATE update_table_pk SET key_col = 'key_new' WHERE key_col = 'key2';
 
-UPDATE update_table_nopk SET value_col = 'value_new' WHERE key_col = 'key1';
-UPDATE update_table_nopk SET key_col = 'key_new' WHERE key_col = 'key2';
+# UPDATE update_table_nopk SET value_col = 'value_new' WHERE key_col = 'key1';
+# UPDATE update_table_nopk SET key_col = 'key_new' WHERE key_col = 'key2';
 
 > SELECT * FROM update_table_pk;
 key1 value_new
 key_new value2
 
-> SELECT * FROM update_table_nopk;
-key1 value_new
-key_new value2
+# [btv] uncomment if we bring back classic debezium mode
+# > SELECT * FROM update_table_nopk;
+# key1 value_new
+# key_new value2
