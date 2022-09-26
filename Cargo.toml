@@ -43,6 +43,7 @@ members = [
     "src/repr-test-util",
     "src/s3-datagen",
     "src/secrets",
+    "src/segment",
     "src/service",
     "src/sql",
     "src/sql-parser",

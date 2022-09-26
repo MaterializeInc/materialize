@@ -107,6 +107,8 @@ pub struct Config {
     pub default_storage_host_size: Option<String>,
     /// The interval at which to collect storage usage information.
     pub storage_usage_collection_interval: Duration,
+    /// An API key for Segment. Enables export of audit events to Segment.
+    pub segment_api_key: Option<String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -280,6 +282,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
+        segment_api_key: config.segment_api_key,
     })
     .await?;
 

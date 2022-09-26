@@ -1329,6 +1329,13 @@ pub struct Connection {
     pub depends_on: Vec<GlobalId>,
 }
 
+pub struct TransactionResult<R> {
+    pub builtin_table_updates: Vec<BuiltinTableUpdate>,
+    pub audit_events: Vec<VersionedEvent>,
+    pub collections: Vec<mz_stash::Id>,
+    pub result: R,
+}
+
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
     pub(crate) fn typ(&self) -> mz_sql::catalog::CatalogItemType {
@@ -3028,6 +3035,7 @@ impl<S: Append> Catalog<S> {
         session: Option<&Session>,
         tx: &mut storage::Transaction<S>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
         object_type: ObjectType,
         event_details: EventDetails,
@@ -3044,6 +3052,7 @@ impl<S: Append> Catalog<S> {
             occurred_at,
         );
         builtin_table_updates.push(self.state.pack_audit_log_update(&event)?);
+        audit_events.push(event.clone());
         tx.insert_audit_log_event(event);
         Ok(())
     }
@@ -3184,14 +3193,14 @@ impl<S: Append> Catalog<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn transact<F, T>(
+    pub async fn transact<F, R>(
         &mut self,
         session: Option<&Session>,
         ops: Vec<Op>,
         f: F,
-    ) -> Result<(Vec<BuiltinTableUpdate>, Vec<mz_stash::Id>, T), AdapterError>
+    ) -> Result<TransactionResult<R>, AdapterError>
     where
-        F: FnOnce(&CatalogState) -> Result<T, AdapterError>,
+        F: FnOnce(&CatalogState) -> Result<R, AdapterError>,
     {
         trace!("transact: {:?}", ops);
 
@@ -3293,6 +3302,7 @@ impl<S: Append> Catalog<S> {
             .collect();
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
+        let mut audit_events = vec![];
         let mut actions = Vec::with_capacity(ops.len());
         let mut storage = self.storage().await;
         let mut tx = storage.transaction().await?;
@@ -3470,6 +3480,7 @@ impl<S: Append> Catalog<S> {
                         session,
                         &mut tx,
                         &mut builtin_table_updates,
+                        &mut audit_events,
                         EventType::Create,
                         ObjectType::Cluster,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
@@ -3514,6 +3525,7 @@ impl<S: Append> Catalog<S> {
                             session,
                             &mut tx,
                             &mut builtin_table_updates,
+                            &mut audit_events,
                             EventType::Create,
                             ObjectType::ClusterReplica,
                             details,
@@ -3569,6 +3581,7 @@ impl<S: Append> Catalog<S> {
                             session,
                             &mut tx,
                             &mut builtin_table_updates,
+                            &mut audit_events,
                             EventType::Create,
                             sql_type_to_object_type(item.typ()),
                             EventDetails::FullNameV1(self.resolve_full_name_detail(&name, session)),
@@ -3623,6 +3636,7 @@ impl<S: Append> Catalog<S> {
                         session,
                         &mut tx,
                         &mut builtin_table_updates,
+                        &mut audit_events,
                         EventType::Drop,
                         ObjectType::Cluster,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
@@ -3668,6 +3682,7 @@ impl<S: Append> Catalog<S> {
                         session,
                         &mut tx,
                         &mut builtin_table_updates,
+                        &mut audit_events,
                         EventType::Drop,
                         ObjectType::ClusterReplica,
                         details,
@@ -3689,6 +3704,7 @@ impl<S: Append> Catalog<S> {
                             session,
                             &mut tx,
                             &mut builtin_table_updates,
+                            &mut audit_events,
                             EventType::Drop,
                             sql_type_to_object_type(entry.item().typ()),
                             EventDetails::FullNameV1(
@@ -3725,6 +3741,7 @@ impl<S: Append> Catalog<S> {
                             session,
                             &mut tx,
                             &mut builtin_table_updates,
+                            &mut audit_events,
                             EventType::Alter,
                             sql_type_to_object_type(entry.item().typ()),
                             details,
@@ -4168,7 +4185,12 @@ impl<S: Append> Catalog<S> {
         self.state = state;
         self.transient_revision += 1;
 
-        Ok((builtin_table_updates, collections, result))
+        Ok(TransactionResult {
+            builtin_table_updates,
+            audit_events,
+            collections,
+            result,
+        })
     }
 
     pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {

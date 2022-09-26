@@ -3042,6 +3042,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-secrets",
+ "mz-segment",
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
@@ -4000,6 +4001,18 @@ dependencies = [
  "anyhow",
  "async-trait",
  "mz-repr",
+]
+
+[[package]]
+name = "mz-segment"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "segment",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5761,6 +5774,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "segment"
+version = "0.2.0"
+source = "git+https://github.com/MaterializeInc/segment.git#d8ad043a0f4ef907293a2e4a4c9c312e26092fa6"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6319,6 +6345,7 @@ dependencies = [
  "libc",
  "num_threads",
  "quickcheck",
+ "serde",
  "time-macros",
 ]
 
