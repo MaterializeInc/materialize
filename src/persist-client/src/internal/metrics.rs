@@ -277,12 +277,12 @@ impl MetricsVecs {
             )),
 
             read_part_bytes: registry.register(metric!(
-                name: "mz_persist_read_part_bytes",
+                name: "mz_persist_read_batch_part_bytes",
                 help: "total encoded size of batch parts read",
                 var_labels: ["op"],
             )),
             read_part_goodbytes: registry.register(metric!(
-                name: "mz_persist_read_part_goodbytes",
+                name: "mz_persist_read_batch_part_goodbytes",
                 help: "total logical size of batch parts read",
                 var_labels: ["op"],
             )),
