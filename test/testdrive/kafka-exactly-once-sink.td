@@ -92,7 +92,7 @@ $ set dbz-key-schema={
       }
     ]
   }
-  
+
 $ set dbz-schema={
     "type": "record",
     "name": "envelope",
