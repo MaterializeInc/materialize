@@ -70,7 +70,7 @@ create_sink ::=
     'FROM' item_name
     'INTO' sink_kafka_connector
     ('FORMAT' sink_format_spec)?
-    ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
+    ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))
     ('WITH' with_options)?
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name

@@ -1536,8 +1536,7 @@ pub fn plan_create_sink(
     } = stmt;
 
     let envelope = match envelope {
-        // Sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
-        None => SinkEnvelope::Debezium,
+        None => sql_bail!("ENVELOPE clause is required"),
         Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
         Some(Envelope::Upsert) => SinkEnvelope::Upsert,
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),

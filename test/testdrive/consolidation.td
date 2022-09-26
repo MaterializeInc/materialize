@@ -113,6 +113,7 @@ $ kafka-create-topic topic=nums
 > CREATE SINK nums_sink FROM nums
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'nums-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 # ==> Test consolidation.
 
