@@ -34,12 +34,20 @@ use mz_repr::RelationType;
 pub struct Join;
 
 impl crate::Transform for Join {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "join_fusion")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
-        relation.try_visit_mut_post(&mut |e| self.action(e))
+        let result = relation.try_visit_mut_post(&mut |e| self.action(e));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

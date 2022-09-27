@@ -56,12 +56,23 @@ impl HirRelationExpr {
     /// Attempt an optimization path from HIR to MIR that goes through a QGM representation.
     ///
     /// Return `Result::Err` if the path is not possible.
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "qgm", skip_all)]
     fn try_qgm_path(self) -> Result<mz_expr::MirRelationExpr, QGMError> {
         // create a query graph model from this HirRelationExpr
         let mut model = Model::try_from(self)?;
 
+        tracing::span!(tracing::Level::INFO, "raw").in_scope(|| {
+            // TODO: this requires to implement Clone for Model
+            // mz_repr::explain_new::trace_plan(model);
+        });
+
         // perform optimizing algebraic rewrites on the qgm
         model.optimize();
+
+        tracing::span!(tracing::Level::INFO, "raw").in_scope(|| {
+            // TODO: this requires to implement Clone for Model
+            // mz_repr::explain_new::trace_plan(model);
+        });
 
         // decorrelate and lower the optimized query graph model into a MirRelationExpr
         model.try_into()

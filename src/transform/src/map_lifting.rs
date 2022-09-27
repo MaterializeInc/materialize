@@ -52,6 +52,12 @@ impl CheckedRecursion for LiteralLifting {
 }
 
 impl crate::Transform for LiteralLifting {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "literal_lifting")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -62,6 +68,7 @@ impl crate::Transform for LiteralLifting {
             // Literals return up the root should be re-installed.
             *relation = relation.take_dangerous().map(literals);
         }
+        mz_repr::explain_new::trace_plan(&*relation);
         Ok(())
     }
 }

@@ -24,12 +24,20 @@ use mz_repr::RelationType;
 pub struct Union;
 
 impl crate::Transform for Union {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "union")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.try_visit_mut_post(&mut |e| Ok(self.action(e)))
+        let result = relation.try_visit_mut_post(&mut |e| Ok(self.action(e)));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

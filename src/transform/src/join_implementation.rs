@@ -48,12 +48,20 @@ impl CheckedRecursion for JoinImplementation {
 }
 
 impl crate::Transform for JoinImplementation {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "join_implementation")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action_recursive(relation, &mut IndexMap::new(args.indexes))
+        let result = self.action_recursive(relation, &mut IndexMap::new(args.indexes));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

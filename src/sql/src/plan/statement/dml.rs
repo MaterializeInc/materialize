@@ -199,31 +199,56 @@ pub fn describe_explain_new(
         stage, explainee, ..
     }: ExplainStatementNew<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
-        match stage {
-            ExplainStageNew::RawPlan => "Raw Plan",
-            ExplainStageNew::QueryGraph => "Query Graph",
-            ExplainStageNew::OptimizedQueryGraph => "Optimized Query Graph",
-            ExplainStageNew::DecorrelatedPlan => "Decorrelated Plan",
-            ExplainStageNew::OptimizedPlan { .. } => "Optimized Plan",
-            ExplainStageNew::PhysicalPlan => "Physical Plan",
-            ExplainStageNew::Trace => "Plan", // TODO: add more columns as part of #13139
-        },
-        ScalarType::String.nullable(false),
-    )))
-    .with_params(match explainee {
-        Explainee::Query(q) => {
-            describe_select(
-                scx,
-                SelectStatement {
-                    query: q,
-                    as_of: None,
-                },
-            )?
-            .param_types
+    let mut relation_desc = RelationDesc::empty();
+
+    match stage {
+        ExplainStageNew::RawPlan => {
+            relation_desc =
+                relation_desc.with_column("Raw Plan", ScalarType::String.nullable(false));
         }
-        _ => vec![],
-    }))
+        ExplainStageNew::QueryGraph => {
+            relation_desc =
+                relation_desc.with_column("Query Graph", ScalarType::String.nullable(false));
+        }
+        ExplainStageNew::OptimizedQueryGraph => {
+            relation_desc = relation_desc
+                .with_column("Optimized Query Graph", ScalarType::String.nullable(false));
+        }
+        ExplainStageNew::DecorrelatedPlan => {
+            relation_desc =
+                relation_desc.with_column("Decorrelated Plan", ScalarType::String.nullable(false));
+        }
+        ExplainStageNew::OptimizedPlan => {
+            relation_desc =
+                relation_desc.with_column("Optimized Plan", ScalarType::String.nullable(false));
+        }
+        ExplainStageNew::PhysicalPlan => {
+            relation_desc =
+                relation_desc.with_column("Physical Plan", ScalarType::String.nullable(false));
+        }
+        ExplainStageNew::Trace => {
+            relation_desc = relation_desc
+                .with_column("Time", ScalarType::UInt64.nullable(false))
+                .with_column("Path", ScalarType::String.nullable(false))
+                .with_column("Plan", ScalarType::String.nullable(false));
+        }
+    };
+
+    Ok(
+        StatementDesc::new(Some(relation_desc)).with_params(match explainee {
+            Explainee::Query(q) => {
+                describe_select(
+                    scx,
+                    SelectStatement {
+                        query: q,
+                        as_of: None,
+                    },
+                )?
+                .param_types
+            }
+            _ => vec![],
+        }),
+    )
 }
 
 pub fn describe_explain_old(

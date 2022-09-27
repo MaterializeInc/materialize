@@ -52,12 +52,20 @@ impl CheckedRecursion for RedundantJoin {
 }
 
 impl crate::Transform for RedundantJoin {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "redundant_join")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation, &mut HashMap::new()).map(|_| ())
+        let result = self.action(relation, &mut HashMap::new()).map(|_| ());
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

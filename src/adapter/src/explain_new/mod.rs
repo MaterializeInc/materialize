@@ -32,6 +32,7 @@ use crate::coord::peek::{self, FastPathPlan};
 pub(crate) mod hir;
 pub(crate) mod lir;
 pub(crate) mod mir;
+pub(crate) mod optimizer_trace;
 pub(crate) mod qgm;
 
 /// Newtype struct for wrapping types that should
@@ -230,7 +231,7 @@ where
 
         match &self.context.fast_path_plan {
             Some(fast_path_plan) if !self.context.config.no_fast_path => {
-                writeln!(f, "{}{} (fast path)", ctx.indent, GlobalId::Explain)?;
+                writeln!(f, "{}{} (fast path):", ctx.indent, GlobalId::Explain)?;
                 ctx.indented(|ctx| {
                     // if present, a RowSetFinishing is applied on top of the fast path plan
                     match &self.context.finishing {
@@ -255,7 +256,7 @@ where
                         self.context.config,
                     );
 
-                    writeln!(f, "{}{}", ctx.indent, id)?;
+                    writeln!(f, "{}{}:", ctx.indent, id)?;
                     ctx.indented(|ctx| {
                         match &self.context.finishing {
                             // if present, a RowSetFinishing always applies to the first rendered plan
@@ -271,13 +272,13 @@ where
                         Ok(())
                     })?;
                 }
-                if !self.sources.is_empty() {
+                if self.sources.iter().any(|(_, op)| !op.is_identity()) {
                     // render one blank line between the plans and sources
                     writeln!(f, "")?;
                     // render sources
-                    for (id, operator) in self.sources.iter() {
+                    for (id, op) in self.sources.iter().filter(|(_, op)| !op.is_identity()) {
                         writeln!(f, "{}Source {}", ctx.indent, id)?;
-                        ctx.indented(|ctx| Displayable(*operator).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| Displayable(*op).fmt_text(f, ctx))?;
                     }
                 }
             }

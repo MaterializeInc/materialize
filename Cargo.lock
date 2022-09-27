@@ -3063,6 +3063,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tracing",
+ "tracing-subscriber",
  "uncased",
  "uuid",
 ]
@@ -3961,6 +3962,8 @@ dependencies = [
  "smallvec",
  "thiserror",
  "timely",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]

@@ -2239,6 +2239,21 @@ pub enum ExplainStageNew {
     Trace,
 }
 
+impl ExplainStageNew {
+    /// Return the tracing path that corresponds to a given stage.
+    pub fn path(&self) -> &'static str {
+        match self {
+            ExplainStageNew::RawPlan => "optimize/raw",
+            ExplainStageNew::QueryGraph => "optimize/qgm/raw",
+            ExplainStageNew::OptimizedQueryGraph => "optimize/qgm/optimized",
+            ExplainStageNew::DecorrelatedPlan => "optimize/hir_to_mir",
+            ExplainStageNew::OptimizedPlan => "optimize/global",
+            ExplainStageNew::PhysicalPlan => "optimize/mir_to_lir",
+            ExplainStageNew::Trace => unreachable!(),
+        }
+    }
+}
+
 impl AstDisplay for ExplainStageNew {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {

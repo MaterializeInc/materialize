@@ -50,12 +50,20 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct CanonicalizeMfp;
 
 impl crate::Transform for CanonicalizeMfp {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "canonicalize_mfp")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation, args.indexes)
+        let result = self.action(relation, args.indexes);
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

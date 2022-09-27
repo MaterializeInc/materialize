@@ -50,12 +50,20 @@ impl CheckedRecursion for NonNullRequirements {
 }
 
 impl crate::Transform for NonNullRequirements {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "non_null_requirements")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation, HashSet::new(), &mut HashMap::new())
+        let result = self.action(relation, HashSet::new(), &mut HashMap::new());
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

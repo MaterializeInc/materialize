@@ -43,17 +43,24 @@ pub struct ProjectionPushdown;
 
 impl crate::Transform for ProjectionPushdown {
     // This method is only used during unit testing.
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "projection_pushdown")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(
+        let result = self.action(
             relation,
             &(0..relation.arity()).collect(),
             &mut HashMap::new(),
-        )?;
-        Ok(())
+        );
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 
