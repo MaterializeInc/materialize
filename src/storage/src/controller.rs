@@ -34,7 +34,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 use itertools::Itertools;
-use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::now::{EpochMillis, MonotonicNow, NowFn};
 use mz_persist_client::PersistClient;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -756,7 +756,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + TimestampManipulation> 
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
     persist: Arc<Mutex<PersistClientCache>>,
-    now: NowFn,
+    now: MonotonicNow,
     introspection_collections: HashMap<IntrospectionType, GlobalId>,
     introspection_details: Arc<Mutex<HashMap<GlobalId, Arc<Mutex<Antichain<T>>>>>>,
     managed_collection_tx: Option<mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>>,
@@ -1052,7 +1052,7 @@ where
                     DataSource::Introspection(i) => {
                         if self.managed_collection_tx.is_none() {
                             // Set up automatic timestamp advancer
-                            let now = self.now.clone();
+                            let mut now = self.now.clone();
                             let collections = Arc::clone(&self.introspection_details);
                             let write_handle = Arc::clone(&self.state.persist_write_handles);
                             let (tx, mut rx) = mpsc::channel(1);
@@ -1064,8 +1064,6 @@ where
                                     let mut interval = tokio::time::interval(
                                         tokio::time::Duration::from_millis(1_000),
                                     );
-
-                                    let mut max_ts = T::minimum();
 
                                     // Returns an upper guaranteed to be
                                     // greater than the current write frontier,
@@ -1091,18 +1089,17 @@ where
                                         tokio::select! {
                                             _ = interval.tick() => {
                                                 let collections = collections.lock().await;
-                                                let now = T::from(now());
+                                                let now = T::from(now.now().await);
                                                 let mut upper_candidate = T::minimum();
                                                 for (_, write_frontier) in collections.iter() {
                                                     let write_frontier = write_frontier.lock().await;
-                                                    let upper = max_now_write_frontier!(write_frontier, now.clone());
+                                                    let upper = max_now_write_frontier!(write_frontier, now.clone())
+                                                        .step_forward();
                                                     upper_candidate = std::cmp::max(upper_candidate, upper);
                                                 };
 
-                                                max_ts = std::cmp::max(upper_candidate, max_ts.step_forward());
-
                                                 let updates = collections.iter().map(|(id, _)| {
-                                                    (*id, vec![], max_ts.clone())
+                                                    (*id, vec![], upper_candidate.clone())
                                                 }).collect::<Vec<_>>();
 
                                                 // When advancing timestamps, errors don't matter
@@ -1112,15 +1109,15 @@ where
                                                 if let Some((id, rows)) = cmd {
                                                     let collections = collections.lock().await;
                                                     let write_frontier = &collections[&id].lock().await;
-                                                    let upper_candidate = dbg!(max_now_write_frontier!(write_frontier, T::from(now())));
-                                                    max_ts = std::cmp::max(upper_candidate, max_ts.step_forward());
-                                                    let lower = dbg!(max_ts.step_back().expect("upper cannot be T::minimum()"));
+                                                    let now = T::from(now.now().await);
+                                                    let lower = max_now_write_frontier!(write_frontier, now.clone());
+                                                    let upper = lower.step_forward();
 
                                                     let updates = vec![(id, rows.into_iter().map(|(row, diff)| Update {
                                                         row,
                                                         diff,
                                                         timestamp: lower.clone()
-                                                    }).collect::<Vec<_>>(), max_ts.clone())];
+                                                    }).collect::<Vec<_>>(), upper.clone())];
 
                                                     write_handle.append(updates).await.unwrap().unwrap();
                                                 }
@@ -1664,7 +1661,7 @@ where
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
-            now,
+            now: MonotonicNow::from(now),
             introspection_collections: HashMap::new(),
             introspection_details: Arc::new(Mutex::new(HashMap::new())),
             managed_collection_tx: None,
@@ -2090,6 +2087,7 @@ mod persist_write_handles {
     use timely::progress::{Antichain, Timestamp};
     use tokio::sync::mpsc::UnboundedSender;
 
+    use mz_ore::now::EpochMillis;
     use mz_persist_client::write::WriteHandle;
     use mz_persist_types::Codec64;
     use mz_repr::{Diff, GlobalId};

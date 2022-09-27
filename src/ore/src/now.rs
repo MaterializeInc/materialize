@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use once_cell::sync::Lazy;
+use tokio::sync::Mutex;
 
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, TimeZone, Utc};
@@ -85,6 +86,29 @@ pub static SYSTEM_TIME: Lazy<NowFn> = Lazy::new(|| NowFn::from(system_time));
 ///
 /// For use in tests.
 pub static NOW_ZERO: Lazy<NowFn> = Lazy::new(|| NowFn::from(now_zero));
+
+#[derive(Debug, Clone)]
+pub struct MonotonicNow {
+    max_ts: Arc<Mutex<EpochMillis>>,
+    now: NowFn,
+}
+
+impl MonotonicNow {
+    pub async fn now(&mut self) -> EpochMillis {
+        let mut max_ts = self.max_ts.lock().await;
+        *max_ts = std::cmp::max(*max_ts + 1, (self.now)());
+        *max_ts
+    }
+}
+
+impl From<NowFn> for MonotonicNow {
+    fn from(now: NowFn) -> Self {
+        MonotonicNow {
+            max_ts: Arc::new(Mutex::new(0)),
+            now,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

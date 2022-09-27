@@ -50,6 +50,8 @@ pub mod metrics;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
 #[cfg(feature = "network")]
 pub mod netio;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "task")))]
+#[cfg(feature = "now")]
 pub mod now;
 pub mod option;
 pub mod panic;
