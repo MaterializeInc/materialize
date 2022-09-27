@@ -46,6 +46,7 @@ steps:
           - { value: checks-oneatatime-restart-postgres-backend }
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
+          - { value: bounded-memory }
           - { value: unused-deps }
         multiple: true
         required: false
@@ -398,6 +399,16 @@ steps:
           composition: persistence
           run: failpoints
     skip: Persistence tests disabled
+
+  - id: bounded-memory
+    label: Bounded memory test
+    timeout_in_minutes: 300
+    artifact_paths: junit_mzcompose_*.xml
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: bounded-memory
 
   - id: unused-deps
     label: Unused dependencies
