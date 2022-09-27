@@ -2241,7 +2241,7 @@ impl<S: Append> Catalog<S> {
         let AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
-            ..
+            migrated_builtins,
         } = self
             .allocate_system_ids(BUILTINS::types().collect(), |typ| {
                 persisted_builtin_ids
@@ -2253,6 +2253,7 @@ impl<S: Append> Catalog<S> {
                     .cloned()
             })
             .await?;
+        assert!(migrated_builtins.is_empty(), "types cannot be migrated");
         let name_to_id_map: HashMap<&str, GlobalId> = all_builtins
             .into_iter()
             .map(|(typ, id)| (typ.name, id))
@@ -2395,7 +2396,7 @@ impl<S: Append> Catalog<S> {
     ///
     /// Objects need to be dropped starting from the leafs of the DAG going up towards the roots,
     /// and they need to be recreated starting at the root of the DAG and going towards the leafs.
-    async fn generate_builtin_migration_metadata(
+    pub async fn generate_builtin_migration_metadata(
         &mut self,
         migrated_ids: Vec<(GlobalId, u64)>,
     ) -> Result<BuiltinMigrationMetadata, Error> {
@@ -2403,6 +2404,7 @@ impl<S: Append> Catalog<S> {
 
         let mut object_queue: VecDeque<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
         let mut visited_set: HashSet<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
+        let mut topological_sort = Vec::new();
         let mut ancestor_ids = HashMap::new();
 
         let id_fingerprint_map: HashMap<GlobalId, u64> = migrated_ids.into_iter().collect();
@@ -2444,6 +2446,29 @@ impl<S: Append> Catalog<S> {
                 );
             }
 
+            // Defer adding the create/drop ops until we know more about the dependency graph.
+            topological_sort.push((entry, new_id));
+
+            ancestor_ids.insert(id, new_id);
+
+            // Add children to queue.
+            for dependant in &entry.used_by {
+                if !visited_set.contains(&dependant) {
+                    object_queue.push_back(*dependant);
+                    visited_set.insert(*dependant);
+                } else {
+                    // If dependant is a child of the current node, then we need to make sure that
+                    // it appears later in the topologically sorted list.
+                    if let Some(idx) = topological_sort.iter().position(|(_, id)| id == dependant) {
+                        let dependant = topological_sort.remove(idx);
+                        topological_sort.push(dependant);
+                    }
+                }
+            }
+        }
+
+        for (entry, new_id) in topological_sort {
+            let id = entry.id();
             // Push drop commands.
             match entry.item() {
                 CatalogItem::Table(_) | CatalogItem::Source(_) => {
@@ -2489,16 +2514,6 @@ impl<S: Append> Catalog<S> {
             migration_metadata
                 .all_create_ops
                 .push((new_id, entry.oid, name, item_rebuilder));
-
-            ancestor_ids.insert(id, new_id);
-
-            // Add children to queue.
-            for dependant in &entry.used_by {
-                if !visited_set.contains(&dependant) {
-                    object_queue.push_back(*dependant);
-                    visited_set.insert(*dependant);
-                }
-            }
         }
 
         // Reverse drop commands.
@@ -2766,6 +2781,16 @@ impl<S: Append> Catalog<S> {
 
     pub async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().await.allocate_user_id().await
+    }
+
+    pub async fn test_only_dont_use_in_production_allocate_system_id(
+        &mut self,
+    ) -> Result<GlobalId, Error> {
+        self.storage()
+            .await
+            .allocate_system_ids(1)
+            .await
+            .map(|ids| ids.into_element())
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {

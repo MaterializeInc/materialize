@@ -29,7 +29,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
 };
@@ -137,6 +137,7 @@ pub struct BuiltinRole {
     pub name: &'static str,
 }
 
+/// Uniquely identifies the definition of a builtin object.
 pub trait Fingerprint {
     fn fingerprint(&self) -> u64;
 }
@@ -162,13 +163,25 @@ impl Fingerprint for BuiltinFunc {
 impl<T: TypeReference> Fingerprint for &Builtin<T> {
     fn fingerprint(&self) -> u64 {
         match self {
-            Builtin::Log(log) => log.fingerprint(),
-            Builtin::Table(table) => table.fingerprint(),
-            Builtin::View(view) => view.fingerprint(),
+            Builtin::Log(log) => log.variant.desc().fingerprint(),
+            Builtin::Table(table) => table.desc.fingerprint(),
+            Builtin::View(view) => view.sql.hashed(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
-            Builtin::StorageCollection(coll) => coll.fingerprint(),
+            Builtin::StorageCollection(coll) => coll.desc.fingerprint(),
         }
+    }
+}
+
+impl Fingerprint for RelationDesc {
+    fn fingerprint(&self) -> u64 {
+        self.typ().fingerprint()
+    }
+}
+
+impl Fingerprint for RelationType {
+    fn fingerprint(&self) -> u64 {
+        self.hashed()
     }
 }
 
@@ -2187,6 +2200,7 @@ pub static MZ_SYSTEM: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
 });
 
+/// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     let mut builtins = vec![
         Builtin::Type(&TYPE_ANY),
