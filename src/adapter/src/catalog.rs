@@ -2717,6 +2717,16 @@ impl<S: Append> Catalog<S> {
         self.storage().await.allocate_user_id().await
     }
 
+    pub async fn test_only_dont_use_in_production_allocate_system_id(
+        &mut self,
+    ) -> Result<GlobalId, Error> {
+        self.storage()
+            .await
+            .allocate_system_ids(1)
+            .await
+            .map(|ids| ids.into_element())
+    }
+
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         self.state.allocate_oid()
     }

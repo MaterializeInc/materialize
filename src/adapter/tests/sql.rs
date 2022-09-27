@@ -18,8 +18,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::error::Error;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -27,15 +25,12 @@ use tokio::sync::Mutex;
 use mz_adapter::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
 use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
-use mz_sql::catalog::{CatalogDatabase, SessionCatalog};
-use mz_sql::names::{
-    self, ObjectQualifiers, PartialObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier,
-};
+use mz_sql::catalog::CatalogDatabase;
+use mz_sql::names::{self, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 use mz_sql::DEFAULT_SCHEMA;
-use mz_stash::Sqlite;
 
 // This morally tests the name resolution stuff, but we need access to a
 // catalog.
