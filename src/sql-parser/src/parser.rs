@@ -2042,14 +2042,10 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(ID)?;
                 KafkaConfigOptionName::ClientId
             }
-            ENABLE => match self.expect_one_of_keywords(&[AUTO, IDEMPOTENCE])? {
-                AUTO => {
-                    self.expect_keyword(COMMIT)?;
-                    KafkaConfigOptionName::EnableAutoCommit
-                }
-                IDEMPOTENCE => KafkaConfigOptionName::EnableIdempotence,
-                _ => unreachable!(),
-            },
+            ENABLE => {
+                self.expect_keyword(IDEMPOTENCE)?;
+                KafkaConfigOptionName::EnableIdempotence
+            }
             FETCH => {
                 self.expect_keywords(&[MESSAGE, crate::keywords::MAX, BYTES])?;
                 KafkaConfigOptionName::FetchMessageMaxBytes

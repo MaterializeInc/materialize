@@ -821,7 +821,6 @@ impl_display_t!(CreateConnection);
 pub enum KafkaConfigOptionName {
     Acks,
     ClientId,
-    EnableAutoCommit,
     EnableIdempotence,
     FetchMessageMaxBytes,
     GroupIdPrefix,
@@ -843,7 +842,6 @@ impl AstDisplay for KafkaConfigOptionName {
         f.write_str(match self {
             KafkaConfigOptionName::Acks => "ACKS",
             KafkaConfigOptionName::ClientId => "CLIENT ID",
-            KafkaConfigOptionName::EnableAutoCommit => "ENABLE AUTO COMMIT",
             KafkaConfigOptionName::EnableIdempotence => "ENABLE IDEMPOTENCE",
             KafkaConfigOptionName::FetchMessageMaxBytes => "FETCH MESSAGE MAX BYTES",
             KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
