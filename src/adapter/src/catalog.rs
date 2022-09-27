@@ -5061,16 +5061,6 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
     fn replica_names(&self) -> HashSet<&String> {
         self.replica_id_by_name.keys().collect::<HashSet<_>>()
     }
-
-    fn replica_logs_and_views(&self, name: &String) -> Option<(Vec<GlobalId>, Vec<GlobalId>)> {
-        let replica = self
-            .replicas_by_id
-            .get(self.replica_id_by_name.get(name)?)?;
-        Some((
-            replica.config.persisted_logs.get_source_ids().collect(),
-            replica.config.persisted_logs.get_view_ids().collect(),
-        ))
-    }
 }
 
 impl mz_sql::catalog::CatalogItem for CatalogEntry {
