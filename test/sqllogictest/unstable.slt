@@ -1,0 +1,58 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Index-based introspection sources are unstable.
+
+statement error cannot create view with unstable dependencies
+CREATE VIEW v AS SELECT * FROM mz_internal.mz_peek_active
+
+statement error cannot create index with unstable dependencies
+CREATE DEFAULT INDEX ON mz_internal.mz_peek_active
+
+# Persisted introspection sources are unstable.
+
+statement error cannot create view with unstable dependencies
+CREATE VIEW v AS SELECT * FROM mz_internal.mz_peek_active_1
+
+statement error cannot create index with unstable dependencies
+CREATE DEFAULT INDEX ON mz_internal.mz_peek_active_1
+
+# Introspection views are unstable.
+
+statement error cannot create view with unstable dependencies
+CREATE VIEW v AS SELECT * FROM mz_internal.mz_scheduling_elapsed
+
+statement error cannot create index with unstable dependencies
+CREATE DEFAULT INDEX ON mz_internal.mz_scheduling_elapsed_1
+
+# mz_view_keys and mz_view_foreign_keys are unstable.
+
+statement error cannot create view with unstable dependencies
+CREATE VIEW v AS SELECT * FROM mz_view_keys
+
+statement error cannot create index with unstable dependencies
+CREATE DEFAULT INDEX ON mz_view_foreign_keys
+
+# Other system tables are stable.
+
+statement ok
+CREATE VIEW v AS SELECT * FROM mz_tables
+
+# SELECTs from unstable objects are allowed.
+
+statement ok
+SELECT * FROM mz_internal.mz_peek_active
+
+statement ok
+SELECT * FROM mz_internal.mz_peek_active_1
+
+statement ok
+SELECT * FROM mz_view_keys

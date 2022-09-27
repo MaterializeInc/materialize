@@ -61,9 +61,6 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         )?;
         client.batch_execute("CREATE VIEW constant AS SELECT 1")?;
         client.batch_execute(
-            "CREATE VIEW logging_derived AS SELECT * FROM mz_internal.mz_arrangement_sizes",
-        )?;
-        client.batch_execute(
             "CREATE VIEW mat (a, a_data, c, c_data) AS SELECT 'a', data, 'c' AS c, data FROM src",
         )?;
         client.batch_execute("CREATE DEFAULT INDEX ON mat")?;
@@ -80,7 +77,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             .into_iter()
             .map(|row| row.get(0))
             .collect::<Vec<String>>(),
-        &["constant", "logging_derived", "mat"]
+        &["constant", "mat"]
     );
     assert_eq!(
         client
@@ -107,7 +104,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             .into_iter()
             .map(|row| row.get(0))
             .collect::<Vec<String>>(),
-        vec!["u1", "u2", "u3", "u4", "u5", "u6", "u7"]
+        vec!["u1", "u2", "u3", "u4", "u5", "u6"]
     );
 
     Ok(())
