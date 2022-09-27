@@ -78,6 +78,14 @@ class K8sPod(K8sResource):
         core_v1_api = self.api()
         core_v1_api.create_namespaced_pod(body=self.pod, namespace=self.namespace())
 
+    def name(self) -> str:
+        assert self.pod.metadata is not None
+        assert self.pod.metadata.name is not None
+        return self.pod.metadata.name
+
+    def copy(self, source: str, destination: str) -> None:
+        self.kubectl("cp", source, f"{self.name()}:{destination}")
+
 
 class K8sService(K8sResource):
     service: V1Service

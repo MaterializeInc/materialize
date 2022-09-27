@@ -14,8 +14,8 @@ from materialize.cloudtest.wait import wait
 
 
 def test_secrets(mz: MaterializeApplication) -> None:
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
             > CREATE SECRET username AS '123';
             > CREATE SECRET password AS '234';
