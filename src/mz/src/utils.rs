@@ -12,6 +12,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
+use uuid::Uuid;
 
 use crate::{ExitMessage, FronteggAPIToken};
 
@@ -89,38 +90,42 @@ pub(crate) fn exit_with_fail_message(message: ExitMessage) -> ! {
     exit(1);
 }
 
-/// Layouts an UUID.
-/// Frontegg API needs the UUID with the layout.
-fn layout_uuid(uuid: String) -> String {
-    let low_time = uuid[0..8].to_string();
-    let mid_time = uuid[8..12].to_string();
-    let high_time = uuid[12..16].to_string();
-    let clock_sequence = uuid[16..20].to_string();
-    let node = uuid[20..32].to_string();
+pub(crate) type AppPassword = String;
 
-    format!(
-        "{}-{}-{}-{}-{}",
-        low_time, mid_time, high_time, clock_sequence, node
-    )
+pub(crate) trait FromTos {
+    /// Turn a password into a Materialize app-password
+    fn from_password(password: String) -> Self;
+
+    /// Turn a profile into a Materialize app-password
+    fn from_api_token(api_token: FronteggAPIToken) -> Self;
+
+    /// Turns the app-password into an API token
+    fn to_api_token(&self) -> Option<FronteggAPIToken>;
 }
 
-/// Turns the app-password into an API token
-pub(crate) fn api_token_from_password(password: String) -> Option<FronteggAPIToken> {
-    if password.len() != 68 || !password.starts_with("mzp_") {
-        None
-    } else {
-        let client_id = layout_uuid(password[4..36].to_string());
-        let secret = layout_uuid(password[36..68].to_string());
-        Some(FronteggAPIToken { client_id, secret })
+impl FromTos for AppPassword {
+    fn from_password(password: String) -> Self {
+        password
     }
-}
 
-/// Format a Materialize password using the client_id and secret
-pub(crate) fn format_password(client_id: String, secret: String) -> String {
-    ("mzp_".to_owned() + &client_id + &secret).replace('-', "")
-}
+    fn from_api_token(api_token: FronteggAPIToken) -> Self {
+        ("mzp_".to_owned() + &api_token.client_id + &api_token.secret).replace('-', "")
+    }
 
-/// Turn a profile into a Materialize cloud instance password
-pub(crate) fn password_from_api_token(api_token: FronteggAPIToken) -> String {
-    format_password(api_token.client_id, api_token.secret)
+    fn to_api_token(&self) -> Option<FronteggAPIToken> {
+        if self.len() != 68 || !self.starts_with("mzp_") {
+            None
+        } else {
+            let client_id_uuid = Uuid::parse_str(&self[4..36]).ok();
+            let secret_uuid = Uuid::parse_str(&self[36..68]).ok();
+
+            match client_id_uuid {
+                Some(client_id) => secret_uuid.map(|secret| FronteggAPIToken {
+                    client_id: client_id.to_string(),
+                    secret: secret.to_string(),
+                }),
+                None => None,
+            }
+        }
+    }
 }

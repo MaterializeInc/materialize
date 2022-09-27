@@ -28,7 +28,7 @@ pub(crate) async fn list_passwords(
         HeaderValue::from_str(authorization.as_str()).unwrap(),
     );
     let mut body = HashMap::new();
-    body.insert("description", &"Token for the CLI");
+    body.insert("description", &"App password for the CLI");
 
     client
         .get(API_FRONTEGG_TOKEN_AUTH_URL)

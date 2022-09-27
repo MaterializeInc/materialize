@@ -36,7 +36,9 @@ use serde::{Deserialize, Serialize};
 use clap::{Args, Parser, Subcommand};
 use reqwest::Client;
 use shell::check_environment_health;
-use utils::{exit_with_fail_message, format_password, run_loading_spinner, CloudProviderRegion};
+use utils::{
+    exit_with_fail_message, run_loading_spinner, AppPassword, CloudProviderRegion, FromTos,
+};
 
 use crate::login::{login_with_browser, login_with_console};
 use crate::profiles::validate_profile;
@@ -50,7 +52,7 @@ use crate::shell::shell;
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
-    /// Specify a particular profile
+    /// Identify using a particular profile
     #[clap(short, long, env = "MZ_PROFILE", default_value = "default")]
     profile: String,
 }
@@ -58,7 +60,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Show commands to interact with passwords
-    AppPassword(AppPassword),
+    AppPassword(AppPasswordCommand),
     /// Open the docs
     Docs,
     /// Open the web login
@@ -68,7 +70,10 @@ enum Commands {
         interactive: bool,
     },
     /// Show commands to interact with regions
-    Region(CRegion),
+    Region {
+        #[clap(subcommand)]
+        command: RegionCommand,
+    },
     /// Connect to a region using a SQL shell
     Shell {
         #[clap(possible_values = CloudProviderRegion::variants())]
@@ -77,13 +82,13 @@ enum Commands {
 }
 
 #[derive(Debug, Args)]
-struct AppPassword {
+struct AppPasswordCommand {
     #[clap(subcommand)]
-    command: AppPasswordCommand,
+    command: AppPasswordSubommand,
 }
 
 #[derive(Debug, Subcommand)]
-enum AppPasswordCommand {
+enum AppPasswordSubommand {
     /// Create a password.
     Create {
         /// Name for the password.
@@ -91,12 +96,6 @@ enum AppPasswordCommand {
     },
     /// List all enabled passwords.
     List,
-}
-
-#[derive(Debug, Args)]
-struct CRegion {
-    #[clap(subcommand)]
-    command: RegionCommand,
 }
 
 #[derive(Debug, Subcommand)]
@@ -171,7 +170,7 @@ struct Profile {
     name: String,
     email: String,
     #[serde(rename(serialize = "app-password", deserialize = "app-password"))]
-    app_password: String,
+    app_password: AppPassword,
     region: Option<String>,
 }
 
@@ -211,8 +210,9 @@ const PROFILES_PREFIX: &str = "profiles";
 const ERROR_OPENING_PROFILES_MESSAGE: &str = "Error opening the profiles file";
 const ERROR_PARSING_PROFILES_MESSAGE: &str = "Error parsing the profiles";
 const ERROR_AUTHENTICATING_PROFILE_MESSAGE: &str = "Error authenticating profile";
-const PROFILE_NOT_FOUND_MESSAGE: &str =
+const ERROR_PROFILE_NOT_FOUND_MESSAGE: &str =
     "Profile not found. Please, add one or login using `mz login`.";
+const ERROR_INCORRECT_PROFILE_PASSWORD_MESSAGE: &str = "Invalid app-password.";
 const ERROR_UNKNOWN_REGION: &str = "Unknown region";
 
 #[tokio::main]
@@ -228,14 +228,15 @@ async fn main() -> Result<()> {
                 .with_context(|| "Validating profile.")?;
 
             match password_cmd.command {
-                AppPasswordCommand::Create { name } => {
+                AppPasswordSubommand::Create { name } => {
                     let api_token = generate_api_token(&client, valid_profile.frontegg_auth, &name)
                         .await
                         .with_context(|| "Generating password.")?;
 
-                    println!("{}", format_password(api_token.client_id, api_token.secret))
+                    let app_password: AppPassword = AppPassword::from_api_token(api_token);
+                    println!("{}", app_password)
                 }
-                AppPasswordCommand::List => {
+                AppPasswordSubommand::List => {
                     let app_passwords = list_passwords(&client, &valid_profile)
                         .await
                         .with_context(|| "Listing passwords.")?;
@@ -270,10 +271,10 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Region(region_cmd) => {
+        Commands::Region { command } => {
             let client = Client::new();
 
-            match region_cmd.command {
+            match command {
                 RegionCommand::Enable {
                     cloud_provider_region,
                 } => match CloudProviderRegion::from_str(&cloud_provider_region) {

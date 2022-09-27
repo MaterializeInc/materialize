@@ -3030,6 +3030,7 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "uuid",
 ]
 
 [[package]]

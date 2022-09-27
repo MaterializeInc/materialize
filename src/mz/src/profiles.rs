@@ -7,12 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::utils::{api_token_from_password, exit_with_fail_message};
+use crate::utils::{exit_with_fail_message, FromTos};
 use crate::{
-    ExitMessage, FronteggAuth, Profile, ValidProfile, DEFAULT_PROFILE_NAME,
-    ERROR_AUTHENTICATING_PROFILE_MESSAGE, ERROR_OPENING_PROFILES_MESSAGE,
-    ERROR_PARSING_PROFILES_MESSAGE, MACHINE_AUTH_URL, PROFILES_DIR_NAME, PROFILES_FILE_NAME,
-    PROFILES_PREFIX, PROFILE_NOT_FOUND_MESSAGE,
+    ExitMessage, FronteggAPIToken, FronteggAuth, Profile, ValidProfile, DEFAULT_PROFILE_NAME,
+    ERROR_AUTHENTICATING_PROFILE_MESSAGE, ERROR_INCORRECT_PROFILE_PASSWORD_MESSAGE,
+    ERROR_OPENING_PROFILES_MESSAGE, ERROR_PARSING_PROFILES_MESSAGE,
+    ERROR_PROFILE_NOT_FOUND_MESSAGE, MACHINE_AUTH_URL, PROFILES_DIR_NAME, PROFILES_FILE_NAME,
+    PROFILES_PREFIX,
 };
 use dirs::home_dir;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
@@ -42,10 +43,9 @@ fn get_config_path() -> PathBuf {
 /// Authenticates a profile with Frontegg
 pub(crate) async fn authenticate_profile(
     client: &Client,
-    profile: &Profile,
+    api_token: &FronteggAPIToken,
 ) -> Result<FronteggAuth, Error> {
     let mut access_token_request_body = HashMap::new();
-    let api_token = api_token_from_password(profile.app_password.clone()).unwrap();
     access_token_request_body.insert("clientId", api_token.client_id.as_str());
     access_token_request_body.insert("secret", api_token.secret.as_str());
 
@@ -166,20 +166,21 @@ pub(crate) async fn validate_profile(
     client: &Client,
 ) -> Option<ValidProfile> {
     match get_profile(profile_name) {
-        Some(profile) => match authenticate_profile(client, &profile).await {
-            Ok(frontegg_auth) => {
-                return Some(ValidProfile {
+        Some(profile) => match profile.app_password.to_api_token() {
+            Some(api_token) => match authenticate_profile(client, &api_token).await {
+                Ok(frontegg_auth) => Some(ValidProfile {
                     frontegg_auth,
                     profile,
-                });
+                }),
+                Err(error) => exit_with_fail_message(ExitMessage::String(format!(
+                    "{:}: {:?}",
+                    ERROR_AUTHENTICATING_PROFILE_MESSAGE, error
+                ))),
+            },
+            None => {
+                exit_with_fail_message(ExitMessage::Str(ERROR_INCORRECT_PROFILE_PASSWORD_MESSAGE))
             }
-            Err(error) => exit_with_fail_message(ExitMessage::String(format!(
-                "{:}: {:?}",
-                ERROR_AUTHENTICATING_PROFILE_MESSAGE, error
-            ))),
         },
-        None => println!("{}", PROFILE_NOT_FOUND_MESSAGE),
+        None => exit_with_fail_message(ExitMessage::Str(ERROR_PROFILE_NOT_FOUND_MESSAGE)),
     }
-
-    None
 }

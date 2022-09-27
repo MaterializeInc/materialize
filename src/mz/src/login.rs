@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::{collections::HashMap, io::Write};
 
 use crate::profiles::save_profile;
-use crate::utils::{exit_with_fail_message, password_from_api_token, trim_newline};
+use crate::utils::{exit_with_fail_message, trim_newline, AppPassword, FromTos};
 use crate::{
     BrowserAPIToken, ExitMessage, FronteggAPIToken, FronteggAuth, Profile, API_TOKEN_AUTH_URL,
     DEFAULT_PROFILE_NAME, USER_AUTH_URL, WEB_LOGIN_URL,
@@ -35,7 +35,7 @@ async fn request(
     }): Query<BrowserAPIToken>,
 ) -> impl IntoResponse {
     if !secret.is_empty() {
-        let app_password = password_from_api_token(FronteggAPIToken { client_id, secret });
+        let app_password = AppPassword::from_api_token(FronteggAPIToken { client_id, secret });
 
         let profile = Profile {
             name: name
@@ -156,13 +156,17 @@ pub(crate) async fn login_with_console(profile_name: &String) -> Result<(), reqw
     // Check if there is a secret somewhere.
     // If there is none save the api token someone on the root folder.
     let auth_user = authenticate_user(&client, &email, &password).await?;
-    let api_token =
-        generate_api_token(&client, auth_user, &String::from("Token for the CLI")).await?;
+    let api_token = generate_api_token(
+        &client,
+        auth_user,
+        &String::from("App password for the CLI"),
+    )
+    .await?;
 
     let profile = Profile {
         name: profile_name.to_string(),
         email,
-        app_password: password_from_api_token(api_token),
+        app_password: AppPassword::from_api_token(api_token),
         region: None,
     };
     save_profile(profile).unwrap();

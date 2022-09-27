@@ -22,3 +22,4 @@ mz-ore = { path = "../ore", features = ["task"] }
 toml_edit = "0.14.4"
 anyhow = "1.0.62"
 indicatif = "0.17.1"
+uuid = "1.1.2"

@@ -8,7 +8,7 @@ USAGE:
 
 OPTIONS:
     -h, --help                 Print help information
-    -p, --profile <PROFILE>    Specify a particular configuration profile
+    -p, --profile <PROFILE>    Identify using a particular configuration profile
 
 SUBCOMMANDS:
     app-password    Show commands to interact with passwords
@@ -73,11 +73,11 @@ Example:
 ```TOML
 ["profiles.production"]
 email = "account@example.com"
-app-password = "mzp_e1620d58b3f5454cbdc86ac07da79fd1f599e02511b34fd8876f293787dca3c9"
+app-password = "mzp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 ["profiles.staging"]
 email = "account@example.com"
-app-password = "mzp_c01b79a5615245a3a8b82482bc728458d0061af2f4fd4b31a5b224efac4df25b"
+app-password = "mzp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 ```
 
 ### App-Passwords
