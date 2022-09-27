@@ -560,6 +560,8 @@ pub struct ReadMetrics {
 pub struct BatchWriteMetrics {
     pub(crate) bytes: IntCounter,
     pub(crate) goodbytes: IntCounter,
+    pub(crate) seconds: Counter,
+    pub(crate) write_stalls: IntCounter,
 }
 
 impl BatchWriteMetrics {
@@ -572,6 +574,17 @@ impl BatchWriteMetrics {
             goodbytes: registry.register(metric!(
                 name: format!("mz_persist_{}_goodbytes", name),
                 help: format!("total logical size of {} batches written", name),
+            )),
+            seconds: registry.register(metric!(
+                name: format!("mz_persist_{}_write_batch_part_seconds", name),
+                help: format!("time spent writing {} batches", name),
+            )),
+            write_stalls: registry.register(metric!(
+                name: format!("mz_persist_{}_write_stall_count", name),
+                help: format!(
+                    "count of {} writes stalling to await max outstanding reqs",
+                    name
+                ),
             )),
         }
     }
@@ -587,12 +600,23 @@ pub struct CompactionMetrics {
     pub(crate) noop: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) memory_violations: IntCounter,
+    pub(crate) runs_compacted: IntCounter,
+    pub(crate) chunks_compacted: IntCounter,
 
     pub(crate) batch: BatchWriteMetrics,
+    pub(crate) steps: CompactionStepTimings,
+
+    pub(crate) _steps_vec: CounterVec,
 }
 
 impl CompactionMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
+        let step_timings: CounterVec = registry.register(metric!(
+                name: "mz_persist_compaction_step_seconds",
+                help: "time spent on individual steps of compaction",
+                var_labels: ["step"],
+        ));
+
         CompactionMetrics {
             requested: registry.register(metric!(
                 name: "mz_persist_compaction_requested",
@@ -626,7 +650,39 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_memory_violations",
                 help: "count of compaction memory requirement violations",
             )),
+            runs_compacted: registry.register(metric!(
+                name: "mz_persist_compaction_runs_compacted",
+                help: "count of runs compacted",
+            )),
+            chunks_compacted: registry.register(metric!(
+                name: "mz_persist_compaction_chunks_compacted",
+                help: "count of run chunks compacted",
+            )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
+            steps: CompactionStepTimings::new(step_timings.clone()),
+            _steps_vec: step_timings,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CompactionStepTimings {
+    pub(crate) part_fetch_seconds: Counter,
+    pub(crate) heap_population_seconds: Counter,
+    pub(crate) consolidation_seconds: Counter,
+    pub(crate) part_columnar_encoding_seconds: Counter,
+    pub(crate) part_write_seconds: Counter,
+}
+
+impl CompactionStepTimings {
+    fn new(step_timings: CounterVec) -> CompactionStepTimings {
+        CompactionStepTimings {
+            part_fetch_seconds: step_timings.with_label_values(&["part_fetch"]),
+            heap_population_seconds: step_timings.with_label_values(&["heap_population"]),
+            consolidation_seconds: step_timings.with_label_values(&["consolidation"]),
+            part_columnar_encoding_seconds: step_timings
+                .with_label_values(&["part_columnar_encoding"]),
+            part_write_seconds: step_timings.with_label_values(&["part_write_seconds"]),
         }
     }
 }
