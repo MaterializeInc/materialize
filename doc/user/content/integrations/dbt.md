@@ -41,7 +41,7 @@ Setting up a dbt project with Materialize is similar to setting it up with any o
 
     `materialize` should be listed under "Plugins". If this is not the case, double-check that the virtual environment is activated!
 
-1. To get started, make sure you have a Materialize account.
+2. To get started, make sure you have a Materialize account.
 
 ## Create and configure a dbt project
 
@@ -67,15 +67,15 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
     **Note:** If you started from an existing project but it's your first time setting up dbt, it's possible that this file doesn't exist yet. You can manually create it in the suggested location.
 
-1. Open `profiles.yml` and adapt it to connect to your Materialize instance using the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize).
+2. Open `profiles.yml` and adapt it to connect to your Materialize instance using the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize).
 
-    As an example, the following profile would allow you to connect to Materialize in two different environments: an instance running locally (`dev`) and a Materialize Cloud instance (`prod`).
+    As an example, the following profile would allow you to connect to Materialize in two different environments: a developer environment (`dev`) and a production environment (`prod`).
 
     ```yaml
     default:
       outputs:
 
-        dev:
+        prod:
           type: materialize
           threads: 1
           host: <host>
@@ -84,13 +84,26 @@ dbt manages all your connection configurations (or, profiles) in a file called [
           pass: <password>
           dbname: materialize
           schema: public
+          cluster: default
+          sslmode: require
+        dev:
+          type: materialize
+          threads: 1
+          host: <host>
+          port: 6875
+          user: <user>
+          pass: <password>
+          dbname: <dev_dbname>
+          schema: <dev_schema>
+          cluster: <dev_cluster>
+          sslmode: require
 
       target: dev
     ```
 
     The `target` parameter allows you to configure the [target environment](https://docs.getdbt.com/docs/guides/managing-environments#how-do-i-maintain-different-environments-with-dbt) that dbt will use to run your models.
 
-1. To test the connection to Materialize, run:
+3. To test the connection to Materialize, run:
 
     ```bash
     dbt debug
@@ -106,9 +119,8 @@ In dbt, a [model](https://docs.getdbt.com/docs/building-a-dbt-project/building-m
 
 When you use dbt with Materialize, **your models stay up-to-date** without manual or configured refreshes. This allows you to efficiently transform streaming data using the same thought process you'd use for batch transformations on top of any other database.
 
-[//]: # "TODO(morsapaes) Adapt once new get started guide is merged"
 
-1. Create a model for each SQL statement you're planning to deploy. Each individual model should be stored as a `.sql` file under the directory defined by `source-paths` in `dbt_project.yml`.
+1. Create a model for each SQL statement you're planning to deploy. Each individual model should be stored as a `.sql` file under the directory defined by `model-paths` in `dbt_project.yml`.
 
     As an example, we'll use the SQL statements in our [getting started guide](/get-started/) and re-write them as dbt models.
 
@@ -116,18 +128,24 @@ When you use dbt with Materialize, **your models stay up-to-date** without manua
 
     You can instruct dbt to create a [source](/sql/create-source) in Materialize using the custom `source` [materialization](#materializations):
 
+    sources/market_orders_raw.sql
     ```sql
     {{ config(materialized='source') }}
 
-    {% set source_name %}
-        {{ mz_generate_name('market_orders_raw') }}
-    {% endset %}
-
-    CREATE SOURCE {{ source_name }}
+    CREATE SOURCE {{ this }}
     FROM LOAD GENERATOR COUNTER;
     ```
+   
+    sources.yml
+    ```
+   sources:
+     - name: market_orders
+       schema: "{{ target.schema }}"
+       tables:
+       - name: market_orders_raw
+   ```
 
-    The `mz_generate_name` [macro](https://docs.getdbt.com/docs/building-a-dbt-project/jinja-macros/#macros) allows you to generate a fully-qualified name from a base object name. Here, `source_name` would be compiled to `materialize.public.market_orders_raw`.
+    The `{{ this }}` [relation](https://docs.getdbt.com/reference/dbt-jinja-functions/this) allows you to generate a fully-qualified name from a base object name. Here, `source_name` would be compiled to `materialize.public.market_orders_raw`.
 
     <h5>Creating a view</h5>
 
@@ -140,10 +158,10 @@ When you use dbt with Materialize, **your models stay up-to-date** without manua
         (text::jsonb)->>'symbol' AS symbol,
         (text::jsonb)->>'trade_type' AS trade_type,
         to_timestamp(((text::jsonb)->'timestamp')::bigint) AS ts
-    FROM {{ ref('market_orders_raw') }}
+    FROM {{ source('market_orders','market_orders_raw') }}
     ```
 
-    One thing to note here is that the model depends on the source defined in the previous step. To express this dependency and track the **lineage** of your project, you can use the dbt [ref()](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function {{% gh 8744 %}}.
+    One thing to note here is that the model depends on the source defined in the previous step. To express this dependency and track the **lineage** of your project, you can use the dbt [source()](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
 
     <h5>Creating a materialized view</h5>
 
@@ -158,7 +176,10 @@ When you use dbt with Materialize, **your models stay up-to-date** without manua
     GROUP BY symbol
     ```
 
-    When should you use what? We recommend using `materializedview` models exclusively for your **core business logic** to ensure that you’re not consuming more memory than needed in Materialize. Intermediate or staging views should use the `view` materialization type instead.
+    Here, the model depends on the view from the previous step. Reference it source defined in the previous step. To express this dependency and track the **lineage** of your project, you can use the dbt [ref()](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
+
+
+    When should you use what? We recommend using `materializedview` models for your intermediate or staging views.
 
 1. [Run](https://docs.getdbt.com/reference/commands/run) the dbt models:
 
@@ -171,7 +192,7 @@ When you use dbt with Materialize, **your models stay up-to-date** without manua
 1. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that all objects have been created:
 
     ```bash
-    psql -U materialize -h localhost -p 6875 materialize
+    psql "postgres://<user>:<password>@<host>:6875/materialize"
     ```
 
     ```sql
@@ -252,7 +273,7 @@ Using dbt in a streaming context means that you're able to run data quality and 
 1. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that the schema storing the tests has been created, as well as the test materialized views:
 
     ```bash
-    psql -U materialize -h localhost -p 6875 materialize
+    psql "postgres://<user>:<password>@<host>:6875/materialize"
     ```
 
     ```sql
