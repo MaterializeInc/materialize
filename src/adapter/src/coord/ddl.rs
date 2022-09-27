@@ -268,8 +268,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     event_type,
                     json!({
                         "event_source": "environmentd",
-                        "organization_id": user_metadata.group_id,
                         "details": event.event_details.as_json(),
+                    }),
+                    json!({
+                        "groupId": user_metadata.group_id,
                     }),
                 );
             }
