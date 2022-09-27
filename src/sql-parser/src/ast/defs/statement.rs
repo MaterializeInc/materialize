@@ -994,10 +994,6 @@ impl_display_t!(CreateClusterStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClusterOption<T: AstInfo> {
-    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
-    IntrospectionInterval(WithOptionValue<T>),
-    /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
-    IntrospectionDebugging(WithOptionValue<T>),
     /// The `REPLICAS` option.
     Replicas(Vec<ReplicaDefinition<T>>),
 }
@@ -1005,14 +1001,6 @@ pub enum ClusterOption<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterOption::IntrospectionInterval(interval) => {
-                f.write_str("INTROSPECTION INTERVAL ");
-                f.write_node(interval);
-            }
-            ClusterOption::IntrospectionDebugging(debugging) => {
-                f.write_str("INTROSPECTION DEBUGGING ");
-                f.write_node(debugging);
-            }
             ClusterOption::Replicas(replicas) => {
                 f.write_str("REPLICAS (");
                 f.write_node(&display::comma_separated(replicas));
@@ -1075,6 +1063,10 @@ pub enum ReplicaOptionName {
     Workers,
     /// The `COMPUTE [<host> [, <host> ...]]` option.
     Compute,
+    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
+    IntrospectionInterval,
+    /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
+    IntrospectionDebugging,
 }
 
 impl AstDisplay for ReplicaOptionName {
@@ -1085,6 +1077,8 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
             ReplicaOptionName::Workers => f.write_str("WORKERS"),
             ReplicaOptionName::Compute => f.write_str("COMPUTE"),
+            ReplicaOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
+            ReplicaOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
         }
     }
 }

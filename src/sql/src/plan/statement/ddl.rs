@@ -2182,30 +2182,9 @@ pub fn plan_create_cluster(
     CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let mut replicas_definitions = None;
-    let mut introspection_debugging = None;
-    let mut introspection_interval: Option<Option<Interval>> = None;
 
     for option in options {
         match option {
-            ClusterOption::IntrospectionDebugging(enabled) => {
-                if introspection_debugging.is_some() {
-                    sql_bail!("INTROSPECTION DEBUGGING specified more than once");
-                }
-                introspection_debugging = Some(
-                    bool::try_from_value(enabled)
-                        .map_err(|e| sql_err!("invalid INTROSPECTION DEBUGGING: {}", e))?,
-                );
-            }
-            ClusterOption::IntrospectionInterval(interval) => {
-                if introspection_interval.is_some() {
-                    sql_bail!("INTROSPECTION INTERVAL specified more than once");
-                }
-                introspection_interval = Some(
-                    OptionalInterval::try_from_value(interval)
-                        .map_err(|e| sql_err!("invalid INTROSPECTION INTERVAL: {}", e))?
-                        .0,
-                );
-            }
             ClusterOption::Replicas(replicas) => {
                 if replicas_definitions.is_some() {
                     sql_bail!("REPLICAS specified more than once");
@@ -2225,22 +2204,9 @@ pub fn plan_create_cluster(
         None => bail_unsupported!("CLUSTER without REPLICAS option"),
     };
 
-    let introspection_interval =
-        introspection_interval.unwrap_or(Some(DEFAULT_INTROSPECTION_INTERVAL));
-
-    let config = match (introspection_debugging, introspection_interval) {
-        (None | Some(false), None) => None,
-        (debugging, Some(interval)) => Some(ComputeInstanceIntrospectionConfig {
-            debugging: debugging.unwrap_or(false),
-            interval: interval.duration()?,
-        }),
-        (Some(true), None) => {
-            sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
-        }
-    };
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
         name: normalize::ident(name),
-        config,
+        config: None,
         replicas,
     }))
 }
@@ -2257,7 +2223,9 @@ generate_extracted_config!(
     (Size, String),
     (Remote, Vec<String>),
     (Compute, Vec<String>),
-    (Workers, u16)
+    (Workers, u16),
+    (IntrospectionInterval, OptionalInterval),
+    (IntrospectionDebugging, bool)
 );
 
 fn plan_replica_config(
@@ -2270,6 +2238,8 @@ fn plan_replica_config(
         remote,
         workers,
         compute,
+        introspection_interval,
+        introspection_debugging,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
@@ -2282,6 +2252,20 @@ fn plan_replica_config(
     if workers.is_some() {
         scx.require_unsafe_mode("WORKERS cluster replica option")?;
     }
+
+    let introspection_interval = introspection_interval
+        .map(|OptionalInterval(i)| i)
+        .unwrap_or(Some(DEFAULT_INTROSPECTION_INTERVAL));
+    let introspection = match introspection_interval {
+        Some(interval) => Some(ComputeInstanceIntrospectionConfig {
+            interval: interval.duration()?,
+            debugging: introspection_debugging.unwrap_or(false),
+        }),
+        None if introspection_debugging == Some(true) => {
+            sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
+        }
+        None => None,
+    };
 
     match (size, remote) {
         (None, Some(remote)) => {
@@ -2314,6 +2298,7 @@ fn plan_replica_config(
                 addrs: remote_addrs,
                 compute_addrs,
                 workers,
+                introspection,
             })
         }
         (Some(size), None) => {
@@ -2327,6 +2312,7 @@ fn plan_replica_config(
             Ok(ComputeInstanceReplicaConfig::Managed {
                 size,
                 availability_zone,
+                introspection,
             })
         }
         (_, _) => {

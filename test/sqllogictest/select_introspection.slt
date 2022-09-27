@@ -18,10 +18,9 @@ INSERT INTO test VALUES('a', 'b')
 statement ok
 CREATE CLUSTER test
   REPLICAS (
-    replica_a (SIZE '1'),
-    replica_b (SIZE '2')
-  ),
-  INTROSPECTION INTERVAL '50 milliseconds'
+    replica_a (SIZE '1', INTROSPECTION INTERVAL '50 milliseconds'),
+    replica_b (SIZE '2', INTROSPECTION INTERVAL '50 milliseconds')
+  )
 
 statement ok
 SET cluster = test
@@ -89,8 +88,7 @@ DROP CLUSTER test CASCADE
 
 statement ok
 CREATE CLUSTER test
-  REPLICAS (replica_a (SIZE '1')),
-  INTROSPECTION INTERVAL 0
+  REPLICAS (replica_a (SIZE '1', INTROSPECTION INTERVAL 0))
 
 query error cannot read log sources on cluster with disabled introspection
 SELECT * FROM mz_internal.mz_compute_exports

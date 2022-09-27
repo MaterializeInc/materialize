@@ -2830,71 +2830,58 @@ impl<'a> Parser<'a> {
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
 
-        let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
-            vec![]
-        } else {
-            self.parse_comma_separated(Parser::parse_cluster_option)?
-        };
+        let mut options = Vec::new();
+        if self.parse_keyword(REPLICAS) {
+            self.expect_token(&Token::LParen)?;
+
+            let replicas = if self.peek_token() == Some(Token::RParen) {
+                vec![]
+            } else {
+                self.parse_comma_separated(|parser| {
+                    let name = parser.parse_identifier()?;
+                    parser.expect_token(&Token::LParen)?;
+                    let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
+                    parser.expect_token(&Token::RParen)?;
+                    Ok(ReplicaDefinition { name, options })
+                })?
+            };
+
+            self.expect_token(&Token::RParen)?;
+            options.push(ClusterOption::Replicas(replicas));
+        }
 
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
         }))
     }
+
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
-        let name =
-            match self.expect_one_of_keywords(&[AVAILABILITY, COMPUTE, REMOTE, SIZE, WORKERS])? {
-                AVAILABILITY => {
-                    self.expect_keyword(ZONE)?;
-                    ReplicaOptionName::AvailabilityZone
-                }
-                COMPUTE => ReplicaOptionName::Compute,
-                REMOTE => ReplicaOptionName::Remote,
-                SIZE => ReplicaOptionName::Size,
-                WORKERS => ReplicaOptionName::Workers,
-                _ => unreachable!(),
-            };
-        let value = self.parse_opt_with_option_value(false)?;
-        Ok(ReplicaOption { name, value })
-    }
-
-    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[REPLICAS, INTROSPECTION])? {
-            REPLICAS => {
-                self.expect_token(&Token::LParen)?;
-
-                let replicas = if self.peek_token() == Some(Token::RParen) {
-                    vec![]
-                } else {
-                    self.parse_comma_separated(|parser| {
-                        let name = parser.parse_identifier()?;
-                        parser.expect_token(&Token::LParen)?;
-                        let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
-                        parser.expect_token(&Token::RParen)?;
-                        Ok(ReplicaDefinition { name, options })
-                    })?
-                };
-
-                self.expect_token(&Token::RParen)?;
-                Ok(ClusterOption::Replicas(replicas))
+        let name = match self.expect_one_of_keywords(&[
+            AVAILABILITY,
+            COMPUTE,
+            INTROSPECTION,
+            REMOTE,
+            SIZE,
+            WORKERS,
+        ])? {
+            AVAILABILITY => {
+                self.expect_keyword(ZONE)?;
+                ReplicaOptionName::AvailabilityZone
             }
+            COMPUTE => ReplicaOptionName::Compute,
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
-                DEBUGGING => {
-                    let _ = self.consume_token(&Token::Eq);
-                    Ok(ClusterOption::IntrospectionDebugging(
-                        self.parse_with_option_value()?,
-                    ))
-                }
-                INTERVAL => {
-                    let _ = self.consume_token(&Token::Eq);
-                    Ok(ClusterOption::IntrospectionInterval(
-                        self.parse_with_option_value()?,
-                    ))
-                }
+                DEBUGGING => ReplicaOptionName::IntrospectionDebugging,
+                INTERVAL => ReplicaOptionName::IntrospectionInterval,
                 _ => unreachable!(),
             },
+            REMOTE => ReplicaOptionName::Remote,
+            SIZE => ReplicaOptionName::Size,
+            WORKERS => ReplicaOptionName::Workers,
             _ => unreachable!(),
-        }
+        };
+        let value = self.parse_opt_with_option_value(false)?;
+        Ok(ReplicaOption { name, value })
     }
 
     fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {

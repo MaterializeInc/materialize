@@ -276,10 +276,12 @@ pub enum ComputeInstanceReplicaConfig {
         addrs: BTreeSet<String>,
         compute_addrs: BTreeSet<String>,
         workers: NonZeroUsize,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
     },
     Managed {
         size: String,
         availability_zone: Option<String>,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
     },
 }
 
@@ -290,10 +292,12 @@ impl ComputeInstanceReplicaConfig {
                 addrs: _,
                 compute_addrs: _,
                 workers: _,
+                introspection: _,
             } => None,
             ComputeInstanceReplicaConfig::Managed {
                 size: _,
                 availability_zone,
+                introspection: _,
             } => availability_zone.as_deref(),
         }
     }

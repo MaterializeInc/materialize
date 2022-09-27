@@ -699,6 +699,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     addrs,
                     compute_addrs,
                     workers,
+                    introspection: _,
                 } => SerializedComputeInstanceReplicaLocation::Remote {
                     addrs,
                     compute_addrs,
@@ -707,6 +708,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 mz_sql::plan::ComputeInstanceReplicaConfig::Managed {
                     size,
                     availability_zone,
+                    introspection: _,
                 } => {
                     let (availability_zone, user_specified) =
                         availability_zone.map(|az| (az, true)).unwrap_or_else(|| {
@@ -828,6 +830,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 addrs,
                 compute_addrs,
                 workers,
+                introspection: _,
             } => SerializedComputeInstanceReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
@@ -836,6 +839,7 @@ impl<S: Append + 'static> Coordinator<S> {
             mz_sql::plan::ComputeInstanceReplicaConfig::Managed {
                 size,
                 availability_zone,
+                introspection: _,
             } => {
                 let (availability_zone, user_specified) = match availability_zone {
                     Some(az) => {
