@@ -214,27 +214,11 @@ impl Codec64 for D {
     }
 
     fn encode(&self) -> [u8; 8] {
-        todo!()
+        [0; 8]
     }
 
     fn decode(_buf: [u8; 8]) -> Self {
         Self(0)
-    }
-}
-
-impl Codec for D {
-    fn codec_name() -> String {
-        KVTD_CODECS.lock().expect("lockable").3.clone()
-    }
-
-    fn encode<B>(&self, _buf: &mut B)
-    where
-        B: BufMut,
-    {
-    }
-
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
-        Ok(Self(0))
     }
 }
 
