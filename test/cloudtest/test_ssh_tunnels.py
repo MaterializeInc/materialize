@@ -14,8 +14,8 @@ from materialize.cloudtest.wait import wait
 
 
 def test_ssh_tunnels(mz: MaterializeApplication) -> None:
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
             > CREATE CONNECTION IF NOT EXISTS ssh_conn
                 FOR SSH TUNNEL
@@ -46,8 +46,8 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         f"echo '{public_key}' > /etc/authorized_keys/mz",
     )
 
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
         > CREATE SECRET pgpass AS 'postgres'
         > CREATE CONNECTION pg FOR POSTGRES
@@ -72,7 +72,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
 
         > CREATE SOURCE mz_source
           FROM POSTGRES CONNECTION pg
-          PUBLICATION 'mz_source';
+          (PUBLICATION 'mz_source');
 
         > SELECT COUNT(*) = 1 FROM mz_source;
         true
@@ -106,8 +106,8 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         "kill -9 `pidof environmentd`",
     )
 
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
         > SELECT f1 FROM t1 ORDER BY f1 ASC;
         1
