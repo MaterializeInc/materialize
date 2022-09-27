@@ -239,8 +239,8 @@ impl<S: Append + 'static> Coordinator<S> {
     ) {
         otel_ctx.attach_as_parent();
 
-        let stmt = match result {
-            Ok(stmt) => stmt,
+        let (subsource_stmts, source_stmt) = match result {
+            Ok(ok) => ok,
             Err(e) => return tx.send(Err(e), session),
         };
 
@@ -261,12 +261,56 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
+        //TODO(petrosagg): Figure out a way to execute the subsources and sources atomically. With
+        //                 the way it's written now it is possible for subsources to be created but
+        //                 not the source object.
+        // First plan all subsource statements
+        let mut subsource_plans = vec![];
+        for stmt in subsource_stmts {
+            let catalog = self.catalog.for_session(&session);
+
+            let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
+                Ok(ok) => ok,
+                Err(e) => return tx.send(Err(e.into()), session),
+            };
+
+            let plan =
+                match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
+                    Ok(Plan::CreateSource(plan)) => plan,
+                    Ok(_) => {
+                        unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
+                    }
+                    Err(e) => return tx.send(Err(e), session),
+                };
+            let depends_on = depends_on.into_iter().collect();
+            subsource_plans.push((plan, depends_on));
+        }
+
+        // Sequence all the subsources
+        for (plan, depends_on) in subsource_plans {
+            if let Err(e) = self
+                .sequence_create_source(&mut session, plan, depends_on)
+                .await
+            {
+                tx.send(Err(e), session);
+                return;
+            }
+        }
+
+        // Now finalize name resolution of the original create source statement and sequence it
+        let catalog = self.catalog.for_session(&session);
+
+        let (stmt, depends_on) = match mz_sql::names::finalize_resolve(&catalog, source_stmt) {
+            Ok(ok) => ok,
+            Err(e) => return tx.send(Err(e.into()), session),
+        };
+
         let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
             Ok(Plan::CreateSource(plan)) => plan,
             Ok(_) => unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource"),
             Err(e) => return tx.send(Err(e), session),
         };
-
+        let depends_on = depends_on.into_iter().collect();
         let result = self
             .sequence_create_source(&mut session, plan, depends_on)
             .await;

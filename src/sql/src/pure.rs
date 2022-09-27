@@ -34,6 +34,7 @@ use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_proto::RustType;
 use mz_repr::strconv;
+use mz_sql_parser::ast::Raw;
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_storage::types::connections::{Connection, ConnectionContext};
 use mz_storage::types::sources::PostgresSourceDetails;
@@ -46,7 +47,7 @@ use crate::ast::{
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::Aug;
+use crate::names::{Aug, Either};
 use crate::normalize;
 use crate::plan::StatementContext;
 
@@ -54,17 +55,18 @@ use crate::plan::StatementContext;
 ///
 /// See the section on [purification](crate#purification) in the crate
 /// documentation for details.
-///
-/// Note that purification is asynchronous, and may take an unboundedly long
-/// time to complete. As a result purification does *not* have access to a
-/// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
-/// locking access to the catalog for an unbounded amount of time.
 pub async fn purify_create_source(
     catalog: Box<dyn SessionCatalog>,
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
     connection_context: ConnectionContext,
-) -> Result<CreateSourceStatement<Aug>, anyhow::Error> {
+) -> Result<
+    (
+        Vec<CreateSourceStatement<Raw>>,
+        CreateSourceStatement<Either<Aug, Raw>>,
+    ),
+    anyhow::Error,
+> {
     let CreateSourceStatement {
         connection,
         format,
@@ -73,8 +75,6 @@ pub async fn purify_create_source(
         include_metadata: _,
         ..
     } = &mut stmt;
-
-    let _ = catalog;
 
     let mut with_options_map = normalize::options(with_options)?;
 
@@ -246,7 +246,8 @@ pub async fn purify_create_source(
     )
     .await?;
 
-    Ok(stmt)
+    let partial_stmt = crate::names::either_aug_raw(stmt);
+    Ok((vec![], partial_stmt))
 }
 
 async fn purify_source_format(
