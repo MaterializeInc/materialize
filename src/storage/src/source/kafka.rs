@@ -29,6 +29,7 @@ use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
 use crate::source::commit::LogCommitter;
+use crate::source::types::OffsetCommitter;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -76,11 +77,18 @@ pub struct KafkaSourceReader {
     include_headers: bool,
 }
 
+pub struct KafkaOffsetCommiter {
+    source_id: GlobalId,
+    topic_name: String,
+    logger: LogCommitter,
+    consumer: Arc<BaseConsumer<GlueConsumerContext>>,
+}
+
 impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Diff = ();
-    type OffsetCommitter = LogCommitter;
+    type OffsetCommitter = KafkaOffsetCommiter;
     type Connection = KafkaSourceConnection;
 
     /// Create a new instance of a Kafka reader.
@@ -187,7 +195,7 @@ impl SourceReader for KafkaSourceReader {
                 source_name,
                 id: source_id,
                 partition_consumers: VecDeque::new(),
-                consumer,
+                consumer: Arc::clone(&consumer),
                 worker_id,
                 worker_count,
                 last_offsets: HashMap::new(),
@@ -199,14 +207,19 @@ impl SourceReader for KafkaSourceReader {
                 partition_metrics: KafkaPartitionMetrics::new(
                     metrics,
                     partition_ids,
-                    topic,
+                    topic.clone(),
                     source_id,
                 ),
             },
-            LogCommitter {
+            KafkaOffsetCommiter {
                 source_id,
-                worker_id,
-                worker_count,
+                topic_name: topic,
+                logger: LogCommitter {
+                    source_id,
+                    worker_id,
+                    worker_count,
+                },
+                consumer,
             },
         ))
     }
@@ -284,6 +297,51 @@ impl SourceReader for KafkaSourceReader {
         }
 
         Ok(next_message)
+    }
+}
+
+#[async_trait::async_trait]
+impl OffsetCommitter for KafkaOffsetCommiter {
+    async fn commit_offsets(
+        &self,
+        offsets: HashMap<PartitionId, MzOffset>,
+    ) -> Result<(), anyhow::Error> {
+        use rdkafka::consumer::CommitMode;
+        use rdkafka::topic_partition_list::Offset;
+
+        let mut tpl = TopicPartitionList::new();
+        for (pid, offset) in offsets.clone() {
+            // Note that we expect the above layers to pre-filter
+            // by partition for us. This is part of the
+            // `OffsetCommitter` contract.
+            let pid = match pid {
+                PartitionId::Kafka(id) => id,
+                _ => panic!("unexpected partition id type"),
+            };
+
+            // This matches the behavior of auto-commit, where we commit a
+            // pseudo-_frontier_. Additionally, overflow will be caught
+            // in the converstion to i64;
+            let offset_to_commit = offset + MzOffset::from(1);
+            let offset_to_commit = Offset::Offset(
+                offset_to_commit
+                    .offset
+                    .try_into()
+                    .expect("offset to be vald i64"),
+            );
+            tpl.add_partition_offset(&self.topic_name, pid, offset_to_commit)
+                .expect("offset known to be valid");
+        }
+
+        let consumer = Arc::clone(&self.consumer);
+        mz_ore::task::spawn_blocking(
+            || format!("source({}) kafka offset commit", self.source_id),
+            move || consumer.commit(&tpl, CommitMode::Sync),
+        )
+        .await??;
+
+        self.logger.commit_offsets(offsets).await?;
+        Ok(())
     }
 }
 

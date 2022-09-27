@@ -75,10 +75,10 @@ impl ReclockFollower {
 
     /// Ensure the `ReclockFollower` has been initialized with trace
     /// up to the given upper.
-    pub async fn ensure_initialized_to(&self, upper: Antichain<Timestamp>) {
-        // Careful not to hold a `Ref` over and await point.
+    pub async fn ensure_initialized_to(&self, upper: AntichainRef<'_, Timestamp>) {
+        // Careful not to hold a `Ref` over an await point.
         loop {
-            if PartialOrder::less_equal(&upper, &RefCell::borrow(&self.inner).upper) {
+            if PartialOrder::less_equal(&upper, &RefCell::borrow(&self.inner).upper.borrow()) {
                 return;
             }
             // Some short but non-0 amount of time
