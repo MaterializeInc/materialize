@@ -40,6 +40,7 @@ use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 use tracing::debug;
@@ -566,6 +567,12 @@ pub struct StorageControllerState<
     /// without blocking the storage controller.
     persist_read_handles: persist_read_handles::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
+    /// Sender for collection management task
+    pub(super) task_tx: mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>,
+    /// Used to communicate with collection management task which collections
+    /// should be managed, and tracks the times at which their writes should
+    /// occur.
+    pub(super) managed_frontiers: Arc<Mutex<HashMap<GlobalId, Antichain<T>>>>,
 }
 
 /// A storage controller for a storage instance.
@@ -682,6 +689,8 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
             .await
             .expect("could not connect to postgres storage stash");
         let stash = mz_stash::Memory::new(stash);
+        // TODO: spawn tokio task to manage collections
+        let (task_tx, _) = mpsc::channel(1);
         Self {
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
@@ -690,6 +699,8 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
             persist_write_handles: persist_write_handles::PersistWorker::new(tx),
             persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
+            task_tx,
+            managed_frontiers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -1409,6 +1420,76 @@ impl<T: Timestamp> ExportState<T> {
     }
     fn from(&self) -> GlobalId {
         self.description.sink.from
+    }
+}
+
+#[async_trait(?Send)]
+pub trait CollectionManager: Debug + Send + StorageController {
+    /// Appends `updates` to the collection correlated with `global_id` at a
+    /// timestamp decided on by the implementor.
+    async fn append_to_managed_collection(
+        &mut self,
+        global_id: GlobalId,
+        updates: Vec<(Row, Diff)>,
+    );
+
+    /// Truncates the collection correlated with `global_id`.
+    async fn truncate_managed_collection(&mut self, global_id: GlobalId);
+}
+
+#[async_trait(?Send)]
+impl<T> CollectionManager for Controller<T>
+where
+    T: Timestamp + Lattice + TotalOrder + Codec64,
+
+    // Required to setup grpc clients for new storaged instances.
+    StorageCommand<T>: RustType<ProtoStorageCommand>,
+    StorageResponse<T>: RustType<ProtoStorageResponse>,
+
+    MetadataExportFetcher: MetadataExport<T>,
+    DurableExportMetadata<T>: mz_stash::Data,
+{
+    /// Effectively truncates the `data_shard` correlated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `global_id` is not correlated to a collection.
+    async fn truncate_managed_collection(&mut self, global_id: GlobalId) {
+        let lowers = self.state.managed_frontiers.lock().await;
+        let lower = &lowers[&global_id];
+
+        let as_of = match lower.elements().iter().min() {
+            Some(lower) => lower.clone(),
+            None => return,
+        };
+
+        drop(lowers);
+
+        let mut negate = self.snapshot(global_id, as_of).await.unwrap();
+
+        for (_, diff) in negate.iter_mut() {
+            *diff = -*diff;
+        }
+
+        self.append_to_managed_collection(global_id, negate).await;
+    }
+
+    /// Append `updates` to the `data_shard` correlated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `global_id` is not correlated to a collection.
+    async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        assert!(
+            self.state.managed_frontiers.lock().await.contains_key(&id),
+            "cannot append collection before it's managed"
+        );
+
+        self.state
+            .task_tx
+            .send((id, updates))
+            .await
+            .expect("rx hung up");
     }
 }
 
