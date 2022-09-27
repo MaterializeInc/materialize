@@ -483,6 +483,7 @@ where
                 )
                 .await?;
                 timings.part_fetching += start.elapsed();
+                let start = Instant::now();
                 while let Some((k, v, mut t, d)) = part.next() {
                     t.advance_by(desc.since().borrow());
                     let d = D::decode(d);
@@ -516,6 +517,7 @@ where
                     )
                     .await?;
                     timings.part_fetching += start.elapsed();
+                    let start = Instant::now();
                     while let Some((k, v, mut t, d)) = part.next() {
                         t.advance_by(desc.since().borrow());
                         let d = D::decode(d);
