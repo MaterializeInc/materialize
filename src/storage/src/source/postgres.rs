@@ -680,6 +680,14 @@ impl PostgresTaskInfo {
     async fn produce_replication(&mut self) -> Result<(), ReplicationError> {
         use ReplicationError::*;
 
+        // An lsn that is safe to send status updates for. This is primarily derived from
+        // the resumption frontier, as that represents an lsn that is durably recorded
+        // into persist. In the beginning, we can use this initial lsn, which is either:
+        // - From the initial resumption frontier if we are restarting and skipping snapshotting
+        // - The end lsn from the snapshot, which is safe to use because pg keeps
+        //   all updates >= this lsn.
+        let mut committed_lsn: PgLsn = self.lsn;
+
         let client = try_recoverable!(self.connection_config.clone().connect_replication().await);
 
         // Before consuming the replication stream we will peek into the replication slot using a
@@ -753,7 +761,6 @@ impl PostgresTaskInfo {
         let mut deletes = vec![];
 
         let mut last_feedback = Instant::now();
-        let mut committed_lsn: Option<PgLsn> = None;
 
         loop {
             let data_next = stream.next();
@@ -767,8 +774,9 @@ impl PostgresTaskInfo {
                     // We assume there is only a single partition here.
                     let lsn: PgLsn = to_commit[&PartitionId::None].offset.into();
                     // Set the committed lsn so we can send a correct status update
-                    // next time we are required.
-                    committed_lsn = Some(lsn);
+                    // next time we are required. We assume this is always
+                    // increasing, and >= the initial lsn.
+                    committed_lsn = lsn;
                     continue;
                 }
                 Either::Right((Some(item), _)) => item,
@@ -965,31 +973,22 @@ impl PostgresTaskInfo {
                 // The enum is marked non_exhaustive, better be conservative
                 _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
             }
-            // TODO(guswynn): consider committing the initial lsn
-            if let Some(committed_lsn) = committed_lsn {
-                if needs_status_update {
-                    let ts: i64 = PG_EPOCH
-                        .elapsed()
-                        .expect("system clock set earlier than year 2000!")
-                        .as_micros()
-                        .try_into()
-                        .expect("software more than 200k years old, consider updating");
+            if needs_status_update {
+                let ts: i64 = PG_EPOCH
+                    .elapsed()
+                    .expect("system clock set earlier than year 2000!")
+                    .as_micros()
+                    .try_into()
+                    .expect("software more than 200k years old, consider updating");
 
-                    try_recoverable!(
-                        stream
-                            .as_mut()
-                            .get_pin_mut()
-                            .standby_status_update(
-                                committed_lsn,
-                                committed_lsn,
-                                committed_lsn,
-                                ts,
-                                0
-                            )
-                            .await
-                    );
-                    last_feedback = Instant::now();
-                }
+                try_recoverable!(
+                    stream
+                        .as_mut()
+                        .get_pin_mut()
+                        .standby_status_update(committed_lsn, committed_lsn, committed_lsn, ts, 0)
+                        .await
+                );
+                last_feedback = Instant::now();
             }
         }
         if !stream.is_stopped() {
