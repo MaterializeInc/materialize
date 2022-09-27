@@ -48,7 +48,6 @@ pub fn validate_options_for_context<T: AstInfo>(
         let limited_to_context = match name {
             Acks => None,
             ClientId => None,
-            EnableAutoCommit => None,
             EnableIdempotence => None,
             FetchMessageMaxBytes => None,
             GroupIdPrefix => None,
@@ -83,7 +82,6 @@ generate_extracted_config!(
     KafkaConfigOption,
     (Acks, String),
     (ClientId, String),
-    (EnableAutoCommit, bool),
     (EnableIdempotence, bool),
     (FetchMessageMaxBytes, i32),
     (GroupIdPrefix, String),
@@ -114,7 +112,6 @@ impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
         KafkaConfigOptionExtracted {
             acks,
             client_id,
-            enable_auto_commit,
             enable_idempotence,
             fetch_message_max_bytes,
             isolation_level,
@@ -157,7 +154,6 @@ impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
             |i: &i32| { 0 <= *i && *i <= 3_600_000 },
             "TOPIC METADATA REFRESH INTERVAL MS must be within [0, 3,600,000]"
         );
-        fill_options!(enable_auto_commit, "enable.auto.commit");
         fill_options!(Some(isolation_level), "isolation.level");
         fill_options!(
             transaction_timeout_ms,
