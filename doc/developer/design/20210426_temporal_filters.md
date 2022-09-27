@@ -14,10 +14,10 @@ Consider the following SQL query:
 ```sql
 SELECT *
 FROM data
-WHERE mz_logical_timestamp() BETWEEN data.valid_from AND data.valid_until;
+WHERE mz_now() BETWEEN data.valid_from AND data.valid_until;
 ```
-The `WHERE` clause here relates two columns in the data to `mz_logical_timestamp()`, a function that returns the current logical timestamp.
-For one-shot queries `mz_logical_timestamp()` is simply evaluated and replaced by that timestamp when the query executes.
+The `WHERE` clause here relates two columns in the data to `mz_now()`, a function that returns the current logical timestamp.
+For one-shot queries `mz_now()` is simply evaluated and replaced by that timestamp when the query executes.
 In a *maintained* query, as for example when you call `CREATE MATERIALIZED VIEW` or `CREATE INDEX`, the value of the function changes every millisecond.
 In particular, in a maintained query any row will not be present at timestamps before its `valid_from` column nor after `valid_until` column.
 
@@ -60,18 +60,18 @@ We can restrict the duration of an update, from `[time, ..)` to any non-empty in
 The first step ensures that the update does not happen until `from` and the second step ensures that the update is retracted at `until`.
 Each of the two steps is optional, if either of the `from` or `until` bounds are unspecified.
 
-This mechanism allows us to support `WHERE` clauses in which `mz_logical_timestamp()` is directly related to an expression not containing `mz_logical_timestamp()`, or conjunctions (`AND`) of these clauses.
+This mechanism allows us to support `WHERE` clauses in which `mz_now()` is directly related to an expression not containing `mz_now()`, or conjunctions (`AND`) of these clauses.
 The following query demonstrates several example uses:
 ```sql
 SELECT *
 FROM data
-WHERE mz_logical_timestamp() BETWEEN data.valid_from AND data.valid_until
-  AND mz_logical_timestamp() > 100
-  AND 567 > mz_logical_timestamp();
+WHERE mz_now() BETWEEN data.valid_from AND data.valid_until
+  AND mz_now() > 100
+  AND 567 > mz_now();
 ```
 The `BETWEEN` expression simplifies to two inequalities, and the other two inequalities are one-sided bounds.
-The `mz_logical_timestamp()` call can appear on either side of the inequality, but it must occur by itself.
-Any conjunction of these inequalities is valid, including just bounding `mz_logical_timestamp()` from above or below, rather than bounding it on both sides.
+The `mz_now()` call can appear on either side of the inequality, but it must occur by itself.
+Any conjunction of these inequalities is valid, including just bounding `mz_now()` from above or below, rather than bounding it on both sides.
 
 The inequality cannot be "not equal" (`!=` or `<>`) as this results in a "hole" rather than an upper and lower bound.
 

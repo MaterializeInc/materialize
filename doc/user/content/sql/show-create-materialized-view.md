@@ -24,7 +24,7 @@ SHOW CREATE MATERIALIZED VIEW winning_bids;
 ```nofmt
               name               |                                                                                                                       create_sql
 ---------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- materialize.public.winning_bids | CREATE MATERIALIZED VIEW "materialize"."public"."winning_bids" IN CLUSTER "default" AS SELECT * FROM "materialize"."public"."highest_bid_per_auction" WHERE "pg_catalog"."extract"('epoch', "end_time") * 1000 < "mz_catalog"."mz_logical_timestamp"()
+ materialize.public.winning_bids | CREATE MATERIALIZED VIEW "materialize"."public"."winning_bids" IN CLUSTER "default" AS SELECT * FROM "materialize"."public"."highest_bid_per_auction" WHERE "end_time" < "mz_catalog"."mz_now"()
 ```
 
 ## Related pages

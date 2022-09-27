@@ -167,11 +167,11 @@ In Materialize, [temporal filters](/sql/patterns/temporal-filters/) allow you to
     SELECT symbol,
            COUNT(*) AS cnt
     FROM market_orders m
-    WHERE EXTRACT(EPOCH FROM (ts + INTERVAL '1 minute'))::bigint * 1000 > mz_logical_timestamp()
+    WHERE (ts + INTERVAL '1 minute') > mz_now()
     GROUP BY symbol;
     ```
 
-    The `mz_logical_timestamp()` function is used to keep track of the logical time that your query executes (similar to `now()` in other systems, as explained more in-depth in ["now and mz_logical_timestamp functions"](/sql/functions/now_and_mz_logical_timestamp/)).
+    The `mz_now()` function is used to keep track of the logical time that your query executes (similar to `now()` in other systems, as explained more in-depth in ["now and mz_now functions"](/sql/functions/now_and_mz_now/)).
 
 1. To see the results:
 
