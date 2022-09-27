@@ -94,10 +94,10 @@ We'll start with some sample real-time data from a [PubNub stream](https://www.p
 
      If you re-run the `SELECT` statement at different points in time, you can see the updated results based on the latest data.
 
-1. To see the sequence of updates affecting the results over time, you can use `TAIL`:
+1. To see the sequence of updates affecting the results over time, you can use `SUBSCRIBE`:
 
     ```sql
-    COPY (TAIL avg_bid) TO stdout;
+    COPY (SUBSCRIBE avg_bid) TO stdout;
     ```
 
     To cancel out of the stream, press **CTRL+C**.

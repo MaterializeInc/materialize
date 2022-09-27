@@ -407,7 +407,7 @@ impl ErrorResponse {
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
-            AdapterError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Transform(_) => SqlState::INTERNAL_ERROR,
             AdapterError::Unauthorized(_) => SqlState::INSUFFICIENT_PRIVILEGE,
             AdapterError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,

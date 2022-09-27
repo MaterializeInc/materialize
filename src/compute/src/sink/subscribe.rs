@@ -20,15 +20,15 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
 
-use mz_compute_client::response::{TailBatch, TailResponse};
-use mz_compute_client::sinks::{ComputeSinkDesc, SinkAsOf, TailSinkConnection};
+use mz_compute_client::response::{SubscribeBatch, SubscribeResponse};
+use mz_compute_client::sinks::{ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::controller::CollectionMetadata;
 use mz_storage::types::errors::DataflowError;
 
 use crate::render::sinks::SinkRender;
 
-impl<G> SinkRender<G> for TailSinkConnection
+impl<G> SinkRender<G> for SubscribeSinkConnection
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -45,46 +45,46 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        // An encapsulation of the Tail response protocol.
+        // An encapsulation of the Subscribe response protocol.
         // Used to send rows and progress messages,
         // and alert if the dataflow was dropped before completing.
-        let tail_protocol_handle = Rc::new(RefCell::new(Some(TailProtocol {
+        let subscribe_protocol_handle = Rc::new(RefCell::new(Some(SubscribeProtocol {
             sink_id,
-            tail_response_buffer: Some(Rc::clone(&compute_state.tail_response_buffer)),
+            subscribe_response_buffer: Some(Rc::clone(&compute_state.subscribe_response_buffer)),
             prev_upper: Antichain::from_elem(Timestamp::minimum()),
         })));
-        let tail_protocol_weak = Rc::downgrade(&tail_protocol_handle);
+        let subscribe_protocol_weak = Rc::downgrade(&subscribe_protocol_handle);
 
-        tail(
+        subscribe(
             sinked_collection,
             sink_id,
             sink.as_of.clone(),
-            tail_protocol_handle,
+            subscribe_protocol_handle,
         );
 
         // Inform the coordinator that we have been dropped,
-        // and destroy the tail protocol so the sink operator
+        // and destroy the subscribe protocol so the sink operator
         // can't send spurious messages while shutting down.
         Some(Rc::new(scopeguard::guard((), move |_| {
-            if let Some(tail_protocol_handle) = tail_protocol_weak.upgrade() {
-                std::mem::drop(tail_protocol_handle.borrow_mut().take())
+            if let Some(subscribe_protocol_handle) = subscribe_protocol_weak.upgrade() {
+                std::mem::drop(subscribe_protocol_handle.borrow_mut().take())
             }
         })))
     }
 }
 
-fn tail<G>(
+fn subscribe<G>(
     sinked_collection: Collection<G, Row, Diff>,
     sink_id: GlobalId,
     as_of: SinkAsOf,
-    tail_protocol_handle: Rc<RefCell<Option<TailProtocol>>>,
+    subscribe_protocol_handle: Rc<RefCell<Option<SubscribeProtocol>>>,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
     let mut results = Vec::new();
     sinked_collection
         .inner
-        .sink(Pipeline, &format!("tail-{}", sink_id), move |input| {
+        .sink(Pipeline, &format!("subscribe-{}", sink_id), move |input| {
             input.for_each(|_, rows| {
                 for (row, time, diff) in rows.iter() {
                     let should_emit = if as_of.strict {
@@ -98,8 +98,8 @@ fn tail<G>(
                 }
             });
 
-            if let Some(tail_protocol) = tail_protocol_handle.borrow_mut().deref_mut() {
-                tail_protocol.send_batch(input.frontier().frontier().to_owned(), &mut results);
+            if let Some(subscribe_protocol) = subscribe_protocol_handle.borrow_mut().deref_mut() {
+                subscribe_protocol.send_batch(input.frontier().frontier().to_owned(), &mut results);
             }
         })
 }
@@ -109,13 +109,13 @@ fn tail<G>(
 /// A protocol instance may `send` rows indefinitely, and is consumed by `complete`,
 /// which is used only to indicate the end of a stream. The `Drop` implementation
 /// otherwise sends an indication that the protocol has finished without completion.
-struct TailProtocol {
+struct SubscribeProtocol {
     pub sink_id: GlobalId,
-    pub tail_response_buffer: Option<Rc<RefCell<Vec<(GlobalId, TailResponse)>>>>,
+    pub subscribe_response_buffer: Option<Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>>,
     pub prev_upper: Antichain<Timestamp>,
 }
 
-impl TailProtocol {
+impl SubscribeProtocol {
     fn send_batch(&mut self, upper: Antichain<Timestamp>, rows: &mut Vec<(Timestamp, Row, Diff)>) {
         if self.prev_upper != upper {
             let mut ship = Vec::new();
@@ -132,12 +132,12 @@ impl TailProtocol {
 
             let input_exhausted = upper.is_empty();
             let buffer = self
-                .tail_response_buffer
+                .subscribe_response_buffer
                 .as_mut()
-                .expect("The tail response buffer is only cleared on drop.");
+                .expect("The subscribe response buffer is only cleared on drop.");
             buffer.borrow_mut().push((
                 self.sink_id,
-                TailResponse::Batch(TailBatch {
+                SubscribeResponse::Batch(SubscribeBatch {
                     lower: self.prev_upper.clone(),
                     upper: upper.clone(),
                     updates: ship,
@@ -147,18 +147,18 @@ impl TailProtocol {
             if input_exhausted {
                 // The dataflow's input has been exhausted; clear the channel,
                 // to avoid sending `TailResponse::DroppedAt`.
-                self.tail_response_buffer = None;
+                self.subscribe_response_buffer = None;
             }
         }
     }
 }
 
-impl Drop for TailProtocol {
+impl Drop for SubscribeProtocol {
     fn drop(&mut self) {
-        if let Some(buffer) = self.tail_response_buffer.take() {
+        if let Some(buffer) = self.subscribe_response_buffer.take() {
             buffer.borrow_mut().push((
                 self.sink_id,
-                TailResponse::DroppedAt(self.prev_upper.clone()),
+                SubscribeResponse::DroppedAt(self.prev_upper.clone()),
             ));
         }
     }

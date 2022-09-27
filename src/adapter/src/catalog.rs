@@ -82,7 +82,7 @@ pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::BootstrapArgs;
 use crate::client::ConnectionId;
 use crate::session::vars::SystemVars;
-use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
+use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::index_sql;
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
 
@@ -95,8 +95,17 @@ pub mod builtin;
 pub mod storage;
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
-pub const SYSTEM_USER: &str = "mz_system";
-pub const HTTP_DEFAULT_USER: &str = "anonymous_http_user";
+
+pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
+    name: "mz_system".into(),
+    external_metadata: None,
+});
+
+pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
+    name: "anonymous_http_user".into(),
+    external_metadata: None,
+});
+
 const CREATE_SQL_TODO: &str = "TODO";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -423,7 +432,7 @@ impl CatalogState {
                 .ok()
                 .map(|db| db.id()),
             search_path: Vec::new(),
-            user: SYSTEM_USER.into(),
+            user: SYSTEM_USER.clone(),
             prepared_statements: None,
         };
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
@@ -1087,7 +1096,7 @@ pub struct ConnCatalog<'a> {
     compute_instance: String,
     database: Option<DatabaseId>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-    user: String,
+    user: User,
     prepared_statements: Option<Cow<'a, HashMap<String, PreparedStatement>>>,
 }
 
@@ -1318,6 +1327,13 @@ pub struct Connection {
     pub create_sql: String,
     pub connection: mz_storage::types::connections::Connection,
     pub depends_on: Vec<GlobalId>,
+}
+
+pub struct TransactionResult<R> {
+    pub builtin_table_updates: Vec<BuiltinTableUpdate>,
+    pub audit_events: Vec<VersionedEvent>,
+    pub collections: Vec<mz_stash::Id>,
+    pub result: R,
 }
 
 impl CatalogItem {
@@ -2615,12 +2631,12 @@ impl<S: Append> Catalog<S> {
             compute_instance: session.vars().cluster().into(),
             database,
             search_path,
-            user: session.user().into(),
+            user: session.user().clone(),
             prepared_statements: Some(Cow::Borrowed(session.prepared_statements())),
         }
     }
 
-    pub fn for_sessionless_user(&self, user: String) -> ConnCatalog {
+    pub fn for_sessionless_user(&self, user: User) -> ConnCatalog {
         ConnCatalog {
             state: Cow::Borrowed(&self.state),
             conn_id: SYSTEM_CONN_ID,
@@ -2638,7 +2654,7 @@ impl<S: Append> Catalog<S> {
     // Leaving the system's search path empty allows us to catch issues
     // where catalog object names have not been normalized correctly.
     pub fn for_system_session(&self) -> ConnCatalog {
-        self.for_sessionless_user(SYSTEM_USER.into())
+        self.for_sessionless_user(SYSTEM_USER.clone())
     }
 
     async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection<S>> {
@@ -3019,11 +3035,12 @@ impl<S: Append> Catalog<S> {
         session: Option<&Session>,
         tx: &mut storage::Transaction<S>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
         object_type: ObjectType,
         event_details: EventDetails,
     ) -> Result<(), Error> {
-        let user = session.map(|session| session.user().to_string());
+        let user = session.map(|session| session.user().name.to_string());
         let occurred_at = (self.state.config.now)();
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(
@@ -3035,6 +3052,7 @@ impl<S: Append> Catalog<S> {
             occurred_at,
         );
         builtin_table_updates.push(self.state.pack_audit_log_update(&event)?);
+        audit_events.push(event.clone());
         tx.insert_audit_log_event(event);
         Ok(())
     }
@@ -3058,14 +3076,6 @@ impl<S: Append> Catalog<S> {
 
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
-            && matches!(
-                item.typ(),
-                SqlCatalogItemType::View
-                    | SqlCatalogItemType::MaterializedView
-                    | SqlCatalogItemType::Source
-                    | SqlCatalogItemType::Sink
-                    | SqlCatalogItemType::Index
-            )
     }
 
     fn resolve_full_name_detail(
@@ -3175,14 +3185,14 @@ impl<S: Append> Catalog<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn transact<F, T>(
+    pub async fn transact<F, R>(
         &mut self,
         session: Option<&Session>,
         ops: Vec<Op>,
         f: F,
-    ) -> Result<(Vec<BuiltinTableUpdate>, Vec<mz_stash::Id>, T), AdapterError>
+    ) -> Result<TransactionResult<R>, AdapterError>
     where
-        F: FnOnce(&CatalogState) -> Result<T, AdapterError>,
+        F: FnOnce(&CatalogState) -> Result<R, AdapterError>,
     {
         trace!("transact: {:?}", ops);
 
@@ -3284,18 +3294,23 @@ impl<S: Append> Catalog<S> {
             .collect();
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
+        let mut audit_events = vec![];
         let mut actions = Vec::with_capacity(ops.len());
         let mut storage = self.storage().await;
         let mut tx = storage.transaction().await?;
 
         fn sql_type_to_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
             match sql_type {
-                SqlCatalogItemType::View => ObjectType::View,
-                SqlCatalogItemType::MaterializedView => ObjectType::MaterializedView,
-                SqlCatalogItemType::Source => ObjectType::Source,
-                SqlCatalogItemType::Sink => ObjectType::Sink,
+                SqlCatalogItemType::Connection => ObjectType::Connection,
+                SqlCatalogItemType::Func => ObjectType::Func,
                 SqlCatalogItemType::Index => ObjectType::Index,
-                _ => unreachable!(),
+                SqlCatalogItemType::MaterializedView => ObjectType::MaterializedView,
+                SqlCatalogItemType::Secret => ObjectType::Secret,
+                SqlCatalogItemType::Sink => ObjectType::Sink,
+                SqlCatalogItemType::Source => ObjectType::Source,
+                SqlCatalogItemType::Table => ObjectType::Table,
+                SqlCatalogItemType::Type => ObjectType::Type,
+                SqlCatalogItemType::View => ObjectType::View,
             }
         }
 
@@ -3461,6 +3476,7 @@ impl<S: Append> Catalog<S> {
                         session,
                         &mut tx,
                         &mut builtin_table_updates,
+                        &mut audit_events,
                         EventType::Create,
                         ObjectType::Cluster,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
@@ -3505,6 +3521,7 @@ impl<S: Append> Catalog<S> {
                             session,
                             &mut tx,
                             &mut builtin_table_updates,
+                            &mut audit_events,
                             EventType::Create,
                             ObjectType::ClusterReplica,
                             details,
@@ -3560,6 +3577,7 @@ impl<S: Append> Catalog<S> {
                             session,
                             &mut tx,
                             &mut builtin_table_updates,
+                            &mut audit_events,
                             EventType::Create,
                             sql_type_to_object_type(item.typ()),
                             EventDetails::FullNameV1(self.resolve_full_name_detail(&name, session)),
@@ -3614,6 +3632,7 @@ impl<S: Append> Catalog<S> {
                         session,
                         &mut tx,
                         &mut builtin_table_updates,
+                        &mut audit_events,
                         EventType::Drop,
                         ObjectType::Cluster,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
@@ -3659,6 +3678,7 @@ impl<S: Append> Catalog<S> {
                         session,
                         &mut tx,
                         &mut builtin_table_updates,
+                        &mut audit_events,
                         EventType::Drop,
                         ObjectType::ClusterReplica,
                         details,
@@ -3680,6 +3700,7 @@ impl<S: Append> Catalog<S> {
                             session,
                             &mut tx,
                             &mut builtin_table_updates,
+                            &mut audit_events,
                             EventType::Drop,
                             sql_type_to_object_type(entry.item().typ()),
                             EventDetails::FullNameV1(
@@ -3716,6 +3737,7 @@ impl<S: Append> Catalog<S> {
                             session,
                             &mut tx,
                             &mut builtin_table_updates,
+                            &mut audit_events,
                             EventType::Alter,
                             sql_type_to_object_type(entry.item().typ()),
                             details,
@@ -4159,7 +4181,12 @@ impl<S: Append> Catalog<S> {
         self.state = state;
         self.transient_revision += 1;
 
-        Ok((builtin_table_updates, collections, result))
+        Ok(TransactionResult {
+            builtin_table_updates,
+            audit_events,
+            collections,
+            result,
+        })
     }
 
     pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
@@ -4785,7 +4812,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
 
 impl SessionCatalog for ConnCatalog<'_> {
     fn active_user(&self) -> &str {
-        &self.user
+        &self.user.name
     }
 
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc> {

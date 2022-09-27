@@ -29,9 +29,9 @@ gem install pg
 
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a Ruby application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Ruby application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```ruby
 require 'pg'
@@ -39,7 +39,7 @@ require 'pg'
 # Locally running instance:
 conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 conn.exec('BEGIN')
-conn.exec('DECLARE c CURSOR FOR TAIL my_view')
+conn.exec('DECLARE c CURSOR FOR SUBSCRIBE my_view')
 
 while true
   conn.exec('FETCH c') do |result|
@@ -50,7 +50,7 @@ while true
 end
 ```
 
-Each `result` of the [TAIL output format](/sql/tail/#output) has exactly object. When a row of a tailed view is **updated,** two objects will show up:
+Each `result` of the [SUBSCRIBE output format](/sql/subscribe/#output) has exactly object. When a row of a subscribed view is **updated,** two objects will show up:
 
 ```json
 ...

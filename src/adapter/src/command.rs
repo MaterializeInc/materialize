@@ -340,7 +340,7 @@ pub enum ExecuteResponse {
     },
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
-    Tailing {
+    Subscribing {
         rx: RowBatchStream,
     },
     /// The specified number of rows were updated in the requested table.
@@ -430,7 +430,7 @@ impl ExecuteResponse {
             SendingRows { .. } => None,
             SetVariable { tag, .. } => Some(tag.to_string()),
             StartedTransaction { .. } => Some("BEGIN".into()),
-            Tailing { .. } => None,
+            Subscribing { .. } => None,
             Updated(n) => Some(format!("UPDATE {}", n)),
             Raise { .. } => Some("RAISE".into()),
         }
@@ -592,7 +592,7 @@ impl ExecuteResponse {
             | Prepare
             | SendingRows { .. }
             | SetVariable { .. }
-            | Tailing { .. }
+            | Subscribing { .. }
             | Updated(..) => None,
         };
 
@@ -674,7 +674,7 @@ impl ExecuteResponse {
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raise],
             PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
-            Tail => vec![Tailing, CopyTo],
+            PlanKind::Subscribe => vec![Subscribing, CopyTo],
             StartTransaction => vec![StartedTransaction],
         }
     }

@@ -25,8 +25,11 @@ def test_sql(mz: MaterializeApplication) -> None:
 
 
 def test_testdrive(mz: MaterializeApplication) -> None:
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.copy("test/testdrive", "/workdir")
+    mz.testdrive.run("testdrive/testdrive.td")
+
+    mz.testdrive.run(
+        input=dedent(
             """
                 $ kafka-create-topic topic=test
 

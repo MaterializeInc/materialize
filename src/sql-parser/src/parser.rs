@@ -254,6 +254,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(COMMIT) => Ok(self.parse_commit()?),
                 Token::Keyword(ROLLBACK) => Ok(self.parse_rollback()?),
                 Token::Keyword(TAIL) => Ok(self.parse_tail()?),
+                Token::Keyword(SUBSCRIBE) => Ok(self.parse_subscribe()?),
                 Token::Keyword(EXPLAIN) => Ok(self.parse_explain()?),
                 Token::Keyword(DECLARE) => Ok(self.parse_declare()?),
                 Token::Keyword(FETCH) => Ok(self.parse_fetch()?),
@@ -1913,39 +1914,13 @@ impl<'a> Parser<'a> {
         Ok(schema)
     }
 
-    fn parse_envelope(&mut self) -> Result<Envelope<Raw>, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
-            let debezium_mode = if self.parse_keyword(UPSERT) {
-                DbzMode::Upsert
-            } else {
-                let tx_metadata = if self.consume_token(&Token::LParen) {
-                    self.expect_keywords(&[TRANSACTION, METADATA])?;
-                    self.expect_token(&Token::LParen)?;
-                    let options = self.parse_comma_separated(|parser| {
-                        match parser.expect_one_of_keywords(&[SOURCE, COLLECTION])? {
-                            SOURCE => {
-                                let _ = parser.consume_token(&Token::Eq);
-                                Ok(DbzTxMetadataOption::Source(parser.parse_raw_name()?))
-                            }
-                            COLLECTION => {
-                                let _ = parser.consume_token(&Token::Eq);
-                                Ok(DbzTxMetadataOption::Collection(
-                                    parser.parse_with_option_value()?,
-                                ))
-                            }
-                            _ => unreachable!(),
-                        }
-                    })?;
-                    self.expect_token(&Token::RParen)?;
-                    self.expect_token(&Token::RParen)?;
-                    options
-                } else {
-                    vec![]
-                };
-                DbzMode::Plain { tx_metadata }
-            };
+            // In Platform, `DEBEZIUM UPSERT` is the only available option.
+            // Revisit this if we ever change that.
+            let debezium_mode = DbzMode::Plain;
             Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
             Envelope::Upsert
@@ -2434,18 +2409,18 @@ impl<'a> Parser<'a> {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
-                self.expect_keyword(PUBLICATION)?;
-                let publication = self.parse_literal_string()?;
-                let details = if self.parse_keyword(DETAILS) {
-                    Some(self.parse_literal_string()?)
+
+                let options = if self.consume_token(&Token::LParen) {
+                    let options = self.parse_comma_separated(Parser::parse_pg_connection_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
                 } else {
-                    None
+                    vec![]
                 };
 
                 Ok(CreateSourceConnection::Postgres {
                     connection,
-                    publication,
-                    details,
+                    options,
                 })
             }
             KAFKA => {
@@ -2540,6 +2515,20 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn parse_pg_connection_option(&mut self) -> Result<PgConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[DETAILS, PUBLICATION])? {
+            DETAILS => PgConfigOptionName::Details,
+            PUBLICATION => PgConfigOptionName::Publication,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(PgConfigOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
@@ -3623,7 +3612,7 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RParen)?;
             match query {
                 Statement::Select(stmt) => CopyRelation::Select(stmt),
-                Statement::Tail(stmt) => CopyRelation::Tail(stmt),
+                Statement::Subscribe(stmt) => CopyRelation::Subscribe(stmt),
                 _ => return parser_err!(self, self.peek_prev_pos(), "unsupported query in COPY"),
             }
         } else {
@@ -5223,32 +5212,41 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_tail(&mut self) -> Result<Statement<Raw>, ParserError> {
+        parser_err!(
+            self,
+            self.peek_prev_pos(),
+            "TAIL has been renamed to SUBSCRIBE"
+        )
+    }
+
+    fn parse_subscribe(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let _ = self.parse_keyword(TO);
         let relation = if self.consume_token(&Token::LParen) {
             let query = self.parse_query()?;
             self.expect_token(&Token::RParen)?;
-            TailRelation::Query(query)
+            SubscribeRelation::Query(query)
         } else {
-            TailRelation::Name(self.parse_raw_name()?)
+            SubscribeRelation::Name(self.parse_raw_name()?)
         };
-        let options = self.parse_kw_options(Parser::parse_tail_option)?;
+        let options = self.parse_kw_options(Parser::parse_subscribe_option)?;
         let as_of = self.parse_optional_as_of()?;
-        Ok(Statement::Tail(TailStatement {
+        Ok(Statement::Subscribe(SubscribeStatement {
             relation,
             options,
             as_of,
         }))
     }
 
-    fn parse_tail_option(&mut self) -> Result<TailOption<Raw>, ParserError> {
+    fn parse_subscribe_option(&mut self) -> Result<SubscribeOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[PROGRESS, SNAPSHOT])? {
-            PROGRESS => TailOptionName::Progress,
-            SNAPSHOT => TailOptionName::Snapshot,
+            PROGRESS => SubscribeOptionName::Progress,
+            SNAPSHOT => SubscribeOptionName::Snapshot,
             _ => unreachable!(),
         };
 
         let _ = self.consume_token(&Token::Eq);
 
-        Ok(TailOption {
+        Ok(SubscribeOption {
             name,
             value: self.parse_opt_with_option_value(false)?,
         })

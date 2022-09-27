@@ -124,7 +124,7 @@ use crate::coord::timeline::{TimelineState, WriteTimestamp};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::sink_connection;
-use crate::tail::PendingTail;
+use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter};
 
 pub(crate) mod id_bundle;
@@ -169,6 +169,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
     ),
+    AdvanceTimelines,
     ComputeInstanceStatus(ComputeInstanceEvent),
     RemovePendingPeeks {
         conn_id: ConnectionId,
@@ -232,6 +233,7 @@ pub struct Config<S> {
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
+    pub segment_api_key: Option<String>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -328,8 +330,8 @@ pub struct Coordinator<S> {
     /// A map from client connection ids to a set of all pending peeks for that client
     client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ComputeInstanceId>>,
 
-    /// A map from pending tails to the tail description.
-    pending_tails: HashMap<GlobalId, PendingTail>,
+    /// A map from pending subscribes to the subscribe description.
+    pending_subscribes: HashMap<GlobalId, PendingSubscribe>,
 
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -356,6 +358,9 @@ pub struct Coordinator<S> {
     storage_usage_client: StorageUsageClient,
     /// The interval at which to collect storage usage information.
     storage_usage_collection_interval: Duration,
+
+    /// Segment analytics client.
+    segment_client: Option<mz_segment::Client>,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -817,6 +822,7 @@ pub async fn serve<S: Append + 'static>(
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
+        segment_api_key,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -898,6 +904,9 @@ pub async fn serve<S: Append + 'static>(
                 );
             }
 
+            let segment_client =
+                handle.block_on(async { segment_api_key.map(mz_segment::Client::new) });
+
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
@@ -912,7 +921,7 @@ pub async fn serve<S: Append + 'static>(
                 txn_reads: Default::default(),
                 pending_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),
-                pending_tails: HashMap::new(),
+                pending_subscribes: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
@@ -921,6 +930,7 @@ pub async fn serve<S: Append + 'static>(
                 transient_replica_metadata: HashMap::new(),
                 storage_usage_client,
                 storage_usage_collection_interval,
+                segment_client,
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));

@@ -43,8 +43,7 @@ ALTER TABLE identity_nothing REPLICA IDENTITY NOTHING;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 # Make sure that the above sources are fully instantiated so that the DML statements below
 # are sent as actual replication events post-snapshot.

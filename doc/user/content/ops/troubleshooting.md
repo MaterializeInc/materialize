@@ -10,7 +10,7 @@ aliases:
 ---
 
 You can use the queries below for spot debugging, but it may also be
-helpful to make them more permanent tools by creating them as views for `TAIL`ing or materialized views to read more efficiently. Note that the
+helpful to make them more permanent tools by creating them as views for `SUBSCRIBE`ing or materialized views to read more efficiently. Note that the
 existence of these additional views may itself affect performance.
 
 ### How fast are my sources loading data?
@@ -32,7 +32,7 @@ This source provides timestamp-based progress, which reveals not the
 volume of data, but how closely the contents track source timestamps.
 ```sql
 -- For each materialization, the next timestamp to be added.
-select * from mz_internal.mz_materialization_frontiers;
+select * from mz_internal.mz_compute_frontiers;
 ```
 
 ### Why is Materialize running so slowly?
@@ -258,17 +258,17 @@ The response lists the disk space for the data directory and any subdirectories:
 
 The `mzdata` directory is typically less than 10MB in size.
 
-### How many `TAIL` processes are running?
+### How many `SUBSCRIBE` processes are running?
 
-You can get the number of active `TAIL` processes in Materialize using the statement below, or another `TAIL` statement.
-Every time `TAIL` is invoked, a dataflow using the `Dataflow: tail` prefix is created.
+You can get the number of active `SUBSCRIBE` processes in Materialize using the statement below, or another `SUBSCRIBE` statement.
+Every time `SUBSCRIBE` is invoked, a dataflow using the `Dataflow: subscribe` prefix is created.
 
 ```sql
--- Report the number of tails running
+-- Report the number of `SUBSCRIBE` queries running
 SELECT count(1) FROM (
     SELECT id
     FROM mz_internal.mz_dataflows
-    WHERE substring(name, 0, 15) = 'Dataflow: tail'
+    WHERE substring(name, 0, 15) = 'Dataflow: subscribe'
     GROUP BY id
 );
 ```

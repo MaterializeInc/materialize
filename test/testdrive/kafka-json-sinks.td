@@ -21,6 +21,7 @@
 > CREATE SINK simple_view_sink FROM simple_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'unnamed-cols-sink-${testdrive.seed}')
   FORMAT JSON
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=json sink=materialize.public.simple_view_sink key=false
 {"before": null, "after": {"a": 1, "b": 2, "c": 3}}
@@ -55,6 +56,7 @@ $ kafka-verify format=json sink=materialize.public.simple_view_upsert key=true
 > CREATE SINK types_sink FROM types_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-types-sink-${testdrive.seed}')
   FORMAT JSON
+  ENVELOPE DEBEZIUM
 
 # Due to limitations in $ kafka-verify, the entire expected JSON output needs to be provided on a single line
 $ kafka-verify format=json sink=materialize.public.types_sink key=false
@@ -68,6 +70,7 @@ $ kafka-verify format=json sink=materialize.public.types_sink key=false
 > CREATE SINK special_characters_sink FROM special_characters_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-special-characters-sink-${testdrive.seed}')
   FORMAT JSON
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=json sink=materialize.public.special_characters_sink key=false
 {"before":null,"after":{"c1":"текст","c2":"\"","c3":"'","c4":"\\","c5":"a\n\tb"}}
@@ -79,6 +82,7 @@ $ kafka-verify format=json sink=materialize.public.special_characters_sink key=f
 > CREATE SINK record_sink FROM record_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-record-sink-${testdrive.seed}')
   FORMAT JSON
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=json sink=materialize.public.record_sink key=false
 {"before":null,"after":{"simple_view":{"a":1,"b":2,"c":3}}}
@@ -105,6 +109,7 @@ contains:column "a" specified more than once
 > CREATE SINK complex_type_sink FROM complex_type_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-complex-type-sink-${testdrive.seed}')
   FORMAT JSON
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=json sink=materialize.public.complex_type_sink key=false
 {"before": null, "after": {"c1": [[1,2],[3,4]], "c2": {"a":{"b":1, "c":2}, "d": {"e":3, "f":4}}}}

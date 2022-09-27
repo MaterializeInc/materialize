@@ -7,18 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Implementations around supporting the TAIL protocol with the dataflow layer
+//! Implementations around supporting the SUBSCRIBE protocol with the dataflow layer
 
 use tokio::sync::mpsc;
 
-use mz_compute_client::response::{TailBatch, TailResponse};
+use mz_compute_client::response::{SubscribeBatch, SubscribeResponse};
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, Row};
 
 use crate::coord::peek::PeekResponseUnary;
 
-/// A description of a pending tail from coord's perspective
-pub(crate) struct PendingTail {
+/// A description of a pending subscribe from coord's perspective
+pub(crate) struct PendingSubscribe {
     /// Channel to send responses to the client
     ///
     /// The responses have the form `PeekResponseUnary` but should perhaps become `TailResponse`.
@@ -29,8 +29,8 @@ pub(crate) struct PendingTail {
     arity: usize,
 }
 
-impl PendingTail {
-    /// Create a new [PendingTail].
+impl PendingSubscribe {
+    /// Create a new [PendingSubscribe].
     /// * The `channel` receives batches of finalized PeekResponses.
     /// * If `emit_progress` is true, the finalized rows are either data or progress updates
     /// * `arity` is the arity of the sink relation.
@@ -46,13 +46,13 @@ impl PendingTail {
         }
     }
 
-    /// Process a tail response
+    /// Process a subscribe response
     ///
     /// Returns `true` if the sink should be removed.
-    pub(crate) fn process_response(&mut self, response: TailResponse) -> bool {
+    pub(crate) fn process_response(&mut self, response: SubscribeResponse) -> bool {
         let mut row_buf = Row::default();
         match response {
-            TailResponse::Batch(TailBatch {
+            SubscribeResponse::Batch(SubscribeBatch {
                 lower: _,
                 upper,
                 updates: mut rows,
@@ -96,7 +96,7 @@ impl PendingTail {
                     assert_eq!(
                         upper.len(),
                         1,
-                        "TAIL only supports single-dimensional timestamps"
+                        "SUBSCRIBE only supports single-dimensional timestamps"
                     );
                     let mut packer = row_buf.packer();
                     packer.push(Datum::from(numeric::Numeric::from(*&upper[0])));
@@ -114,7 +114,7 @@ impl PendingTail {
                 }
                 upper.is_empty()
             }
-            TailResponse::DroppedAt(_frontier) => {
+            SubscribeResponse::DroppedAt(_frontier) => {
                 // TODO: Could perhaps do this earlier, in response to DROP SINK.
                 true
             }

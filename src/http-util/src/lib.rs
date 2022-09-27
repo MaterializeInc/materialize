@@ -110,38 +110,15 @@ pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse 
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct DynamicOtelConfig {
-    enabled: bool,
-}
-
-/// Allows dynamic control of the OpenTelemetry `tracing` subscriber.
-#[allow(clippy::unused_async)]
-pub async fn handle_enable_otel(
-    callback: mz_ore::tracing::OpenTelemetryEnableCallback,
-    Json(cfg): Json<DynamicOtelConfig>,
-) -> impl IntoResponse {
-    match callback.call(cfg.enabled) {
-        Ok(()) => (
-            StatusCode::OK,
-            format!(
-                "Otel collector successfully {}",
-                if cfg.enabled { "enabled" } else { "disabled" }
-            ),
-        ),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct DynamicStderrConfig {
+pub struct DynamicFilterTarget {
     targets: String,
 }
 
 /// Allows dynamic control of the stderr log filter
 #[allow(clippy::unused_async)]
-pub async fn handle_modify_stderr_filter(
-    callback: mz_ore::tracing::StderrFilterCallback,
-    Json(cfg): Json<DynamicStderrConfig>,
+pub async fn handle_modify_filter_target(
+    callback: mz_ore::tracing::DynamicTargetsCallback,
+    Json(cfg): Json<DynamicFilterTarget>,
 ) -> impl IntoResponse {
     match cfg.targets.parse::<Targets>() {
         Ok(targets) => match callback.call(targets) {

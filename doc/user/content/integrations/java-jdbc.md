@@ -59,9 +59,9 @@ To establish the connection to Materialize, call the `getConnection()` method on
 
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a Java application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Java application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```java
 import java.sql.Connection;
@@ -92,12 +92,12 @@ public class App {
 
     }
 
-    public void tail() {
+    public void subscribe() {
         try (Connection conn = connect()) {
 
             Statement stmt = conn.createStatement();
             stmt.execute("BEGIN");
-            stmt.execute("DECLARE c CURSOR FOR TAIL my_view");
+            stmt.execute("DECLARE c CURSOR FOR SUBSCRIBE my_view");
             while (true) {
                 ResultSet rs = stmt.executeQuery("FETCH ALL c");
                 if(rs.next()) {
@@ -111,12 +111,12 @@ public class App {
 
     public static void main(String[] args) {
         App app = new App();
-        app.tail();
+        app.subscribe();
     }
 }
 ```
 
-The [TAIL output format](/sql/tail/#output) of `rs` is a `ResultSet` of view updates. When a row of a tailed view is **updated,** two objects will show up in the `rows` array:
+The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `rs` is a `ResultSet` of view updates. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
 ```java
     ...

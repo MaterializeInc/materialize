@@ -14,7 +14,7 @@ menu:
 
 Field | Use
 ------|-----
-_query_ | The [`SELECT`](/sql/select) or [`TAIL`](/sql/tail) query to send
+_query_ | The [`SELECT`](/sql/select) or [`SUBSCRIBE`](/sql/subscribe) query to send
 _field_ | The name of the option you want to set.
 _val_ | The value for the option.
 
@@ -32,8 +32,8 @@ Name | Value type | Default value | Description
 COPY (SELECT * FROM some_view) TO STDOUT;
 ```
 
-### Tailing a view with binary output
+### Subscribing to a view with binary output
 
 ```sql
-COPY (TAIL some_view) TO STDOUT WITH (FORMAT binary);
+COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 ```

@@ -20,8 +20,9 @@ use anyhow::{anyhow, bail, Context};
 use aws_arn::ResourceName as AmazonResourceName;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{
-    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, KafkaConfigOption,
-    KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, ReaderSchemaSelectionStrategy,
+    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, Envelope,
+    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -39,8 +40,8 @@ use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, DbzMode, Envelope, Format,
-    ProtobufSchema, Value, WithOptionValue,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value,
+    WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
@@ -196,8 +197,7 @@ pub async fn purify_create_source(
         }
         CreateSourceConnection::Postgres {
             connection,
-            publication,
-            details: details_ast,
+            options,
         } => {
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
@@ -207,12 +207,19 @@ pub async fn purify_create_source(
                     _ => bail!("{} is not a postgres connection", item.name()),
                 }
             };
+            let crate::plan::statement::PgConfigOptionExtracted { publication, .. } =
+                options.clone().try_into()?;
+            let publication = publication
+                .ok_or_else(|| sql_err!("POSTGRES CONNECTION must specify PUBLICATION"))?;
+
             // verify that we can connect upstream and snapshot publication metadata
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
             let tables = mz_postgres_util::publication_info(&config, &publication).await?;
 
+            // Remove any old detail references
+            options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
             let details = PostgresSourceDetails {
                 tables,
                 slot: format!(
@@ -220,7 +227,12 @@ pub async fn purify_create_source(
                     Uuid::new_v4().to_string().replace('-', "")
                 ),
             };
-            *details_ast = Some(hex::encode(details.into_proto().encode_to_vec()));
+            options.push(PgConfigOption {
+                name: PgConfigOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            })
         }
         CreateSourceConnection::LoadGenerator { .. } => (),
     }
@@ -241,7 +253,7 @@ async fn purify_source_format(
     catalog: &dyn SessionCatalog,
     format: &mut CreateSourceFormat<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
@@ -271,7 +283,7 @@ async fn purify_source_format_single(
     catalog: &dyn SessionCatalog,
     format: &mut Format<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     match format {
@@ -346,7 +358,7 @@ async fn purify_csr_connection_proto(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -388,8 +400,8 @@ async fn purify_csr_connection_proto(
                 .await
                 .ok();
 
-            if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key.is_none() {
-                bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+            if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key.is_none() {
+                bail!("Key schema is required for ENVELOPE DEBEZIUM");
             }
 
             *seed = Some(CsrSeedProtobuf { value, key });
@@ -404,7 +416,7 @@ async fn purify_csr_connection_avro(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionAvro<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -447,8 +459,8 @@ async fn purify_csr_connection_avro(
             topic,
         )
         .await?;
-        if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key_schema.is_none() {
-            bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+        if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key_schema.is_none() {
+            bail!("Key schema is required for ENVELOPE DEBEZIUM");
         }
 
         *seed = Some(CsrSeedAvro {

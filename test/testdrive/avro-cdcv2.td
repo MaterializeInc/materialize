@@ -153,13 +153,13 @@ id price
 
 # Test that tails report progress messages even without new data
 
-# The ouput of TAIL is dependent on the replica size
+# The ouput of SUBSCRIBE is dependent on the replica size
 $ skip-if
 SELECT ${arg.replica-size} > 1;
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL data_schema_inline WITH (SNAPSHOT = FALSE, PROGRESS = TRUE);
+> DECLARE c CURSOR FOR SUBSCRIBE data_schema_inline WITH (SNAPSHOT = FALSE, PROGRESS = TRUE);
 
 > FETCH 2 FROM c WITH (timeout = '60s')
 14 true <null> <null> <null>

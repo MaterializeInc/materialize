@@ -188,8 +188,8 @@ COMMIT
 ----
 db error: ERROR: unknown catalog item 'u1'
 
-# Verify TAIL must be only read statement in a transaction.
-# We use FETCH 0 with TAIL below so that we don't need to worry about
+# Verify SUBSCRIBE must be only read statement in a transaction.
+# We use FETCH 0 with SUBSCRIBE below so that we don't need to worry about
 # timestamps in this slt file.
 
 statement ok
@@ -199,33 +199,33 @@ statement ok
 INSERT INTO t VALUES (1)
 
 simple
-DECLARE c CURSOR FOR TAIL t;
+DECLARE c CURSOR FOR SUBSCRIBE t;
 FETCH 0 c;
-DECLARE d CURSOR FOR TAIL t;
+DECLARE d CURSOR FOR SUBSCRIBE t;
 FETCH 0 d;
 ----
-db error: ERROR: TAIL in transactions must be the only read statement
+db error: ERROR: SUBSCRIBE in transactions must be the only read statement
 
 simple
-DECLARE c CURSOR FOR TAIL t;
+DECLARE c CURSOR FOR SUBSCRIBE t;
 FETCH 0 c;
 SELECT * FROM t LIMIT 0;
 ----
-db error: ERROR: TAIL in transactions must be the only read statement
+db error: ERROR: SUBSCRIBE in transactions must be the only read statement
 
 simple
 SELECT * FROM t LIMIT 0;
-DECLARE c CURSOR FOR TAIL t;
+DECLARE c CURSOR FOR SUBSCRIBE t;
 FETCH 0 c;
 ----
 db error: ERROR: transaction in read-only mode
 
-# Using an AS OF in the SELECT or TAIL allows lifting that restriction.
+# Using an AS OF in the SELECT or SUBSCRIBE allows lifting that restriction.
 
 simple
-DECLARE c CURSOR FOR TAIL t AS OF 18446744073709551615;
+DECLARE c CURSOR FOR SUBSCRIBE t AS OF 18446744073709551615;
 FETCH 0 c;
-DECLARE d CURSOR FOR TAIL t;
+DECLARE d CURSOR FOR SUBSCRIBE t;
 FETCH 0 d;
 ----
 COMPLETE 0
@@ -234,7 +234,7 @@ COMPLETE 0
 COMPLETE 0
 
 simple
-DECLARE c CURSOR FOR TAIL t AS OF 18446744073709551615;
+DECLARE c CURSOR FOR SUBSCRIBE t AS OF 18446744073709551615;
 FETCH 0 c;
 SELECT * FROM t LIMIT 0;
 ----
@@ -244,7 +244,7 @@ COMPLETE 0
 
 simple
 SELECT * FROM t LIMIT 0;
-DECLARE c CURSOR FOR TAIL t AS OF 18446744073709551615;
+DECLARE c CURSOR FOR SUBSCRIBE t AS OF 18446744073709551615;
 FETCH 0 c;
 ----
 COMPLETE 0
@@ -252,7 +252,7 @@ COMPLETE 0
 COMPLETE 0
 
 simple
-DECLARE c CURSOR FOR TAIL t;
+DECLARE c CURSOR FOR SUBSCRIBE t;
 FETCH 0 c;
 SELECT * FROM t LIMIT 0 AS OF AT LEAST 0;
 ----
@@ -262,7 +262,7 @@ COMPLETE 0
 
 simple
 SELECT * FROM t LIMIT 0 AS OF AT LEAST 0;
-DECLARE c CURSOR FOR TAIL t;
+DECLARE c CURSOR FOR SUBSCRIBE t;
 FETCH 0 c;
 ----
 COMPLETE 0
@@ -512,12 +512,12 @@ BEGIN READ WRITE
 statement ok
 COMMIT
 
-# Test read-only -> read-write with tail
+# Test read-only -> read-write with subscribe
 statement ok
 BEGIN READ ONLY
 
 simple
-DECLARE c CURSOR FOR TAIL t;
+DECLARE c CURSOR FOR SUBSCRIBE t;
 FETCH 0 c;
 ----
 COMPLETE 0

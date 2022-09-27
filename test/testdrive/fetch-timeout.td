@@ -13,7 +13,7 @@
 #
 
 #
-# FETCH + TAIL - sleep happens
+# FETCH + SUBSCRIBE - sleep happens
 #
 
 > CREATE TABLE t1 (f1 INTEGER);
@@ -24,7 +24,7 @@
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL t1;
+> DECLARE c CURSOR FOR SUBSCRIBE t1;
 
 > FETCH 1 c WITH (timeout='1.1s');
 

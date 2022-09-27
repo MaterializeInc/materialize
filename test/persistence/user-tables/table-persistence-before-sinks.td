@@ -23,6 +23,7 @@
 
 > CREATE SINK sink_sink FROM sink_table
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-exactly-once-sink-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM;
 
 > INSERT INTO sink_table VALUES (2);

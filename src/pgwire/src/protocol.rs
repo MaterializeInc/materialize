@@ -17,7 +17,6 @@ use std::mem;
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
-use mz_repr::GlobalId;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
@@ -25,9 +24,10 @@ use tokio::select;
 use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
 
+use mz_adapter::session::User;
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
-    TransactionStatus,
+    EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
+    RowBatchStream, Session, TransactionStatus,
 };
 use mz_adapter::{ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::FronteggAuthentication;
@@ -35,6 +35,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::GlobalId;
 use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
@@ -168,7 +169,7 @@ where
         }
     }
 
-    let is_expired = if let Some(frontegg) = frontegg {
+    let (external_metadata, is_expired) = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
@@ -186,9 +187,15 @@ where
         match frontegg
             .exchange_password_for_token(&password)
             .await
-            .and_then(|token| frontegg.check_expiry(token, user.clone()))
+            .and_then(|token| frontegg.continuously_validate_access_token(token, user.clone()))
         {
-            Ok(check) => check.left_future(),
+            Ok((claims, is_expired)) => {
+                let external_metadata = Some(ExternalUserMetadata {
+                    user_id: claims.best_user_id(),
+                    group_id: claims.tenant_id,
+                });
+                (external_metadata, is_expired.left_future())
+            }
             Err(e) => {
                 warn!("PGwire connection failed authentication: {}", e);
                 return conn
@@ -201,11 +208,17 @@ where
         }
     } else {
         // No frontegg check, so is_expired never resolves.
-        pending().right_future()
+        (None, pending().right_future())
     };
 
     // Construct session.
-    let mut session = Session::new(conn.id(), user);
+    let mut session = Session::new(
+        conn.id(),
+        User {
+            name: user,
+            external_metadata,
+        },
+    );
     for (name, value) in params {
         let local = false;
         let _ = session.vars_mut().set(&name, &value, local);
@@ -1157,15 +1170,17 @@ where
                 }
                 command_complete!()
             }
-            ExecuteResponse::Tailing { rx } => {
+            ExecuteResponse::Subscribing { rx } => {
                 if fetch_portal_name.is_none() {
                     let mut msg = ErrorResponse::notice(
                         SqlState::WARNING,
-                        "streaming TAIL rows directly requires a client that does not buffer output",
+                        "streaming SUBSCRIBE rows directly requires a client that does not buffer output",
                     );
                     if self.adapter_client.session().vars().application_name() == "psql" {
-                        msg.hint =
-                            Some("Wrap your TAIL statement in `COPY (TAIL ...) TO STDOUT`.".into())
+                        msg.hint = Some(
+                            "Wrap your SUBSCRIBE statement in `COPY (SUBSCRIBE ...) TO STDOUT`."
+                                .into(),
+                        )
                     }
                     self.send(msg).await?;
                     self.conn.flush().await?;
@@ -1187,7 +1202,7 @@ where
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 let rows: RowBatchStream = match *resp {
-                    ExecuteResponse::Tailing { rx } => rx,
+                    ExecuteResponse::Subscribing { rx } => rx,
                     ExecuteResponse::SendingRows {
                         future: rows_rx,
                         span,

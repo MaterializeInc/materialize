@@ -34,7 +34,7 @@ During the first query, a timestamp is chosen that is valid for all of those obj
 This timestamp will be used for all other queries.
 The transaction will additionally hold back normal compaction of the objects, potentially increasing memory usage for very long running transactions.
 
-A second kind of **read-only** transaction can contain an initial [`TAIL`](/sql/tail), which can appear in a transaction block along with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
+A second kind of **read-only** transaction can contain an initial [`SUBSCRIBE`](/sql/subscribe), which can appear in a transaction block along with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
 
 ### Write-only transactions
 

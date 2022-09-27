@@ -14,7 +14,7 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE alter_add_column (f1 INTEGER);
+CREATE TABLE alter_add_column (f1 INTEGER PRIMARY KEY);
 ALTER TABLE alter_add_column REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column VALUES (123);
 
@@ -37,7 +37,7 @@ $ schema-registry-wait-schema schema=postgres.public.alter_add_column-value
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_add_column ADD COLUMN new_column INTEGER DEFAULT 1;
-INSERT INTO alter_add_column VALUES (123,2);
+INSERT INTO alter_add_column VALUES (1234,2);
 
 UPDATE alter_add_column SET f1 = f1 * 10 WHERE new_column = 1;
 UPDATE alter_add_column SET f1 = f1 * 100 WHERE new_column = 2;
@@ -47,4 +47,4 @@ UPDATE alter_add_column SET f1 = f1 * 100 WHERE new_column = 2;
 
 > SELECT * FROM alter_add_column;
 1230
-12300
+123400

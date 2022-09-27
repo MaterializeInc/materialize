@@ -31,7 +31,7 @@ use mz_compute_client::command::{
 };
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
-use mz_compute_client::response::{ComputeResponse, PeekResponse, TailResponse};
+use mz_compute_client::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
@@ -58,11 +58,11 @@ pub struct ComputeState {
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub sink_tokens: HashMap<GlobalId, SinkToken>,
-    /// Shared buffer with TAIL operator instances by which they can respond.
+    /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
     ///
-    /// The entries are pairs of sink identifier (to identify the tail instance)
+    /// The entries are pairs of sink identifier (to identify the subscribe instance)
     /// and the response itself.
-    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
+    pub subscribe_response_buffer: Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
@@ -95,8 +95,8 @@ pub struct ActiveComputeState<'a, A: Allocate> {
 pub struct SinkToken {
     /// The underlying token.
     pub token: Box<dyn Any>,
-    /// Whether the sink token is keeping a tail alive.
-    pub is_tail: bool,
+    /// Whether the sink token is keeping a subscribe alive.
+    pub is_subscribe: bool,
 }
 
 impl<'a, A: Allocate> ActiveComputeState<'a, A> {
@@ -629,11 +629,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
     }
 
-    /// Scan the shared tail response buffer, and forward results along.
-    pub fn process_tails(&mut self) {
-        let mut tail_responses = self.compute_state.tail_response_buffer.borrow_mut();
-        for (sink_id, response) in tail_responses.drain(..) {
-            self.send_compute_response(ComputeResponse::TailResponse(sink_id, response));
+    /// Scan the shared subscribe response buffer, and forward results along.
+    pub fn process_subscribes(&mut self) {
+        let mut subscribe_responses = self.compute_state.subscribe_response_buffer.borrow_mut();
+        for (sink_id, response) in subscribe_responses.drain(..) {
+            self.send_compute_response(ComputeResponse::SubscribeResponse(sink_id, response));
         }
     }
 

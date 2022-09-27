@@ -84,7 +84,7 @@ To create a source in Materialize:
 CREATE SOURCE mz_source
     FROM POSTGRES
       CONNECTION pg_connection
-      PUBLICATION 'mz_source';
+      (PUBLICATION 'mz_source');
 ```
 
 {{< note >}}

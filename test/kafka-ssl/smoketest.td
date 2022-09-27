@@ -75,6 +75,7 @@ a
 > CREATE SINK snk FROM data
   INTO KAFKA CONNECTION kafka_ssl (TOPIC 'snk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
 {"before": null, "after": {"row":{"a": 1}}}
@@ -91,6 +92,7 @@ $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
 ! CREATE SINK no_basic_auth FROM data
   INTO KAFKA CONNECTION kafka_ssl (TOPIC 'snk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION no_basic_auth_conn
+  ENVELOPE DEBEZIUM
 contains:error publishing kafka schemas for sink: unable to publish value schema to registry in kafka sink: server error 401: Unauthorized
 
 > CREATE CONNECTION csr_without_ssl

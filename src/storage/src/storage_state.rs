@@ -302,7 +302,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// are allowed to compact up to any new `as_of`.
     ///
     /// Some additional tidying happens, e.g. cleaning up reported frontiers.
-    /// tail response buffer. We will need to be vigilant with future
+    /// subscribe response buffer. We will need to be vigilant with future
     /// modifications to `StorageState` to line up changes there with clean
     /// resets here.
     fn reconcile(&mut self, command_rx: &CommandReceiver) {

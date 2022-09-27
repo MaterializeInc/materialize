@@ -116,6 +116,7 @@ pub struct BuiltinFunc {
 
 pub static BUILTIN_ROLE_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
 
+#[derive(Clone)]
 pub struct BuiltinRole {
     /// Name of the builtin role.
     ///
@@ -973,32 +974,32 @@ pub const MZ_ARRANGEMENT_SHARING_INTERNAL: BuiltinLog = BuiltinLog {
     variant: LogVariant::Differential(DifferentialLog::Sharing),
 };
 
-pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
-    name: "mz_materializations",
+pub const MZ_COMPUTE_EXPORTS: BuiltinLog = BuiltinLog {
+    name: "mz_compute_exports",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
 };
 
-pub const MZ_WORKER_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
-    name: "mz_worker_materialization_dependencies",
+pub const MZ_WORKER_COMPUTE_DEPENDENCIES: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::DataflowDependency),
 };
 
-pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
-    name: "mz_worker_materialization_frontiers",
+pub const MZ_WORKER_COMPUTE_FRONTIERS: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
 };
 
-pub const MZ_WORKER_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinLog = BuiltinLog {
-    name: "mz_worker_materialization_source_frontiers",
+pub const MZ_WORKER_COMPUTE_IMPORT_FRONTIERS: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_import_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
 };
 
-pub const MZ_WORKER_MATERIALIZATION_DELAYS: BuiltinLog = BuiltinLog {
-    name: "mz_worker_materialization_delays",
+pub const MZ_WORKER_COMPUTE_DELAYS: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_delays",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
 };
@@ -1068,6 +1069,17 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("topic", ScalarType::String.nullable(false))
         .with_column("progress_topic", ScalarType::String.nullable(true))
         .with_key(vec![0]),
+});
+pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_kafka_connections",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column(
+            "brokers",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column("progress_topic", ScalarType::String.nullable(true)),
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
@@ -1433,22 +1445,22 @@ LEFT OUTER JOIN counts
     ON mz_cluster_replicas_base.id = counts.replica_id",
 };
 
-pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
-    name: "mz_materialization_frontiers",
+pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
+    name: "mz_compute_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_materialization_frontiers AS SELECT
-    object_id, pg_catalog.min(time) AS time
-FROM mz_internal.mz_worker_materialization_frontiers
-GROUP BY object_id",
+    sql: "CREATE VIEW mz_internal.mz_compute_frontiers AS SELECT
+    export_id, pg_catalog.min(time) AS time
+FROM mz_internal.mz_worker_compute_frontiers
+GROUP BY export_id",
 };
 
-pub const MZ_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinView = BuiltinView {
-    name: "mz_materialization_source_frontiers",
+pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
+    name: "mz_compute_import_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_materialization_source_frontiers AS SELECT
-    object_id, source_id, pg_catalog.min(time) AS time
-FROM mz_internal.mz_worker_materialization_source_frontiers
-GROUP BY object_id, source_id",
+    sql: "CREATE VIEW mz_internal.mz_compute_import_frontiers AS SELECT
+    export_id, import_id, pg_catalog.min(time) AS time
+FROM mz_internal.mz_worker_compute_import_frontiers
+GROUP BY export_id, import_id",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
@@ -2157,7 +2169,9 @@ FROM mz_catalog.mz_roles r
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 
-pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: SYSTEM_USER };
+pub static MZ_SYSTEM: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+    name: &*SYSTEM_USER.name,
+});
 
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     let mut builtins = vec![
@@ -2256,8 +2270,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_DATAFLOW_OPERATORS),
         Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
-        Builtin::Log(&MZ_MATERIALIZATIONS),
-        Builtin::Log(&MZ_WORKER_MATERIALIZATION_DEPENDENCIES),
+        Builtin::Log(&MZ_COMPUTE_EXPORTS),
+        Builtin::Log(&MZ_WORKER_COMPUTE_DEPENDENCIES),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
         Builtin::Log(&MZ_PEEK_ACTIVE),
@@ -2265,12 +2279,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
-        Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
-        Builtin::Log(&MZ_WORKER_MATERIALIZATION_SOURCE_FRONTIERS),
-        Builtin::Log(&MZ_WORKER_MATERIALIZATION_DELAYS),
+        Builtin::Log(&MZ_WORKER_COMPUTE_FRONTIERS),
+        Builtin::Log(&MZ_WORKER_COMPUTE_IMPORT_FRONTIERS),
+        Builtin::Log(&MZ_WORKER_COMPUTE_DELAYS),
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),
+        Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
@@ -2306,8 +2321,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICAS),
-        Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
-        Builtin::View(&MZ_MATERIALIZATION_SOURCE_FRONTIERS),
+        Builtin::View(&MZ_COMPUTE_FRONTIERS),
+        Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
@@ -2347,7 +2362,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> = Lazy::new(|| vec![MZ_SYSTEM]);
+pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> = Lazy::new(|| vec![&*MZ_SYSTEM]);
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {

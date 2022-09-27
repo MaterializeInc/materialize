@@ -31,7 +31,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL v1;
+> DECLARE c CURSOR FOR SUBSCRIBE v1;
 
 > FETCH 1 c WITH (timeout = '1d');
 <TIMESTAMP> 1 123
@@ -44,7 +44,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL v1;
+> DECLARE c CURSOR FOR SUBSCRIBE v1;
 
 > FETCH 3 c WITH (timeout = '1d');
 <TIMESTAMP> 1 123

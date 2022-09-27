@@ -416,18 +416,18 @@ impl LogView {
 
             LogView::MzMaterializationFrontiers => (
                 "SELECT
-                    object_id, pg_catalog.min(time) AS time
-                FROM mz_internal.mz_worker_materialization_frontiers_{}
-                GROUP BY object_id",
-                "mz_materialization_frontiers_{}",
+                    export_id, pg_catalog.min(time) AS time
+                FROM mz_internal.mz_worker_compute_frontiers_{}
+                GROUP BY export_id",
+                "mz_compute_frontiers_{}",
             ),
 
             LogView::MzMaterializationSourceFrontiers => (
                 "SELECT
-                    object_id, source_id, pg_catalog.min(time) AS time
-                FROM mz_internal.mz_worker_materialization_source_frontiers_{}
-                GROUP BY object_id, source_id",
-                "mz_materialization_source_frontiers_{}",
+                    export_id, import_id, pg_catalog.min(time) AS time
+                FROM mz_internal.mz_worker_compute_import_frontiers_{}
+                GROUP BY export_id, import_id",
+                "mz_compute_import_frontiers_{}",
             ),
 
             LogView::MzMessageCounts => (
@@ -645,7 +645,7 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::empty()
-                .with_column("object_id", ScalarType::String.nullable(false))
+                .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1]),
 
@@ -655,19 +655,19 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
-                .with_column("object_id", ScalarType::String.nullable(false))
+                .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false)),
 
             LogVariant::Compute(ComputeLog::SourceFrontierCurrent) => RelationDesc::empty()
-                .with_column("object_id", ScalarType::String.nullable(false))
-                .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("export_id", ScalarType::String.nullable(false))
+                .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierDelay) => RelationDesc::empty()
-                .with_column("object_id", ScalarType::String.nullable(false))
-                .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("export_id", ScalarType::String.nullable(false))
+                .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("delay_ns", ScalarType::UInt64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))

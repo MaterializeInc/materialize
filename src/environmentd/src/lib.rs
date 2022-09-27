@@ -37,7 +37,7 @@ use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
-use mz_ore::tracing::{OpenTelemetryEnableCallback, StderrFilterCallback};
+use mz_ore::tracing::TracingTargetCallbacks;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
@@ -107,14 +107,14 @@ pub struct Config {
     pub default_storage_host_size: Option<String>,
     /// The interval at which to collect storage usage information.
     pub storage_usage_collection_interval: Duration,
+    /// An API key for Segment. Enables export of audit events to Segment.
+    pub segment_api_key: Option<String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
     pub metrics_registry: MetricsRegistry,
-    /// A callback to enable or disable the OpenTelemetry tracing collector.
-    pub otel_enable_callback: OpenTelemetryEnableCallback,
-    /// A callback to modify the stderr log filter
-    pub stderr_filter_callback: StderrFilterCallback,
+    /// Callbacks used to modify tracing/logging filters
+    pub tracing_target_callbacks: TracingTargetCallbacks,
 
     // === Testing options. ===
     /// A now generation function for mocking time.
@@ -210,11 +210,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Listen on the internal HTTP API port.
     let internal_http_local_addr = {
         let metrics_registry = config.metrics_registry.clone();
-        let server = http::InternalServer::new(
-            metrics_registry,
-            config.otel_enable_callback,
-            config.stderr_filter_callback,
-        );
+        let server = http::InternalServer::new(metrics_registry, config.tracing_target_callbacks);
         let bound_server = server.bind(config.internal_http_listen_addr);
         let internal_http_local_addr = bound_server.local_addr();
         task::spawn(|| "internal_http_server", {
@@ -280,6 +276,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
+        segment_api_key: config.segment_api_key,
     })
     .await?;
 

@@ -132,8 +132,8 @@ pub enum AdapterError {
     StatementTimeout,
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(mz_sql::catalog::CatalogError),
-    /// The transaction is in single-tail mode.
-    TailOnlyTransaction,
+    /// The transaction is in single-subscribe mode.
+    SubscribeOnlyTransaction,
     /// An error occurred in the MIR stage of the optimizer.
     Transform(TransformError),
     /// A user tried to perform an action that they were unauthorized to do.
@@ -387,8 +387,8 @@ impl fmt::Display for AdapterError {
                 write!(f, "cannot create {} in safe mode", feature)
             }
             AdapterError::SqlCatalog(e) => e.fmt(f),
-            AdapterError::TailOnlyTransaction => {
-                f.write_str("TAIL in transactions must be the only read statement")
+            AdapterError::SubscribeOnlyTransaction => {
+                f.write_str("SUBSCRIBE in transactions must be the only read statement")
             }
             AdapterError::Transform(e) => e.fmt(f),
             AdapterError::UncallableFunction { func, context } => {

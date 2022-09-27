@@ -21,11 +21,11 @@ DECLARE c CURSOR FOR SELECT * FROM t
 Declare(DeclareStatement { name: Ident("c"), stmt: Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }) })
 
 parse-statement
-DECLARE c CURSOR FOR TAIL t
+DECLARE c CURSOR FOR SUBSCRIBE t
 ----
-DECLARE c CURSOR FOR TAIL t
+DECLARE c CURSOR FOR SUBSCRIBE t
 =>
-Declare(DeclareStatement { name: Ident("c"), stmt: Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("t")]))), options: [], as_of: None }) })
+Declare(DeclareStatement { name: Ident("c"), stmt: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("t")]))), options: [], as_of: None }) })
 
 parse-statement
 CLOSE c
