@@ -12,11 +12,6 @@ menu:
 Materialize exposes a system catalog that contains metadata about the running
 Materialize instance.
 
-{{< warning >}}
-The system tables are not part of Materialize's stable interface.
-Backwards-incompatible changes to these tables may be made at any time.
-{{< /warning >}}
-
 ## Details
 
 The system catalog consists of three schemas that are implicitly available in
@@ -361,6 +356,11 @@ Materialize with minor changes to the `pg_catalog` compatibility shim.
 
 The following sections describe the available objects in the `mz_internal`
 schema.
+
+{{< warning >}}
+The objects in the `mz_internal` schema are not part of Materialize's stable interface.
+Backwards-incompatible changes to these tables may be made at any time.
+{{< /warning >}}
 
 ### `mz_arrangement_sharing`
 

@@ -74,7 +74,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinStorageCollection, BuiltinTable, BuiltinType, Fingerprint,
     BUILTINS, BUILTIN_ROLE_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
-    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    MZ_TEMP_SCHEMA, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
@@ -256,6 +256,23 @@ impl CatalogState {
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
             | CatalogItem::StorageCollection(_) => false,
+        }
+    }
+
+    /// Indicates whether the indicated item is considered stable or not.
+    ///
+    /// Only stable items can be used as dependencies of other catalog items.
+    pub fn is_stable(&self, id: GlobalId) -> bool {
+        let item = self.get_entry(&id).item();
+
+        match item {
+            CatalogItem::Table(_) => {
+                !(id == self.resolve_builtin_table(&MZ_VIEW_KEYS)
+                    || id == self.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS))
+            }
+            CatalogItem::Log(_) => false,
+            // In general, an item is stable iff all its dependencies are stable.
+            item => item.uses().iter().all(|id| self.is_stable(*id)),
         }
     }
 
@@ -3567,6 +3584,8 @@ impl<S: Append> Catalog<S> {
                     name,
                     item,
                 } => {
+                    self.ensure_no_unstable_uses(&item)?;
+
                     if item.is_temporary() {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
                             || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
@@ -4214,6 +4233,25 @@ impl<S: Append> Catalog<S> {
             collections,
             result,
         })
+    }
+
+    fn ensure_no_unstable_uses(&self, item: &CatalogItem) -> Result<(), AdapterError> {
+        let unstable_dependencies: Vec<_> = item
+            .uses()
+            .iter()
+            .filter(|id| !self.state.is_stable(**id))
+            .map(|id| self.state.get_entry(&id).name().item.clone())
+            .collect();
+
+        if unstable_dependencies.is_empty() {
+            Ok(())
+        } else {
+            let object_type = item.typ().to_string();
+            Err(AdapterError::UnstableDependency {
+                object_type,
+                unstable_dependencies,
+            })
+        }
     }
 
     pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
@@ -5049,16 +5087,6 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
 
     fn replica_names(&self) -> HashSet<&String> {
         self.replica_id_by_name.keys().collect::<HashSet<_>>()
-    }
-
-    fn replica_logs_and_views(&self, name: &String) -> Option<(Vec<GlobalId>, Vec<GlobalId>)> {
-        let replica = self
-            .replicas_by_id
-            .get(self.replica_id_by_name.get(name)?)?;
-        Some((
-            replica.config.persisted_logs.get_source_ids().collect(),
-            replica.config.persisted_logs.get_view_ids().collect(),
-        ))
     }
 }
 

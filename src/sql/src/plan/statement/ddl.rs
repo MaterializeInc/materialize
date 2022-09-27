@@ -2959,11 +2959,7 @@ pub fn describe_drop_cluster_replica(
 
 pub fn plan_drop_cluster_replica(
     scx: &StatementContext,
-    DropClusterReplicasStatement {
-        if_exists,
-        names,
-        cascade,
-    }: DropClusterReplicasStatement,
+    DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
 ) -> Result<Plan, PlanError> {
     let mut names_out = Vec::with_capacity(names.len());
     for QualifiedReplica { cluster, replica } in names {
@@ -2975,29 +2971,6 @@ pub fn plan_drop_cluster_replica(
         let replica_name = replica.into_string();
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
-            if !cascade {
-                let (log_ids, view_ids) = instance.replica_logs_and_views(&replica_name).unwrap();
-
-                // Check if we have an item that depends on the replica's logs or log views
-                for id in log_ids.iter().chain(view_ids.iter()) {
-                    let log_item = scx.catalog.get_item(&id);
-                    for id in log_item.used_by() {
-                        // Dependencies on log views can be removed without cascade.
-                        if !view_ids.contains(id) {
-                            let dep = scx.catalog.get_item(id);
-                            if dependency_prevents_drop(ObjectType::Source, dep) {
-                                sql_bail!(
-                                    "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
-                                    replica_name.quoted(),
-                                    instance.name().quoted(),
-                                    scx.catalog.resolve_full_name(dep.name())
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
             names_out.push((instance.name().to_string(), replica_name));
         } else {
             // If "IF EXISTS" supplied, names allowed to be missing,

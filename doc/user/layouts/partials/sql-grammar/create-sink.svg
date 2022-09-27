@@ -1,95 +1,95 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="579" height="347">
-   <polygon points="11 17 3 13 3 21"/>
-   <polygon points="19 17 11 13 11 21"/>
-   <rect x="33" y="3" width="114" height="32" rx="10"/>
-   <rect x="31"
+<svg xmlns="http://www.w3.org/2000/svg" width="587" height="331">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="114" height="32" rx="10"/>
+   <rect x="29"
          y="1"
          width="114"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="41" y="21">CREATE SINK</text>
-   <rect x="187" y="35" width="120" height="32" rx="10"/>
-   <rect x="185"
+   <text class="terminal" x="39" y="21">CREATE SINK</text>
+   <rect x="185" y="35" width="120" height="32" rx="10"/>
+   <rect x="183"
          y="33"
          width="120"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="195" y="53">IF NOT EXISTS</text>
-   <rect x="347" y="3" width="88" height="32"/>
-   <rect x="345" y="1" width="88" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="355" y="21">sink_name</text>
-   <rect x="455" y="3" width="60" height="32" rx="10"/>
-   <rect x="453"
+   <text class="terminal" x="193" y="53">IF NOT EXISTS</text>
+   <rect x="345" y="3" width="88" height="32"/>
+   <rect x="343" y="1" width="88" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="353" y="21">sink_name</text>
+   <rect x="453" y="3" width="60" height="32" rx="10"/>
+   <rect x="451"
          y="1"
          width="60"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="463" y="21">FROM</text>
-   <rect x="119" y="101" width="90" height="32"/>
-   <rect x="117" y="99" width="90" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="127" y="119">item_name</text>
-   <rect x="229" y="101" width="54" height="32" rx="10"/>
-   <rect x="227"
+   <text class="terminal" x="461" y="21">FROM</text>
+   <rect x="122" y="101" width="90" height="32"/>
+   <rect x="120" y="99" width="90" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="130" y="119">item_name</text>
+   <rect x="232" y="101" width="54" height="32" rx="10"/>
+   <rect x="230"
          y="99"
          width="54"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="237" y="119">INTO</text>
-   <rect x="303" y="101" width="162" height="32"/>
-   <rect x="301" y="99" width="162" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="311" y="119">sink_kafka_connector</text>
-   <rect x="175" y="183" width="80" height="32" rx="10"/>
-   <rect x="173"
-         y="181"
+   <text class="terminal" x="240" y="119">INTO</text>
+   <rect x="306" y="101" width="162" height="32"/>
+   <rect x="304" y="99" width="162" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="314" y="119">sink_kafka_connector</text>
+   <rect x="45" y="199" width="80" height="32" rx="10"/>
+   <rect x="43"
+         y="197"
          width="80"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="183" y="201">FORMAT</text>
-   <rect x="275" y="183" width="134" height="32"/>
-   <rect x="273" y="181" width="134" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="283" y="201">sink_format_spec</text>
-   <rect x="45" y="269" width="94" height="32" rx="10"/>
-   <rect x="43"
-         y="267"
+   <text class="terminal" x="53" y="217">FORMAT</text>
+   <rect x="145" y="199" width="134" height="32"/>
+   <rect x="143" y="197" width="134" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="153" y="217">sink_format_spec</text>
+   <rect x="319" y="167" width="94" height="32" rx="10"/>
+   <rect x="317"
+         y="165"
          width="94"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="53" y="287">ENVELOPE</text>
-   <rect x="179" y="269" width="92" height="32" rx="10"/>
-   <rect x="177"
-         y="267"
+   <text class="terminal" x="327" y="185">ENVELOPE</text>
+   <rect x="453" y="167" width="92" height="32" rx="10"/>
+   <rect x="451"
+         y="165"
          width="92"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="187" y="287">DEBEZIUM</text>
-   <rect x="179" y="313" width="76" height="32" rx="10"/>
-   <rect x="177"
-         y="311"
+   <text class="terminal" x="461" y="185">DEBEZIUM</text>
+   <rect x="453" y="211" width="76" height="32" rx="10"/>
+   <rect x="451"
+         y="209"
          width="76"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="187" y="331">UPSERT</text>
-   <rect x="351" y="269" width="58" height="32" rx="10"/>
-   <rect x="349"
-         y="267"
+   <text class="terminal" x="461" y="229">UPSERT</text>
+   <rect x="359" y="297" width="58" height="32" rx="10"/>
+   <rect x="357"
+         y="295"
          width="58"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="359" y="287">WITH</text>
-   <rect x="429" y="269" width="102" height="32"/>
-   <rect x="427" y="267" width="102" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="437" y="287">with_options</text>
+   <text class="terminal" x="367" y="315">WITH</text>
+   <rect x="437" y="297" width="102" height="32"/>
+   <rect x="435" y="295" width="102" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="445" y="315">with_options</text>
    <path class="line"
-         d="m19 17 h2 m0 0 h10 m114 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m20 -32 h10 m88 0 h10 m0 0 h10 m60 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-440 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m90 0 h10 m0 0 h10 m54 0 h10 m0 0 h10 m162 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-354 50 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h244 m-274 0 h20 m254 0 h20 m-294 0 q10 0 10 10 m274 0 q0 -10 10 -10 m-284 10 v12 m274 0 v-12 m-274 12 q0 10 10 10 m254 0 q10 0 10 -10 m-264 10 h10 m80 0 h10 m0 0 h10 m134 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-448 86 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h256 m-286 0 h20 m266 0 h20 m-306 0 q10 0 10 10 m286 0 q0 -10 10 -10 m-296 10 v12 m286 0 v-12 m-286 12 q0 10 10 10 m266 0 q10 0 10 -10 m-276 10 h10 m94 0 h10 m20 0 h10 m92 0 h10 m-132 0 h20 m112 0 h20 m-152 0 q10 0 10 10 m132 0 q0 -10 10 -10 m-142 10 v24 m132 0 v-24 m-132 24 q0 10 10 10 m112 0 q10 0 10 -10 m-122 10 h10 m76 0 h10 m0 0 h16 m60 -76 h10 m0 0 h190 m-220 0 h20 m200 0 h20 m-240 0 q10 0 10 10 m220 0 q0 -10 10 -10 m-230 10 v12 m220 0 v-12 m-220 12 q0 10 10 10 m200 0 q10 0 10 -10 m-210 10 h10 m58 0 h10 m0 0 h10 m102 0 h10 m23 -32 h-3"/>
-   <polygon points="569 251 577 247 577 255"/>
-   <polygon points="569 251 561 247 561 255"/>
+         d="m17 17 h2 m0 0 h10 m114 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m20 -32 h10 m88 0 h10 m0 0 h10 m60 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-435 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m90 0 h10 m0 0 h10 m54 0 h10 m0 0 h10 m162 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-487 66 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h244 m-274 0 h20 m254 0 h20 m-294 0 q10 0 10 10 m274 0 q0 -10 10 -10 m-284 10 v12 m274 0 v-12 m-274 12 q0 10 10 10 m254 0 q10 0 10 -10 m-264 10 h10 m80 0 h10 m0 0 h10 m134 0 h10 m20 -32 h10 m94 0 h10 m20 0 h10 m92 0 h10 m-132 0 h20 m112 0 h20 m-152 0 q10 0 10 10 m132 0 q0 -10 10 -10 m-142 10 v24 m132 0 v-24 m-132 24 q0 10 10 10 m112 0 q10 0 10 -10 m-122 10 h10 m76 0 h10 m0 0 h16 m22 -44 l2 0 m2 0 l2 0 m2 0 l2 0 m-270 98 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h190 m-220 0 h20 m200 0 h20 m-240 0 q10 0 10 10 m220 0 q0 -10 10 -10 m-230 10 v12 m220 0 v-12 m-220 12 q0 10 10 10 m200 0 q10 0 10 -10 m-210 10 h10 m58 0 h10 m0 0 h10 m102 0 h10 m23 -32 h-3"/>
+   <polygon points="577 279 585 275 585 283"/>
+   <polygon points="577 279 569 275 569 283"/>
 </svg>

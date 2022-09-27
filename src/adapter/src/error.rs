@@ -163,6 +163,11 @@ pub enum AdapterError {
     Unsupported(&'static str),
     /// The specified function cannot be materialized.
     UnmaterializableFunction(UnmaterializableFunc),
+    /// Attempted to create an object that has unstable dependencies.
+    UnstableDependency {
+        object_type: String,
+        unstable_dependencies: Vec<String>,
+    },
     /// Attempted to read from log sources without selecting a target replica.
     UntargetedLogRead {
         log_names: Vec<String>,
@@ -215,6 +220,10 @@ impl AdapterError {
             AdapterError::InvalidLogDependency { log_names, .. } => Some(format!(
                 "The object depends on the following log sources:\n    {}",
                 log_names.join("\n    "),
+            )),
+            AdapterError::UnstableDependency { unstable_dependencies, .. } => Some(format!(
+                "The object depends on the following unstable objects:\n    {}",
+                unstable_dependencies.join("\n    "),
             )),
             AdapterError::PlanError(e) => e.detail(),
             _ => None,
@@ -422,6 +431,9 @@ impl fmt::Display for AdapterError {
                 f,
                 "cluster replica '{cluster_name}.{replica_name}' does not exist"
             ),
+            AdapterError::UnstableDependency { object_type, .. } => {
+                write!(f, "cannot create {object_type} with unstable dependencies")
+            }
             AdapterError::UntargetedLogRead { .. } => {
                 f.write_str("log source reads must target a replica")
             }
