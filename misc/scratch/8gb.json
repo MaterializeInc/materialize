@@ -1,0 +1,8 @@
+{
+    "name": "c5.large with 8Gb of ram",
+    "launch_script": "true",
+    "instance_type": "c5.xlarge",
+    "ami": "ami-09d56f8956ab235b3",
+    "size_gb": 50,
+    "tags": {}
+}
