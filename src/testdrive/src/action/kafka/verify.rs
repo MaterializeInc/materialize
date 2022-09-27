@@ -194,9 +194,6 @@ impl Action for VerifyAction {
             match message_stream.next().await {
                 Some(Ok(message)) => {
                     let message = message?;
-                    consumer
-                        .store_offset_from_message(&message)
-                        .context("storing message offset")?;
                     let headers = self
                         .header_keys
                         .iter()
