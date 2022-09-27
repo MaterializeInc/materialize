@@ -467,6 +467,7 @@ mz_databases
 mz_functions
 mz_index_columns
 mz_indexes
+mz_kafka_connections
 mz_kafka_sinks
 mz_list_types
 mz_map_types
@@ -587,7 +588,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-30
+31
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
