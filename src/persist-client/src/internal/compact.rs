@@ -473,11 +473,6 @@ where
         for (index, (part_desc, parts)) in runs.iter_mut().enumerate() {
             if let Some(part) = parts.next() {
                 let start = Instant::now();
-                let mut part =
-                    fetch_batch_part(&shard_id, blob.as_ref(), &metrics, &part.key, part_desc)
-                        .await?;
-                timings.part_fetching += start.elapsed();
-                let start = Instant::now();
                 let mut part = fetch_batch_part(
                     &shard_id,
                     blob.as_ref(),
@@ -487,6 +482,7 @@ where
                     part_desc,
                 )
                 .await?;
+                timings.part_fetching += start.elapsed();
                 while let Some((k, v, mut t, d)) = part.next() {
                     t.advance_by(desc.since().borrow());
                     let d = D::decode(d);
@@ -510,12 +506,6 @@ where
                 let (part_desc, parts) = &mut runs[index];
                 if let Some(part) = parts.next() {
                     let start = Instant::now();
-                    let mut part =
-                        fetch_batch_part(&shard_id, blob.as_ref(), &metrics, &part.key, part_desc)
-                            .await?;
-                    timings.part_fetching += start.elapsed();
-
-                    let start = Instant::now();
                     let mut part = fetch_batch_part(
                         &shard_id,
                         blob.as_ref(),
@@ -525,6 +515,7 @@ where
                         part_desc,
                     )
                     .await?;
+                    timings.part_fetching += start.elapsed();
                     while let Some((k, v, mut t, d)) = part.next() {
                         t.advance_by(desc.since().borrow());
                         let d = D::decode(d);
