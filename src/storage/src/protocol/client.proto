@@ -32,23 +32,23 @@ message ProtoAllowCompaction {
     repeated ProtoCompaction collections = 1;
 }
 
-message ProtoIngestSourceCommand {
+message ProtoCreateSourceCommand {
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_storage.types.sources.ProtoIngestionDescription description = 2;
     mz_repr.antichain.ProtoU64Antichain resume_upper = 3;
 }
 
-message ProtoIngestSources {
-    repeated ProtoIngestSourceCommand ingestions = 1;
+message ProtoCreateSources {
+    repeated ProtoCreateSourceCommand sources = 1;
 }
 
-message ProtoExportSinkCommand {
+message ProtoCreateSinkCommand {
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_storage.types.sinks.ProtoStorageSinkDesc description = 2;
 }
 
-message ProtoExportSinks {
-    repeated ProtoExportSinkCommand exports = 1;
+message ProtoCreateSinks {
+    repeated ProtoCreateSinkCommand sinks = 1;
 }
 
 message ProtoFrontierUppersKind {
@@ -62,10 +62,10 @@ message ProtoTrace {
 
 message ProtoStorageCommand {
     oneof kind {
-        ProtoIngestSources ingest_sources = 1;
+        ProtoCreateSources create_sources = 1;
         ProtoAllowCompaction allow_compaction = 2;
         google.protobuf.Empty initialization_complete = 3;
-        ProtoExportSinks export_sinks = 4;
+        ProtoCreateSinks create_sinks = 4;
     }
 }
 
