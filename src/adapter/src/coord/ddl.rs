@@ -270,9 +270,9 @@ impl<S: Append + 'static> Coordinator<S> {
                         "event_source": "environmentd",
                         "details": event.event_details.as_json(),
                     }),
-                    json!({
+                    Some(json!({
                         "groupId": user_metadata.group_id,
-                    }),
+                    })),
                 );
             }
         }
