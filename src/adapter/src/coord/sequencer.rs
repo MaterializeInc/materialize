@@ -426,6 +426,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
+            connection_id: plan.source.connection_id,
             source_desc: plan.source.source_desc,
             desc: plan.source.desc,
             timeline: plan.timeline,
@@ -1091,6 +1092,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let catalog_sink = catalog::Sink {
             create_sql: sink.create_sql,
             from: sink.from,
+            connection_id: sink.connection_id,
             connection: StorageSinkConnectionState::Pending(StorageSinkConnectionBuilder::Kafka(
                 connection_builder,
             )),

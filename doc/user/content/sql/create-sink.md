@@ -72,7 +72,7 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 ## Detail
 
 - Materialize currently only supports Avro or JSON-formatted sinks that write to a Kafka topic.
-- Materialize stores information about actual topic names in the `mz_kafka_sinks` log sources. See the [examples](#examples) below for more details.
+- Materialize stores information about the sink's topic name in the [`mz_kafka_sinks`](/sql/system-catalog/#mz_kafka_sinks) system table. See the [examples](#examples) below for more details.
 - For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink. If needed, the fullnames for these schemas can be specified with the `avro_key_fullname` and `avro_value_fullname` options.
 
 ### Debezium envelope details
@@ -134,7 +134,7 @@ If the topic does not exist, Materialize will use the Kafka Admin API to create 
 
 For Avro-encoded sinks, Materialize will publish the sink's Avro schema to the Confluent Schema Registry. Materialize will not publish schemas for JSON-encoded sinks.
 
-You can find the topic name and other metadata for each Kafka sink by querying `mz_kafka_sinks`.
+You can find the topic name and other metadata for each Kafka sink by querying [`mz_kafka_sinks`](/sql/system-catalog/#mz_kafka_sinks).
 
 {{< note >}}
 {{% kafka-sink-drop  %}}
@@ -185,19 +185,19 @@ FORMAT AVRO USING
 ENVELOPE DEBEZIUM;
 ```
 
-#### Get actual Kafka topic names
+#### Get Kafka topic names
 
 ```sql
 SELECT sink_id, name, topic
 FROM mz_sinks
-JOIN mz_kafka_sinks ON mz_sinks.id = mz_kafka_sinks.sink_id
+JOIN mz_kafka_sinks USING (id);
 ```
 
 ```nofmt
-  sink_id  |              name                    |                        topic
------------+--------------------------------------+------------------------------------------------------
- u5        | materialize.public.quotes_sink       | quotes-sink-u6-1586024632-15401700525642547992
- u6        | materialize.public.frank_quotes_sink | frank-quotes-sink-u5-1586024632-15401700525642547992
+  sink_id  |              name                    |       topic
+-----------+--------------------------------------+---------------------
+ u5        | materialize.public.quotes_sink       | quotes
+ u6        | materialize.public.frank_quotes_sink | frank-quotes
 ```
 
 ### JSON sinks

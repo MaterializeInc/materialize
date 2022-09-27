@@ -221,6 +221,17 @@ pub struct CatalogConfig {
     pub now: NowFn,
 }
 
+impl CatalogConfig {
+    /// Returns the default progress topic name for a Kafka sink for a given
+    /// connection.
+    pub fn default_kafka_sink_progress_topic(&self, connection_id: GlobalId) -> String {
+        format!(
+            "_materialize-progress-{}-{connection_id}",
+            self.environment_id
+        )
+    }
+}
+
 /// A database in a [`SessionCatalog`].
 pub trait CatalogDatabase {
     /// Returns a fully-specified name of the database.

@@ -1078,9 +1078,8 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sinks",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("sink_id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("topic", ScalarType::String.nullable(false))
-        .with_column("progress_topic", ScalarType::String.nullable(true))
         .with_key(vec![0]),
 });
 pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1092,7 +1091,7 @@ pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
             "brokers",
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
-        .with_column("progress_topic", ScalarType::String.nullable(true)),
+        .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
@@ -1179,7 +1178,8 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false)),
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("connection_id", ScalarType::String.nullable(true)),
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
@@ -1189,7 +1189,8 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false)),
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("connection_id", ScalarType::String.nullable(true)),
 });
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_views",

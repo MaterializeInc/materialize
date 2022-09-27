@@ -144,15 +144,25 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
+### `mz_kafka_connections`
+
+The `mz_kafka_connections` table contains a row for each Kafka connection in the
+system.
+
+Field                 | Type           | Meaning
+----------------------|----------------|--------
+`id`                  | [`text`]       | The ID of the connection.
+`brokers`             | [`text array`] | The addresses of the Kafka brokers to connect to.
+`sink_progress_topic` | [`text`]       | The name of the Kafka topic where any sinks associated with this connection will track their progress information and other metadata. The contents of this topic are unspecified.
+
 ### `mz_kafka_sinks`
 
 The `mz_kafka_sinks` table contains a row for each Kafka sink in the system.
 
 Field                | Type     | Meaning
 ---------------------|----------|--------
-`sink_id`            | [`text`] | The ID of the sink.
+`id`                 | [`text`] | The ID of the sink.
 `topic`              | [`text`] | The name of the Kafka topic into which the sink is writing.
-`progress_topic`     | [`text`] | The name of the Kafka topic where the sink will track its progress information and other metadata. The contents of this topic are unspecified. If no progress topic name was specified for the given connection, Materialize will use a default based on the environment name and Kafka connection ID.
 
 ### `mz_list_types`
 
@@ -256,6 +266,7 @@ Field            | Type        | Meaning
 `schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
 `name`           | [`text`]    | The name of the sink.
 `type`           | [`text`]    | The type of the sink: `kafka`.
+`connection_id`  | [`text`]    | The ID of the connection associated with the sink, if any.
 
 ### `mz_sources`
 
@@ -268,6 +279,7 @@ Field            | Type       | Meaning
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
 `type`           | [`text`]   | The type of the source: `kafka` or `postgres`.
+`connection_id`  | [`text`]   | The ID of the connection associated with the source, if any.
 
 ### `mz_storage_usage`
 
