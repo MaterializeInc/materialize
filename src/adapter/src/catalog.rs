@@ -481,6 +481,7 @@ impl CatalogState {
             .flatten()
     }
 
+    /// Associates a name, `GlobalId`, and entry.
     fn insert_item(
         &mut self,
         id: GlobalId,
@@ -536,11 +537,18 @@ impl CatalogState {
             &entry.name().qualifiers.schema_spec,
             conn_id,
         );
-        if let CatalogItem::Func(_) = entry.item() {
-            schema.functions.insert(entry.name.item.clone(), entry.id);
+
+        let prev_id = if let CatalogItem::Func(_) = entry.item() {
+            schema.functions.insert(entry.name.item.clone(), entry.id)
         } else {
-            schema.items.insert(entry.name.item.clone(), entry.id);
-        }
+            schema.items.insert(entry.name.item.clone(), entry.id)
+        };
+
+        assert!(
+            prev_id.is_none(),
+            "builtin name collision on {:?}",
+            entry.name.item.clone()
+        );
 
         self.entry_by_id.insert(entry.id, entry.clone());
     }
@@ -1662,8 +1670,16 @@ struct AllocatedBuiltinSystemIds<T> {
     migrated_builtins: Vec<(GlobalId, u64)>,
 }
 
+/// Functions can share the same name as any other catalog item type
+/// within a given schema.
+/// For example, a function can have the same name as a type, e.g.
+/// 'date'.
+/// As such, system objects are keyed in the catalog storage by the
+/// tuple (schema_name, object_type, object_name), which is guaranteed
+/// to be unique.
 pub struct SystemObjectMapping {
     schema_name: String,
+    object_type: CatalogItemType,
     object_name: String,
     id: GlobalId,
     fingerprint: u64,
@@ -1892,7 +1908,11 @@ impl<S: Append> Catalog<S> {
                     .collect(),
                 |builtin| {
                     persisted_builtin_ids
-                        .get(&(builtin.schema().to_string(), builtin.name().to_string()))
+                        .get(&(
+                            builtin.schema().to_string(),
+                            builtin.catalog_item_type(),
+                            builtin.name().to_string(),
+                        ))
                         .cloned()
                 },
             )
@@ -1978,6 +1998,7 @@ impl<S: Append> Catalog<S> {
             .iter()
             .map(|(builtin, id)| SystemObjectMapping {
                 schema_name: builtin.schema().to_string(),
+                object_type: builtin.catalog_item_type(),
                 object_name: builtin.name().to_string(),
                 id: *id,
                 fingerprint: builtin.fingerprint(),
@@ -2201,7 +2222,11 @@ impl<S: Append> Catalog<S> {
         } = self
             .allocate_system_ids(BUILTINS::types().collect(), |typ| {
                 persisted_builtin_ids
-                    .get(&(typ.schema.to_string(), typ.name.to_string()))
+                    .get(&(
+                        typ.schema.to_string(),
+                        CatalogItemType::Type,
+                        typ.name.to_string(),
+                    ))
                     .cloned()
             })
             .await?;
@@ -2257,6 +2282,7 @@ impl<S: Append> Catalog<S> {
             .iter()
             .map(|(typ, id)| SystemObjectMapping {
                 schema_name: typ.schema.to_string(),
+                object_type: CatalogItemType::Type,
                 object_name: typ.name.to_string(),
                 id: *id,
                 fingerprint: typ.fingerprint(),
@@ -2387,6 +2413,7 @@ impl<S: Append> Catalog<S> {
                     id,
                     SystemObjectMapping {
                         schema_name: schema_name.to_string(),
+                        object_type: entry.item_type(),
                         object_name: entry.name.item.clone(),
                         id: new_id,
                         fingerprint: *fingerprint,
