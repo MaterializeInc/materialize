@@ -1438,8 +1438,8 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                          > CREATE MATERIALIZED VIEW v_{cluster_name} AS
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
-                        > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                          FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+                         > CREATE CONNECTION IF NOT EXISTS kafka_conn
+                           FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
 
                          > CREATE CONNECTION IF NOT EXISTS csr_conn
                            FOR CONFLUENT SCHEMA REGISTRY
