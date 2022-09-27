@@ -11,9 +11,9 @@
 # Concurrent deletes over different tables
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE concurrent_delete1 (f1 INTEGER);
+CREATE TABLE concurrent_delete1 (f1 INTEGER PRIMARY KEY);
 ALTER TABLE concurrent_delete1 REPLICA IDENTITY FULL;
-CREATE TABLE concurrent_delete2 (f1 INTEGER);
+CREATE TABLE concurrent_delete2 (f1 INTEGER PRIMARY KEY);
 ALTER TABLE concurrent_delete2 REPLICA IDENTITY FULL;
 
 INSERT INTO concurrent_delete1 VALUES (1);

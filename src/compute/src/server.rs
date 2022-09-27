@@ -531,7 +531,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
                 compute_state.process_peeks();
-                compute_state.process_tails();
+                compute_state.process_subscribes();
             }
         }
     }
@@ -555,7 +555,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.timely_worker.index(),
                     ),
                     sink_tokens: HashMap::new(),
-                    tail_response_buffer: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+                    subscribe_response_buffer: std::rc::Rc::new(
+                        std::cell::RefCell::new(Vec::new()),
+                    ),
                     sink_write_frontiers: HashMap::new(),
                     pending_peeks: Vec::new(),
                     reported_frontiers: HashMap::new(),
@@ -610,7 +612,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// dataflows are created from scratch. "Kept" dataflows are allowed to compact up to any new `as_of`.
     ///
     /// Some additional tidying happens, cleaning up pending peeks, reported frontiers, and creating a new
-    /// tail response buffer. We will need to be vigilant with future modifications to `ComputeState` to
+    /// subscribe response buffer. We will need to be vigilant with future modifications to `ComputeState` to
     /// line up changes there with clean resets here.
     fn reconcile(
         &mut self,
@@ -710,8 +712,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                             dataflow.as_of.as_ref().unwrap(),
                                         )
                                     });
-                                // TODO: this can be improved to "tail with snapshot"-free, I believe.
-                                // There would need to be changes to clean-up, especially around `tail_response_buffer`.
+                                // TODO: this can be improved to "subscribe with snapshot"-free, I believe.
+                                // There would need to be changes to clean-up, especially around `subscribe_response_buffer`.
                                 let sink_free = dataflow.sink_exports.is_empty();
                                 if compatible && uncompacted && sink_free {
                                     // Match found; remove the match from the deletion queue,
@@ -786,9 +788,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
             compute_state
                 .sink_tokens
                 .retain(|id, _| retain_ids.contains(id));
-            // We must drop the tail response buffer as it is global across all tails.
+            // We must drop the subscribe response buffer as it is global across all subscribes.
             // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
-            compute_state.tail_response_buffer =
+            compute_state.subscribe_response_buffer =
                 std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         } else {
             todo_commands = new_commands.clone();

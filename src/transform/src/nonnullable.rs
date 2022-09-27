@@ -25,12 +25,20 @@ use mz_repr::{Datum, RelationType, ScalarType};
 pub struct NonNullable;
 
 impl crate::Transform for NonNullable {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "non_nullable")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
-        relation.try_visit_mut_pre(&mut |e| self.action(e))
+        let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

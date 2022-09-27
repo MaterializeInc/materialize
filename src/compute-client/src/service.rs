@@ -32,7 +32,7 @@ use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer,
 
 use crate::command::{CommunicationConfig, ComputeCommand, ProtoComputeCommand};
 use crate::response::{
-    ComputeResponse, PeekResponse, ProtoComputeResponse, TailBatch, TailResponse,
+    ComputeResponse, PeekResponse, ProtoComputeResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::service::proto_compute_client::ProtoComputeClient;
 use crate::service::proto_compute_server::ProtoCompute;
@@ -105,9 +105,9 @@ pub struct PartitionedComputeState<T> {
     uppers: HashMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
     /// Pending responses for a peek; returnable once all are available.
     peek_responses: HashMap<Uuid, HashMap<usize, PeekResponse>>,
-    /// Tracks in-progress `TAIL`s, and the stashed rows we are holding
+    /// Tracks in-progress `SUBSCRIBE`s, and the stashed rows we are holding
     /// back until their timestamps are complete.
-    pending_tails: HashMap<GlobalId, Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>>,
+    pending_subscribes: HashMap<GlobalId, Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>>,
 }
 
 impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
@@ -122,7 +122,7 @@ where
             parts,
             uppers: HashMap::new(),
             peek_responses: HashMap::new(),
-            pending_tails: HashMap::new(),
+            pending_subscribes: HashMap::new(),
         }
     }
 }
@@ -136,11 +136,11 @@ where
             parts: _,
             uppers,
             peek_responses,
-            pending_tails,
+            pending_subscribes,
         } = self;
         uppers.clear();
         peek_responses.clear();
-        pending_tails.clear();
+        pending_subscribes.clear();
     }
 
     /// Observes commands that move past, and prepares state for responses.
@@ -261,8 +261,8 @@ where
                     None
                 }
             }
-            ComputeResponse::TailResponse(id, response) => {
-                let maybe_entry = self.pending_tails.entry(id).or_insert_with(|| {
+            ComputeResponse::SubscribeResponse(id, response) => {
+                let maybe_entry = self.pending_subscribes.entry(id).or_insert_with(|| {
                     let mut frontier = MutableAntichain::new();
                     frontier.update_iter(std::iter::once((T::minimum(), self.parts as i64)));
                     Some((frontier, Vec::new()))
@@ -270,7 +270,7 @@ where
 
                 let entry = match maybe_entry {
                     None => {
-                        // This tail has been dropped;
+                        // This subscribe has been dropped;
                         // we should permanently block
                         // any messages from it
                         return None;
@@ -279,7 +279,7 @@ where
                 };
 
                 match response {
-                    TailResponse::Batch(TailBatch {
+                    SubscribeResponse::Batch(SubscribeBatch {
                         lower,
                         upper,
                         mut updates,
@@ -301,9 +301,9 @@ where
                                 }
                             }
                             entry.1 = keep;
-                            Some(Ok(ComputeResponse::TailResponse(
+                            Some(Ok(ComputeResponse::SubscribeResponse(
                                 id,
-                                TailResponse::Batch(TailBatch {
+                                SubscribeResponse::Batch(SubscribeBatch {
                                     lower: old_frontier,
                                     upper: new_frontier,
                                     updates: ship,
@@ -313,11 +313,11 @@ where
                             None
                         }
                     }
-                    TailResponse::DroppedAt(frontier) => {
+                    SubscribeResponse::DroppedAt(frontier) => {
                         *maybe_entry = None;
-                        Some(Ok(ComputeResponse::TailResponse(
+                        Some(Ok(ComputeResponse::SubscribeResponse(
                             id,
-                            TailResponse::DroppedAt(frontier),
+                            SubscribeResponse::DroppedAt(frontier),
                         )))
                     }
                 }

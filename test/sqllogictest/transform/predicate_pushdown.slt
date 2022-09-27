@@ -416,7 +416,7 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND ((t1.f2 = 3 AND t2.f2 = 4) OR (t1.f2 = 5 AND t2.f2 = 6));
 ----
-Explained Query
+Explained Query:
   Join::Delta
     plan_path[0]
       final_closure

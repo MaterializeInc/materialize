@@ -291,7 +291,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 > CREATE SINK snk FROM source_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-catalog-sink-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM;
 
 > SHOW OBJECTS
 name        type
@@ -467,6 +468,7 @@ mz_databases
 mz_functions
 mz_index_columns
 mz_indexes
+mz_kafka_connections
 mz_kafka_sinks
 mz_list_types
 mz_map_types
@@ -515,10 +517,10 @@ mz_dataflow_operator_reachability_internal      log
 mz_dataflow_operator_reachability_internal_1    log
 mz_dataflow_operators                           log
 mz_dataflow_operators_1                         log
-mz_worker_materialization_dependencies          log
-mz_worker_materialization_dependencies_1        log
-mz_materializations                             log
-mz_materializations_1                           log
+mz_worker_compute_dependencies                  log
+mz_worker_compute_dependencies_1                log
+mz_compute_exports                              log
+mz_compute_exports_1                            log
 mz_message_counts_received_internal             log
 mz_message_counts_received_internal_1           log
 mz_message_counts_sent_internal                 log
@@ -533,12 +535,12 @@ mz_scheduling_histogram_internal                log
 mz_scheduling_histogram_internal_1              log
 mz_scheduling_parks_internal                    log
 mz_scheduling_parks_internal_1                  log
-mz_worker_materialization_delays                log
-mz_worker_materialization_delays_1              log
-mz_worker_materialization_frontiers             log
-mz_worker_materialization_frontiers_1           log
-mz_worker_materialization_source_frontiers      log
-mz_worker_materialization_source_frontiers_1    log
+mz_worker_compute_delays                        log
+mz_worker_compute_delays_1                      log
+mz_worker_compute_frontiers                     log
+mz_worker_compute_frontiers_1                   log
+mz_worker_compute_import_frontiers              log
+mz_worker_compute_import_frontiers_1            log
 
 > SHOW TABLES FROM mz_internal
 name
@@ -557,10 +559,10 @@ mz_dataflow_operator_dataflows
 mz_dataflow_operator_dataflows_1
 mz_dataflow_operator_reachability
 mz_dataflow_operator_reachability_1
-mz_materialization_frontiers
-mz_materialization_frontiers_1
-mz_materialization_source_frontiers
-mz_materialization_source_frontiers_1
+mz_compute_frontiers
+mz_compute_frontiers_1
+mz_compute_import_frontiers
+mz_compute_import_frontiers_1
 mz_message_counts
 mz_message_counts_1
 mz_records_per_dataflow
@@ -587,7 +589,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-30
+31
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

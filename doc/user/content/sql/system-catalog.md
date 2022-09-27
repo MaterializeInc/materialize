@@ -12,11 +12,6 @@ menu:
 Materialize exposes a system catalog that contains metadata about the running
 Materialize instance.
 
-{{< warning >}}
-The system tables are not part of Materialize's stable interface.
-Backwards-incompatible changes to these tables may be made at any time.
-{{< /warning >}}
-
 ## Details
 
 The system catalog consists of three schemas that are implicitly available in
@@ -149,15 +144,25 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
+### `mz_kafka_connections`
+
+The `mz_kafka_connections` table contains a row for each Kafka connection in the
+system.
+
+Field                 | Type           | Meaning
+----------------------|----------------|--------
+`id`                  | [`text`]       | The ID of the connection.
+`brokers`             | [`text array`] | The addresses of the Kafka brokers to connect to.
+`sink_progress_topic` | [`text`]       | The name of the Kafka topic where any sinks associated with this connection will track their progress information and other metadata. The contents of this topic are unspecified.
+
 ### `mz_kafka_sinks`
 
 The `mz_kafka_sinks` table contains a row for each Kafka sink in the system.
 
 Field                | Type     | Meaning
 ---------------------|----------|--------
-`sink_id`            | [`text`] | The ID of the sink.
+`id`                 | [`text`] | The ID of the sink.
 `topic`              | [`text`] | The name of the Kafka topic into which the sink is writing.
-`progress_topic`     | [`text`] | The name of the Kafka topic where the sink will track its progress information and other metadata. The contents of this topic are unspecified. If no progress topic name was specified for the given connection, Materialize will use a default based on the environment name and Kafka connection ID.
 
 ### `mz_list_types`
 
@@ -261,6 +266,7 @@ Field            | Type        | Meaning
 `schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
 `name`           | [`text`]    | The name of the sink.
 `type`           | [`text`]    | The type of the sink: `kafka`.
+`connection_id`  | [`text`]    | The ID of the connection associated with the sink, if any.
 
 ### `mz_sources`
 
@@ -273,6 +279,7 @@ Field            | Type       | Meaning
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
 `type`           | [`text`]   | The type of the source: `kafka` or `postgres`.
+`connection_id`  | [`text`]   | The ID of the connection associated with the source, if any.
 
 ### `mz_storage_usage`
 
@@ -362,6 +369,11 @@ Materialize with minor changes to the `pg_catalog` compatibility shim.
 The following sections describe the available objects in the `mz_internal`
 schema.
 
+{{< warning >}}
+The objects in the `mz_internal` schema are not part of Materialize's stable interface.
+Backwards-incompatible changes to these tables may be made at any time.
+{{< /warning >}}
+
 ### `mz_arrangement_sharing`
 
 The `mz_arrangement_sharing` source describes how many times each [arrangement]
@@ -446,44 +458,44 @@ Field           | Type       | Meaning
 `dataflow_id`   | [`bigint`] | The ID of the dataflow hosting the operator.
 `dataflow_name` | [`text`]   | The name of the dataflow hosting the operator.
 
-### `mz_materializations`
+### `mz_compute_exports`
 
-The `mz_materializations` source describes the dataflows created by indexes and materialized views in the system.
+The `mz_compute_exports` source describes the dataflows created by indexes and materialized views in the system.
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`object_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_indexes.id`](#mz_indexes) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the corresponding [dataflow].
 
-### `mz_materialization_frontiers`
+### `mz_compute_frontiers`
 
-The `mz_materialization_frontiers` view describes the frontier for each
+The `mz_compute_frontiers` view describes the frontier for each
 [dataflow] in the system across all workers. The frontier describes the earliest
 timestamp at which the output of the dataflow may change; data prior to that
 timestamp is sealed.
 
 For per-worker frontier information, see
-[`mz_worker_materialization_frontiers`](#mz_worker_materialization_frontiers).
+[`mz_worker_compute_frontiers`](#mz_worker_compute_frontiers).
 
 Field        | Type       | Meaning
 -------------|------------|--------
-`object_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
-`time`       | [`mztimestamp`] | The next timestamp at which the materialization may change.
+`export_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`time`       | [`mztimestamp`] | The next timestamp at which the output may change.
 
-### `mz_materialization_source_frontiers`
+### `mz_compute_import_frontiers`
 
-The `mz_materialization_source_frontiers` view describes the frontiers for every
-storage source used in a [dataflow] in the system across all workers. The frontier
+The `mz_compute_import_frontiers` view describes the frontiers for every
+source object used in a [dataflow] in the system across all workers. The frontier
 describes the earliest timestamp at which the output of the source instantiation
 at the dataflow layer may change; data prior to that timestamp is sealed.
 
 For per-worker frontier information, see
-[`mz_worker_materialization_source_frontiers`](#mz_worker_materialization_source_frontiers).
+[`mz_worker_compute_import_frontiers`](#mz_worker_compute_import_frontiers).
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`object_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
-`source_id` | [`text`]   | The ID of the input storage source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
 `time`      | [`mztimestamp`] | The next timestamp at which the source instantiation may change.
 
 ### `mz_message_counts`
@@ -599,65 +611,65 @@ Field       | Type       | Meaning
 `requested` | [`bigint`] | The requested length of the park event.
 `count`     | [`bigint`] | The number of park events in this bucket.
 
-### `mz_worker_materialization_delays`
+### `mz_worker_compute_delays`
 
-The `mz_worker_materialization_delays` source provides, for each worker,
-a histogram of wall-clock delays between observations of storage source frontier
+The `mz_worker_compute_delays` source provides, for each worker,
+a histogram of wall-clock delays between observations of source object frontier
 advancements at the dataflow layer and the advancements of the corresponding
 [dataflow] frontiers.
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`object_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
-`source_id` | [`text`]   | The ID of the input storage source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `delay_ns`  | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`     | [`bigint`] | The (noncumulative) count of delay measurements in this bucket.
 
-### `mz_worker_materialization_dependencies`
+### `mz_worker_compute_dependencies`
 
-The `mz_worker_materialization_dependencies` source describes the dependency structure
+The `mz_worker_compute_dependencies` source describes the dependency structure
 between each [dataflow] and the sources of their data. To create a complete dependency
 structure, the `import_id` column includes other dataflows.
 
 Field      | Type       | Meaning
 -----------|------------|--------
-`export_id`| [`text`]   | The ID of the object that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
-`import_id`| [`text`]   | The ID of the storage source. Corresponds to [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materializations.object_id`](#mz_materializations).
+`export_id`| [`text`]   | The ID of the object that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`import_id`| [`text`]   | The ID of the source object for the dataflow. Corresponds to [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id`| [`bigint`] | The ID of the worker thread hosting the dataflow.
 
-### `mz_worker_materialization_frontiers`
+### `mz_worker_compute_frontiers`
 
-The `mz_worker_materialization_frontiers` source describes each worker's
+The `mz_worker_compute_frontiers` source describes each worker's
 frontier for each [dataflow] in the system. The frontier describes the earliest
 timestamp at which the output of the dataflow may change; data prior to that
 timestamp is sealed.
 
 For frontier information aggregated across all workers, see
-[`mz_materialization_frontiers`](#mz_materialization_frontiers).
+[`mz_compute_frontiers`](#mz_compute_frontiers).
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`object_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
+`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mztimestamp`] | The next timestamp at which the dataflow may change.
 
-### `mz_worker_materialization_source_frontiers`
+### `mz_worker_compute_import_frontiers`
 
-The `mz_worker_materialization_source_frontiers` source describes the frontiers that
-each worker is aware of for every storage source used in a [dataflow] in the system. The
+The `mz_worker_compute_import_frontiers` source describes the frontiers that
+each worker is aware of for every source object used in a [dataflow] in the system. The
 frontier describes the earliest timestamp at which the output of the source instantiation
 at the dataflow layer may change; data prior to that timestamp is sealed.
 
 For frontier information aggregated across all workers, see
-[`mz_materialization_source_frontiers`](#mz_materialization_source_frontiers).
+[`mz_compute_import_frontiers`](#mz_compute_import_frontiers).
 
 Field       | Type       | Meaning
 ------------|------------|--------
-`object_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_materializations.object_id`](#mz_materializations).
-`source_id` | [`text`]   | The ID of the input storage source for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`source_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
-`time`      | [`mztimestamp`] | The next timestamp at which the source instantiation may change.
+`time`      | [`mztimestamp`] | The next timestamp at which the dataflow may change.
 
 ## `information_schema`
 

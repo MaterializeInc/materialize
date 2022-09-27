@@ -56,7 +56,7 @@ use crate::command::{
     ReplicaId, SourceInstanceDesc,
 };
 use crate::logging::{LogVariant, LogView, LoggingConfig};
-use crate::response::{ComputeResponse, PeekResponse, TailBatch, TailResponse};
+use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
@@ -85,8 +85,8 @@ pub struct ComputeInstanceEvent {
 pub enum ComputeControllerResponse<T> {
     /// See [`ComputeResponse::PeekResponse`].
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// See [`ComputeResponse::TailResponse`].
-    TailResponse(GlobalId, TailResponse<T>),
+    /// See [`ComputeResponse::SubscribeResponse`].
+    SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
@@ -691,10 +691,10 @@ where
                     otel_ctx,
                 )))
             }
-            ComputeResponse::TailResponse(global_id, response) => {
+            ComputeResponse::SubscribeResponse(global_id, response) => {
                 let new_upper = match &response {
-                    TailResponse::Batch(TailBatch { lower, upper, .. }) => {
-                        // Ensure there are no gaps in the tail stream we receive.
+                    SubscribeResponse::Batch(SubscribeBatch { lower, upper, .. }) => {
+                        // Ensure there are no gaps in the subscribe stream we receive.
                         assert_eq!(
                             lower,
                             &instance.compute.collections[&global_id].write_frontier
@@ -702,14 +702,14 @@ where
 
                         upper.clone()
                     }
-                    // The tail will not be written to again, but we should not confuse that
-                    // with the source of the TAIL being complete through this time.
-                    TailResponse::DroppedAt(_) => Antichain::new(),
+                    // The subscribe will not be written to again, but we should not confuse that
+                    // with the source of the SUBSCRIBE being complete through this time.
+                    SubscribeResponse::DroppedAt(_) => Antichain::new(),
                 };
                 instance
                     .update_write_frontiers(&[(global_id, new_upper)])
                     .await?;
-                Ok(Some(ComputeControllerResponse::TailResponse(
+                Ok(Some(ComputeControllerResponse::SubscribeResponse(
                     global_id, response,
                 )))
             }
@@ -993,7 +993,9 @@ where
                         };
                         ComputeSinkConnection::Persist(conn)
                     }
-                    ComputeSinkConnection::Tail(conn) => ComputeSinkConnection::Tail(conn),
+                    ComputeSinkConnection::Subscribe(conn) => {
+                        ComputeSinkConnection::Subscribe(conn)
+                    }
                 };
                 let desc = ComputeSinkDesc {
                     from: se.from,

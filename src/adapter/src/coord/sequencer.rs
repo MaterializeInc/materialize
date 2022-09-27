@@ -29,7 +29,7 @@ use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
 use mz_compute_client::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, TailSinkConnection,
+    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
@@ -38,7 +38,7 @@ use mz_expr::{
 use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
-use mz_repr::explain_new::{Explain, Explainee};
+use mz_repr::explain_new::Explainee;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
@@ -54,8 +54,8 @@ use mz_sql::plan::{
     DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
     FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom,
-    TailPlan, View,
+    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
@@ -74,13 +74,13 @@ use crate::coord::{
     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
 };
 use crate::error::AdapterError;
-use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
+use crate::explain_new::optimizer_trace::OptimizerTrace;
 use crate::session::vars::IsolationLevel;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
     WriteOp,
 };
-use crate::tail::PendingTail;
+use crate::subscribe::PendingSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
 use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
 
@@ -237,9 +237,10 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::Peek(plan) => {
                 tx.send(self.sequence_peek(&mut session, plan).await, session);
             }
-            Plan::Tail(plan) => {
+            Plan::Subscribe(plan) => {
                 tx.send(
-                    self.sequence_tail(&mut session, plan, depends_on).await,
+                    self.sequence_subscribe(&mut session, plan, depends_on)
+                        .await,
                     session,
                 );
             }
@@ -425,6 +426,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
+            connection_id: plan.source.connection_id,
             source_desc: plan.source.source_desc,
             desc: plan.source.desc,
             timeline: plan.timeline,
@@ -1090,6 +1092,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let catalog_sink = catalog::Sink {
             create_sql: sink.create_sql,
             from: sink.from,
+            connection_id: sink.connection_id,
             connection: StorageSinkConnectionState::Pending(StorageSinkConnectionBuilder::Kafka(
                 connection_builder,
             )),
@@ -2117,13 +2120,13 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    async fn sequence_tail(
+    async fn sequence_subscribe(
         &mut self,
         session: &mut Session,
-        plan: TailPlan,
+        plan: SubscribePlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let TailPlan {
+        let SubscribePlan {
             from,
             with_snapshot,
             when,
@@ -2136,16 +2139,16 @@ impl<S: Append + 'static> Coordinator<S> {
             .resolve_compute_instance(session.vars().cluster())?
             .id;
 
-        // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
+        // SUBSCRIBE AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
         if when == QueryWhen::Immediately {
-            // If this isn't a TAIL AS OF, the TAIL can be in a transaction if it's the
+            // If this isn't a SUBSCRIBE AS OF, the SUBSCRIBE can be in a transaction if it's the
             // only operation.
-            session.add_transaction_ops(TransactionOps::Tail)?;
+            session.add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
         let make_sink_desc = |coord: &mut Coordinator<S>, from, from_desc, uses| {
-            // Determine the frontier of updates to tail *from*.
+            // Determine the frontier of updates to subscribe *from*.
             // Updates greater or equal to this frontier will be produced.
             let id_bundle = coord
                 .index_oracle(compute_instance)
@@ -2157,7 +2160,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
-                connection: ComputeSinkConnection::Tail(TailSinkConnection::default()),
+                connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
                 as_of: SinkAsOf {
                     frontier: Antichain::from_elem(timestamp),
                     strict: !with_snapshot,
@@ -2166,7 +2169,7 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let dataflow = match from {
-            TailFrom::Id(from_id) => {
+            SubscribeFrom::Id(from_id) => {
                 let from = self.catalog.get_entry(&from_id);
                 let from_desc = from
                     .desc(
@@ -2178,16 +2181,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     .into_owned();
                 let sink_id = self.catalog.allocate_user_id().await?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
-                let sink_name = format!("tail-{}", sink_id);
+                let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(compute_instance)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
             }
-            TailFrom::Query { expr, desc } => {
+            SubscribeFrom::Query { expr, desc } => {
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
-                let mut dataflow = DataflowDesc::new(format!("tail-{}", id));
+                let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(compute_instance);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
                 dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
@@ -2202,11 +2205,11 @@ impl<S: Append + 'static> Coordinator<S> {
         });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
-        self.pending_tails
-            .insert(*sink_id, PendingTail::new(tx, emit_progress, arity));
+        self.pending_subscribes
+            .insert(*sink_id, PendingSubscribe::new(tx, emit_progress, arity));
         self.ship_dataflow(dataflow, compute_instance).await;
 
-        let resp = ExecuteResponse::Tailing { rx };
+        let resp = ExecuteResponse::Subscribing { rx };
         match copy_to {
             None => Ok(resp),
             Some(format) => Ok(ExecuteResponse::CopyTo {
@@ -2232,13 +2235,17 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: ExplainPlanNew,
     ) -> Result<ExecuteResponse, AdapterError> {
+        use mz_compute_client::plan::Plan;
+        use mz_repr::explain_new::trace_plan;
+        use ExplainStageNew::*;
+
         let compute_instance = self
             .catalog
             .resolve_compute_instance(session.vars().cluster())?
             .id;
 
         let ExplainPlanNew {
-            mut raw_plan,
+            raw_plan,
             row_set_finishing,
             stage,
             format,
@@ -2246,155 +2253,152 @@ impl<S: Append + 'static> Coordinator<S> {
             explainee,
         } = plan;
 
-        let decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {
-            let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
-                qgm_optimizations: session.vars().qgm_optimizations(),
-            })?;
-            Ok(decorrelated_plan)
+        let optimizer_trace = match stage {
+            Trace => OptimizerTrace::new(), // collect all trace entries
+            QueryGraph | OptimizedQueryGraph => OptimizerTrace::find(""), // don't collect anything
+            stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
-        let optimize =
-            |coord: &mut Self,
-             decorrelated_plan: MirRelationExpr|
-             -> Result<DataflowDescription<OptimizedMirRelationExpr>, AdapterError> {
-                let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"));
-                coord
-                    .dataflow_builder(compute_instance)
-                    .import_view_into_dataflow(
-                        // TODO: If explaining a view, pipe the actual id of the view.
-                        &GlobalId::Explain,
-                        &optimized_plan,
-                        &mut dataflow,
-                    )?;
+        let (used_indexes, fast_path_plan) =
+            optimizer_trace.collect_trace(|| -> Result<_, AdapterError> {
+                let raw_plan = raw_plan.clone(); // FIXME: remove `.clone()` once the QGM Model implements Clone.
+                let _span = tracing::span!(Level::INFO, "optimize").entered();
+
+                tracing::span!(Level::INFO, "raw").in_scope(|| {
+                    trace_plan(&raw_plan);
+                });
+
+                // run optimization pipeline
+                let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
+                    qgm_optimizations: session.vars().qgm_optimizations(),
+                })?;
+
+                self.validate_timeline(decorrelated_plan.depends_on())?;
+
+                let mut dataflow = tracing::span!(Level::INFO, "local").in_scope(
+                    || -> Result<_, AdapterError> {
+                        let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
+                        let mut dataflow = DataflowDesc::new(format!("explanation"));
+                        self.dataflow_builder(compute_instance)
+                            .import_view_into_dataflow(
+                                // TODO: If explaining a view, pipe the actual id of the view.
+                                &GlobalId::Explain,
+                                &optimized_plan,
+                                &mut dataflow,
+                            )?;
+                        mz_repr::explain_new::trace_plan(&dataflow);
+                        Ok(dataflow)
+                    },
+                )?;
+
                 mz_transform::optimize_dataflow(
                     &mut dataflow,
-                    &coord.index_oracle(compute_instance),
+                    &self.index_oracle(compute_instance),
                 )?;
-                Ok(dataflow)
-            };
 
-        let explanation_string = match stage {
-            ExplainStageNew::RawPlan => {
-                // construct explanation context
-                let catalog = self.catalog.for_session(session);
-                let context = ExplainContext {
-                    config: &config,
-                    humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
-                    finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
+                let used_indexes = dataflow
+                    .index_imports
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<GlobalId>>();
+
+                let fast_path_plan = match explainee {
+                    Explainee::Query => {
+                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                    }
+                    _ => None,
                 };
-                // explain plan
-                Explainable::new(&mut raw_plan).explain(&format, &config, &context)?
-            }
-            ExplainStageNew::QueryGraph => {
+
+                let dataflow_plan = Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
+                    .expect("Finalized dataflow");
+
+                trace_plan(&dataflow_plan);
+
+                Ok((used_indexes, fast_path_plan))
+            })?;
+
+        let trace = if matches!(stage, QueryGraph | OptimizedQueryGraph) {
+            vec![] // FIXME: remove this case once the QGM Model implements Clone
+        } else {
+            optimizer_trace.drain_all(
+                format.clone(), // FIXME: remove `.clone()` once the QGM Model implements Clone
+                config.clone(), // FIXME: remove `.clone()` once the QGM Model implements Clone
+                self.catalog.for_session(session),
+                row_set_finishing.clone(), // FIXME: remove `.clone()` once the QGM Model implements Clone
+                used_indexes,
+                fast_path_plan,
+            )?
+        };
+
+        let rows = match stage {
+            // QGM graphs are not collected in the trace at the moment as they
+            // do not implement Clone (see the TODOs in try_qgm_path.
+            // Once this is done the next two cases will be handled by the catch-all
+            // case at the end of this method.
+            QueryGraph => {
+                use mz_repr::explain_new::Explain;
                 // run partial pipeline
                 let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
-                let context = ExplainContext {
+                let context = crate::explain_new::ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: crate::explain_new::UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
                     fast_path_plan: Default::default(),
                 };
                 // explain plan
-                Explainable::new(&mut model).explain(&format, &config, &context)?
+                let mut explainable = crate::explain_new::Explainable::new(&mut model);
+                let explanation_string = explainable.explain(&format, &config, &context)?;
+                // pack rows in result vector
+                vec![Row::pack_slice(&[Datum::from(&*explanation_string)])]
             }
-            ExplainStageNew::OptimizedQueryGraph => {
+            OptimizedQueryGraph => {
+                use mz_repr::explain_new::Explain;
                 // run partial pipeline
                 let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
                 model.optimize();
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
-                let context = ExplainContext {
+                let context = crate::explain_new::ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: crate::explain_new::UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
                     fast_path_plan: Default::default(),
                 };
                 // explain plan
-                Explainable::new(&mut model).explain(&format, &config, &context)?
+                let mut explainable = crate::explain_new::Explainable::new(&mut model);
+                let explanation_string = explainable.explain(&format, &config, &context)?;
+                // pack rows in result vector
+                vec![Row::pack_slice(&[Datum::from(&*explanation_string)])]
             }
-            ExplainStageNew::DecorrelatedPlan => {
-                // run partial pipeline
-                let mut decorrelated_plan = decorrelate(raw_plan)?;
-                self.validate_timeline(decorrelated_plan.depends_on())?;
-                // construct explanation context
-                let catalog = self.catalog.for_session(session);
-                let context = ExplainContext {
-                    config: &config,
-                    humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
-                    finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
-                };
-                // explain plan
-                Explainable::new(&mut decorrelated_plan).explain(&format, &config, &context)?
+            // For the `Trace` stage, return the entire trace as (time, path, plan) triples.
+            Trace => {
+                let rows = trace
+                    .into_iter()
+                    .map(|entry| {
+                        Row::pack_slice(&[
+                            Datum::from(entry.duration.as_nanos() as u64),
+                            Datum::from(entry.path.as_str()),
+                            Datum::from(entry.plan.as_str()),
+                        ])
+                    })
+                    .collect();
+                rows
             }
-            ExplainStageNew::OptimizedPlan => {
-                // run partial pipeline
-                let decorrelated_plan = decorrelate(raw_plan)?;
-                self.validate_timeline(decorrelated_plan.depends_on())?;
-                let mut dataflow = optimize(self, decorrelated_plan)?;
-                // construct explanation context
-                let catalog = self.catalog.for_session(session);
-                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
-                let fast_path_plan = match explainee {
-                    Explainee::Query => {
-                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
-                    }
-                    _ => None,
-                };
-                let context = ExplainContext {
-                    config: &config,
-                    humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(used_indexes),
-                    finishing: row_set_finishing,
-                    fast_path_plan,
-                };
-                // explain plan
-                Explainable::new(&mut dataflow).explain(&format, &config, &context)?
-            }
-            ExplainStageNew::PhysicalPlan => {
-                // run partial pipeline
-                let decorrelated_plan = decorrelate(raw_plan)?;
-                self.validate_timeline(decorrelated_plan.depends_on())?;
-                let mut dataflow = optimize(self, decorrelated_plan)?;
-                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
-                let fast_path_plan = match explainee {
-                    Explainee::Query => {
-                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
-                    }
-                    _ => None,
-                };
-                let mut dataflow_plan =
-                    mz_compute_client::plan::Plan::<mz_repr::Timestamp>::finalize_dataflow(
-                        dataflow,
-                    )
-                    .expect("Dataflow planning failed; unrecoverable error");
-                // construct explanation context
-                let catalog = self.catalog.for_session(session);
-                let context = ExplainContext {
-                    config: &config,
-                    humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(used_indexes),
-                    finishing: row_set_finishing,
-                    fast_path_plan,
-                };
-                // explain plan
-                Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
-            }
-            ExplainStageNew::Trace => {
-                let feature = "ExplainStageNew::Trace";
-                Err(AdapterError::Unsupported(feature))?
+            // For everything else, return the plan for the stage identified by the corresponding path.
+            stage => {
+                let row = trace
+                    .into_iter()
+                    .find(|entry| entry.path == stage.path())
+                    .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
+                    .unwrap_or_else(|| panic!("plan at {}", stage.path()));
+                vec![row]
             }
         };
 
-        let rows = vec![Row::pack_slice(&[Datum::from(&*explanation_string)])];
         Ok(send_immediate_rows(rows))
     }
 
@@ -3332,11 +3336,12 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     fn is_user_allowed_to_alter_system(&self, session: &Session) -> Result<(), AdapterError> {
-        if session.user() == SYSTEM_USER {
+        if session.user() == &*SYSTEM_USER {
             Ok(())
         } else {
             Err(AdapterError::Unauthorized(format!(
-                "only user '{SYSTEM_USER}' is allowed to execute 'ALTER SYSTEM ...'"
+                "only user '{}' is allowed to execute 'ALTER SYSTEM ...'",
+                SYSTEM_USER.name,
             )))
         }
     }

@@ -39,7 +39,7 @@ view. It's a good idea to create a materialized view if:
 * The results need to be available across clusters;
 * View maintenance and query serving would benefit from being scaled
   independently;
-* The final consumer of the view is a sink or a [subscription](../tail).
+* The final consumer of the view is a sink or a [`SUBSCRIBE`](../subscribe) operation.
 
 On the other hand, if you only need to access a view from a single cluster, you
 should consider creating a [non-materialized view](../create-view) and building

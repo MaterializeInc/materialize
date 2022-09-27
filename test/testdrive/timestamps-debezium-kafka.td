@@ -116,7 +116,7 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL (SELECT * FROM bar)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM bar)
 
 > FETCH ALL c WITH (timeout = '2s');
 
@@ -124,7 +124,7 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL (SELECT * FROM foo)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM foo)
 
 > FETCH ALL c WITH (timeout = '2s');
 
@@ -132,7 +132,7 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL (SELECT * FROM join)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM join)
 
 > FETCH ALL c WITH (timeout = '2s');
 

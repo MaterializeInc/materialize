@@ -132,8 +132,8 @@ pub enum AdapterError {
     StatementTimeout,
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(mz_sql::catalog::CatalogError),
-    /// The transaction is in single-tail mode.
-    TailOnlyTransaction,
+    /// The transaction is in single-subscribe mode.
+    SubscribeOnlyTransaction,
     /// An error occurred in the MIR stage of the optimizer.
     Transform(TransformError),
     /// A user tried to perform an action that they were unauthorized to do.
@@ -163,6 +163,11 @@ pub enum AdapterError {
     Unsupported(&'static str),
     /// The specified function cannot be materialized.
     UnmaterializableFunction(UnmaterializableFunc),
+    /// Attempted to create an object that has unstable dependencies.
+    UnstableDependency {
+        object_type: String,
+        unstable_dependencies: Vec<String>,
+    },
     /// Attempted to read from log sources without selecting a target replica.
     UntargetedLogRead {
         log_names: Vec<String>,
@@ -215,6 +220,10 @@ impl AdapterError {
             AdapterError::InvalidLogDependency { log_names, .. } => Some(format!(
                 "The object depends on the following log sources:\n    {}",
                 log_names.join("\n    "),
+            )),
+            AdapterError::UnstableDependency { unstable_dependencies, .. } => Some(format!(
+                "The object depends on the following unstable objects:\n    {}",
+                unstable_dependencies.join("\n    "),
             )),
             AdapterError::PlanError(e) => e.detail(),
             _ => None,
@@ -387,8 +396,8 @@ impl fmt::Display for AdapterError {
                 write!(f, "cannot create {} in safe mode", feature)
             }
             AdapterError::SqlCatalog(e) => e.fmt(f),
-            AdapterError::TailOnlyTransaction => {
-                f.write_str("TAIL in transactions must be the only read statement")
+            AdapterError::SubscribeOnlyTransaction => {
+                f.write_str("SUBSCRIBE in transactions must be the only read statement")
             }
             AdapterError::Transform(e) => e.fmt(f),
             AdapterError::UncallableFunction { func, context } => {
@@ -422,6 +431,9 @@ impl fmt::Display for AdapterError {
                 f,
                 "cluster replica '{cluster_name}.{replica_name}' does not exist"
             ),
+            AdapterError::UnstableDependency { object_type, .. } => {
+                write!(f, "cannot create {object_type} with unstable dependencies")
+            }
             AdapterError::UntargetedLogRead { .. } => {
                 f.write_str("log source reads must target a replica")
             }

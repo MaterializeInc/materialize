@@ -36,7 +36,7 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL tail_without_snapshot WITH (SNAPSHOT = FALSE);
+> DECLARE c CURSOR FOR SUBSCRIBE tail_without_snapshot WITH (SNAPSHOT = FALSE);
 
 > FETCH 1 FROM c WITH (timeout = '2s')
 

@@ -60,6 +60,7 @@ a
   FROM data
   INTO KAFKA CONNECTION kafka_sasl (TOPIC 'testdrive-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
 {"before": null, "after": {"row": {"a": 1}}}

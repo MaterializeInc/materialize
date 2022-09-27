@@ -35,8 +35,7 @@ INSERT INTO t1 VALUES ('true'),('false');
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > SELECT COUNT(*) > 0 FROM mz_source;
 true

@@ -23,12 +23,20 @@ use mz_expr::MirRelationExpr;
 pub struct ReduceElision;
 
 impl crate::Transform for ReduceElision {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "reduce_elision")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.try_visit_mut_post(&mut |e| self.action(e))
+        let result = relation.try_visit_mut_post(&mut |e| self.action(e));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

@@ -43,9 +43,9 @@ The remainder of this guide uses the [`*pgx.Conn`](https://pkg.go.dev/github.com
 
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a Go application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Go application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```go
 tx, err := conn.Begin(ctx)
@@ -55,7 +55,7 @@ if err != nil {
 }
 defer tx.Rollback(ctx)
 
-_, err = tx.Exec(ctx, "DECLARE c CURSOR FOR TAIL my_view")
+_, err = tx.Exec(ctx, "DECLARE c CURSOR FOR SUBSCRIBE my_view")
 if err != nil {
     log.Fatal(err)
     return
@@ -70,12 +70,12 @@ for {
     }
 
     for rows.Next() {
-        var r tailResult
+        var r subscribeResult
         if err := rows.Scan(&r.MzTimestamp, &r.MzDiff, ...); err != nil {
             log.Fatal(err)
         }
         fmt.Printf("%+v\n", r)
-        // operate on tailResult
+        // operate on subscribeResult
     }
 }
 
@@ -85,7 +85,7 @@ if err != nil {
 }
 ```
 
-The [TAIL output format](/sql/tail/#output) of `tailResult` contains all of the columns of `my_view`, prepended with several additional columns that describe the nature of the update.  When a row of a tailed view is **updated,** two objects will show up in the result set:
+The [SUBSCRIBE output format](/sql/subscribe/#output) of `subscribeResult` contains all of the columns of `my_view`, prepended with several additional columns that describe the nature of the update.  When a row of a subscribed view is **updated,** two objects will show up in the result set:
 
 ```go
 {MzTimestamp:1646868332570 MzDiff:1 row...}

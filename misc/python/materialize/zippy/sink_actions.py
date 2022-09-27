@@ -58,7 +58,8 @@ class CreateSink(Action):
 
                 > CREATE SINK {self.sink.name} FROM {self.source_view.name}
                   INTO KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn;
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
+                  ENVELOPE DEBEZIUM;
 
                 # Ingest the sink again in order to be able to validate its contents
 

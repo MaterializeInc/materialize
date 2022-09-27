@@ -17,12 +17,20 @@ use mz_expr::{MirRelationExpr, MirScalarExpr};
 pub struct Reduce;
 
 impl crate::Transform for Reduce {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "reduce_fusion")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
-        relation.try_visit_mut_pre(&mut |e| self.action(e))
+        let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

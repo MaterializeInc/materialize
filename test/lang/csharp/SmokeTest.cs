@@ -35,7 +35,7 @@ namespace csharp
         }
 
         [Test]
-        public void BasicTail() {
+        public void BasicSubscribe() {
             using var conn = OpenConnection();
 
             // Create a table with one row of data.
@@ -43,7 +43,7 @@ namespace csharp
             new NpgsqlCommand("INSERT INTO t VALUES (1, 'a')", conn).ExecuteNonQuery();
 
             var txn = conn.BeginTransaction();
-            new NpgsqlCommand("DECLARE c CURSOR FOR TAIL t", conn, txn).ExecuteNonQuery();
+            new NpgsqlCommand("DECLARE c CURSOR FOR SUBSCRIBE t", conn, txn).ExecuteNonQuery();
             using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
             using (var reader  = cmd.ExecuteReader())
             {
@@ -75,15 +75,15 @@ namespace csharp
         }
 
         [Test]
-        public void CopyTail() {
+        public void CopySubscribe() {
             using var conn = OpenConnection();
 
             // Create a table with one row of data.
             new NpgsqlCommand("CREATE TABLE t (a int, b text)", conn).ExecuteNonQuery();
             new NpgsqlCommand("INSERT INTO t VALUES (1, 'a')", conn).ExecuteNonQuery();
 
-            // Start a tail using the binary copy protocol.
-            var reader = conn.BeginBinaryExport("COPY (TAIL t) TO STDOUT (FORMAT BINARY)");
+            // Start a subscribe using the binary copy protocol.
+            var reader = conn.BeginBinaryExport("COPY (SUBSCRIBE t) TO STDOUT (FORMAT BINARY)");
             // Validate the first row.
             Assert.AreEqual(4, reader.StartRow());
             reader.Read<decimal>(); // ignore timestamp column
@@ -109,7 +109,7 @@ namespace csharp
             Assert.AreEqual(2, reader.Read<int>()); // a column
             Assert.AreEqual("b", reader.Read<string>()); // b column
 
-            // The tail won't end until we send a cancel request.
+            // The subscribe won't end until we send a cancel request.
             reader.Cancel();
 
             // Ensure the COPY has ended after being canceled.

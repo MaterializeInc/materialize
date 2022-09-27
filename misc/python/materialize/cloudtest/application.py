@@ -18,8 +18,10 @@ from materialize.cloudtest.k8s.environmentd import (
 )
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
+from materialize.cloudtest.k8s.postgres_source import POSTGRES_SOURCE_RESOURCES
 from materialize.cloudtest.k8s.redpanda import REDPANDA_RESOURCES
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
+from materialize.cloudtest.k8s.ssh import SSH_RESOURCES
 from materialize.cloudtest.k8s.testdrive import Testdrive
 from materialize.cloudtest.wait import wait
 
@@ -67,7 +69,9 @@ class MaterializeApplication(Application):
 
         self.resources = [
             *POSTGRES_RESOURCES,
+            *POSTGRES_SOURCE_RESOURCES,
             *REDPANDA_RESOURCES,
+            *SSH_RESOURCES,
             Minio(),
             AdminRoleBinding(),
             EnvironmentdStatefulSet(),
@@ -75,7 +79,7 @@ class MaterializeApplication(Application):
             self.testdrive,
         ]
 
-        self.images = ["environmentd", "computed", "storaged", "testdrive"]
+        self.images = ["environmentd", "computed", "storaged", "testdrive", "postgres"]
 
         # Label the minicube nodes in a way that mimics Materialize cloud
         for node in [

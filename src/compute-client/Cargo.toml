@@ -19,7 +19,7 @@ mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-persist = { path = "../persist" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr" }
+mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
 mz-timely-util = { path = "../timely-util" }

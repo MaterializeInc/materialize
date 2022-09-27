@@ -16,8 +16,8 @@ from materialize.cloudtest.wait import wait
 
 def test_storaged_creation(mz: MaterializeApplication) -> None:
     """Test that creating multiple sources causes multiple storageds to be spawned."""
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
             $ kafka-create-topic topic=test
 
@@ -56,8 +56,8 @@ def test_storaged_creation(mz: MaterializeApplication) -> None:
 
 def test_storaged_resizing(mz: MaterializeApplication) -> None:
     """Test that resizing a given source causes the storaged to be replaced."""
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
             $ kafka-create-topic topic=test
 
@@ -82,8 +82,8 @@ def test_storaged_resizing(mz: MaterializeApplication) -> None:
 
     wait(condition="condition=Ready", resource=storaged)
 
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
             > ALTER SOURCE resize_storaged
               SET (SIZE '16');
@@ -104,8 +104,8 @@ def test_storaged_resizing(mz: MaterializeApplication) -> None:
 
 def test_storaged_shutdown(mz: MaterializeApplication) -> None:
     """Test that dropping a source causes its respective storaged to shut down."""
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
             $ kafka-create-topic topic=test
 

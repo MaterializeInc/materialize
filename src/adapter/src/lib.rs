@@ -37,7 +37,7 @@ mod coord;
 mod error;
 mod explain_new;
 mod sink_connection;
-mod tail;
+mod subscribe;
 mod util;
 
 pub mod catalog;

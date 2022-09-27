@@ -25,6 +25,7 @@
 > CREATE SINK data_sink FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1, "b": 1}}}
@@ -122,6 +123,7 @@ $ kafka-create-topic topic=input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE VIEW max_view AS SELECT a, MAX(b) as b FROM input GROUP BY a
 
@@ -131,21 +133,25 @@ $ kafka-create-topic topic=input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-of-keyed-relation-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK keyed_sink FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK keyed_sink_of_keyed_relation FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-of-keyed-relation-${testdrive.seed}') KEY (b)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK multi_keyed_sink FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'multi-keyed-sink-${testdrive.seed}') KEY (b, a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=input schema=${schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}

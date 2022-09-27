@@ -1047,6 +1047,7 @@ URL '${{testdrive.schema-registry-url}}';
   INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 
@@ -1101,8 +1102,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
         return Td(
             f"""
 > CREATE SOURCE mz_source_pgcdc
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres' (PUBLICATION 'mz_source');
   /* A */
 
 > SELECT count(*) FROM mz_source_pgcdc
@@ -1141,8 +1141,7 @@ CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
 
 > CREATE SOURCE s1
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
-  PUBLICATION 'p1';
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres' (PUBLICATION 'p1');
             """
         )
 
@@ -1308,6 +1307,7 @@ URL '${{testdrive.schema-registry-url}}';
   INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
+  ENVELOPE DEBEZIUM
 """
             for i in range(0, self.n())
         )

@@ -41,7 +41,7 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 1
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_compute_frontiers_%';
 ----
 1
 
@@ -54,7 +54,7 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 3
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_compute_frontiers_%';
 ----
 3
 
@@ -67,7 +67,7 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 2
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_compute_frontiers_%';
 ----
 2
 
@@ -80,83 +80,6 @@ select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
 1
 
 query T rowsort
-select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
-----
-1
-
-
-# Now create a view and ensure CASCADE works as intended
-
-statement ok
-CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
-
-
-# We have to guess the identifier 4 here, it should match c1.r1 at this point
-statement ok
-CREATE VIEW v1 AS SELECT * FROM mz_internal.mz_peek_active_4;
-
-statement ok
-CREATE VIEW w1 AS SELECT * FROM mz_internal.mz_materialization_frontiers_4;
-
-statement ok
-CREATE VIEW v11 AS SELECT * FROM v1;
-
-statement ok
-CREATE VIEW w11 AS SELECT * FROM w1;
-
-statement ok
-CREATE VIEW v2 AS SELECT * FROM mz_internal.mz_peek_active_5;
-
-statement ok
-CREATE VIEW w2 AS SELECT * FROM mz_internal.mz_materialization_frontiers_5;
-
-statement ok
-CREATE VIEW v21 AS SELECT * FROM v2;
-
-statement ok
-CREATE VIEW w21 AS SELECT * FROM w2;
-
-statement error cannot drop replica "r1" of cluster "c1".*
-DROP CLUSTER REPLICA c1.r1;
-
-statement ok
-DROP CLUSTER REPLICA c1.r1 CASCADE;
-
-# Now ensure the dependent views are gone
-
-query error unknown catalog item 'v1'
-SELECT * FROM v1;
-
-query error unknown catalog item 'v11'
-SELECT * FROM v11;
-
-query error unknown catalog item 'w1'
-SELECT * FROM w1;
-
-query error unknown catalog item 'w11'
-SELECT * FROM w11;
-
-statement ok
-DROP CLUSTER c1;
-
-query error unknown catalog item 'v2'
-SELECT * FROM v2;
-
-query error unknown catalog item 'v21'
-SELECT * FROM v21;
-
-query error unknown catalog item 'w2'
-SELECT * FROM w2;
-
-query error unknown catalog item 'w21'
-SELECT * FROM w21;
-
-query T rowsort
-select COUNT(*) from mz_catalog.mz_sources WHERE name LIKE 'mz_peek_active_%';
-----
-1
-
-query T rowsort
-select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_materialization_frontiers_%';
+select COUNT(*) from mz_catalog.mz_views WHERE name LIKE 'mz_compute_frontiers_%';
 ----
 1

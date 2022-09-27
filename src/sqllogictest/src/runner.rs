@@ -689,9 +689,9 @@ impl Runner {
             connection_context: ConnectionContext::for_tests(
                 (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
             ),
-            otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
-            stderr_filter_callback: mz_ore::tracing::StderrFilterCallback::none(),
+            tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
             storage_usage_collection_interval: Duration::from_secs(3600),
+            segment_api_key: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

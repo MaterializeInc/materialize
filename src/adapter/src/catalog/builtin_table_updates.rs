@@ -24,15 +24,16 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_storage::types::connections::KafkaConnection;
 use mz_storage::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
-    MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE, MZ_TABLES, MZ_TYPES,
-    MZ_VIEWS,
+    MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
+    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS,
+    MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE, MZ_TABLES,
+    MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, MaterializedView, Sink,
@@ -191,12 +192,20 @@ impl CatalogState {
             .id;
         let name = &entry.name().item;
         let mut updates = match entry.item() {
-            CatalogItem::Log(_) => self.pack_source_update(id, oid, schema_id, name, "log", diff),
+            CatalogItem::Log(_) => {
+                self.pack_source_update(id, oid, schema_id, name, "log", None, diff)
+            }
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
-            CatalogItem::Source(source) => {
-                self.pack_source_update(id, oid, schema_id, name, source.source_desc.name(), diff)
-            }
+            CatalogItem::Source(source) => self.pack_source_update(
+                id,
+                oid,
+                schema_id,
+                name,
+                source.source_desc.name(),
+                source.connection_id,
+                diff,
+            ),
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
             CatalogItem::MaterializedView(mview) => {
                 self.pack_materialized_view_update(id, oid, schema_id, name, mview, diff)
@@ -209,7 +218,7 @@ impl CatalogState {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
             CatalogItem::StorageCollection(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "storage collection", diff)
+                self.pack_source_update(id, oid, schema_id, name, "storage collection", None, diff)
             }
         };
 
@@ -271,6 +280,7 @@ impl CatalogState {
         schema_id: &SchemaSpecifier,
         name: &str,
         source_desc_name: &str,
+        connection_id: Option<GlobalId>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -281,6 +291,7 @@ impl CatalogState {
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(source_desc_name),
+                Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
             ]),
             diff,
         }]
@@ -314,18 +325,26 @@ impl CatalogState {
             ]),
             diff,
         }];
-        if let mz_storage::types::connections::Connection::Ssh(ssh) = &connection.connection {
-            if let Some(public_keypair) = ssh.public_keys.as_ref() {
-                updates.extend(self.pack_ssh_tunnel_connection_update(
-                    id,
-                    name,
-                    public_keypair,
-                    diff,
-                ));
-            } else {
-                tracing::error!("does this even happen?");
+        match connection.connection {
+            mz_storage::types::connections::Connection::Ssh(ref ssh) => {
+                if let Some(public_keypair) = ssh.public_keys.as_ref() {
+                    updates.extend(self.pack_ssh_tunnel_connection_update(
+                        id,
+                        name,
+                        public_keypair,
+                        diff,
+                    ));
+                } else {
+                    tracing::error!("does this even happen?");
+                }
             }
-        }
+            mz_storage::types::connections::Connection::Kafka(ref kafka) => {
+                updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
+            }
+            mz_storage::types::connections::Connection::Csr(_)
+            | mz_storage::types::connections::Connection::Postgres(_)
+            | mz_storage::types::connections::Connection::Aws(_) => {}
+        };
         updates
     }
 
@@ -344,6 +363,38 @@ impl CatalogState {
                 Datum::String(&public_key_primary),
                 Datum::String(&public_key_secondary),
             ]),
+            diff,
+        }]
+    }
+
+    fn pack_kafka_connection_update(
+        &self,
+        id: GlobalId,
+        kafka: &KafkaConnection,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        let progress_topic_holder;
+        let progress_topic = match kafka.progress_topic {
+            Some(ref topic) => Datum::String(&topic),
+            None => {
+                progress_topic_holder = self.config.default_kafka_sink_progress_topic(id);
+                Datum::String(&progress_topic_holder)
+            }
+        };
+        let mut row = Row::default();
+        row.packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: kafka.brokers.len(),
+                }],
+                kafka.brokers.iter().map(|id| Datum::String(&id)),
+            )
+            .unwrap();
+        let brokers = row.unpack_first();
+        vec![BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_KAFKA_CONNECTIONS),
+            row: Row::pack_slice(&[Datum::String(&id.to_string()), brokers, progress_topic]),
             diff,
         }]
     }
@@ -435,16 +486,12 @@ impl CatalogState {
         } = sink
         {
             match connection {
-                StorageSinkConnection::Kafka(KafkaSinkConnection {
-                    topic, consistency, ..
-                }) => {
-                    let progress_topic = Datum::String(consistency.topic.as_str());
+                StorageSinkConnection::Kafka(KafkaSinkConnection { topic, .. }) => {
                     updates.push(BuiltinTableUpdate {
                         id: self.resolve_builtin_table(&MZ_KAFKA_SINKS),
                         row: Row::pack_slice(&[
                             Datum::String(&id.to_string()),
                             Datum::String(topic.as_str()),
-                            progress_topic,
                         ]),
                         diff,
                     });
@@ -458,6 +505,7 @@ impl CatalogState {
                     Datum::UInt64(schema_id.into()),
                     Datum::String(name),
                     Datum::String(connection.name()),
+                    Datum::from(sink.connection_id.map(|id| id.to_string()).as_deref()),
                 ]),
                 diff,
             });

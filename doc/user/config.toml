@@ -72,9 +72,9 @@ url = "/sql/select/"
 weight= 70
 
 [[menu.main]]
-name = "Subscriptions (`TAIL`)"
+name = "Subscriptions (`SUBSCRIBE`)"
 parent = "reference"
-url = "/sql/tail/"
+url = "/sql/subscribe/"
 weight= 80
 
 [[menu.main]]

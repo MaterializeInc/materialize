@@ -70,7 +70,7 @@ contains:unknown catalog item 'UID'
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL v1 AS OF 18446744073709551615;
+> DECLARE c CURSOR FOR SUBSCRIBE v1 AS OF 18446744073709551615;
 
 > FETCH 4 c WITH (timeout='10s');
 18446744073709551615 1 1
@@ -95,6 +95,7 @@ contains:unknown catalog item 'UID'
 > CREATE SINK sort_messages_sink FROM sort_messages
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sort-messages-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.sort_messages_sink sort-messages=true
 {"before": null, "after": {"row": {"a": 1}}}
@@ -181,6 +182,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 > CREATE SINK kafka_verify_regexp_sink FROM kafka_verify_regexp
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-verify-regexp-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort-messages=true
 {"before": null, "after": {"row": {"a": "UID"}}}

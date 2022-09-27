@@ -39,8 +39,7 @@ INSERT INTO t2(t1_id, name) VALUES (1, 'example');
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE VIEWS FROM SOURCE mz_source;
 
@@ -63,8 +62,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 # verify that dropping things allows recreation
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE VIEWS FROM SOURCE mz_source;
 

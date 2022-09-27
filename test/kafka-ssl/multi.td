@@ -64,6 +64,7 @@ a
 > CREATE SINK snk FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
 {"before": null, "after": {"row":{"a": 1}}}

@@ -53,6 +53,8 @@ pub struct Metrics {
     /// Metrics for batches written directly on behalf of a user (BatchBuilder
     /// or one of the sugar methods that use it).
     pub user: BatchWriteMetrics,
+    /// Metrics for reading batch parts
+    pub read: BatchPartReadMetrics,
     /// Metrics for compaction.
     pub compaction: CompactionMetrics,
     /// Metrics for garbage collection.
@@ -95,6 +97,7 @@ impl Metrics {
             retries: vecs.retries_metrics(),
             codecs: vecs.codecs_metrics(),
             user: BatchWriteMetrics::new(registry, "user"),
+            read: vecs.batch_part_read_metrics(),
             compaction: CompactionMetrics::new(registry),
             gc: GcMetrics::new(registry),
             lease: LeaseMetrics::new(registry),
@@ -150,6 +153,11 @@ struct MetricsVecs {
     encode_seconds: CounterVec,
     decode_count: IntCounterVec,
     decode_seconds: CounterVec,
+
+    read_part_bytes: IntCounterVec,
+    read_part_goodbytes: IntCounterVec,
+    read_part_count: IntCounterVec,
+    read_part_seconds: CounterVec,
 
     /// A minimal set of metrics imported into honeycomb for alerting.
     alerts_metrics: Arc<AlertsMetrics>,
@@ -265,6 +273,27 @@ impl MetricsVecs {
             decode_seconds: registry.register(metric!(
                 name: "mz_persist_decode_seconds",
                 help: "time spent in op decodes",
+                var_labels: ["op"],
+            )),
+
+            read_part_bytes: registry.register(metric!(
+                name: "mz_persist_read_batch_part_bytes",
+                help: "total encoded size of batch parts read",
+                var_labels: ["op"],
+            )),
+            read_part_goodbytes: registry.register(metric!(
+                name: "mz_persist_read_batch_part_goodbytes",
+                help: "total logical size of batch parts read",
+                var_labels: ["op"],
+            )),
+            read_part_count: registry.register(metric!(
+                name: "mz_persist_read_batch_part_count",
+                help: "count of batch parts read",
+                var_labels: ["op"],
+            )),
+            read_part_seconds: registry.register(metric!(
+                name: "mz_persist_read_batch_part_seconds",
+                help: "time spent reading batch parts",
                 var_labels: ["op"],
             )),
 
@@ -393,6 +422,24 @@ impl MetricsVecs {
             alerts_metrics: Arc::clone(&self.alerts_metrics),
         }
     }
+
+    fn batch_part_read_metrics(&self) -> BatchPartReadMetrics {
+        BatchPartReadMetrics {
+            listen: self.read_metrics("listen"),
+            snapshot: self.read_metrics("snapshot"),
+            batch_fetcher: self.read_metrics("batch_fetcher"),
+            compaction: self.read_metrics("compaction"),
+        }
+    }
+
+    fn read_metrics(&self, op: &str) -> ReadMetrics {
+        ReadMetrics {
+            part_bytes: self.read_part_bytes.with_label_values(&[op]),
+            part_goodbytes: self.read_part_goodbytes.with_label_values(&[op]),
+            part_count: self.read_part_count.with_label_values(&[op]),
+            seconds: self.read_part_seconds.with_label_values(&[op]),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -491,12 +538,30 @@ pub struct RetriesMetrics {
     pub(crate) snapshot: RetryMetrics,
 }
 
+#[derive(Debug)]
+pub struct BatchPartReadMetrics {
+    pub(crate) listen: ReadMetrics,
+    pub(crate) snapshot: ReadMetrics,
+    pub(crate) batch_fetcher: ReadMetrics,
+    pub(crate) compaction: ReadMetrics,
+}
+
+#[derive(Debug)]
+pub struct ReadMetrics {
+    pub(crate) part_bytes: IntCounter,
+    pub(crate) part_goodbytes: IntCounter,
+    pub(crate) part_count: IntCounter,
+    pub(crate) seconds: Counter,
+}
+
 // This one is Clone in contrast to the others because it has to get moved into
 // a task.
 #[derive(Debug, Clone)]
 pub struct BatchWriteMetrics {
     pub(crate) bytes: IntCounter,
     pub(crate) goodbytes: IntCounter,
+    pub(crate) seconds: Counter,
+    pub(crate) write_stalls: IntCounter,
 }
 
 impl BatchWriteMetrics {
@@ -509,6 +574,17 @@ impl BatchWriteMetrics {
             goodbytes: registry.register(metric!(
                 name: format!("mz_persist_{}_goodbytes", name),
                 help: format!("total logical size of {} batches written", name),
+            )),
+            seconds: registry.register(metric!(
+                name: format!("mz_persist_{}_write_batch_part_seconds", name),
+                help: format!("time spent writing {} batches", name),
+            )),
+            write_stalls: registry.register(metric!(
+                name: format!("mz_persist_{}_write_stall_count", name),
+                help: format!(
+                    "count of {} writes stalling to await max outstanding reqs",
+                    name
+                ),
             )),
         }
     }
@@ -524,12 +600,23 @@ pub struct CompactionMetrics {
     pub(crate) noop: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) memory_violations: IntCounter,
+    pub(crate) runs_compacted: IntCounter,
+    pub(crate) chunks_compacted: IntCounter,
 
     pub(crate) batch: BatchWriteMetrics,
+    pub(crate) steps: CompactionStepTimings,
+
+    pub(crate) _steps_vec: CounterVec,
 }
 
 impl CompactionMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
+        let step_timings: CounterVec = registry.register(metric!(
+                name: "mz_persist_compaction_step_seconds",
+                help: "time spent on individual steps of compaction",
+                var_labels: ["step"],
+        ));
+
         CompactionMetrics {
             requested: registry.register(metric!(
                 name: "mz_persist_compaction_requested",
@@ -563,7 +650,39 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_memory_violations",
                 help: "count of compaction memory requirement violations",
             )),
+            runs_compacted: registry.register(metric!(
+                name: "mz_persist_compaction_runs_compacted",
+                help: "count of runs compacted",
+            )),
+            chunks_compacted: registry.register(metric!(
+                name: "mz_persist_compaction_chunks_compacted",
+                help: "count of run chunks compacted",
+            )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
+            steps: CompactionStepTimings::new(step_timings.clone()),
+            _steps_vec: step_timings,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CompactionStepTimings {
+    pub(crate) part_fetch_seconds: Counter,
+    pub(crate) heap_population_seconds: Counter,
+    pub(crate) consolidation_seconds: Counter,
+    pub(crate) part_columnar_encoding_seconds: Counter,
+    pub(crate) part_write_seconds: Counter,
+}
+
+impl CompactionStepTimings {
+    fn new(step_timings: CounterVec) -> CompactionStepTimings {
+        CompactionStepTimings {
+            part_fetch_seconds: step_timings.with_label_values(&["part_fetch"]),
+            heap_population_seconds: step_timings.with_label_values(&["heap_population"]),
+            consolidation_seconds: step_timings.with_label_values(&["consolidation"]),
+            part_columnar_encoding_seconds: step_timings
+                .with_label_values(&["part_columnar_encoding"]),
+            part_write_seconds: step_timings.with_label_values(&["part_write_seconds"]),
         }
     }
 }

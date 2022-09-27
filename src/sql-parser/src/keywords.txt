@@ -67,7 +67,6 @@ Cluster
 Clusters
 Coalesce
 Collate
-Collection
 Columns
 Commit
 Committed
@@ -313,6 +312,7 @@ Stdin
 Stdout
 Strategy
 String
+Subscribe
 Substring
 Superuser
 System

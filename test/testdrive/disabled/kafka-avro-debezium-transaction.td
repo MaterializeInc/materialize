@@ -228,6 +228,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-sink-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 # Check that repeated Debezium messages are skipped.
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
@@ -266,7 +267,7 @@ $ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
 #
 # We want the next message to have a different timestamp
 > BEGIN
-> DECLARE c CURSOR FOR TAIL data_schema_inline WITH (snapshot = false, progress = true)
+> DECLARE c CURSOR FOR SUBSCRIBE data_schema_inline WITH (snapshot = false, progress = true)
 > FETCH 1 c
 mz_timestamp  mz_progressed  mz_diff  a       b
 -------------------------------------------------
@@ -300,7 +301,7 @@ a  b
 
 # We want the next message to have a different timestamp
 > BEGIN
-> DECLARE c CURSOR FOR TAIL data_schema_inline WITH (snapshot = false, progress = true)
+> DECLARE c CURSOR FOR SUBSCRIBE data_schema_inline WITH (snapshot = false, progress = true)
 > FETCH 1 c
 mz_timestamp  mz_progressed  mz_diff  a       b
 -------------------------------------------------

@@ -55,11 +55,10 @@ use mz_storage::types::sources::encoding::{
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
 use mz_storage::types::sources::{
-    DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
-    DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
-    KinesisSourceConnection, LoadGeneratorSourceConnection, PostgresSourceConnection,
-    PostgresSourceDetails, ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection,
-    SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection,
+    LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourceDetails,
+    ProtoPostgresSourceDetails, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
+    Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -76,11 +75,11 @@ use crate::ast::{
     CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
     CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
     CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
-    DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
-    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
-    KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, ObjectType, Op, PostgresConnectionOption,
+    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
+    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName, KafkaConnectionOption,
+    KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
+    ObjectType, Op, PgConfigOption, PgConfigOptionName, PostgresConnectionOption,
     PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
@@ -319,6 +318,8 @@ generate_extracted_config!(
     (TimestampInterval, Interval)
 );
 
+generate_extracted_config!(PgConfigOption, (Details, String), (Publication, String));
+
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
@@ -366,7 +367,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connection, encoding) = match connection {
+    let (external_connection, connection_id, encoding) = match connection {
         CreateSourceConnection::Kafka(mz_sql_parser::ast::KafkaSourceConnection {
             connection:
                 mz_sql_parser::ast::KafkaConnection {
@@ -461,19 +462,6 @@ pub fn plan_create_source(
                 sql_bail!("INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE");
             }
 
-            if !include_metadata.is_empty()
-                && matches!(envelope, Envelope::Debezium(DbzMode::Plain { .. }))
-            {
-                for kind in include_metadata {
-                    if !matches!(kind.ty, SourceIncludeMetadataType::Key) {
-                        sql_bail!(
-                            "INCLUDE {} with Debezium requires UPSERT semantics",
-                            kind.ty
-                        );
-                    }
-                }
-            }
-
             for (pos, item) in include_metadata.iter().cloned().enumerate() {
                 match item.ty {
                     SourceIncludeMetadataType::Timestamp => {
@@ -502,7 +490,7 @@ pub fn plan_create_source(
 
             let connection = SourceConnection::Kafka(connection);
 
-            (connection, encoding)
+            (connection, Some(item.id()), encoding)
         }
         CreateSourceConnection::Kinesis {
             connection: aws_connection,
@@ -538,7 +526,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
                 SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
-            (connection, encoding)
+            (connection, Some(item.id()), encoding)
         }
         CreateSourceConnection::S3 {
             connection: aws_connection,
@@ -593,18 +581,23 @@ pub fn plan_create_source(
                     Compression::None => mz_storage::types::sources::Compression::None,
                 },
             });
-            (connection, encoding)
+            (connection, Some(item.id()), encoding)
         }
         CreateSourceConnection::Postgres {
             connection,
-            publication,
-            details,
+            options,
         } => {
             let item = scx.get_item_by_resolved_name(&connection)?;
             let connection = match item.connection()? {
                 Connection::Postgres(connection) => connection.clone(),
                 _ => sql_bail!("{} is not a postgres connection", item.name()),
             };
+            let PgConfigOptionExtracted {
+                details,
+                publication,
+                seen: _,
+            } = options.clone().try_into()?;
+
             let details = details
                 .as_ref()
                 .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
@@ -613,14 +606,14 @@ pub fn plan_create_source(
                 ProtoPostgresSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
             let connection = SourceConnection::Postgres(PostgresSourceConnection {
                 connection,
-                publication: publication.clone(),
+                publication: publication.expect("validated exists during purification"),
                 details: PostgresSourceDetails::from_proto(details)
                     .map_err(|e| sql_err!("{}", e))?,
             });
 
             let encoding =
                 SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Postgres));
-            (connection, encoding)
+            (connection, Some(item.id()), encoding)
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let load_generator = match generator {
@@ -640,7 +633,7 @@ pub fn plan_create_source(
                 load_generator,
                 tick_micros,
             });
-            (connection, generator.data_encoding())
+            (connection, None, generator.data_encoding())
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -660,74 +653,11 @@ pub fn plan_create_source(
         mz_sql_parser::ast::Envelope::None => UnplannedSourceEnvelope::None(key_envelope),
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
-            let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
+            let (_before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
             match mode {
-                DbzMode::Upsert => {
+                DbzMode::Plain => {
                     UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
-                }
-                DbzMode::Plain { tx_metadata } => {
-                    scx.require_unsafe_mode("ENVELOPE DEBEZIUM")?;
-
-                    // TODO(#11668): Probably make this not a WITH option and integrate into the DBZ envelope?
-                    let mut tx_metadata_source = None;
-                    let mut tx_metadata_collection = None;
-
-                    if !tx_metadata.is_empty() {
-                        scx.require_unsafe_mode("ENVELOPE DEBEZIUM ... TRANSACTION METADATA")?;
-                    }
-
-                    for option in tx_metadata {
-                        match option {
-                            DbzTxMetadataOption::Source(source) => {
-                                if tx_metadata_source.is_some() {
-                                    sql_bail!(
-                                        "TRANSACTION METADATA SOURCE specified more than once"
-                                    )
-                                }
-                                let item = scx.get_item_by_resolved_name(source)?;
-                                if item.item_type() != CatalogItemType::Source {
-                                    sql_bail!(
-                                        "provided TRANSACTION METADATA SOURCE {} is not a source",
-                                        source.full_name_str(),
-                                    );
-                                }
-                                tx_metadata_source = Some(item);
-                            }
-                            DbzTxMetadataOption::Collection(data_collection) => {
-                                if tx_metadata_collection.is_some() {
-                                    sql_bail!(
-                                        "TRANSACTION METADATA COLLECTION specified more than once"
-                                    );
-                                }
-                                tx_metadata_collection =
-                                    Some(String::try_from_value(data_collection.clone())?);
-                            }
-                        }
-                    }
-
-                    let tx_metadata = match (tx_metadata_source, tx_metadata_collection) {
-                        (None, None) => None,
-                        (Some(source), Some(collection)) => {
-                            Some(typecheck_debezium_transaction_metadata(
-                                scx,
-                                source,
-                                &value_desc,
-                                collection,
-                            )?)
-                        }
-                        _ => {
-                            sql_bail!(
-                                "TRANSACTION METADATA requires both SOURCE and COLLECTION options"
-                            );
-                        }
-                    };
-
-                    UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
-                        before_idx,
-                        after_idx,
-                        dedup: typecheck_debezium_dedup(&value_desc, tx_metadata)?,
-                    })
                 }
             }
         }
@@ -852,6 +782,7 @@ pub fn plan_create_source(
 
     let source = Source {
         create_sql,
+        connection_id,
         source_desc: SourceDesc {
             connection: external_connection,
             encoding,
@@ -891,228 +822,10 @@ fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanE
     Ok((before_idx, after_idx))
 }
 
-fn typecheck_debezium_dedup(
-    value_desc: &RelationDesc,
-    tx_metadata: Option<DebeziumTransactionMetadata>,
-) -> Result<DebeziumDedupProjection, PlanError> {
-    let (op_idx, op_ty) = value_desc
-        .get_by_name(&"op".into())
-        .ok_or_else(|| sql_err!("'op' column missing from debezium input"))?;
-    if op_ty.scalar_type != ScalarType::String {
-        sql_bail!("'op' column must be of type string");
-    };
-
-    let (source_idx, source_ty) = value_desc
-        .get_by_name(&"source".into())
-        .ok_or_else(|| sql_err!("'source' column missing from debezium input"))?;
-
-    let source_fields = match &source_ty.scalar_type {
-        ScalarType::Record { fields, .. } => fields,
-        _ => sql_bail!("'source' column must be of type record"),
-    };
-
-    let snapshot = source_fields
-        .iter()
-        .enumerate()
-        .find(|(_, f)| f.0.as_str() == "snapshot");
-    let snapshot_idx = match snapshot {
-        Some((idx, (_, ty))) => match &ty.scalar_type {
-            ScalarType::String | ScalarType::Bool => idx,
-            _ => sql_bail!("'snapshot' column must be a string or boolean"),
-        },
-        None => sql_bail!("'snapshot' field missing from source record"),
-    };
-
-    let mut mysql = (None, None, None);
-    let mut postgres = (None, None);
-    let mut sqlserver = (None, None);
-
-    for (idx, (name, ty)) in source_fields.iter().enumerate() {
-        match name.as_str() {
-            "file" => {
-                mysql.0 = match &ty.scalar_type {
-                    ScalarType::String => Some(idx),
-                    t => sql_bail!(r#""source"."file" must be of type string, found {:?}"#, t),
-                }
-            }
-            "pos" => {
-                mysql.1 = match &ty.scalar_type {
-                    ScalarType::Int64 => Some(idx),
-                    t => sql_bail!(r#""source"."pos" must be of type bigint, found {:?}"#, t),
-                }
-            }
-            "row" => {
-                mysql.2 = match &ty.scalar_type {
-                    ScalarType::Int32 => Some(idx),
-                    t => sql_bail!(r#""source"."file" must be of type int, found {:?}"#, t),
-                }
-            }
-            "sequence" => {
-                postgres.0 = match &ty.scalar_type {
-                    ScalarType::String => Some(idx),
-                    t => sql_bail!(
-                        r#""source"."sequence" must be of type string, found {:?}"#,
-                        t
-                    ),
-                }
-            }
-            "lsn" => {
-                postgres.1 = match &ty.scalar_type {
-                    ScalarType::Int64 => Some(idx),
-                    t => sql_bail!(r#""source"."lsn" must be of type bigint, found {:?}"#, t),
-                }
-            }
-            "change_lsn" => {
-                sqlserver.0 = match &ty.scalar_type {
-                    ScalarType::String => Some(idx),
-                    t => sql_bail!(
-                        r#""source"."change_lsn" must be of type string, found {:?}"#,
-                        t
-                    ),
-                }
-            }
-            "event_serial_no" => {
-                sqlserver.1 = match &ty.scalar_type {
-                    ScalarType::Int64 => Some(idx),
-                    t => sql_bail!(
-                        r#""source"."event_serial_no" must be of type bigint, found {:?}"#,
-                        t
-                    ),
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let source_projection = if let (Some(file), Some(pos), Some(row)) = mysql {
-        DebeziumSourceProjection::MySql { file, pos, row }
-    } else if let (Some(change_lsn), Some(event_serial_no)) = sqlserver {
-        DebeziumSourceProjection::SqlServer {
-            change_lsn,
-            event_serial_no,
-        }
-    } else if let (Some(sequence), Some(lsn)) = postgres {
-        DebeziumSourceProjection::Postgres { sequence, lsn }
-    } else {
-        sql_bail!("unknown type of upstream database")
-    };
-
-    Ok(DebeziumDedupProjection {
-        op_idx,
-        source_idx,
-        snapshot_idx,
-        source_projection,
-        tx_metadata,
-    })
-}
-
-fn typecheck_debezium_transaction_metadata(
-    scx: &StatementContext,
-    tx_metadata_source: &dyn CatalogItem,
-    data_value_desc: &RelationDesc,
-    tx_data_collection_name: String,
-) -> Result<DebeziumTransactionMetadata, PlanError> {
-    let tx_value_desc =
-        tx_metadata_source.desc(&scx.catalog.resolve_full_name(tx_metadata_source.name()))?;
-    let (tx_status_idx, tx_status_ty) = tx_value_desc
-        .get_by_name(&"status".into())
-        .ok_or_else(|| sql_err!("'status' column missing from debezium transaction metadata"))?;
-    let (tx_transaction_id_idx, tx_transaction_id_ty) = tx_value_desc
-        .get_by_name(&"id".into())
-        .ok_or_else(|| sql_err!("'id' column missing from debezium transaction metadata"))?;
-    let (tx_data_collections_idx, tx_data_collections_ty) = tx_value_desc
-        .get_by_name(&"data_collections".into())
-        .ok_or_else(|| {
-            sql_err!("'data_collections' column missing from debezium transaction metadata")
-        })?;
-    if tx_status_ty != &ScalarType::String.nullable(false) {
-        sql_bail!("'status' column must be of type non-nullable string");
-    }
-    if tx_transaction_id_ty != &ScalarType::String.nullable(false) {
-        sql_bail!("'id' column must be of type non-nullable string");
-    }
-
-    // Don't care about nullability of data_collections or subtypes
-    let (tx_data_collections_data_collection, tx_data_collections_event_count) =
-        match tx_data_collections_ty.scalar_type {
-            ScalarType::Array(ref element_type)
-            | ScalarType::List {
-                ref element_type, ..
-            } => match **element_type {
-                ScalarType::Record { ref fields, .. } => {
-                    let data_collections_data_collection = fields
-                        .iter()
-                        .enumerate()
-                        .find(|(_, f)| f.0.as_str() == "data_collection");
-                    let data_collections_event_count = fields
-                        .iter()
-                        .enumerate()
-                        .find(|(_, f)| f.0.as_str() == "event_count");
-                    (
-                        data_collections_data_collection,
-                        data_collections_event_count,
-                    )
-                }
-                _ => sql_bail!("'data_collections' array must contain records"),
-            },
-            _ => sql_bail!("'data_collections' column must be of array or list type",),
-        };
-
-    let tx_data_collections_data_collection_idx = match tx_data_collections_data_collection {
-        Some((idx, (_, ty))) => match ty.scalar_type {
-            ScalarType::String => idx,
-            _ => sql_bail!("'data_collections.data_collection' must be of type string"),
-        },
-        _ => sql_bail!(
-            "'data_collections.data_collection' missing from debezium transaction metadata"
-        ),
-    };
-
-    let tx_data_collections_event_count_idx = match tx_data_collections_event_count {
-        Some((idx, (_, ty))) => match ty.scalar_type {
-            ScalarType::Int16 | ScalarType::Int32 | ScalarType::Int64 => idx,
-            _ => sql_bail!("'data_collections.event_count' must be of type string"),
-        },
-        _ => sql_bail!("'data_collections.event_count' missing from debezium transaction metadata"),
-    };
-
-    let (data_transaction_idx, data_transaction_ty) = data_value_desc
-        .get_by_name(&"transaction".into())
-        .ok_or_else(|| sql_err!("'transaction' column missing from debezium input"))?;
-
-    let data_transaction_id = match &data_transaction_ty.scalar_type {
-        ScalarType::Record { fields, .. } => fields
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.0.as_str() == "id"),
-        _ => sql_bail!("'transaction' column must be of type record"),
-    };
-
-    let data_transaction_id_idx = match data_transaction_id {
-        Some((idx, (_, ty))) => match &ty.scalar_type {
-            ScalarType::String => idx,
-            _ => sql_bail!("'transaction.id' column must be of type string"),
-        },
-        None => sql_bail!("'transaction.id' column missing from debezium input"),
-    };
-
-    Ok(DebeziumTransactionMetadata {
-        tx_metadata_global_id: tx_metadata_source.id(),
-        tx_status_idx,
-        tx_transaction_id_idx,
-        tx_data_collections_idx,
-        tx_data_collections_data_collection_idx,
-        tx_data_collections_event_count_idx,
-        tx_data_collection_name,
-        data_transaction_idx,
-        data_transaction_id_idx,
-    })
-}
-
 fn get_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
-    envelope: &Envelope<Aug>,
+    envelope: &Envelope,
     connection: &CreateSourceConnection<Aug>,
 ) -> Result<SourceDataEncoding, PlanError> {
     let encoding = match format {
@@ -1137,7 +850,7 @@ fn get_encoding(
 
     let requires_keyvalue = matches!(
         envelope,
-        Envelope::Debezium(DbzMode::Upsert) | Envelope::Upsert
+        Envelope::Debezium(DbzMode::Plain) | Envelope::Upsert
     );
     let is_keyvalue = matches!(encoding, SourceDataEncoding::KeyValue { .. });
     if requires_keyvalue && !is_keyvalue {
@@ -1343,7 +1056,7 @@ fn get_encoding_inner(
 /// Extract the key envelope, if it is requested
 fn get_key_envelope(
     included_items: &[SourceIncludeMetadata],
-    envelope: &Envelope<Aug>,
+    envelope: &Envelope,
     encoding: &SourceDataEncoding,
 ) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
@@ -1824,19 +1537,10 @@ pub fn plan_create_sink(
     } = stmt;
 
     let envelope = match envelope {
-        // Sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
-        None => SinkEnvelope::Debezium,
-        Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain { tx_metadata })) => {
-            if !tx_metadata.is_empty() {
-                bail_unsupported!("ENVELOPE DEBEZIUM ... TRANSACTION METADATA");
-            }
-            SinkEnvelope::Debezium
-        }
+        None => sql_bail!("ENVELOPE clause is required"),
+        Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
         Some(Envelope::Upsert) => SinkEnvelope::Upsert,
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
-        Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Upsert)) => {
-            bail_unsupported!("UPSERT doesn't make sense for sinks")
-        }
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
@@ -1909,7 +1613,7 @@ pub fn plan_create_sink(
         return Err(PlanError::UpsertSinkWithoutKey);
     }
 
-    let connection_builder = match connection {
+    let (connection_id, connection_builder) = match connection {
         CreateSinkConnection::Kafka { connection, .. } => kafka_sink_builder(
             scx,
             connection,
@@ -1928,6 +1632,7 @@ pub fn plan_create_sink(
         sink: Sink {
             create_sql,
             from: from.id(),
+            connection_id: Some(connection_id),
             connection_builder,
             envelope,
         },
@@ -2001,7 +1706,7 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-) -> Result<StorageSinkConnectionBuilder, PlanError> {
+) -> Result<(GlobalId, StorageSinkConnectionBuilder), PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
     let connection = match item.connection()? {
@@ -2109,12 +1814,12 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let environment_id = &scx.catalog.config().environment_id;
     let consistency_config = KafkaConsistencyConfig::Progress {
-        topic: connection
-            .progress_topic
-            .clone()
-            .unwrap_or_else(|| format!("_materialize-progress-{environment_id}-{connection_id}")),
+        topic: connection.progress_topic.clone().unwrap_or_else(|| {
+            scx.catalog
+                .config()
+                .default_kafka_sink_progress_topic(connection_id)
+        }),
     };
 
     if partition_count == 0 || partition_count < -1 {
@@ -2142,8 +1847,9 @@ fn kafka_sink_builder(
         bytes: retention_bytes,
     };
 
-    Ok(StorageSinkConnectionBuilder::Kafka(
-        KafkaSinkConnectionBuilder {
+    Ok((
+        connection_id,
+        StorageSinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
             connection_id,
             connection,
             options: config_options,
@@ -2157,7 +1863,7 @@ fn kafka_sink_builder(
             key_desc_and_indices,
             value_desc,
             retention,
-        },
+        }),
     ))
 }
 
@@ -3256,11 +2962,7 @@ pub fn describe_drop_cluster_replica(
 
 pub fn plan_drop_cluster_replica(
     scx: &StatementContext,
-    DropClusterReplicasStatement {
-        if_exists,
-        names,
-        cascade,
-    }: DropClusterReplicasStatement,
+    DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
 ) -> Result<Plan, PlanError> {
     let mut names_out = Vec::with_capacity(names.len());
     for QualifiedReplica { cluster, replica } in names {
@@ -3272,29 +2974,6 @@ pub fn plan_drop_cluster_replica(
         let replica_name = replica.into_string();
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
-            if !cascade {
-                let (log_ids, view_ids) = instance.replica_logs_and_views(&replica_name).unwrap();
-
-                // Check if we have an item that depends on the replica's logs or log views
-                for id in log_ids.iter().chain(view_ids.iter()) {
-                    let log_item = scx.catalog.get_item(&id);
-                    for id in log_item.used_by() {
-                        // Dependencies on log views can be removed without cascade.
-                        if !view_ids.contains(id) {
-                            let dep = scx.catalog.get_item(id);
-                            if dependency_prevents_drop(ObjectType::Source, dep) {
-                                sql_bail!(
-                                    "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
-                                    replica_name.quoted(),
-                                    instance.name().quoted(),
-                                    scx.catalog.resolve_full_name(dep.name())
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
             names_out.push((instance.name().to_string(), replica_name));
         } else {
             // If "IF EXISTS" supplied, names allowed to be missing,

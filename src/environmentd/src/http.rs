@@ -50,14 +50,16 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_adapter::catalog::HTTP_DEFAULT_USER;
-use mz_adapter::session::{EndTransactionAction, Session, TransactionStatus};
+use mz_adapter::session::{
+    EndTransactionAction, ExternalUserMetadata, Session, TransactionStatus, User,
+};
 use mz_adapter::{
     ExecuteResponse, ExecuteResponseKind, ExecuteResponsePartialError, PeekResponseUnary,
     SessionClient,
 };
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::{OpenTelemetryEnableCallback, StderrFilterCallback};
+use mz_ore::tracing::TracingTargetCallbacks;
 use mz_repr::{Datum, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement};
@@ -189,7 +191,7 @@ enum ConnProtocol {
 }
 
 struct AuthedUser {
-    user: String,
+    user: User,
     create_if_not_exists: bool,
 }
 
@@ -289,7 +291,7 @@ impl AuthedClient {
                     execute_response,
                     ExecuteResponseKind::Fetch
                         | ExecuteResponseKind::SetVariable
-                        | ExecuteResponseKind::Tailing
+                        | ExecuteResponseKind::Subscribing
                         | ExecuteResponseKind::CopyTo
                         | ExecuteResponseKind::CopyFrom
                         | ExecuteResponseKind::Raise
@@ -545,7 +547,7 @@ impl AuthedClient {
             }
             res @ (ExecuteResponse::Fetch { .. }
             | ExecuteResponse::SetVariable { .. }
-            | ExecuteResponse::Tailing { .. }
+            | ExecuteResponse::Subscribing { .. }
             | ExecuteResponse::CopyTo { .. }
             | ExecuteResponse::CopyFrom { .. }
             | ExecuteResponse::Raise { .. }
@@ -656,7 +658,10 @@ async fn auth<B>(
     let user = match frontegg {
         // If no Frontegg authentication, we can use the cert's username if
         // present, otherwise the default HTTP user.
-        None => user.unwrap_or_else(|| HTTP_DEFAULT_USER.to_string()),
+        None => User {
+            name: user.unwrap_or_else(|| HTTP_DEFAULT_USER.name.to_string()),
+            external_metadata: None,
+        },
         // If we require Frontegg auth, fetch credentials from the HTTP auth
         // header. Basic auth comes with a username/password, where the password
         // is the client+secret pair. Bearer auth is an existing JWT that must
@@ -682,12 +687,18 @@ async fn auth<B>(
                 return Err(AuthError::MissingHttpAuthentication);
             };
             let claims = frontegg.validate_access_token(&token, user.as_deref())?;
-            claims.email
+            User {
+                external_metadata: Some(ExternalUserMetadata {
+                    user_id: claims.best_user_id(),
+                    group_id: claims.tenant_id,
+                }),
+                name: claims.email,
+            }
         }
     };
 
-    if mz_adapter::catalog::is_reserved_name(user.as_str()) {
-        return Err(AuthError::InvalidLogin(user));
+    if mz_adapter::catalog::is_reserved_name(user.name.as_str()) {
+        return Err(AuthError::InvalidLogin(user.name));
     }
 
     // Add the authenticated user as an extension so downstream handlers can
@@ -704,20 +715,17 @@ async fn auth<B>(
 #[derive(Clone)]
 pub struct InternalServer {
     metrics_registry: MetricsRegistry,
-    otel_enable_callback: OpenTelemetryEnableCallback,
-    stderr_filter_callback: StderrFilterCallback,
+    tracing_target_callbacks: TracingTargetCallbacks,
 }
 
 impl InternalServer {
     pub fn new(
         metrics_registry: MetricsRegistry,
-        otel_enable_callback: OpenTelemetryEnableCallback,
-        stderr_filter_callback: StderrFilterCallback,
+        tracing_target_callbacks: TracingTargetCallbacks,
     ) -> Self {
         Self {
             metrics_registry,
-            otel_enable_callback,
-            stderr_filter_callback,
+            tracing_target_callbacks,
         }
     }
 
@@ -737,14 +745,21 @@ impl InternalServer {
             .route(
                 "/api/opentelemetry/config",
                 routing::put(move |payload| async move {
-                    mz_http_util::handle_enable_otel(self.otel_enable_callback, payload).await
+                    mz_http_util::handle_modify_filter_target(
+                        self.tracing_target_callbacks.tracing,
+                        payload,
+                    )
+                    .await
                 }),
             )
             .route(
                 "/api/stderr/config",
                 routing::put(move |payload| async move {
-                    mz_http_util::handle_modify_stderr_filter(self.stderr_filter_callback, payload)
-                        .await
+                    mz_http_util::handle_modify_filter_target(
+                        self.tracing_target_callbacks.stderr,
+                        payload,
+                    )
+                    .await
                 }),
             );
         axum::Server::bind(&addr).serve(router.into_make_service())

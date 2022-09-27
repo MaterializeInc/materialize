@@ -986,6 +986,7 @@ pub mod datadriven {
                 &datadriven.shard_id,
                 datadriven.client.blob.as_ref(),
                 datadriven.client.metrics.as_ref(),
+                &datadriven.client.metrics.read.batch_fetcher,
                 &part.key,
                 &batch.desc,
             )
@@ -1135,6 +1136,7 @@ pub mod datadriven {
                     &datadriven.shard_id,
                     datadriven.client.blob.as_ref(),
                     datadriven.client.metrics.as_ref(),
+                    &datadriven.client.metrics.read.batch_fetcher,
                     &part.key,
                     &batch.desc,
                 )

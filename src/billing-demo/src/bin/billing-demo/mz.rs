@@ -62,7 +62,7 @@ pub async fn create_kafka_sink(
     sink_topic_name: &str,
     sink_name: &str,
     schema_registry_url: &str,
-) -> Result<String> {
+) -> Result<()> {
     let query = format!(
         "CREATE CONNECTION IF NOT EXISTS {sink}_kafka_conn
             FOR KAFKA BROKER '{kafka_url}'",
@@ -86,7 +86,8 @@ pub async fn create_kafka_sink(
 
     let query = format!(
             "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA CONNECTION {sink}_kafka_conn (TOPIC '{topic}') \
-             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {sink}_csr_conn",
+             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {sink}_csr_conn
+             ENVELOPE DEBEZIUM",
              sink = sink_name,
              topic = sink_topic_name,
          );
@@ -94,15 +95,7 @@ pub async fn create_kafka_sink(
     debug!("creating sink=> {}", query);
     mz_client::execute(&mz_client, &query).await?;
 
-    // Get the topic for the newly-created sink.
-    let row = mz_client
-        .query_one(
-            "SELECT topic FROM mz_kafka_sinks JOIN mz_sinks ON mz_kafka_sinks.sink_id = mz_sinks.id \
-                 WHERE name = $1",
-            &[&sink_name],
-        )
-        .await?;
-    Ok(row.get("topic"))
+    Ok(())
 }
 
 pub async fn create_price_table(

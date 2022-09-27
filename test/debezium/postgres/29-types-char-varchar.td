@@ -12,9 +12,9 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE char_varchar_type (char_col CHAR(5), varchar_col VARCHAR(5));
+CREATE TABLE char_varchar_type (char_col CHAR(5), varchar_col VARCHAR(5), f3 INTEGER PRIMARY KEY);
 ALTER TABLE char_varchar_type REPLICA IDENTITY FULL;
-INSERT INTO char_varchar_type VALUES ('a ', 'a ');
+INSERT INTO char_varchar_type VALUES ('a ', 'a ', 0);
 
 $ schema-registry-wait-schema schema=postgres.public.char_varchar_type-value
 

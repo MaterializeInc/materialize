@@ -31,7 +31,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  (PUBLICATION 'mz_source');
 
 > SELECT COUNT(*) = 1 FROM mz_source;
 true

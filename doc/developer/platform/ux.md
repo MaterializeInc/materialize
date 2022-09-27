@@ -362,7 +362,7 @@ The HTTPS server exposes two APIs:
   * `ws://<ENDPOINT>/query?query=QUERY` streams the result of a single query
     over the WebSockets protocol.
 
-    This API is particularly useful for listening to the results of `TAIL`
+    This API is particularly useful for listening to the results of `SUBSCRIBE`
     queries from a browser.
 
     In the future, we can consider adding parameter parsing for these queries.
@@ -383,7 +383,7 @@ The HTTPS server exposes two APIs:
     { "ok": "INSERT 0 1"}
     ```
 
-    In the case of `TAIL`, users may expect many instances of `"rows"` after the
+    In the case of `SUBSCRIBE`, users may expect many instances of `"rows"` after the
     initial `{"col_names"...}`.
 
     #### Ordering
@@ -391,12 +391,12 @@ The HTTPS server exposes two APIs:
     Clients can derive a finite-state machine to handle returned values:
 
     1. `"col_names"` if there will be columns of data returned.
-      1. 0 or more `"rows"`. In the case of e.g. `TAIL`, there may be many such
+      1. 0 or more `"rows"`. In the case of e.g. `SUBSCRIBE`, there may be many such
        values returned.
     1. `"ok"` or `"error"` indicating that the statement is done processing.
        Note that:
        - `"col_names"` never precedes `"error"`.
-       - Statements such as `TAIL` are capable of non-termination, so may never
+       - Statements such as `SUBSCRIBE` are capable of non-termination, so may never
          issue an `"ok"`.
 
 #### SQL dialect
@@ -1023,7 +1023,7 @@ skepticism. Here are the arguments:
 * We get extremely valuable experience using Materialize to power a web UI,
   which is exactly the use case we're selling.
 
-  The APIs we develop to support our own web UI, like tailing cluster
+  The APIs we develop to support our own web UI, like subscribing to cluster
   provisioning updates over WebSockets, are APIs that will also be useful to our
   customers.
 

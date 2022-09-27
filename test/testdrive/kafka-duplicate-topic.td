@@ -40,11 +40,13 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema} repeat=1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK sink1 FROM source1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 
 

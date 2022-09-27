@@ -57,7 +57,7 @@ class DebeziumPostgres(Check):
                 > CREATE SOURCE debezium_source1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE DEBEZIUM UPSERT;
+                  ENVELOPE DEBEZIUM;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 INSERT INTO debezium_table SELECT 'B', generate_series, 1, REPEAT('X', 16) FROM generate_series(1,1000);
@@ -85,7 +85,7 @@ class DebeziumPostgres(Check):
                 > CREATE SOURCE debezium_source2
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE DEBEZIUM UPSERT;
+                  ENVELOPE DEBEZIUM;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 BEGIN;
@@ -105,7 +105,7 @@ class DebeziumPostgres(Check):
                 > CREATE SOURCE debezium_source3
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE DEBEZIUM UPSERT;
+                  ENVELOPE DEBEZIUM;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
                 BEGIN;

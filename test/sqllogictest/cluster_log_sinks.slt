@@ -17,8 +17,8 @@
 ###     "mz_dataflow_addresses",
 ###     "mz_dataflow_operator_reachability_internal",
 ###     "mz_dataflow_operators",
-###     "mz_worker_materialization_dependencies",
-###     "mz_materializations",
+###     "mz_compute_exports",
+###     "mz_worker_compute_dependencies",
 ###     "mz_message_counts_received_internal",
 ###     "mz_message_counts_sent_internal",
 ###     "mz_peek_active",
@@ -26,16 +26,16 @@
 ###     "mz_scheduling_elapsed_internal",
 ###     "mz_scheduling_histogram_internal",
 ###     "mz_scheduling_parks_internal",
-###     "mz_worker_materialization_delays",
-###     "mz_worker_materialization_frontiers",
-###     "mz_worker_materialization_source_frontiers",
+###     "mz_worker_compute_delays",
+###     "mz_worker_compute_frontiers",
+###     "mz_worker_compute_import_frontiers",
 ###     "mz_arrangement_sharing",
 ###     "mz_arrangement_sizes",
 ###     "mz_dataflows",
 ###     "mz_dataflow_operator_dataflows",
 ###     "mz_dataflow_operator_reachability",
-###     "mz_materialization_frontiers",
-###     "mz_materialization_source_frontiers",
+###     "mz_compute_frontiers",
+###     "mz_compute_import_frontiers",
 ###     "mz_message_counts",
 ###     "mz_records_per_dataflow",
 ###     "mz_records_per_dataflow_global",
@@ -188,19 +188,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators_1) EXCEPT (SELEC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_dependencies_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_dependencies_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_dependencies));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materializations) EXCEPT (SELECT * FROM mz_internal.mz_materializations_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materializations_1) EXCEPT (SELECT * FROM mz_internal.mz_materializations));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_1) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
 ----
 
 query T
@@ -260,27 +260,27 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal_1) EXCEPT
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_delays) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_delays_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_delays_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_delays));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_frontiers_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_frontiers_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_1) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers));
 ----
 
 query T
@@ -324,19 +324,19 @@ SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM 
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_materialization_frontiers_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_frontiers_1) EXCEPT (SELECT * FROM mz_internal.mz_materialization_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_1) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_source_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_materialization_source_frontiers_1));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers_1));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_source_frontiers_1) EXCEPT (SELECT * FROM mz_internal.mz_materialization_source_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers_1) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers));
 ----
 
 query T
@@ -461,19 +461,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators_2) EXCEPT (SELEC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_dependencies_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_dependencies_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_dependencies));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materializations) EXCEPT (SELECT * FROM mz_internal.mz_materializations_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materializations_2) EXCEPT (SELECT * FROM mz_internal.mz_materializations));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_2) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
 ----
 
 query T
@@ -533,27 +533,27 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal_2) EXCEPT
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_delays) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_delays_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_delays_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_delays));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_frontiers_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_2));
 ----
 
 query T
@@ -597,19 +597,19 @@ SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM 
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_materialization_frontiers_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_materialization_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_source_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_materialization_source_frontiers_2));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers_2));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_source_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_materialization_source_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers_2) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers));
 ----
 
 query T
@@ -744,19 +744,19 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_dataflow_operators_3) EXCEPT (SELEC
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_dependencies_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_dependencies_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_dependencies));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_dependencies_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_dependencies));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materializations) EXCEPT (SELECT * FROM mz_internal.mz_materializations_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materializations_3) EXCEPT (SELECT * FROM mz_internal.mz_materializations));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_exports_3) EXCEPT (SELECT * FROM mz_internal.mz_compute_exports));
 ----
 
 query T
@@ -816,27 +816,27 @@ SELECT * FROM ((SELECT * FROM mz_internal.mz_scheduling_parks_internal_3) EXCEPT
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_delays) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_delays_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_delays_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_delays));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_delays_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_delays));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_frontiers_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_materialization_source_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_worker_compute_import_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_worker_compute_import_frontiers));
 ----
 
 query T
@@ -880,19 +880,19 @@ SELECT port,worker_id,update_type FROM ((SELECT port,worker_id,update_type FROM 
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_materialization_frontiers_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_materialization_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_compute_frontiers));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_source_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_materialization_source_frontiers_3));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers_3));
 ----
 
 query T
-SELECT * FROM ((SELECT * FROM mz_internal.mz_materialization_source_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_materialization_source_frontiers));
+SELECT * FROM ((SELECT * FROM mz_internal.mz_compute_import_frontiers_3) EXCEPT (SELECT * FROM mz_internal.mz_compute_import_frontiers));
 ----
 
 query T
