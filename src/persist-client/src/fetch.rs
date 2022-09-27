@@ -12,11 +12,13 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::cast::CastFrom;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -28,7 +30,7 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::Metrics;
+use crate::internal::metrics::{Metrics, ReadMetrics};
 use crate::internal::paths::PartialBatchKey;
 use crate::read::{ReadHandle, ReaderId};
 use crate::ShardId;
@@ -92,8 +94,14 @@ where
             );
         }
 
-        let (part, fetched_part) =
-            fetch_leased_part(part, self.blob.as_ref(), Arc::clone(&self.metrics), None).await;
+        let (part, fetched_part) = fetch_leased_part(
+            part,
+            self.blob.as_ref(),
+            Arc::clone(&self.metrics),
+            &self.metrics.read.batch_fetcher,
+            None,
+        )
+        .await;
         (part, Ok(fetched_part))
     }
 }
@@ -150,6 +158,7 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     part: LeasedBatchPart<T>,
     blob: &(dyn Blob + Send + Sync),
     metrics: Arc<Metrics>,
+    read_metrics: &ReadMetrics,
     reader_id: Option<&ReaderId>,
 ) -> (LeasedBatchPart<T>, FetchedPart<K, V, T, D>)
 where
@@ -170,25 +179,32 @@ where
         }
     };
 
-    let encoded_part = fetch_batch_part(&part.shard_id, blob, &metrics, &part.key, &part.desc)
-        .await
-        .unwrap_or_else(|err| {
-            // Ideally, readers should never encounter a missing blob. They place a seqno
-            // hold as they consume their snapshot/listen, preventing any blobs they need
-            // from being deleted by garbage collection, and all blob implementations are
-            // linearizable so there should be no possibility of stale reads.
-            //
-            // If we do have a bug and a reader does encounter a missing blob, the state
-            // cannot be recovered, and our best option is to panic and retry the whole
-            // process.
-            panic!(
-                "{} could not fetch batch part: {}",
-                reader_id
-                    .map(|id| id.to_string())
-                    .unwrap_or_else(|| "batch fetcher".to_string()),
-                err
-            )
-        });
+    let encoded_part = fetch_batch_part(
+        &part.shard_id,
+        blob,
+        &metrics,
+        read_metrics,
+        &part.key,
+        &part.desc,
+    )
+    .await
+    .unwrap_or_else(|err| {
+        // Ideally, readers should never encounter a missing blob. They place a seqno
+        // hold as they consume their snapshot/listen, preventing any blobs they need
+        // from being deleted by garbage collection, and all blob implementations are
+        // linearizable so there should be no possibility of stale reads.
+        //
+        // If we do have a bug and a reader does encounter a missing blob, the state
+        // cannot be recovered, and our best option is to panic and retry the whole
+        // process.
+        panic!(
+            "{} could not fetch batch part: {}",
+            reader_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "batch fetcher".to_string()),
+            err
+        )
+    });
     let fetched_part = FetchedPart {
         metrics,
         ts_filter,
@@ -203,12 +219,14 @@ pub(crate) async fn fetch_batch_part<T>(
     shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
+    read_metrics: &ReadMetrics,
     key: &PartialBatchKey,
     registered_desc: &Description<T>,
 ) -> Result<EncodedPart<T>, anyhow::Error>
 where
     T: Timestamp + Lattice + Codec64,
 {
+    let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
         blob.get(&key.complete(shard_id)).await
@@ -228,6 +246,9 @@ where
     };
     drop(get_span);
 
+    read_metrics.part_count.inc();
+    read_metrics.part_bytes.inc_by(u64::cast_from(value.len()));
+
     let part = trace_span!("fetch_batch::decode").in_scope(|| {
         let part = metrics
             .codecs
@@ -242,9 +263,14 @@ where
 
         // Drop the encoded representation as soon as we can to reclaim memory.
         drop(value);
+        read_metrics.part_goodbytes.inc_by(u64::cast_from(
+            part.updates.iter().map(|x| x.goodbytes()).sum(),
+        ));
 
         EncodedPart::new(key, registered_desc.clone(), part)
     });
+
+    read_metrics.seconds.inc_by(now.elapsed().as_secs_f64());
 
     Ok(part)
 }

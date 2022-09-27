@@ -330,6 +330,7 @@ where
                 part,
                 self.handle.blob.as_ref(),
                 Arc::clone(&self.handle.metrics),
+                &self.handle.metrics.read.listen,
                 Some(&self.handle.reader_id),
             )
             .await;
@@ -544,6 +545,7 @@ where
                 part,
                 self.blob.as_ref(),
                 Arc::clone(&self.metrics),
+                &self.metrics.read.snapshot,
                 Some(&self.reader_id),
             )
             .await;
