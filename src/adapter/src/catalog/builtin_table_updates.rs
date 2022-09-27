@@ -192,12 +192,20 @@ impl CatalogState {
             .id;
         let name = &entry.name().item;
         let mut updates = match entry.item() {
-            CatalogItem::Log(_) => self.pack_source_update(id, oid, schema_id, name, "log", diff),
+            CatalogItem::Log(_) => {
+                self.pack_source_update(id, oid, schema_id, name, "log", None, diff)
+            }
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
-            CatalogItem::Source(source) => {
-                self.pack_source_update(id, oid, schema_id, name, source.source_desc.name(), diff)
-            }
+            CatalogItem::Source(source) => self.pack_source_update(
+                id,
+                oid,
+                schema_id,
+                name,
+                source.source_desc.name(),
+                source.connection_id,
+                diff,
+            ),
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
             CatalogItem::MaterializedView(mview) => {
                 self.pack_materialized_view_update(id, oid, schema_id, name, mview, diff)
@@ -210,7 +218,7 @@ impl CatalogState {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
             CatalogItem::StorageCollection(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "storage collection", diff)
+                self.pack_source_update(id, oid, schema_id, name, "storage collection", None, diff)
             }
         };
 
@@ -272,6 +280,7 @@ impl CatalogState {
         schema_id: &SchemaSpecifier,
         name: &str,
         source_desc_name: &str,
+        connection_id: Option<GlobalId>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -282,6 +291,7 @@ impl CatalogState {
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(source_desc_name),
+                Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
             ]),
             diff,
         }]
@@ -363,9 +373,13 @@ impl CatalogState {
         kafka: &KafkaConnection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
+        let progress_topic_holder;
         let progress_topic = match kafka.progress_topic {
             Some(ref topic) => Datum::String(&topic),
-            None => Datum::Null,
+            None => {
+                progress_topic_holder = self.config.default_kafka_sink_progress_topic(id);
+                Datum::String(&progress_topic_holder)
+            }
         };
         let mut row = Row::default();
         row.packer()
@@ -472,16 +486,12 @@ impl CatalogState {
         } = sink
         {
             match connection {
-                StorageSinkConnection::Kafka(KafkaSinkConnection {
-                    topic, consistency, ..
-                }) => {
-                    let progress_topic = Datum::String(consistency.topic.as_str());
+                StorageSinkConnection::Kafka(KafkaSinkConnection { topic, .. }) => {
                     updates.push(BuiltinTableUpdate {
                         id: self.resolve_builtin_table(&MZ_KAFKA_SINKS),
                         row: Row::pack_slice(&[
                             Datum::String(&id.to_string()),
                             Datum::String(topic.as_str()),
-                            progress_topic,
                         ]),
                         diff,
                     });
@@ -495,6 +505,7 @@ impl CatalogState {
                     Datum::UInt64(schema_id.into()),
                     Datum::String(name),
                     Datum::String(connection.name()),
+                    Datum::from(sink.connection_id.map(|id| id.to_string()).as_deref()),
                 ]),
                 diff,
             });

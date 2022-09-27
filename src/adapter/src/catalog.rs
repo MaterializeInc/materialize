@@ -1252,6 +1252,9 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
+    pub connection_id: Option<GlobalId>,
+    // TODO(benesch): this field contains connection information that could be
+    // derived from the connection ID. Too hard to fix at the moment.
     pub source_desc: SourceDesc,
     pub desc: RelationDesc,
     pub timeline: Timeline,
@@ -1263,6 +1266,9 @@ pub struct Source {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
+    pub connection_id: Option<GlobalId>,
+    // TODO(benesch): this field duplicates information that could be derived
+    // from the connection ID. Too hard to fix at the moment.
     pub connection: StorageSinkConnectionState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
@@ -4267,6 +4273,7 @@ impl<S: Append> Catalog<S> {
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
+                connection_id: source.connection_id,
                 source_desc: source.source_desc,
                 desc: source.desc,
                 timeline,
@@ -4314,6 +4321,7 @@ impl<S: Append> Catalog<S> {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
+                connection_id: sink.connection_id,
                 connection: StorageSinkConnectionState::Pending(sink.connection_builder),
                 envelope: sink.envelope,
                 with_snapshot,

@@ -649,6 +649,7 @@ pub struct Table {
 #[derive(Clone, Debug)]
 pub struct Source {
     pub create_sql: String,
+    pub connection_id: Option<GlobalId>,
     pub source_desc: SourceDesc,
     pub desc: RelationDesc,
 }
@@ -669,6 +670,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
+    pub connection_id: Option<GlobalId>,
     pub connection_builder: StorageSinkConnectionBuilder,
     pub envelope: SinkEnvelope,
 }

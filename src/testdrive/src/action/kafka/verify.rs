@@ -130,7 +130,7 @@ async fn get_topic(
 ) -> Result<String, anyhow::Error> {
     let query = format!(
         "SELECT {} FROM mz_sinks JOIN mz_kafka_sinks \
-        ON mz_sinks.id = mz_kafka_sinks.sink_id \
+        ON mz_sinks.id = mz_kafka_sinks.id \
         JOIN mz_schemas s ON s.id = mz_sinks.schema_id \
         LEFT JOIN mz_databases d ON d.id = s.database_id \
         WHERE d.name = $1 \
