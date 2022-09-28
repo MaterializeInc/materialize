@@ -34,6 +34,7 @@ use std::error::Error;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
@@ -172,7 +173,7 @@ impl From<anyhow::Error> for ComputeError {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComputeInstanceReplicaConfig {
     pub location: ComputeInstanceReplicaLocation,
-    pub persisted_logs: ComputeInstanceReplicaLogging,
+    pub logging: ComputeInstanceReplicaLogging,
 }
 
 /// Size or location of a replica
@@ -233,46 +234,32 @@ impl ComputeInstanceReplicaAllocation {
 }
 
 /// Logging configuration of a replica.
-/// Changing this type requires a catalog storage migration!
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ComputeInstanceReplicaLogging {
-    /// Instantiate default logging configuration upon system start.
-    /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
-    Default,
-    /// Logging sources and views have been built for this replica.
-    ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ComputeInstanceReplicaLogging {
+    /// Whether to enable logging for the logging dataflows.
+    pub log_logging: bool,
+    /// The interval at which to log.
+    pub interval: Duration,
+    /// Log sources of this replica.
+    pub sources: Vec<(LogVariant, GlobalId)>,
+    /// Log views of this replica.
+    pub views: Vec<(LogView, GlobalId)>,
 }
 
 impl ComputeInstanceReplicaLogging {
-    /// Return all persisted introspection sources contained.
-    pub fn get_sources(&self) -> &[(LogVariant, GlobalId)] {
-        match self {
-            ComputeInstanceReplicaLogging::Default => &[],
-            ComputeInstanceReplicaLogging::ConcreteViews(logs, _) => logs,
-        }
-    }
-
-    /// Return all persisted introspection views contained.
-    pub fn get_views(&self) -> &[(LogView, GlobalId)] {
-        match self {
-            ComputeInstanceReplicaLogging::Default => &[],
-            ComputeInstanceReplicaLogging::ConcreteViews(_, views) => views,
-        }
-    }
-
     /// Return all ids of the persisted introspection views contained.
-    pub fn get_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.get_views().into_iter().map(|(_, id)| *id)
+    pub fn view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.views.iter().map(|(_, id)| *id)
     }
 
     /// Return all ids of the persisted introspection sources contained.
-    pub fn get_source_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.get_sources().into_iter().map(|(_, id)| *id)
+    pub fn source_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.sources.iter().map(|(_, id)| *id)
     }
 
     /// Return all ids of the persisted introspection sources and logs contained.
-    pub fn get_source_and_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.get_source_ids().chain(self.get_view_ids())
+    pub fn source_and_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.source_ids().chain(self.view_ids())
     }
 }
 
@@ -482,12 +469,7 @@ where
         replica_id: ReplicaId,
         config: ComputeInstanceReplicaConfig,
     ) -> Result<(), ComputeError> {
-        let persisted_logs = config
-            .persisted_logs
-            .get_sources()
-            .iter()
-            .cloned()
-            .collect();
+        let persisted_logs = config.logging.sources.iter().cloned().collect();
 
         // Add replicas backing that instance.
         match config.location {

@@ -694,21 +694,24 @@ impl<S: Append + 'static> Coordinator<S> {
         for (replica_name, replica_config) in replicas.into_iter() {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
-            let location = match replica_config {
+            let (location, introspection) = match replica_config {
                 mz_sql::plan::ComputeInstanceReplicaConfig::Remote {
                     addrs,
                     compute_addrs,
                     workers,
-                    introspection: _,
-                } => SerializedComputeInstanceReplicaLocation::Remote {
-                    addrs,
-                    compute_addrs,
-                    workers,
-                },
+                    introspection,
+                } => {
+                    let location = SerializedComputeInstanceReplicaLocation::Remote {
+                        addrs,
+                        compute_addrs,
+                        workers,
+                    };
+                    (location, introspection)
+                }
                 mz_sql::plan::ComputeInstanceReplicaConfig::Managed {
                     size,
                     availability_zone,
-                    introspection: _,
+                    introspection,
                 } => {
                     let (availability_zone, user_specified) =
                         availability_zone.map(|az| (az, true)).unwrap_or_else(|| {
@@ -716,30 +719,41 @@ impl<S: Append + 'static> Coordinator<S> {
                             *n_replicas_per_az.get_mut(&az).unwrap() += 1;
                             (az, false)
                         });
-                    SerializedComputeInstanceReplicaLocation::Managed {
+                    let location = SerializedComputeInstanceReplicaLocation::Managed {
                         size,
                         availability_zone,
                         az_user_specified: user_specified,
-                    }
+                    };
+                    (location, introspection)
                 }
             };
-            // These are the persisted, per replica persisted logs
-            let persisted_logs = if compute_instance_config.is_some() {
-                self.catalog.allocate_persisted_introspection_items().await
+
+            let logging = if let Some(config) = introspection {
+                let sources = self
+                    .catalog
+                    .allocate_persisted_introspection_sources()
+                    .await;
+                let views = self.catalog.allocate_persisted_introspection_views().await;
+                ComputeInstanceReplicaLogging {
+                    log_logging: config.debugging,
+                    interval: config.interval,
+                    sources,
+                    views,
+                }
             } else {
-                ComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
+                ComputeInstanceReplicaLogging::default()
             };
 
             persisted_introspection_sources.extend(
-                persisted_logs
-                    .get_sources()
+                logging
+                    .sources
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into())),
             );
 
             let config = ComputeInstanceReplicaConfig {
                 location: self.catalog.concretize_replica_location(location)?,
-                persisted_logs,
+                logging,
             };
 
             ops.push(catalog::Op::CreateComputeInstanceReplica {
@@ -809,37 +823,25 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
         }: CreateComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
-
-        let persisted_logs = if instance.logging.is_some() {
-            self.catalog.allocate_persisted_introspection_items().await
-        } else {
-            ComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
-        };
-
-        let persisted_source_ids = persisted_logs.get_source_ids().collect();
-        let persisted_sources = persisted_logs
-            .get_sources()
-            .iter()
-            .map(|(variant, id)| (*id, variant.desc().into()))
-            .collect();
-
         // Choose default AZ if necessary
-        let location = match config {
+        let (location, introspection) = match config {
             mz_sql::plan::ComputeInstanceReplicaConfig::Remote {
                 addrs,
                 compute_addrs,
                 workers,
-                introspection: _,
-            } => SerializedComputeInstanceReplicaLocation::Remote {
-                addrs,
-                compute_addrs,
-                workers,
-            },
+                introspection,
+            } => {
+                let location = SerializedComputeInstanceReplicaLocation::Remote {
+                    addrs,
+                    compute_addrs,
+                    workers,
+                };
+                (location, introspection)
+            }
             mz_sql::plan::ComputeInstanceReplicaConfig::Managed {
                 size,
                 availability_zone,
-                introspection: _,
+                introspection,
             } => {
                 let (availability_zone, user_specified) = match availability_zone {
                     Some(az) => {
@@ -872,17 +874,41 @@ impl<S: Append + 'static> Coordinator<S> {
                         (az, false)
                     }
                 };
-                SerializedComputeInstanceReplicaLocation::Managed {
+                let location = SerializedComputeInstanceReplicaLocation::Managed {
                     size,
                     availability_zone,
                     az_user_specified: user_specified,
-                }
+                };
+                (location, introspection)
             }
         };
 
+        let logging = if let Some(config) = introspection {
+            let sources = self
+                .catalog
+                .allocate_persisted_introspection_sources()
+                .await;
+            let views = self.catalog.allocate_persisted_introspection_views().await;
+            ComputeInstanceReplicaLogging {
+                log_logging: config.debugging,
+                interval: config.interval,
+                sources,
+                views,
+            }
+        } else {
+            ComputeInstanceReplicaLogging::default()
+        };
+
+        let log_source_ids: Vec<_> = logging.source_ids().collect();
+        let log_source_collections = logging
+            .sources
+            .iter()
+            .map(|(variant, id)| (*id, variant.desc().into()))
+            .collect();
+
         let config = ComputeInstanceReplicaConfig {
             location: self.catalog.concretize_replica_location(location)?,
-            persisted_logs,
+            logging,
         };
 
         let op = catalog::Op::CreateComputeInstanceReplica {
@@ -900,7 +926,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.controller
             .storage
-            .create_collections(persisted_sources)
+            .create_collections(log_source_collections)
             .await
             .unwrap();
 
@@ -908,9 +934,9 @@ impl<S: Append + 'static> Coordinator<S> {
         let instance_id = instance.id;
         let replica_id = instance.replica_id_by_name[&name];
 
-        if instance.logging.is_some() {
+        if !log_source_ids.is_empty() {
             self.initialize_storage_read_policies(
-                persisted_source_ids,
+                log_source_ids,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
@@ -1521,9 +1547,9 @@ impl<S: Append + 'static> Coordinator<S> {
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
             for replica in instance.replicas_by_id.values() {
-                let persisted_logs = replica.config.persisted_logs.clone();
-                let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-                let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
+                let logging = &replica.config.logging;
+                let log_and_view_ids = logging.source_and_view_ids();
+                let view_ids: HashSet<_> = logging.view_ids().collect();
                 for log_id in log_and_view_ids {
                     // We consider the dependencies of both views and logs, but remove the
                     // views itself. The views are included as they depend on the source,
@@ -1579,16 +1605,15 @@ impl<S: Append + 'static> Coordinator<S> {
             // Determine from the replica which additional items to drop. This is the set
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
-            let persisted_logs = instance
+            let logging = &instance
                 .replicas_by_id
                 .get(&replica_id)
                 .unwrap()
                 .config
-                .persisted_logs
-                .clone();
+                .logging;
 
-            let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-            let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
+            let log_and_view_ids = logging.source_and_view_ids();
+            let view_ids: HashSet<_> = logging.view_ids().collect();
 
             for log_id in log_and_view_ids {
                 // We consider the dependencies of both views and logs, but remove the

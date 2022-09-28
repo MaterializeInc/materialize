@@ -226,11 +226,16 @@ async fn migrate<S: Append>(
                 compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
                 name: "default_replica".into(),
                 config: SerializedComputeInstanceReplicaConfig {
-                    persisted_logs: SerializedComputeInstanceReplicaLogging::Default,
                     location: SerializedComputeInstanceReplicaLocation::Managed {
                         size: bootstrap_args.default_cluster_replica_size.clone(),
                         availability_zone: bootstrap_args.default_availability_zone.clone(),
                         az_user_specified: false,
+                    },
+                    logging: SerializedComputeInstanceReplicaLogging {
+                        log_logging: false,
+                        interval: Duration::from_secs(1),
+                        sources: None,
+                        views: None,
                     },
                 },
             };
