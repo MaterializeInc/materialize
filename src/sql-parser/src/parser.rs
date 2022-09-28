@@ -1625,7 +1625,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE",
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW or VIEWS, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
                     self.peek_token(),
                 )
             }
