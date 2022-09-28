@@ -52,7 +52,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
@@ -882,13 +882,18 @@ where
                 read.downgrade_since(since).await;
             }
 
-            let collection_state =
-                CollectionState::new(description.clone(), read.since().clone(), metadata);
+            let collection_state = CollectionState::new(
+                description.clone(),
+                read.since().clone(),
+                write.upper().clone(),
+                metadata,
+            );
 
             self.state.persist_write_handles.register(id, write);
             self.state.persist_read_handles.register(id, read);
 
             self.state.collections.insert(id, collection_state);
+            self.register_shard_mapping(id).await;
 
             if let Some(ingestion) = description.data_source {
                 match ingestion {
@@ -957,6 +962,7 @@ where
                         match i {
                             IntrospectionType::ShardMapping => {
                                 self.truncate_managed_collection(id).await;
+                                self.initialize_shard_mapping().await;
                             }
                         }
                     }
@@ -1467,6 +1473,7 @@ impl<T: Timestamp> CollectionState<T> {
     pub fn new(
         description: CollectionDescription<T>,
         since: Antichain<T>,
+        write_frontier: Antichain<T>,
         metadata: CollectionMetadata,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -1476,7 +1483,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
-            write_frontier: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier,
             collection_metadata: metadata,
         }
     }
@@ -1515,6 +1522,16 @@ pub trait CollectionManager: Debug + Send + StorageController {
 
     /// Truncates the collection associated with `global_id`.
     async fn truncate_managed_collection(&mut self, global_id: GlobalId);
+
+    // ShardMapping functions
+
+    /// Initializes the data expressing which global IDs correlate to which
+    /// shards. Necessary because we cannot write any of these mappings that we
+    /// discover before the shard mapping collection exists.
+    async fn initialize_shard_mapping(&mut self);
+
+    /// Writes a new global ID, shard ID pair to the appropriate collection.
+    async fn register_shard_mapping(&mut self, global_id: GlobalId);
 }
 
 #[async_trait(?Send)]
@@ -1561,7 +1578,7 @@ where
     /// effective as of the system time.
     ///
     /// # Panics
-    /// - If `global_id` is not correlated to a collection.
+    /// - If `id` is not registered as a managed collection.
     async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         assert!(
             self.state.managed_collections.lock().await.contains(&id),
@@ -1573,6 +1590,72 @@ where
             .send((id, updates))
             .await
             .expect("rx hung up");
+    }
+
+    /// Append `updates` to the `data_shard` correlated with `global_id`
+    /// effective as of the system time.
+    ///
+    /// # Panics
+    /// - If `IntrospectionType::ShardMapping` is not correlated with a
+    ///   `GlobalId`.
+    /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
+    ///   a managed collection.
+    async fn initialize_shard_mapping(&mut self) {
+        let id = self.state.introspection_ids[&IntrospectionType::ShardMapping];
+
+        let mut row_buf = Row::default();
+        let mut updates = Vec::with_capacity(self.state.collections.len());
+        for (
+            global_id,
+            CollectionState {
+                collection_metadata: CollectionMetadata { data_shard, .. },
+                ..
+            },
+        ) in self.state.collections.iter()
+        {
+            let mut packer = row_buf.packer();
+            packer.push(Datum::from(global_id.to_string().as_str()));
+            packer.push(Datum::from(data_shard.to_string().as_str()));
+            updates.push((row_buf.clone(), 1));
+        }
+
+        self.append_to_managed_collection(id, updates).await;
+    }
+
+    /// Tracks the mapping of `GlobalId` to data shards in the collection at
+    /// `self.state.shard_collection_global_id`.
+    ///
+    /// However, data is written iff we know of the `GlobalId` of the
+    /// `IntrospectionType::ShardMapping` collection; in other cases, data is
+    /// dropped on the floor. In these cases, the data is later written by
+    /// [`Self::initialize_shard_mapping`].
+    ///
+    /// # Panics
+    /// - If `self.state.collections` does not have an entry for `global_id`.
+    /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
+    ///   a managed collection.
+    async fn register_shard_mapping(&mut self, global_id: GlobalId) {
+        let id = match self
+            .state
+            .introspection_ids
+            .get(&IntrospectionType::ShardMapping)
+        {
+            Some(id) => *id,
+            _ => return,
+        };
+
+        let shard_id = self.state.collections[&global_id]
+            .collection_metadata
+            .data_shard;
+
+        // Pack updates into rows
+        let mut row_buf = Row::default();
+        let mut packer = row_buf.packer();
+        packer.push(Datum::from(global_id.to_string().as_str()));
+        packer.push(Datum::from(shard_id.to_string().as_str()));
+        let updates = vec![(row_buf.clone(), 1)];
+
+        self.append_to_managed_collection(id, updates).await;
     }
 }
 
