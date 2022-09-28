@@ -333,7 +333,7 @@ impl Value {
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
             Value::Numeric(d) => strconv::format_numeric(buf, &d.0),
-            Value::MzTimestamp(t) => strconv::format_mztimestamp(buf, *t),
+            Value::MzTimestamp(t) => strconv::format_mz_timestamp(buf, *t),
         }
     }
 
@@ -520,7 +520,7 @@ impl Value {
             Type::Timestamp { .. } => Value::Timestamp(strconv::parse_timestamp(s)?),
             Type::TimestampTz { .. } => Value::TimestampTz(strconv::parse_timestamptz(s)?),
             Type::Uuid => Value::Uuid(Uuid::parse_str(s)?),
-            Type::MzTimestamp => Value::MzTimestamp(strconv::parse_mztimestamp(s)?),
+            Type::MzTimestamp => Value::MzTimestamp(strconv::parse_mz_timestamp(s)?),
         })
     }
 

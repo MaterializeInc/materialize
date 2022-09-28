@@ -83,11 +83,11 @@ SELECT * FROM t AS OF AT LEAST 1
 ----
 1
 
-query error can't use null as a mztimestamp for AS OF
+query error can't use null as a mz_timestamp for AS OF
 SELECT 1 AS OF NULL::timestamp;
 
-query error can't use null as a mztimestamp for AS OF
+query error can't use null as a mz_timestamp for AS OF
 SELECT * FROM data AS OF NULL::numeric;
 
-query error can't use null as a mztimestamp for AS OF
+query error can't use null as a mz_timestamp for AS OF
 SUBSCRIBE (SELECT 1) AS OF NULL::timestamptz;

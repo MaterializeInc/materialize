@@ -14,16 +14,13 @@ For example, at 9pm, Materialize may choose to execute a query as of logical tim
 
 Its typical uses are:
 
-* Query time introspection
+* **Query timestamp introspection**
 
   `mz_now()` can be useful if you need to understand how up to date the data returned by a query is. The data returned by a query reflects the results as of the logical time returned by a call to `mz_now()` in that query.
 
-* [Temporal filters]
+* **Temporal filters**
 
   Various windowing idioms involve using `mz_now()` in a [temporal filter](/sql/patterns/temporal-filters).
-* Defining [temporal filters](/sql/patterns/temporal-filters/)
-
-
 
 ## Example
 
@@ -47,6 +44,7 @@ FROM events
 WHERE mz_now() >= insert_t
   AND mz_now() < delete_t;
 CREATE DEFAULT INDEX ON valid;
+```
 
 Next, you'll populate the table with timestamp data.
 

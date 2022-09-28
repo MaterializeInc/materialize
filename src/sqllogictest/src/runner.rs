@@ -418,7 +418,7 @@ impl<'a> FromSql<'a> for Slt {
                         }
                         Self(Value::UInt8(v))
                     }
-                    oid::TYPE_MZTIMESTAMP_OID => {
+                    oid::TYPE_MZ_TIMESTAMP_OID => {
                         let s = types::text_from_sql(raw)?;
                         let t: mz_repr::Timestamp = s.parse()?;
                         Self(Value::MzTimestamp(t))
@@ -437,7 +437,7 @@ impl<'a> FromSql<'a> for Slt {
             oid::TYPE_UINT2_OID
             | oid::TYPE_UINT4_OID
             | oid::TYPE_UINT8_OID
-            | oid::TYPE_MZTIMESTAMP_OID => return true,
+            | oid::TYPE_MZ_TIMESTAMP_OID => return true,
             _ => {}
         }
         matches!(

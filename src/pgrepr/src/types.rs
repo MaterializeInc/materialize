@@ -446,20 +446,20 @@ pub static UINT8_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
 });
 
 /// An anonymous [`Type::MzTimestamp`], akin to [`postgres_types::Type::TEXT`].
-pub static MZTIMESTAMP: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static MZ_TIMESTAMP: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "mztimestamp".to_owned(),
-        oid::TYPE_MZTIMESTAMP_OID,
+        "mz_timestamp".to_owned(),
+        oid::TYPE_MZ_TIMESTAMP_OID,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     )
 });
 
 /// An anonymous [`Type::Array`], akin to [`postgres_types::Type::TEXT_ARRAY`].
-pub static MZTIMESTAMP_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
+pub static MZ_TIMESTAMP_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
     postgres_types::Type::new(
-        "mztimestamp_array".to_owned(),
-        oid::TYPE_MZTIMESTAMP_ARRAY_OID,
+        "mz_timestamp_array".to_owned(),
+        oid::TYPE_MZ_TIMESTAMP_ARRAY_OID,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     )
@@ -633,7 +633,7 @@ impl Type {
                 Type::RegProc => &postgres_types::Type::REGPROC_ARRAY,
                 Type::RegType => &postgres_types::Type::REGTYPE_ARRAY,
                 Type::Int2Vector => &postgres_types::Type::INT2_VECTOR_ARRAY,
-                Type::MzTimestamp => &MZTIMESTAMP_ARRAY,
+                Type::MzTimestamp => &MZ_TIMESTAMP_ARRAY,
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -667,7 +667,7 @@ impl Type {
             Type::RegProc => &postgres_types::Type::REGPROC,
             Type::RegType => &postgres_types::Type::REGTYPE,
             Type::Int2Vector => &postgres_types::Type::INT2_VECTOR,
-            Type::MzTimestamp => &MZTIMESTAMP,
+            Type::MzTimestamp => &MZ_TIMESTAMP,
         }
     }
 

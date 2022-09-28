@@ -930,23 +930,23 @@ pub const TYPE_UINT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
-pub const TYPE_MZTIMESTAMP: BuiltinType<NameReference> = BuiltinType {
-    name: "mztimestamp",
+pub const TYPE_MZ_TIMESTAMP: BuiltinType<NameReference> = BuiltinType {
+    name: "mz_timestamp",
     schema: MZ_CATALOG_SCHEMA,
-    oid: mz_pgrepr::oid::TYPE_MZTIMESTAMP_OID,
+    oid: mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::MzTimestamp,
         array_id: None,
     },
 };
 
-pub const TYPE_MZTIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
-    name: "_mztimestamp",
+pub const TYPE_MZ_TIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_mz_timestamp",
     schema: MZ_CATALOG_SCHEMA,
-    oid: mz_pgrepr::oid::TYPE_MZTIMESTAMP_ARRAY_OID,
+    oid: mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_reference: TYPE_MZTIMESTAMP.name,
+            element_reference: TYPE_MZ_TIMESTAMP.name,
         },
         array_id: None,
     },
@@ -2270,8 +2270,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_UINT4_ARRAY),
         Builtin::Type(&TYPE_UINT8),
         Builtin::Type(&TYPE_UINT8_ARRAY),
-        Builtin::Type(&TYPE_MZTIMESTAMP),
-        Builtin::Type(&TYPE_MZTIMESTAMP_ARRAY),
+        Builtin::Type(&TYPE_MZ_TIMESTAMP),
+        Builtin::Type(&TYPE_MZ_TIMESTAMP_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),

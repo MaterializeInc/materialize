@@ -195,11 +195,11 @@ impl<S: Append + 'static> Coordinator<S> {
         prep_scalar_expr(self.catalog.state(), &mut timestamp, ExprPrepStyle::AsOf)?;
         let evaled = timestamp.eval(&[], &temp_storage)?;
         if evaled.is_null() {
-            coord_bail!("can't use {} as a mztimestamp for AS OF", evaled);
+            coord_bail!("can't use {} as a mz_timestamp for AS OF", evaled);
         }
         let ty = timestamp.typ(&[]);
         Ok(match ty.scalar_type {
-            ScalarType::MzTimestamp => evaled.unwrap_mztimestamp(),
+            ScalarType::MzTimestamp => evaled.unwrap_mz_timestamp(),
             ScalarType::Numeric { .. } => {
                 let n = evaled.unwrap_numeric().0;
                 n.try_into()?
@@ -213,7 +213,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
             ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
             _ => coord_bail!(
-                "can't use {} as a mztimestamp for AS OF",
+                "can't use {} as a mz_timestamp for AS OF",
                 self.catalog.for_session(session).humanize_column_type(&ty)
             ),
         })

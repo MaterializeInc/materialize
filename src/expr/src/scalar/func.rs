@@ -5620,7 +5620,7 @@ where
         Int2Vector => strconv::format_legacy_vector(buf, &d.unwrap_array().elements(), |buf, d| {
             stringify_datum(buf.nonnull_buffer(), d, &ScalarType::Int16)
         }),
-        MzTimestamp { .. } => Ok(strconv::format_mztimestamp(buf, d.unwrap_mztimestamp())),
+        MzTimestamp { .. } => Ok(strconv::format_mz_timestamp(buf, d.unwrap_mz_timestamp())),
     }
 }
 
