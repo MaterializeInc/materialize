@@ -60,7 +60,7 @@ $ kafka-verify format=avro sink=materialize.public.datetime_data_sink sort-messa
 {"before": null, "after": {"row": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
 {"before": null, "after": {"row": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}
 
-> CREATE MATERIALIZED VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04')
+> CREATE MATERIALIZED VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04'), (TIME '00:00:00'), (TIME '23:59:59')
 
 > CREATE SINK time_data_sink FROM time_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-time-data-sink-${testdrive.seed}')
@@ -68,8 +68,10 @@ $ kafka-verify format=avro sink=materialize.public.datetime_data_sink sort-messa
   ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=true
+{"before": null, "after": {"row": {"time": 0}}}
 {"before": null, "after": {"row": {"time": 3723000000}}}
 {"before": null, "after": {"row": {"time": 3724000000}}}
+{"before": null, "after": {"row": {"time": 86399000000}}}
 
 # Test jsonb
 
