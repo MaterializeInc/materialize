@@ -34,7 +34,7 @@
 3
 1
 
-> CREATE TABLE dec (d MZTIMESTAMP)
+> CREATE TABLE dec (d mz_timestamp)
 
 # Verify that mz_now cannot be used in INSERTs (until
 # we decide what it should do in an INSERT). Previously it could, but

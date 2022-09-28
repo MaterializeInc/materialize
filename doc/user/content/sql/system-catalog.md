@@ -480,7 +480,7 @@ For per-worker frontier information, see
 Field        | Type       | Meaning
 -------------|------------|--------
 `export_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
-`time`       | [`mztimestamp`] | The next timestamp at which the output may change.
+`time`       | [`mz_timestamp`] | The next timestamp at which the output may change.
 
 ### `mz_compute_import_frontiers`
 
@@ -496,7 +496,7 @@ Field       | Type       | Meaning
 ------------|------------|--------
 `export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
-`time`      | [`mztimestamp`] | The next timestamp at which the source instantiation may change.
+`time`      | [`mz_timestamp`] | The next timestamp at which the source instantiation may change.
 
 ### `mz_message_counts`
 
@@ -521,7 +521,7 @@ Field      | Type       | Meaning
 `id`       | [`uuid`]   | The ID of the peek request.
 `worker_id`| [`bigint`] | The ID of the worker thread servicing the peek.
 `index_id` | [`text`]   | The ID of the index the peek is targeting.
-`time`     | [`mztimestamp`] | The timestamp the peek has requested.
+`time`     | [`mz_timestamp`] | The timestamp the peek has requested.
 
 ### `mz_peek_durations`
 
@@ -652,7 +652,7 @@ Field       | Type       | Meaning
 ------------|------------|--------
 `export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
-`time`      | [`mztimestamp`] | The next timestamp at which the dataflow may change.
+`time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
 ### `mz_worker_compute_import_frontiers`
 
@@ -669,7 +669,7 @@ Field       | Type       | Meaning
 `export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `source_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
-`time`      | [`mztimestamp`] | The next timestamp at which the dataflow may change.
+`time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
 ## `information_schema`
 
@@ -692,6 +692,7 @@ Materialize should use the documented [`mz_catalog`](#mz_catalog) API instead.
 [`bytea`]: /sql/types/bytea
 [`double precision`]: /sql/types/double-precision
 [`jsonb`]: /sql/types/jsonb
+[`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`oid`]: /sql/types/oid
 [`text`]: /sql/types/text

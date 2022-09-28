@@ -207,7 +207,7 @@ impl ToJson for TypedDatum<'_> {
                         .collect();
                     serde_json::Value::Object(elements)
                 }
-                ScalarType::MzTimestamp => json!(datum.unwrap_mztimestamp().to_string()),
+                ScalarType::MzTimestamp => json!(datum.unwrap_mz_timestamp().to_string()),
             }
         }
     }

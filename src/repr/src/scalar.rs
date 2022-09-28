@@ -701,10 +701,10 @@ impl<'a> Datum<'a> {
     ///
     /// Panics if the datum is not [`Datum::MzTimestamp`].
     #[track_caller]
-    pub fn unwrap_mztimestamp(&self) -> crate::Timestamp {
+    pub fn unwrap_mz_timestamp(&self) -> crate::Timestamp {
         match self {
             Datum::MzTimestamp(t) => *t,
-            _ => panic!("Datum::unwrap_mztimestamp called on {:?}", self),
+            _ => panic!("Datum::unwrap_mz_timestamp called on {:?}", self),
         }
     }
 

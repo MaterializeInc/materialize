@@ -168,7 +168,7 @@ ts
 # Using a TABLE source
 #
 
-> CREATE TABLE one_ts (ts MZTIMESTAMP)
+> CREATE TABLE one_ts (ts mz_timestamp)
 
 > INSERT INTO one_ts VALUES ('2000-01-01'::timestamp)
 
@@ -212,7 +212,7 @@ ts
 "2000-01-01 00:00:00 UTC"
 "2000-01-01 00:00:00 UTC"
 
-> CREATE TABLE first_ts (ts MZTIMESTAMP)
+> CREATE TABLE first_ts (ts mz_timestamp)
 
 > INSERT INTO first_ts VALUES ('2000-01-01'::timestamp)
 
@@ -220,7 +220,7 @@ ts
 
 > INSERT INTO first_ts VALUES (NULL)
 
-> CREATE TABLE second_ts (ts MZTIMESTAMP)
+> CREATE TABLE second_ts (ts mz_timestamp)
 
 > INSERT INTO second_ts VALUES ('2000-01-01'::timestamp)
 
@@ -260,13 +260,13 @@ ts
 contains:Unsupported binary temporal operation: NotEq
 
 !CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_now() + 1 = ts;
-contains:no overload for mztimestamp + integer
+contains:no overload for mz_timestamp + integer
 
 !CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_now() > ts OR ts = 1;
-contains:Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mztimestamp-castable type. Expression found: ((#0 = 1) OR (mz_now() > #0))
+contains:Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: ((#0 = 1) OR (mz_now() > #0))
 
 !CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE ts BETWEEN mz_now() AND mz_now() + 1;
-contains:no overload for mztimestamp + integer
+contains:no overload for mz_timestamp + integer
 
 #
 # Numeric comparisons
@@ -280,4 +280,4 @@ contains:no overload for mztimestamp + integer
   WHERE mz_now() <= 18446744073709551614.1;
 
 ! SELECT * FROM numeric_trunc;
-contains:Evaluation error: mztimestamp out of range
+contains:Evaluation error: mz_timestamp out of range

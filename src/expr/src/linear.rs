@@ -1621,7 +1621,7 @@ pub mod plan {
                             != MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
                     {
                         return Err(format!(
-                            "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mztimestamp-castable expression. Expression found: {}",
+                            "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mz_timestamp-castable expression. Expression found: {}",
                             MirScalarExpr::CallBinary { func, expr1, expr2 },
                             ));
                     }
@@ -1659,7 +1659,7 @@ pub mod plan {
                     }
                 } else {
                     return Err(format!(
-                        "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mztimestamp-castable type. Expression found: {}",
+                        "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: {}",
                         predicate,
                         ));
                 }
@@ -1757,7 +1757,7 @@ pub mod plan {
                         null_eval = true;
                     }
                     x => {
-                        panic!("Non-mztimestamp value in temporal predicate: {:?}", x);
+                        panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
                     }
                 }
             }
@@ -1796,7 +1796,7 @@ pub mod plan {
                             null_eval = true;
                         }
                         x => {
-                            panic!("Non-mztimestamp value in temporal predicate: {:?}", x);
+                            panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
                         }
                     }
                 }

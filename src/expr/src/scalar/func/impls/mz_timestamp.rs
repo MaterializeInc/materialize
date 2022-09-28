@@ -23,7 +23,7 @@ sqlfunc!(
     #[preserves_uniqueness = true]
     fn cast_mz_timestamp_to_string(a: Timestamp) -> String {
         let mut buf = String::new();
-        strconv::format_mztimestamp(&mut buf, a);
+        strconv::format_mz_timestamp(&mut buf, a);
         buf
     }
 );
@@ -31,7 +31,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "text_to_mz_timestamp"]
     fn cast_string_to_mz_timestamp(a: String) -> Result<Timestamp, EvalError> {
-        strconv::parse_mztimestamp(&a).err_into()
+        strconv::parse_mz_timestamp(&a).err_into()
     }
 );
 
