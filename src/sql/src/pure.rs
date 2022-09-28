@@ -33,8 +33,7 @@ use uuid::Uuid;
 use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_proto::RustType;
-use mz_repr::strconv;
-use mz_sql_parser::ast::Raw;
+use mz_repr::{strconv, GlobalId};
 use mz_storage::types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_storage::types::connections::{Connection, ConnectionContext};
 use mz_storage::types::sources::PostgresSourceDetails;
@@ -47,7 +46,7 @@ use crate::ast::{
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::{Aug, Either};
+use crate::names::Aug;
 use crate::normalize;
 use crate::plan::StatementContext;
 
@@ -60,13 +59,7 @@ pub async fn purify_create_source(
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
     connection_context: ConnectionContext,
-) -> Result<
-    (
-        Vec<CreateSourceStatement<Raw>>,
-        CreateSourceStatement<Either<Aug, Raw>>,
-    ),
-    anyhow::Error,
-> {
+) -> Result<Vec<(GlobalId, CreateSourceStatement<Aug>)>, anyhow::Error> {
     let CreateSourceStatement {
         connection,
         format,
@@ -246,8 +239,7 @@ pub async fn purify_create_source(
     )
     .await?;
 
-    let partial_stmt = crate::names::either_aug_raw(stmt);
-    Ok((vec![], partial_stmt))
+    Ok(vec![(GlobalId::Transient(1), stmt)])
 }
 
 async fn purify_source_format(

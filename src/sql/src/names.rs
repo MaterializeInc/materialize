@@ -611,45 +611,6 @@ impl AstInfo for Aug {
     type CteId = LocalId;
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
-pub enum Either<A, B> {
-    Left(A),
-    Right(B),
-}
-
-impl<A: AstInfo, B: AstInfo> AstInfo for Either<A, B> {
-    type NestedStatement = Either<A::NestedStatement, B::NestedStatement>;
-    type ObjectName = Either<A::ObjectName, B::ObjectName>;
-    type SchemaName = Either<A::SchemaName, B::SchemaName>;
-    type DatabaseName = Either<A::DatabaseName, B::DatabaseName>;
-    type ClusterName = Either<A::ClusterName, B::ClusterName>;
-    type DataType = Either<A::DataType, B::DataType>;
-    type CteId = Either<A::CteId, B::CteId>;
-}
-
-impl<A: AstDisplay, B: AstDisplay> AstDisplay for Either<A, B> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Either::Left(a) => a.fmt(f),
-            Either::Right(b) => b.fmt(f),
-        }
-    }
-
-    fn to_ast_string(&self) -> String {
-        match self {
-            Either::Left(a) => a.to_ast_string(),
-            Either::Right(b) => b.to_ast_string(),
-        }
-    }
-
-    fn to_ast_string_stable(&self) -> String {
-        match self {
-            Either::Left(a) => a.to_ast_string_stable(),
-            Either::Right(b) => b.to_ast_string_stable(),
-        }
-    }
-}
-
 /// The identifier for a schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct SchemaId(pub u64);
@@ -1171,212 +1132,97 @@ where
     Ok((result, resolver.ids))
 }
 
-/// Converts an AST into a state where additional raw nodes can be inserted by wrapping each `Aug`
-/// node into an `Either::Left(_)` node.
-pub fn either_aug_raw<N>(node: N) -> N::Folded
-where
-    N: FoldNode<Aug, Either<Aug, Raw>>,
-{
-    node.fold(&mut LeftWrapper)
-}
-
-/// Finalizes name resolution of a partially resolved AST node.
-pub fn finalize_resolve<N>(
-    catalog: &dyn SessionCatalog,
-    node: N,
-) -> Result<(N::Folded, HashSet<GlobalId>), PlanError>
-where
-    N: FoldNode<Either<Aug, Raw>, Aug>,
-    N::Folded: for<'ast> VisitNode<'ast, Aug>,
-{
-    let resolver = NameResolver::new(catalog);
-    let mut folder = EitherUnwrapper::new(resolver);
-    let result = node.fold(&mut folder);
-
-    folder.inner.status?;
-
-    let mut dep_visitor = DependencyVisitor::default();
-    result.visit(&mut dep_visitor);
-
-    Ok((result, dep_visitor.ids))
-}
-
 #[derive(Debug)]
-pub struct LeftWrapper;
+pub struct TransientResolver<'a> {
+    /// A HashMap mapping each transient global id to its final non-transient global id
+    allocation: &'a HashMap<GlobalId, GlobalId>,
+    status: Result<(), PlanError>,
+}
 
-impl<A: AstInfo, B: AstInfo> Fold<A, Either<A, B>> for LeftWrapper {
-    fn fold_nested_statement(
-        &mut self,
-        stmt: A::NestedStatement,
-    ) -> <Either<A, B> as AstInfo>::NestedStatement {
-        Either::Left(stmt)
-    }
-
-    fn fold_query(&mut self, q: Query<A>) -> Query<Either<A, B>> {
-        Query {
-            ctes: q.ctes.into_iter().map(|c| self.fold_cte(c)).collect(),
-            body: self.fold_set_expr(q.body),
-            limit: q.limit.map(|l| self.fold_limit(l)),
-            offset: q.offset.map(|l| self.fold_expr(l)),
-            order_by: q
-                .order_by
-                .into_iter()
-                .map(|c| self.fold_order_by_expr(c))
-                .collect(),
+impl<'a> TransientResolver<'a> {
+    fn new(allocation: &'a HashMap<GlobalId, GlobalId>) -> Self {
+        TransientResolver {
+            allocation,
+            status: Ok(()),
         }
     }
+}
 
-    fn fold_cte_id(&mut self, id: A::CteId) -> <Either<A, B> as AstInfo>::CteId {
-        Either::Left(id)
+impl Fold<Aug, Aug> for TransientResolver<'_> {
+    fn fold_object_name(&mut self, object_name: ResolvedObjectName) -> ResolvedObjectName {
+        match object_name {
+            ResolvedObjectName::Object {
+                id: transient_id @ GlobalId::Transient(_),
+                qualifiers,
+                full_name,
+                print_id,
+            } => {
+                let id = match self.allocation.get(&transient_id) {
+                    Some(id) => *id,
+                    None => {
+                        let obj = ResolvedObjectName::Object {
+                            id: transient_id,
+                            qualifiers: qualifiers.clone(),
+                            full_name: full_name.clone(),
+                            print_id,
+                        };
+                        self.status = Err(PlanError::InvalidObject(obj));
+                        transient_id
+                    }
+                };
+                ResolvedObjectName::Object {
+                    id,
+                    qualifiers,
+                    full_name,
+                    print_id,
+                }
+            }
+            other => other,
+        }
     }
-
-    fn fold_object_name(
-        &mut self,
-        object_name: A::ObjectName,
-    ) -> <Either<A, B> as AstInfo>::ObjectName {
-        Either::Left(object_name)
-    }
-
-    fn fold_data_type(&mut self, data_type: A::DataType) -> <Either<A, B> as AstInfo>::DataType {
-        Either::Left(data_type)
-    }
-
-    fn fold_schema_name(&mut self, name: A::SchemaName) -> <Either<A, B> as AstInfo>::SchemaName {
-        Either::Left(name)
-    }
-
-    fn fold_database_name(
-        &mut self,
-        database_name: A::DatabaseName,
-    ) -> <Either<A, B> as AstInfo>::DatabaseName {
-        Either::Left(database_name)
-    }
-
     fn fold_cluster_name(
         &mut self,
-        cluster_name: A::ClusterName,
-    ) -> <Either<A, B> as AstInfo>::ClusterName {
-        Either::Left(cluster_name)
+        node: <Aug as AstInfo>::ClusterName,
+    ) -> <Aug as AstInfo>::ClusterName {
+        node
     }
-
-    fn fold_with_option_value(
+    fn fold_cte_id(&mut self, node: <Aug as AstInfo>::CteId) -> <Aug as AstInfo>::CteId {
+        node
+    }
+    fn fold_data_type(&mut self, node: <Aug as AstInfo>::DataType) -> <Aug as AstInfo>::DataType {
+        node
+    }
+    fn fold_database_name(
         &mut self,
-        node: mz_sql_parser::ast::WithOptionValue<A>,
-    ) -> mz_sql_parser::ast::WithOptionValue<Either<A, B>> {
-        use mz_sql_parser::ast::WithOptionValue::*;
-        match node {
-            Value(v) => Value(Fold::<A, Either<A, B>>::fold_value(self, v)),
-            Ident(i) => Ident(Fold::<A, Either<A, B>>::fold_ident(self, i)),
-            DataType(dt) => DataType(Fold::<A, Either<A, B>>::fold_data_type(self, dt)),
-            Secret(secret) => Secret(Fold::<A, Either<A, B>>::fold_object_name(self, secret)),
-            Object(obj) => Object(Fold::<A, Either<A, B>>::fold_object_name(self, obj)),
-        }
+        node: <Aug as AstInfo>::DatabaseName,
+    ) -> <Aug as AstInfo>::DatabaseName {
+        node
     }
-}
-
-#[derive(Debug)]
-pub struct EitherUnwrapper<F> {
-    inner: F,
-}
-
-impl<F> EitherUnwrapper<F> {
-    fn new(inner: F) -> Self {
-        Self { inner }
-    }
-}
-
-impl<A: AstInfo, B: AstInfo, F: Fold<B, A>> Fold<Either<A, B>, A> for EitherUnwrapper<F> {
     fn fold_nested_statement(
         &mut self,
-        stmt: <Either<A, B> as AstInfo>::NestedStatement,
-    ) -> A::NestedStatement {
-        match stmt {
-            Either::Left(stmt) => stmt,
-            Either::Right(stmt) => self.inner.fold_nested_statement(stmt),
-        }
+        node: <Aug as AstInfo>::NestedStatement,
+    ) -> <Aug as AstInfo>::NestedStatement {
+        node
     }
-
-    fn fold_query(&mut self, q: Query<Either<A, B>>) -> Query<A> {
-        Query {
-            ctes: q.ctes.into_iter().map(|c| self.fold_cte(c)).collect(),
-            body: self.fold_set_expr(q.body),
-            limit: q.limit.map(|l| self.fold_limit(l)),
-            offset: q.offset.map(|l| self.fold_expr(l)),
-            order_by: q
-                .order_by
-                .into_iter()
-                .map(|c| self.fold_order_by_expr(c))
-                .collect(),
-        }
-    }
-
-    fn fold_cte_id(&mut self, id: <Either<A, B> as AstInfo>::CteId) -> A::CteId {
-        match id {
-            Either::Left(id) => id,
-            Either::Right(id) => self.inner.fold_cte_id(id),
-        }
-    }
-
-    fn fold_object_name(
-        &mut self,
-        object_name: <Either<A, B> as AstInfo>::ObjectName,
-    ) -> A::ObjectName {
-        match object_name {
-            Either::Left(object_name) => object_name,
-            Either::Right(object_name) => self.inner.fold_object_name(object_name),
-        }
-    }
-
-    fn fold_data_type(&mut self, data_type: <Either<A, B> as AstInfo>::DataType) -> A::DataType {
-        match data_type {
-            Either::Left(data_type) => data_type,
-            Either::Right(data_type) => self.inner.fold_data_type(data_type),
-        }
-    }
-
     fn fold_schema_name(
         &mut self,
-        schema_name: <Either<A, B> as AstInfo>::SchemaName,
-    ) -> A::SchemaName {
-        match schema_name {
-            Either::Left(schema_name) => schema_name,
-            Either::Right(schema_name) => self.inner.fold_schema_name(schema_name),
-        }
+        node: <Aug as AstInfo>::SchemaName,
+    ) -> <Aug as AstInfo>::SchemaName {
+        node
     }
+}
 
-    fn fold_database_name(
-        &mut self,
-        database_name: <Either<A, B> as AstInfo>::DatabaseName,
-    ) -> A::DatabaseName {
-        match database_name {
-            Either::Left(database_name) => database_name,
-            Either::Right(database_name) => self.inner.fold_database_name(database_name),
-        }
-    }
-
-    fn fold_cluster_name(
-        &mut self,
-        cluster_name: <Either<A, B> as AstInfo>::ClusterName,
-    ) -> A::ClusterName {
-        match cluster_name {
-            Either::Left(cluster_name) => cluster_name,
-            Either::Right(cluster_name) => self.inner.fold_cluster_name(cluster_name),
-        }
-    }
-
-    fn fold_with_option_value(
-        &mut self,
-        node: mz_sql_parser::ast::WithOptionValue<Either<A, B>>,
-    ) -> mz_sql_parser::ast::WithOptionValue<A> {
-        use mz_sql_parser::ast::WithOptionValue::*;
-        match node {
-            Value(v) => Value(Fold::<Either<A, B>, A>::fold_value(self, v)),
-            Ident(i) => Ident(Fold::<Either<A, B>, A>::fold_ident(self, i)),
-            DataType(dt) => DataType(Fold::<Either<A, B>, A>::fold_data_type(self, dt)),
-            Secret(secret) => Secret(Fold::<Either<A, B>, A>::fold_object_name(self, secret)),
-            Object(obj) => Object(Fold::<Either<A, B>, A>::fold_object_name(self, obj)),
-        }
-    }
+pub fn resolve_transient_ids<N>(
+    allocation: &HashMap<GlobalId, GlobalId>,
+    node: N,
+) -> Result<N::Folded, PlanError>
+where
+    N: FoldNode<Aug, Aug>,
+{
+    let mut resolver = TransientResolver::new(allocation);
+    let result = node.fold(&mut resolver);
+    resolver.status?;
+    Ok(result)
 }
 
 #[derive(Debug, Default)]
@@ -1407,6 +1253,15 @@ impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
             ResolvedDataType::Error => {}
         }
     }
+}
+
+pub fn visit_dependencies<'ast, N>(node: &'ast N) -> HashSet<GlobalId>
+where
+    N: VisitNode<'ast, Aug> + 'ast,
+{
+    let mut visitor = DependencyVisitor::default();
+    node.visit(&mut visitor);
+    visitor.ids
 }
 
 // Used when displaying a view's source for human creation. If the name

@@ -417,86 +417,91 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
-        plan: CreateSourcePlan,
-        depends_on: Vec<GlobalId>,
+        plans: Vec<(GlobalId, CreateSourcePlan, Vec<GlobalId>)>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = vec![];
-        let source_id = self.catalog.allocate_user_id().await?;
-        let source_oid = self.catalog.allocate_oid()?;
-        let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
-        let source = catalog::Source {
-            create_sql: plan.source.create_sql,
-            source_desc: plan.source.source_desc,
-            desc: plan.source.desc,
-            timeline: plan.timeline,
-            depends_on,
-            host_config,
-        };
-        ops.push(catalog::Op::CreateItem {
-            id: source_id,
-            oid: source_oid,
-            name: plan.name.clone(),
-            item: CatalogItem::Source(source.clone()),
-        });
+        let mut sources = vec![];
+        for (source_id, plan, depends_on) in plans {
+            let source_oid = self.catalog.allocate_oid()?;
+            let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
+            let source = catalog::Source {
+                create_sql: plan.source.create_sql,
+                source_desc: plan.source.source_desc,
+                desc: plan.source.desc,
+                timeline: plan.timeline,
+                depends_on,
+                host_config,
+            };
+            ops.push(catalog::Op::CreateItem {
+                id: source_id,
+                oid: source_oid,
+                name: plan.name.clone(),
+                item: CatalogItem::Source(source.clone()),
+            });
+            sources.push((source_id, source));
+        }
         match self
             .catalog_transact(Some(session), ops, move |_| Ok(()))
             .await
         {
             Ok(()) => {
-                // Do everything to instantiate the source at the coordinator and
-                // inform the timestamper and dataflow workers of its existence before
-                // shipping any dataflows that depend on its existence.
+                for (source_id, source) in sources {
+                    // Do everything to instantiate the source at the coordinator and
+                    // inform the timestamper and dataflow workers of its existence before
+                    // shipping any dataflows that depend on its existence.
 
-                let mut ingestion = IngestionDescription {
-                    desc: source.source_desc.clone(),
-                    source_imports: BTreeMap::new(),
-                    storage_metadata: (),
-                    typ: source.desc.typ().clone(),
-                };
+                    let mut ingestion = IngestionDescription {
+                        desc: source.source_desc.clone(),
+                        source_imports: BTreeMap::new(),
+                        storage_metadata: (),
+                        typ: source.desc.typ().clone(),
+                    };
 
-                for id in self.catalog.state().get_entry(&source_id).uses() {
-                    if self.catalog.state().get_entry(id).source().is_some() {
-                        ingestion.source_imports.insert(*id, ());
+                    for id in self.catalog.state().get_entry(&source_id).uses() {
+                        if self.catalog.state().get_entry(id).source().is_some() {
+                            ingestion.source_imports.insert(*id, ());
+                        }
                     }
+
+                    // This is disabled for the moment because it has unusual upper
+                    // advancement behavior.
+                    // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
+                    let status_collection_id = if false {
+                        Some(self.catalog.resolve_builtin_storage_collection(
+                            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                        ))
+                    } else {
+                        None
+                    };
+
+                    self.controller
+                        .storage
+                        .create_collections(vec![(
+                            source_id,
+                            CollectionDescription {
+                                desc: source.desc.clone(),
+                                ingestion: Some(ingestion),
+                                since: None,
+                                status_collection_id,
+                                host_config: Some(source.host_config),
+                            },
+                        )])
+                        .await
+                        .unwrap();
+
+                    self.initialize_storage_read_policies(
+                        vec![source_id],
+                        DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                    )
+                    .await;
                 }
-
-                // This is disabled for the moment because it has unusual upper
-                // advancement behavior.
-                // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-                let status_collection_id = if false {
-                    Some(self.catalog.resolve_builtin_storage_collection(
-                        &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                    ))
-                } else {
-                    None
-                };
-
-                self.controller
-                    .storage
-                    .create_collections(vec![(
-                        source_id,
-                        CollectionDescription {
-                            desc: source.desc.clone(),
-                            ingestion: Some(ingestion),
-                            since: None,
-                            status_collection_id,
-                            host_config: Some(source.host_config),
-                        },
-                    )])
-                    .await
-                    .unwrap();
-
-                self.initialize_storage_read_policies(
-                    vec![source_id],
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
-                )
-                .await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_),
-                ..
-            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
+            //TODO(petrosagg): figure this out
+            // Err(AdapterError::Catalog(catalog::Error {
+            //     kind: catalog::ErrorKind::ItemAlreadyExists(_),
+            //     ..
+            // })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
             Err(err) => Err(err),
         }
     }

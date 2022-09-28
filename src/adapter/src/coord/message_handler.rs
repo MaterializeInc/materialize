@@ -239,11 +239,6 @@ impl<S: Append + 'static> Coordinator<S> {
     ) {
         otel_ctx.attach_as_parent();
 
-        let (subsource_stmts, source_stmt) = match result {
-            Ok(ok) => ok,
-            Err(e) => return tx.send(Err(e), session),
-        };
-
         // Ensure that all dependencies still exist after purification, as a
         // `DROP CONNECTION` may have sneaked in. If any have gone missing, we
         // repurify the original statement. This will either produce a nice
@@ -261,19 +256,31 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
-        //TODO(petrosagg): Figure out a way to execute the subsources and sources atomically. With
-        //                 the way it's written now it is possible for subsources to be created but
-        //                 not the source object.
-        // First plan all subsource statements
-        let mut subsource_plans = vec![];
-        for stmt in subsource_stmts {
-            let catalog = self.catalog.for_session(&session);
+        let stmts = match result {
+            Ok(ok) => ok,
+            Err(e) => return tx.send(Err(e), session),
+        };
 
-            let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
+        // First we'll allocate global ids for each source
+        let mut allocation = HashMap::new();
+        let mut allocated_stmts = vec![];
+        for (transient_id, stmt) in stmts {
+            let source_id = match self.catalog.allocate_user_id().await {
+                Ok(id) => id,
+                Err(e) => return tx.send(Err(e.into()), session),
+            };
+            allocation.insert(transient_id, source_id);
+            allocated_stmts.push((source_id, stmt));
+        }
+
+        // Then, we'll rewrite all statements to point to the newly minted global ids and plan them
+        let mut plans = vec![];
+        for (source_id, stmt) in allocated_stmts {
+            let stmt = match mz_sql::names::resolve_transient_ids(&allocation, stmt) {
                 Ok(ok) => ok,
                 Err(e) => return tx.send(Err(e.into()), session),
             };
-
+            let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
             let plan =
                 match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
                     Ok(Plan::CreateSource(plan)) => plan,
@@ -282,38 +289,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     Err(e) => return tx.send(Err(e), session),
                 };
-            let depends_on = depends_on.into_iter().collect();
-            subsource_plans.push((plan, depends_on));
+            plans.push((source_id, plan, depends_on));
         }
 
-        // Sequence all the subsources
-        for (plan, depends_on) in subsource_plans {
-            if let Err(e) = self
-                .sequence_create_source(&mut session, plan, depends_on)
-                .await
-            {
-                tx.send(Err(e), session);
-                return;
-            }
-        }
-
-        // Now finalize name resolution of the original create source statement and sequence it
-        let catalog = self.catalog.for_session(&session);
-
-        let (stmt, depends_on) = match mz_sql::names::finalize_resolve(&catalog, source_stmt) {
-            Ok(ok) => ok,
-            Err(e) => return tx.send(Err(e.into()), session),
-        };
-
-        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
-            Ok(Plan::CreateSource(plan)) => plan,
-            Ok(_) => unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource"),
-            Err(e) => return tx.send(Err(e), session),
-        };
-        let depends_on = depends_on.into_iter().collect();
-        let result = self
-            .sequence_create_source(&mut session, plan, depends_on)
-            .await;
+        // Finally, sequence all plans in one go
+        let result = self.sequence_create_source(&mut session, plans).await;
         tx.send(result, session);
     }
 

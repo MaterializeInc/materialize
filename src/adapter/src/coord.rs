@@ -198,15 +198,7 @@ pub struct CreateSourceStatementReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
-    /// Contains the purified source statement and a list of subsources that must be created before
-    /// executing the final create source statement
-    pub result: Result<
-        (
-            Vec<CreateSourceStatement<Raw>>,
-            CreateSourceStatement<mz_sql::names::Either<Aug, Raw>>,
-        ),
-        AdapterError,
-    >,
+    pub result: Result<Vec<(GlobalId, CreateSourceStatement<Aug>)>, AdapterError>,
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
