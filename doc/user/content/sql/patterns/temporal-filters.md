@@ -23,7 +23,7 @@ You can only use `mz_now()` to establish a temporal filter under the following c
     or be part of a conjunction phrase (`AND`) which directly compares `mz_now()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_now()`.
 -   The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN`).
 
-    At the moment, you can't use the `!=` operator with `mz_now()` (we're working on it).
+    At the moment, you can't use the `!=` operator with `mz_now()`.
 
 Let's take a look at an example.
 
