@@ -40,6 +40,7 @@ use mz_compute_client::controller::{
 use mz_compute_client::response::{PeekResponse, SubscribeResponse};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::Orchestrator;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
@@ -70,6 +71,8 @@ pub struct ControllerConfig {
     pub storaged_image: String,
     /// The computed image to use when starting new compute processes.
     pub computed_image: String,
+    /// The now function to advance the controller's introspection collections.
+    pub now: NowFn,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -199,6 +202,7 @@ where
         + TryFrom<i64>
         + Codec64
         + Unpin
+        + From<EpochMillis>
         + TimestampManipulation,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
@@ -215,6 +219,7 @@ where
             config.persist_clients,
             config.orchestrator.namespace("storage"),
             config.storaged_image,
+            config.now,
         )
         .await;
 
