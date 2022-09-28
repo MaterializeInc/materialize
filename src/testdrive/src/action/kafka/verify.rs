@@ -16,7 +16,7 @@ use anyhow::{anyhow, bail, ensure, Context};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use itertools::Itertools;
-use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::{Headers, Message};
 use regex::Regex;
 use tokio::pin;
@@ -228,6 +228,9 @@ impl Action for VerifyAction {
                 }
             }
         }
+
+        let position = consumer.position()?;
+        consumer.commit(&position, CommitMode::Sync)?;
 
         match &self.format {
             SinkFormat::Avro => {
