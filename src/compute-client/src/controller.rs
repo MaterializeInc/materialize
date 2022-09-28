@@ -170,14 +170,14 @@ impl From<anyhow::Error> for ComputeError {
 
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ConcreteComputeInstanceReplicaConfig {
-    pub location: ConcreteComputeInstanceReplicaLocation,
-    pub persisted_logs: ConcreteComputeInstanceReplicaLogging,
+pub struct ComputeInstanceReplicaConfig {
+    pub location: ComputeInstanceReplicaLocation,
+    pub persisted_logs: ComputeInstanceReplicaLogging,
 }
 
 /// Size or location of a replica
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ConcreteComputeInstanceReplicaLocation {
+pub enum ComputeInstanceReplicaLocation {
     /// Out-of-process replica
     Remote {
         /// The network addresses of the processes in the replica.
@@ -202,11 +202,11 @@ pub enum ConcreteComputeInstanceReplicaLocation {
     },
 }
 
-impl ConcreteComputeInstanceReplicaLocation {
+impl ComputeInstanceReplicaLocation {
     pub fn get_az(&self) -> Option<&str> {
         match self {
-            ConcreteComputeInstanceReplicaLocation::Remote { .. } => None,
-            ConcreteComputeInstanceReplicaLocation::Managed {
+            ComputeInstanceReplicaLocation::Remote { .. } => None,
+            ComputeInstanceReplicaLocation::Managed {
                 availability_zone, ..
             } => Some(availability_zone),
         }
@@ -235,7 +235,7 @@ impl ComputeInstanceReplicaAllocation {
 /// Logging configuration of a replica.
 /// Changing this type requires a catalog storage migration!
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ConcreteComputeInstanceReplicaLogging {
+pub enum ComputeInstanceReplicaLogging {
     /// Instantiate default logging configuration upon system start.
     /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
     Default,
@@ -243,20 +243,20 @@ pub enum ConcreteComputeInstanceReplicaLogging {
     ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
 
-impl ConcreteComputeInstanceReplicaLogging {
+impl ComputeInstanceReplicaLogging {
     /// Return all persisted introspection sources contained.
     pub fn get_sources(&self) -> &[(LogVariant, GlobalId)] {
         match self {
-            ConcreteComputeInstanceReplicaLogging::Default => &[],
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(logs, _) => logs,
+            ComputeInstanceReplicaLogging::Default => &[],
+            ComputeInstanceReplicaLogging::ConcreteViews(logs, _) => logs,
         }
     }
 
     /// Return all persisted introspection views contained.
     pub fn get_views(&self) -> &[(LogView, GlobalId)] {
         match self {
-            ConcreteComputeInstanceReplicaLogging::Default => &[],
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(_, views) => views,
+            ComputeInstanceReplicaLogging::Default => &[],
+            ComputeInstanceReplicaLogging::ConcreteViews(_, views) => views,
         }
     }
 
@@ -480,7 +480,7 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        config: ConcreteComputeInstanceReplicaConfig,
+        config: ComputeInstanceReplicaConfig,
     ) -> Result<(), ComputeError> {
         let persisted_logs = config
             .persisted_logs
@@ -491,7 +491,7 @@ where
 
         // Add replicas backing that instance.
         match config.location {
-            ConcreteComputeInstanceReplicaLocation::Remote {
+            ComputeInstanceReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
@@ -507,7 +507,7 @@ where
                     },
                 );
             }
-            ConcreteComputeInstanceReplicaLocation::Managed {
+            ComputeInstanceReplicaLocation::Managed {
                 allocation,
                 availability_zone,
                 ..
@@ -539,9 +539,9 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        config: ConcreteComputeInstanceReplicaConfig,
+        config: ComputeInstanceReplicaConfig,
     ) -> Result<(), ComputeError> {
-        if let ConcreteComputeInstanceReplicaLocation::Managed { .. } = config.location {
+        if let ComputeInstanceReplicaLocation::Managed { .. } = config.location {
             self.compute
                 .orchestrator
                 .drop_replica(instance_id, replica_id)

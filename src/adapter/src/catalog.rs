@@ -31,8 +31,7 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
     ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceReplicaAllocation,
-    ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLocation,
-    ConcreteComputeInstanceReplicaLogging,
+    ComputeInstanceReplicaConfig, ComputeInstanceReplicaLocation, ComputeInstanceReplicaLogging,
 };
 use mz_compute_client::logging::{
     LogVariant, LogView, LoggingConfig as DataflowLoggingConfig, DEFAULT_LOG_VARIANTS,
@@ -375,7 +374,7 @@ impl CatalogState {
     /// Create and insert the per replica log sources and log views.
     fn insert_replica_introspection_items(
         &mut self,
-        persisted_logs: &ConcreteComputeInstanceReplicaLogging,
+        persisted_logs: &ComputeInstanceReplicaLogging,
         replica_id: u64,
     ) {
         for (variant, source_id) in persisted_logs.get_sources() {
@@ -713,7 +712,7 @@ impl CatalogState {
         on_instance: ComputeInstanceId,
         replica_name: String,
         replica_id: ReplicaId,
-        config: ConcreteComputeInstanceReplicaConfig,
+        config: ComputeInstanceReplicaConfig,
     ) {
         self.insert_replica_introspection_items(&config.persisted_logs, replica_id);
         let replica = ComputeInstanceReplica {
@@ -1227,7 +1226,7 @@ pub struct ComputeInstance {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ComputeInstanceReplica {
-    pub config: ConcreteComputeInstanceReplicaConfig,
+    pub config: ComputeInstanceReplicaConfig,
     pub process_status: HashMap<ProcessId, ComputeInstanceEvent>,
 }
 
@@ -2093,16 +2092,16 @@ impl<S: Append> Catalog<S> {
                     if inst.logging.is_some() {
                         catalog.allocate_persisted_introspection_items().await
                     } else {
-                        ConcreteComputeInstanceReplicaLogging::ConcreteViews(vec![], vec![])
+                        ComputeInstanceReplicaLogging::ConcreteViews(vec![], vec![])
                     }
                 }
 
                 SerializedComputeInstanceReplicaLogging::ConcreteViews(x, y) => {
-                    ConcreteComputeInstanceReplicaLogging::ConcreteViews(x.clone(), y.clone())
+                    ComputeInstanceReplicaLogging::ConcreteViews(x.clone(), y.clone())
                 }
             };
 
-            let config = ConcreteComputeInstanceReplicaConfig {
+            let config = ComputeInstanceReplicaConfig {
                 location: catalog.concretize_replica_location(serialized_config.location)?,
                 persisted_logs: persisted_logs.clone(),
             };
@@ -3175,14 +3174,14 @@ impl<S: Append> Catalog<S> {
     pub fn concretize_replica_location(
         &self,
         location: SerializedComputeInstanceReplicaLocation,
-    ) -> Result<ConcreteComputeInstanceReplicaLocation, AdapterError> {
+    ) -> Result<ComputeInstanceReplicaLocation, AdapterError> {
         let cluster_replica_sizes = &self.state.cluster_replica_sizes;
         let location = match location {
             SerializedComputeInstanceReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
-            } => ConcreteComputeInstanceReplicaLocation::Remote {
+            } => ComputeInstanceReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
@@ -3208,7 +3207,7 @@ impl<S: Append> Catalog<S> {
                         expected,
                     }
                 })?;
-                ConcreteComputeInstanceReplicaLocation::Managed {
+                ComputeInstanceReplicaLocation::Managed {
                     allocation: allocation.clone(),
                     availability_zone,
                     size,
@@ -3300,7 +3299,7 @@ impl<S: Append> Catalog<S> {
                 id: ReplicaId,
                 name: String,
                 on_cluster_name: String,
-                config: ConcreteComputeInstanceReplicaConfig,
+                config: ComputeInstanceReplicaConfig,
             },
             CreateItem {
                 id: GlobalId,
@@ -3581,9 +3580,7 @@ impl<S: Append> Catalog<S> {
                         &name,
                         &config.clone().into(),
                     )?;
-                    if let ConcreteComputeInstanceReplicaLocation::Managed { size, .. } =
-                        &config.location
-                    {
+                    if let ComputeInstanceReplicaLocation::Managed { size, .. } = &config.location {
                         let details = EventDetails::CreateComputeInstanceReplicaV1(
                             mz_audit_log::CreateComputeInstanceReplicaV1 {
                                 cluster_id: id,
@@ -4545,7 +4542,7 @@ impl<S: Append> Catalog<S> {
     /// Called once per compute replica creation.
     pub async fn allocate_persisted_introspection_items(
         &mut self,
-    ) -> ConcreteComputeInstanceReplicaLogging {
+    ) -> ComputeInstanceReplicaLogging {
         let logs = {
             let log_amount = DEFAULT_LOG_VARIANTS.len();
             let system_ids = self
@@ -4566,7 +4563,7 @@ impl<S: Append> Catalog<S> {
                 .collect()
         };
 
-        ConcreteComputeInstanceReplicaLogging::ConcreteViews(
+        ComputeInstanceReplicaLogging::ConcreteViews(
             logs,
             self.allocate_persisted_introspection_views().await,
         )
@@ -4626,7 +4623,7 @@ pub enum Op {
     CreateComputeInstanceReplica {
         name: String,
         on_cluster_name: String,
-        config: ConcreteComputeInstanceReplicaConfig,
+        config: ComputeInstanceReplicaConfig,
     },
     CreateItem {
         id: GlobalId,
@@ -4694,7 +4691,7 @@ pub enum SerializedCatalogItem {
 }
 
 /// Serialized (stored alongside the replica) logging configuration of
-/// a replica. Serialized variant of ConcreteComputeInstanceReplicaLogging.
+/// a replica. Serialized variant of `ComputeInstanceReplicaLogging`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SerializedComputeInstanceReplicaLogging {
     /// Instantiate default logging configuration upon system start.
@@ -4704,30 +4701,30 @@ pub enum SerializedComputeInstanceReplicaLogging {
     ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
 
-impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
-    fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
-        match conc {
-            ConcreteComputeInstanceReplicaLogging::Default => Self::Default,
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(x, y) => Self::ConcreteViews(x, y),
+impl From<ComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
+    fn from(logging: ComputeInstanceReplicaLogging) -> Self {
+        match logging {
+            ComputeInstanceReplicaLogging::Default => Self::Default,
+            ComputeInstanceReplicaLogging::ConcreteViews(x, y) => Self::ConcreteViews(x, y),
         }
     }
 }
 
-/// A [`mz_sql::plan::ComputeInstanceReplicaConfig`] that is serialized as JSON and persisted
-/// to the catalog stash. This is a separate type to allow us to evolve the
-/// on-disk format independently from the SQL layer.
+/// A [`mz_compute_client::controller::ComputeInstanceReplicaConfig`] that is serialized as JSON
+/// and persisted to the catalog stash. This is a separate type to allow us to evolve the on-disk
+/// format independently from the SQL layer.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedComputeInstanceReplicaConfig {
     pub persisted_logs: SerializedComputeInstanceReplicaLogging,
     pub location: SerializedComputeInstanceReplicaLocation,
 }
 
-impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
+impl From<ComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
     fn from(
-        ConcreteComputeInstanceReplicaConfig {
+        ComputeInstanceReplicaConfig {
             location,
             persisted_logs,
-        }: ConcreteComputeInstanceReplicaConfig,
+        }: ComputeInstanceReplicaConfig,
     ) -> Self {
         SerializedComputeInstanceReplicaConfig {
             persisted_logs: persisted_logs.into(),
@@ -4752,10 +4749,10 @@ pub enum SerializedComputeInstanceReplicaLocation {
     },
 }
 
-impl From<ConcreteComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
-    fn from(loc: ConcreteComputeInstanceReplicaLocation) -> Self {
+impl From<ComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
+    fn from(loc: ComputeInstanceReplicaLocation) -> Self {
         match loc {
-            ConcreteComputeInstanceReplicaLocation::Remote {
+            ComputeInstanceReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
@@ -4764,7 +4761,7 @@ impl From<ConcreteComputeInstanceReplicaLocation> for SerializedComputeInstanceR
                 compute_addrs,
                 workers,
             },
-            ConcreteComputeInstanceReplicaLocation::Managed {
+            ComputeInstanceReplicaLocation::Managed {
                 allocation: _,
                 size,
                 availability_zone,
