@@ -75,7 +75,8 @@ create_sink ::=
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA' 'CONNECTION' connection_name 'TOPIC' topic with_options?
+  'FROM' 'KAFKA' 'CONNECTION' connection_name
+  '(' 'TOPIC' topic ( ( ',' connection_option )? ) ')'
   ('KEY FORMAT' format_spec 'VALUE FORMAT' format_spec | 'FORMAT' format_spec)
   ('INCLUDE'
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
