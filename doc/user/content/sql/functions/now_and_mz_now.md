@@ -1,6 +1,8 @@
 ---
 title: "now and mz_now functions"
 description: "Details the differences between the `now()` and `mz_now()` functions."
+aliases:
+  - /sql/functions/now_and_mz_logical_timestamp/
 menu:
   main:
     parent: 'sql-functions'
