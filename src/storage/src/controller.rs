@@ -20,7 +20,7 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
@@ -47,6 +47,7 @@ use tracing::debug;
 
 use mz_build_info::BuildInfo;
 use mz_orchestrator::NamespacedOrchestrator;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
@@ -569,15 +570,14 @@ pub struct StorageControllerState<
     stashed_response: Option<StorageResponse<T>>,
     /// Sender for collection management task
     pub(super) task_tx: mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>,
-    /// Used to communicate with collection management task which collections
-    /// should be managed, and tracks the times at which their writes should
-    /// occur.
-    pub(super) managed_frontiers: Arc<Mutex<HashMap<GlobalId, Antichain<T>>>>,
+    /// Tracks which collections are managed.
+    pub(super) managed_collections: Arc<Mutex<HashSet<GlobalId>>>,
 }
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct Controller<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
+pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
+{
     state: StorageControllerState<T>,
     /// Storage host provisioning and storage object assignment.
     hosts: StorageHosts<T>,
@@ -675,10 +675,13 @@ impl From<DataflowError> for StorageError {
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> StorageControllerState<T> {
+impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
+    StorageControllerState<T>
+{
     pub(super) async fn new(
         postgres_url: String,
         tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+        now: NowFn,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
@@ -689,18 +692,58 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> StorageController
             .await
             .expect("could not connect to postgres storage stash");
         let stash = mz_stash::Memory::new(stash);
-        // TODO: spawn tokio task to manage collections
-        let (task_tx, _) = mpsc::channel(1);
+
+        // Set up automatic timestamp advancer
+        let managed_collections = Arc::new(Mutex::new(HashSet::<GlobalId>::new()));
+        let task_collections = Arc::clone(&managed_collections);
+
+        let persist_write_handles = persist_write_handles::PersistWorker::new(tx);
+        let task_handle = persist_write_handles.clone();
+
+        let (task_tx, mut rx) = mpsc::channel::<(GlobalId, Vec<(Row, Diff)>)>(1);
+
+        mz_ore::task::spawn(|| "ControllerManagedCollectionWriter", async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let collections = &mut *task_collections.lock().await;
+
+                        let now = T::from(now());
+                        let updates = collections.iter().map(|id| {
+                            (*id, vec![], now.clone())
+                        }).collect::<Vec<_>>();
+
+                        // Failures don't matter when advancing collections' uppers.
+                        let _ = task_handle.monotonic_append(updates).await;
+                    },
+                    cmd = rx.recv() => {
+                        if let Some((id, updates)) = cmd {
+                            assert!(task_collections.lock().await.contains(&id));
+
+                            let updates = vec![(id, updates.into_iter().map(|(row, diff)| TimestamplessUpdate {
+                                row,
+                                diff,
+                            }).collect::<Vec<_>>(), T::from(now()))];
+
+                            // TODO? Handle contention among multiple writers
+                            task_handle.monotonic_append(updates).await.unwrap().unwrap();
+                        }
+                    }
+                }
+            }
+        });
+
         Self {
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
             exported_collections: BTreeMap::default(),
             stash,
-            persist_write_handles: persist_write_handles::PersistWorker::new(tx),
+            persist_write_handles,
             persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
             task_tx,
-            managed_frontiers: Arc::new(Mutex::new(HashMap::new())),
+            managed_collections,
         }
     }
 }
@@ -708,7 +751,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> StorageController
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + TimestampManipulation,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1237,7 +1280,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + TimestampManipulation,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1251,11 +1294,12 @@ where
         persist_clients: Arc<Mutex<PersistClientCache>>,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         storaged_image: String,
+        now: NowFn,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
-            state: StorageControllerState::new(postgres_url, tx).await,
+            state: StorageControllerState::new(postgres_url, tx, now).await,
             hosts: StorageHosts::new(
                 StorageHostsConfig {
                     build_info,
@@ -1273,7 +1317,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + TimestampManipulation,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1440,7 +1484,7 @@ pub trait CollectionManager: Debug + Send + StorageController {
 #[async_trait(?Send)]
 impl<T> CollectionManager for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + TimestampManipulation,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1454,24 +1498,26 @@ where
     ///
     /// # Panics
     /// - If `global_id` is not correlated to a collection.
-    async fn truncate_managed_collection(&mut self, global_id: GlobalId) {
-        let lowers = self.state.managed_frontiers.lock().await;
-        let lower = &lowers[&global_id];
-
-        let as_of = match lower.elements().iter().min() {
-            Some(lower) => lower.clone(),
-            None => return,
+    async fn truncate_managed_collection(&mut self, id: GlobalId) {
+        let as_of = match self.state.collections[&id]
+            .write_frontier
+            .elements()
+            .iter()
+            .min()
+        {
+            Some(f) if f > &T::minimum() => f.step_back().unwrap(),
+            // If collection is closed or the frontier is the minimum, we cannot
+            // or don't need to truncate (respectively).
+            _ => return,
         };
 
-        drop(lowers);
-
-        let mut negate = self.snapshot(global_id, as_of).await.unwrap();
+        let mut negate = self.snapshot(id, as_of).await.unwrap();
 
         for (_, diff) in negate.iter_mut() {
             *diff = -*diff;
         }
 
-        self.append_to_managed_collection(global_id, negate).await;
+        self.append_to_managed_collection(id, negate).await;
     }
 
     /// Append `updates` to the `data_shard` correlated with `global_id`
@@ -1481,7 +1527,7 @@ where
     /// - If `global_id` is not correlated to a collection.
     async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         assert!(
-            self.state.managed_frontiers.lock().await.contains_key(&id),
+            self.state.managed_collections.lock().await.contains(&id),
             "cannot append collection before it's managed"
         );
 
@@ -1751,7 +1797,7 @@ mod persist_write_handles {
     use crate::protocol::client::{TimestamplessUpdate, Update};
     use crate::types::sources::SourceData;
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct PersistWorker<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
         tx: UnboundedSender<(tracing::Span, PersistWorkerCmd<T>)>,
     }
@@ -2042,7 +2088,7 @@ mod persist_write_handles {
         ///
         /// Note that it is still possible for the append operation to fail in
         /// the face of contention from other writers.
-        pub(crate) fn motonic_append(
+        pub(crate) fn monotonic_append(
             &self,
             updates: Vec<(GlobalId, Vec<TimestamplessUpdate>, T)>,
         ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
