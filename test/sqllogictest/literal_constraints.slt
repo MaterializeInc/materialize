@@ -607,8 +607,10 @@ Explained Query (fast path):
 EOF
 
 # IndexedFilter before a join.
-# (CanonicalizeMfp has to run before JoinImplementation. Otherwise, JoinImplementation lifts the predicate, and then
-# CanonicalizeMfp can't create an IndexedFilter from the predicate anymore, because it's not on top of a Get.)
+# - CanonicalizeMfp has to run before JoinImplementation. Otherwise, JoinImplementation lifts the predicate, and then
+#   CanonicalizeMfp can't create an IndexedFilter from the predicate anymore, because it's not on top of a Get.
+# - This should be a Delta join! To ensure this, we have to look behind the IndexedFilter when collecting the available
+#   arrangements on the join inputs.
 
 query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT t1.a, t1.b, t2.c FROM t1, t2
@@ -617,20 +619,21 @@ WHERE
     t1.b IN ('l2', 'l3')
 ----
 Explained Query:
-  Project (#0, #1, #4) // { arity: 3 }
-    Join on=(#0 = #2) type=differential // { arity: 5 }
-      implementation
-        %0 » %1[#0]
-      Project (#0, #1) // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 3 }
+  Project (#0, #1, #5) // { arity: 3 }
+    Filter (#0) IS NOT NULL // { arity: 6 }
+      Join on=(#0 = #3) type=delta // { arity: 6 }
+        implementation
+          %0 » %1[#0]
+          %1 » %0[#0]
+        ArrangeBy keys=[[#0]] // { arity: 3 }
           Join on=(#1 = #2) type=indexed_filter // { arity: 3 }
             ArrangeBy keys=[[#1]] // { arity: 2 }
               Get materialize.public.t1 // { arity: 2 }
             Constant // { arity: 1 }
               - ("l2")
               - ("l3")
-      ArrangeBy keys=[[#0]] // { arity: 3 }
-        Get materialize.public.t2 // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 3 }
+          Get materialize.public.t2 // { arity: 3 }
 
 Used Indexes:
   - materialize.public.idx_t2_a
@@ -647,7 +650,7 @@ WHERE
 2  l2  32
 3  l3  33
 
-# This is the same as the previous query, but it also tests that ColumnKnowledge and LiteralLifting don't mess up
+# This is similar to the previous query, but it also tests that ColumnKnowledge and LiteralLifting don't mess up
 # the IndexedFilter join.
 
 query T multiline
@@ -657,19 +660,20 @@ WHERE
     t1.b = 'l2'
 ----
 Explained Query:
-  Project (#0, #1, #4) // { arity: 3 }
-    Join on=(#0 = #2) type=differential // { arity: 5 }
-      implementation
-        %0 » %1[#0]
-      Project (#0, #1) // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 3 }
+  Project (#0, #1, #5) // { arity: 3 }
+    Filter (#0) IS NOT NULL // { arity: 6 }
+      Join on=(#0 = #3) type=delta // { arity: 6 }
+        implementation
+          %0 » %1[#0]
+          %1 » %0[#0]
+        ArrangeBy keys=[[#0]] // { arity: 3 }
           Join on=(#1 = #2) type=indexed_filter // { arity: 3 }
             ArrangeBy keys=[[#1]] // { arity: 2 }
               Get materialize.public.t1 // { arity: 2 }
             Constant // { arity: 1 }
               - ("l2")
-      ArrangeBy keys=[[#0]] // { arity: 3 }
-        Get materialize.public.t2 // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 3 }
+          Get materialize.public.t2 // { arity: 3 }
 
 Used Indexes:
   - materialize.public.idx_t2_a
@@ -741,7 +745,7 @@ statement ok
 INSERT INTO foo VALUES (0, 1, 2, 'xxx'), (3, 4, 5, 'yyy');
 
 query T multiline
-EXPLAIN SELECT * FROM foo
+EXPLAIN WITH(arity, join_impls) SELECT * FROM foo
 WHERE a = 0 AND b = 1 AND c = 2 AND v = 'xxx';
 ----
 Explained Query (fast path):
@@ -754,7 +758,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM foo
+EXPLAIN WITH(arity, join_impls) SELECT * FROM foo
 WHERE 0 = a AND 1 = b AND 2 = c AND 'xxx' = v;
 ----
 Explained Query (fast path):
@@ -778,7 +782,7 @@ CREATE INDEX idx_foo_a ON foo(a);
 # Check that the deduplication in `remove_impossible_or_args` treats `a = 0` and `a = 0::SMALLINT` the same
 
 query T multiline
-EXPLAIN SELECT a FROM foo
+EXPLAIN WITH(arity, join_impls) SELECT a FROM foo
 WHERE a = 0 AND a = 0::SMALLINT;
 ----
 Explained Query (fast path):
@@ -800,7 +804,7 @@ WHERE a = 0 AND a = 0::SMALLINT;
 # For this, `any_expr_eq_literal` should peel off the cast in the returned expression.
 
 query T multiline
-EXPLAIN SELECT a FROM foo
+EXPLAIN WITH(arity, join_impls) SELECT a FROM foo
 WHERE (a = 0 AND a = 2::SMALLINT) OR a = 3;
 ----
 Explained Query (fast path):
@@ -822,7 +826,7 @@ WHERE (a = 0 AND a = 2::SMALLINT) OR a = 3;
 # SMALLINT. (It never worked for VARCHAR.)
 
 query T multiline
-EXPLAIN SELECT a FROM foo
+EXPLAIN WITH(arity, join_impls) SELECT a FROM foo
 WHERE a = 3::SMALLINT;
 ----
 Explained Query (fast path):
@@ -849,7 +853,7 @@ statement ok
 CREATE INDEX idx_foo_a_cast ON foo(a::INTEGER);
 
 query T multiline
-EXPLAIN SELECT * FROM foo
+EXPLAIN WITH(arity, join_impls) SELECT * FROM foo
 WHERE a = 0;
 ----
 Explained Query (fast path):
@@ -873,7 +877,7 @@ statement ok
 CREATE INDEX idx_foo_v_cast ON foo(v::TEXT);
 
 query T multiline
-EXPLAIN SELECT * FROM foo
+EXPLAIN WITH(arity, join_impls) SELECT * FROM foo
 WHERE v = 'xxx';
 ----
 Explained Query (fast path):
@@ -898,7 +902,7 @@ statement ok
 CREATE INDEX idx_foo_a ON foo(a);
 
 query T multiline
-EXPLAIN SELECT * FROM foo
+EXPLAIN WITH(arity, join_impls) SELECT * FROM foo
 WHERE a = 0;
 ----
 Explained Query (fast path):
@@ -923,7 +927,7 @@ statement ok
 CREATE INDEX idx_foo_v ON foo(v);
 
 query T multiline
-EXPLAIN SELECT * FROM foo
+EXPLAIN WITH(arity, join_impls) SELECT * FROM foo
 WHERE v = 'xxx';
 ----
 Explained Query (fast path):
@@ -945,7 +949,7 @@ WHERE v = 'xxx';
 # See `MirScalarExpr::impossible_literal_equality_because_types`.
 
 query T multiline
-EXPLAIN SELECT * FROM foo
+EXPLAIN WITH(arity, join_impls) SELECT * FROM foo
 WHERE a = 1000000;
 ----
 Explained Query (fast path):

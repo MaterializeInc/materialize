@@ -20,10 +20,14 @@ use std::collections::HashMap;
 
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::JoinImplementation::IndexedFilter;
-use mz_expr::{JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{
+    FilterCharacteristics, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
+    RECURSION_LIMIT,
+};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use self::index_map::IndexMap;
+use crate::predicate_pushdown::PredicatePushdown;
 use crate::{TransformArgs, TransformError};
 
 /// Determines the join implementation for join operators.
@@ -59,7 +63,7 @@ impl crate::Transform for JoinImplementation {
         &self,
         relation: &mut MirRelationExpr,
         args: TransformArgs,
-    ) -> Result<(), crate::TransformError> {
+    ) -> Result<(), TransformError> {
         let result = self.action_recursive(relation, &mut IndexMap::new(args.indexes));
         mz_repr::explain_new::trace_plan(&*relation);
         result
@@ -75,7 +79,7 @@ impl JoinImplementation {
         &self,
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
-    ) -> Result<(), crate::TransformError> {
+    ) -> Result<(), TransformError> {
         if let MirRelationExpr::Let { id, value, body } = relation {
             self.action_recursive(value, indexes)?;
             match &**value {
@@ -96,19 +100,24 @@ impl JoinImplementation {
             indexes.remove_local(*id);
             Ok(())
         } else {
-            relation.try_visit_mut_children(|e| self.action_recursive(e, indexes))?;
-            self.action(relation, indexes);
+            let (mfp, mfp_input) = MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
+            mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes))?;
+            self.action(mfp_input, mfp, indexes)?;
             Ok(())
         }
     }
 
     /// Determines the join implementation for join operators.
-    pub fn action(&self, relation: &mut MirRelationExpr, indexes: &IndexMap) {
+    pub fn action(
+        &self,
+        relation: &mut MirRelationExpr,
+        mfp_above: MapFilterProject,
+        indexes: &IndexMap,
+    ) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
             implementation,
-            ..
         } = relation
         {
             if !matches!(implementation, IndexedFilter(..)) {
@@ -126,21 +135,93 @@ impl JoinImplementation {
                 // The first fundamental question is whether we should employ a delta query or not.
                 //
                 // Here we conservatively use the rule that if sufficient arrangements exist we will
-                // use a delta query. An arrangement is considered available if it is a global get
-                // with columns present in `indexes`, if it is an `ArrangeBy` with the columns present,
-                // or a filter wrapped around either of these.
+                // use a delta query. An arrangement is considered available
+                // - if it is a global `Get` with columns present in `indexes`,
+                //   - or the same wrapped by an IndexedFilter,
+                // - if it is an `ArrangeBy` with the columns present,
+                // - if it is a `Reduce` whose output is arranged the right way,
+                // - if it is a filter wrapped around either of these (see the mfp extraction).
+                //
+                // The `IndexedFilter` case above is to avoid losing some Delta joins
+                // due to `IndexedFilter` on a join input. This means that in the absolute worst
+                // case (when the `IndexedFilter` doesn't filter out anything), we will fully
+                // re-create some arrangements that we already have for that input. This worst case
+                // is still better than what can happen if we lose a Delta join: Differential joins
+                // will create several new arrangements that doesn't even have a size bound, i.e.,
+                // they might be larger than any user-created index.
 
                 let unique_keys = input_types
                     .into_iter()
                     .map(|typ| typ.keys)
                     .collect::<Vec<_>>();
                 let mut available_arrangements = vec![Vec::new(); inputs.len()];
+                let mut filters = Vec::new();
+
+                // We figure out what predicates from mfp_above could be pushed to which input.
+                // We won't actually push these down now; this just informs FilterCharacteristics.
+                let (map, mut filter, _) = mfp_above.as_map_filter_project();
+                let all_errors = filter.iter().all(|p| p.is_literal_err());
+                let (_, pushed_through_map) = PredicatePushdown::push_filters_through_map(
+                    &map,
+                    &mut filter,
+                    mfp_above.input_arity,
+                    all_errors,
+                )?;
+                let (_, push_downs) = PredicatePushdown::push_filters_through_join(
+                    &input_mapper,
+                    equivalences,
+                    pushed_through_map,
+                );
+
                 for index in 0..inputs.len() {
                     // We can work around mfps, as we can lift the mfps into the join execution.
                     let (mfp, input) =
                         MapFilterProject::extract_non_errors_from_expr(&inputs[index]);
-                    let (_, _, project) = mfp.as_map_filter_project();
-                    // Get and ArrangeBy expressions contribute arrangements.
+                    let (_, filter, project) = mfp.as_map_filter_project();
+
+                    // We gather filter characteristics:
+                    // - From the filter that is directly at the top mfp of the input.
+                    // - IndexedFilter joins are constructed from literal equality filters.
+                    // - If the input is an ArrangeBy, then we gather filter characteristics from
+                    //   the mfp below the ArrangeBy. (JoinImplementation often inserts ArrangeBys.)
+                    // - From filters that could be pushed down from above the join to this input.
+                    //   (In LIR, these will be executed right after the join path executes the join
+                    //   for this input.)
+                    let mut characteristics =
+                        FilterCharacteristics::filter_characteristics(&filter)?;
+                    if matches!(
+                        input,
+                        MirRelationExpr::Join {
+                            implementation: IndexedFilter(..),
+                            ..
+                        }
+                    ) {
+                        characteristics.add_literal_equality();
+                    }
+                    if let MirRelationExpr::ArrangeBy {
+                        input: arrange_by_input,
+                        ..
+                    } = input
+                    {
+                        let (mfp, input) =
+                            MapFilterProject::extract_non_errors_from_expr(arrange_by_input);
+                        let (_, filter, _) = mfp.as_map_filter_project();
+                        characteristics |= FilterCharacteristics::filter_characteristics(&filter)?;
+                        if matches!(
+                            input,
+                            MirRelationExpr::Join {
+                                implementation: IndexedFilter(..),
+                                ..
+                            }
+                        ) {
+                            characteristics.add_literal_equality();
+                        }
+                    }
+                    characteristics |=
+                        FilterCharacteristics::filter_characteristics(&push_downs[index])?;
+                    filters.push(characteristics);
+
+                    // Collect available arrangements on this input.
                     match input {
                         MirRelationExpr::Get { id, typ: _ } => {
                             available_arrangements[index]
@@ -158,6 +239,14 @@ impl JoinImplementation {
                             // The first `keys.len()` columns form an arrangement key.
                             available_arrangements[index]
                                 .push((0..group_key.len()).map(MirScalarExpr::Column).collect());
+                        }
+                        MirRelationExpr::Join {
+                            implementation: IndexedFilter(id, ..),
+                            ..
+                        } => {
+                            available_arrangements[index].extend(
+                                indexes.get(Id::Global(id.clone())).map(|key| key.to_vec()),
+                            );
                         }
                         _ => {}
                     }
@@ -204,12 +293,14 @@ impl JoinImplementation {
                     &input_mapper,
                     &available_arrangements,
                     &unique_keys,
+                    &filters,
                 );
                 let differential_plan = differential::plan(
                     relation,
                     &input_mapper,
                     &available_arrangements,
                     &unique_keys,
+                    &filters,
                 );
 
                 *relation = delta_query_plan
@@ -217,6 +308,7 @@ impl JoinImplementation {
                     .expect("Failed to produce a join plan");
             }
         }
+        Ok(())
     }
 }
 
@@ -273,7 +365,9 @@ mod index_map {
 
 mod delta_queries {
 
-    use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{
+        FilterCharacteristics, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr,
+    };
 
     use crate::TransformError;
 
@@ -286,6 +380,7 @@ mod delta_queries {
         input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
+        filters: &[FilterCharacteristics],
     ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
 
@@ -307,7 +402,8 @@ mod delta_queries {
             }
 
             // Determine a viable order for each relation, or return `Err` if none found.
-            let orders = super::optimize_orders(equivalences, available, unique_keys, input_mapper);
+            let orders =
+                super::optimize_orders(equivalences, available, unique_keys, filters, input_mapper);
 
             // A viable delta query requires that, for every order,
             // there is an arrangement for every input except for
@@ -351,7 +447,8 @@ mod delta_queries {
 }
 
 mod differential {
-
+    use crate::join_implementation::{Characteristics, FilterCharacteristics};
+    use itertools::Itertools;
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
     use crate::TransformError;
@@ -362,6 +459,7 @@ mod differential {
         input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
+        filters: &[FilterCharacteristics],
     ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
 
@@ -377,8 +475,29 @@ mod differential {
             // point iteration; we choose to start with the first input optimizing our criteria, which
             // should remain stable even when promoted to the first position.
             let mut orders =
-                super::optimize_orders(equivalences, available, unique_keys, input_mapper);
+                super::optimize_orders(equivalences, available, unique_keys, filters, input_mapper);
 
+            // Inside each order, we take the `FilterCharacteristics` from each element, and OR it
+            // to every other element to the right. This is because we are gonna be looking for the
+            // worst `Characteristic` in every order, and for this it makes sense to include a
+            // filter in a `Characteristic` if the filter was applied not just at that input but
+            // any input before. Two examples for bad join orders without this:
+            //  - chbench.slt Query 20: a cross join would come before a filtered input.
+            //  - lifting.slt "tricky join ordering": a filtered input would go to the end. (Note
+            //    the `skip(1)` when thinking this through.)
+            orders.iter_mut().for_each(|order| {
+                let mut sum = FilterCharacteristics::none();
+                for (Characteristics { filters, .. }, _, _) in order {
+                    *filters |= sum;
+                    sum = filters.clone();
+                }
+            });
+
+            // `orders` has one order for each starting collection, and now we have to choose one
+            // from these. First, we find the worst `Characteristics` inside each order, and then we
+            // find the best one among these across all orders, which goes into
+            // `max_min_characteristics`.
+            //
             // For differential join, it is not as important for the starting
             // input to have good characteristics because the other ones
             // determine whether intermediate results blow up. Thus, we do not
@@ -390,10 +509,16 @@ mod differential {
             let mut order = if let Some(max_min_characteristics) = max_min_characteristics {
                 orders
                     .into_iter()
-                    .find(|o| {
+                    .filter(|o| {
                         o.iter().skip(1).map(|(c, _, _)| c).min().unwrap()
                             == &max_min_characteristics
                     })
+                    // It can happen that `orders` has multiple such orders that have the same worst
+                    // `Characteristic` as `max_min_characteristics`. In this case, we go beyond the
+                    // worst `Characteristic`: we inspect the entire `Characteristic` vector of each
+                    // of these orders, and choose the best among these. This pushes bad stuff to
+                    // happen later, by which time we might have applied some filters.
+                    .max_by_key(|o| o.clone().into_iter().skip(1).collect_vec())
                     .ok_or_else(|| {
                         TransformError::Internal(String::from(
                             "could not find max-min characteristics",
@@ -498,7 +623,7 @@ fn implement_arrangements<'a>(
         }
     }
 
-    // Combined lifted mfps into one.
+    // Combine lifted mfps into one.
     let new_join_mapper = JoinInputMapper::new(inputs);
     let mut arity = new_join_mapper.total_columns();
     let combined_mfp = MapFilterProject::new(arity);
@@ -569,9 +694,10 @@ fn optimize_orders(
     equivalences: &[Vec<MirScalarExpr>],
     available: &[Vec<Vec<MirScalarExpr>>],
     unique_keys: &[Vec<Vec<usize>>],
+    filters: &[FilterCharacteristics],
     input_mapper: &JoinInputMapper,
 ) -> Vec<Vec<(Characteristics, Vec<MirScalarExpr>, usize)>> {
-    let mut orderer = Orderer::new(equivalences, available, unique_keys, input_mapper);
+    let mut orderer = Orderer::new(equivalences, available, unique_keys, filters, input_mapper);
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
         .collect::<Vec<_>>()
@@ -592,16 +718,25 @@ pub struct Characteristics {
     key_length: usize,
     // Indicates that there will be no additional in-memory footprint.
     arranged: bool,
+    // Characteristics of the filter that is applied at this input.
+    filters: FilterCharacteristics,
     // We want to prefer input earlier in the input list, for stability of ordering.
     input: std::cmp::Reverse<usize>,
 }
 
 impl Characteristics {
-    fn new(unique_key: bool, key_length: usize, arranged: bool, input: usize) -> Self {
+    fn new(
+        unique_key: bool,
+        key_length: usize,
+        arranged: bool,
+        filters: FilterCharacteristics,
+        input: usize,
+    ) -> Self {
         Self {
             unique_key,
             key_length,
             arranged,
+            filters,
             input: std::cmp::Reverse(input),
         }
     }
@@ -612,6 +747,7 @@ struct Orderer<'a> {
     equivalences: &'a [Vec<MirScalarExpr>],
     arrangements: &'a [Vec<Vec<MirScalarExpr>>],
     unique_keys: &'a [Vec<Vec<usize>>],
+    filters: &'a [FilterCharacteristics],
     input_mapper: &'a JoinInputMapper,
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
     unique_arrangement: Vec<Vec<bool>>,
@@ -629,6 +765,7 @@ impl<'a> Orderer<'a> {
         equivalences: &'a [Vec<MirScalarExpr>],
         arrangements: &'a [Vec<Vec<MirScalarExpr>>],
         unique_keys: &'a [Vec<Vec<usize>>],
+        filters: &'a [FilterCharacteristics],
         input_mapper: &'a JoinInputMapper,
     ) -> Self {
         let inputs = arrangements.len();
@@ -663,6 +800,7 @@ impl<'a> Orderer<'a> {
             equivalences,
             arrangements,
             unique_keys,
+            filters,
             input_mapper,
             reverse_equivalences,
             unique_arrangement,
@@ -699,13 +837,13 @@ impl<'a> Orderer<'a> {
             {
                 self.arrangement_active[input].push(pos);
                 self.priority_queue.push((
-                    Characteristics::new(is_unique, 0, true, input),
+                    Characteristics::new(is_unique, 0, true, self.filters[input].clone(), input),
                     vec![],
                     input,
                 ));
             } else {
                 self.priority_queue.push((
-                    Characteristics::new(is_unique, 0, false, input),
+                    Characteristics::new(is_unique, 0, false, self.filters[input].clone(), input),
                     vec![],
                     input,
                 ));
@@ -730,7 +868,11 @@ impl<'a> Orderer<'a> {
 
         // calculate characteristics of an arrangement, if any on the starting input
         // by default, there is no arrangement on the starting input
-        let mut start_tuple = (Characteristics::new(false, 0, false, start), vec![], start);
+        let mut start_tuple = (
+            Characteristics::new(false, 0, false, self.filters[start].clone(), start),
+            vec![],
+            start,
+        );
         // use an arrangement if there exists one that lines up with the keys of
         // the second input
         if let Some((_, key, second)) = self.order.get(0) {
@@ -752,7 +894,13 @@ impl<'a> Orderer<'a> {
                 {
                     let is_unique = self.unique_arrangement[start][pos];
                     start_tuple = (
-                        Characteristics::new(is_unique, candidate_start_key.len(), true, start),
+                        Characteristics::new(
+                            is_unique,
+                            candidate_start_key.len(),
+                            true,
+                            self.filters[start].clone(),
+                            start,
+                        ),
                         candidate_start_key,
                         start,
                     );
@@ -824,6 +972,7 @@ impl<'a> Orderer<'a> {
                                                     is_unique,
                                                     keys.len(),
                                                     true,
+                                                    self.filters[rel].clone(),
                                                     rel,
                                                 ),
                                                 keys.clone(),
@@ -842,6 +991,7 @@ impl<'a> Orderer<'a> {
                                         is_unique,
                                         self.bound[rel].len(),
                                         false,
+                                        self.filters[rel].clone(),
                                         rel,
                                     ),
                                     self.bound[rel].clone(),

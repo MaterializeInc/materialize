@@ -119,7 +119,7 @@ impl RedundantJoin {
                     // and if it finds a redundant join input it removes it. In that case, it
                     // also fails to produce exciting provenance information, partly out of
                     // laziness and the challenge of ensuring it is correct. Instead, if it is
-                    // unable to find a rendundant join it produces meaningful provenance information.
+                    // unable to find a redundant join it produces meaningful provenance information.
 
                     // Recursively apply transformation, and determine the provenance of inputs.
                     let mut input_prov = Vec::new();

@@ -115,15 +115,14 @@ Explained Query:
     Project (#0, #2, #4) // { arity: 3 }
       Join on=(#1 = (#0 + 1) AND #3 = (#0 + #1)) type=differential // { arity: 5 }
         implementation
-          %0 » l1[#0] » l1[#0]
-        Project (#0) // { arity: 1 }
-          Get l0 // { arity: 2 }
-        Get l1 // { arity: 2 }
-        Get l1 // { arity: 2 }
-  With
-    cte l1 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
+          l0 » %0[(#0 + 1)] » %2[#0]
+        ArrangeBy keys=[[(#0 + 1)]] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Get l0 // { arity: 2 }
         Get l0 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Get l0 // { arity: 2 }
+  With
     cte l0 =
       Filter (#0) IS NOT NULL // { arity: 2 }
         Get materialize.public.l // { arity: 2 }
