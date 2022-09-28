@@ -20,7 +20,7 @@ use timely::progress::Timestamp;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
-use mz_compute_client::controller::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
+use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceReplicaConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;
@@ -650,7 +650,7 @@ impl<S: Append> Connection<S> {
         replica_id: ReplicaId,
         compute_instance_id: ComputeInstanceId,
         name: String,
-        config: &ConcreteComputeInstanceReplicaConfig,
+        config: &ComputeInstanceReplicaConfig,
     ) -> Result<(), Error> {
         let key = ComputeInstanceReplicaKey { id: replica_id };
         let val = ComputeInstanceReplicaValue {

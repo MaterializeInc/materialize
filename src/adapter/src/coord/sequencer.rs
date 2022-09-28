@@ -23,7 +23,7 @@ use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
 use mz_compute_client::controller::{
-    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging,
+    ComputeInstanceId, ComputeInstanceReplicaConfig, ComputeInstanceReplicaLogging,
 };
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
@@ -46,16 +46,15 @@ use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
-    FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SubscribeFrom, SubscribePlan, View,
+    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr,
+    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
+    PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
@@ -696,7 +695,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
             let location = match replica_config {
-                ComputeInstanceReplicaConfig::Remote {
+                mz_sql::plan::ComputeInstanceReplicaConfig::Remote {
                     addrs,
                     compute_addrs,
                     workers,
@@ -705,7 +704,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     compute_addrs,
                     workers,
                 },
-                ComputeInstanceReplicaConfig::Managed {
+                mz_sql::plan::ComputeInstanceReplicaConfig::Managed {
                     size,
                     availability_zone,
                 } => {
@@ -726,7 +725,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let persisted_logs = if compute_instance_config.is_some() {
                 self.catalog.allocate_persisted_introspection_items().await
             } else {
-                ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
+                ComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
             };
 
             persisted_introspection_sources.extend(
@@ -736,7 +735,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .map(|(variant, id)| (*id, variant.desc().into())),
             );
 
-            let config = ConcreteComputeInstanceReplicaConfig {
+            let config = ComputeInstanceReplicaConfig {
                 location: self.catalog.concretize_replica_location(location)?,
                 persisted_logs,
             };
@@ -813,7 +812,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let persisted_logs = if instance.logging.is_some() {
             self.catalog.allocate_persisted_introspection_items().await
         } else {
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
+            ComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
 
         let persisted_source_ids = persisted_logs.get_source_ids().collect();
@@ -825,7 +824,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Choose default AZ if necessary
         let location = match config {
-            ComputeInstanceReplicaConfig::Remote {
+            mz_sql::plan::ComputeInstanceReplicaConfig::Remote {
                 addrs,
                 compute_addrs,
                 workers,
@@ -834,7 +833,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 compute_addrs,
                 workers,
             },
-            ComputeInstanceReplicaConfig::Managed {
+            mz_sql::plan::ComputeInstanceReplicaConfig::Managed {
                 size,
                 availability_zone,
             } => {
@@ -877,7 +876,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
-        let config = ConcreteComputeInstanceReplicaConfig {
+        let config = ComputeInstanceReplicaConfig {
             location: self.catalog.concretize_replica_location(location)?,
             persisted_logs,
         };
@@ -1626,7 +1625,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        replica_config: ConcreteComputeInstanceReplicaConfig,
+        replica_config: ComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
             let retraction = self
