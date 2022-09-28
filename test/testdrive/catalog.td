@@ -529,12 +529,17 @@ mz_raw_worker_compute_delays                    log   <null>
 mz_raw_worker_compute_delays_1                  log   <null>
 mz_active_peeks                                 log   <null>
 mz_active_peeks_1                               log   <null>
+mz_peek_durations                               log   <null>
+mz_peek_durations_1                             log   <null>
 mz_scheduling_elapsed_internal                  log   <null>
 mz_scheduling_elapsed_internal_1                log   <null>
 mz_raw_compute_operator_durations_internal      log   <null>
 mz_raw_compute_operator_durations_internal_1    log   <null>
 mz_scheduling_parks_internal                    log   <null>
 mz_scheduling_parks_internal_1                  log   <null>
+mz_storage_shards                               source <null>
+mz_worker_compute_delays                        log   <null>
+mz_worker_compute_delays_1                      log   <null>
 mz_worker_compute_frontiers                     log   <null>
 mz_worker_compute_frontiers_1                   log   <null>
 mz_worker_compute_import_frontiers              log   <null>

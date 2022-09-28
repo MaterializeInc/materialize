@@ -93,7 +93,7 @@ impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub enum IntrospectionType {
     ShardMapping,
 }
@@ -586,6 +586,8 @@ pub struct StorageControllerState<
     pub(super) task_tx: mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>,
     /// Tracks which collections are managed.
     pub(super) managed_collections: Arc<Mutex<HashSet<GlobalId>>>,
+    /// Tracks which collection is responsible for which [`IntrospectionType`].
+    pub(super) introspection_ids: HashMap<IntrospectionType, GlobalId>,
 }
 
 /// A storage controller for a storage instance.
@@ -758,6 +760,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             stashed_response: None,
             task_tx,
             managed_collections,
+            introspection_ids: HashMap::new(),
         }
     }
 }
@@ -942,7 +945,21 @@ where
                     .await?;
                         client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
                     }
-                    DataSource::Introspection(_) => unreachable!(),
+                    DataSource::Introspection(i) => {
+                        let prev = self.state.introspection_ids.insert(i, id);
+                        assert!(
+                            prev.is_none(),
+                            "cannot have multiple IDs for introspection type"
+                        );
+
+                        self.state.managed_collections.lock().await.insert(id);
+
+                        match i {
+                            IntrospectionType::ShardMapping => {
+                                self.truncate_managed_collection(id).await;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1496,7 +1513,7 @@ pub trait CollectionManager: Debug + Send + StorageController {
         updates: Vec<(Row, Diff)>,
     );
 
-    /// Truncates the collection correlated with `global_id`.
+    /// Truncates the collection associated with `global_id`.
     async fn truncate_managed_collection(&mut self, global_id: GlobalId);
 }
 
@@ -1512,11 +1529,12 @@ where
     MetadataExportFetcher: MetadataExport<T>,
     DurableExportMetadata<T>: mz_stash::Data,
 {
-    /// Effectively truncates the `data_shard` correlated with `global_id`
+    /// Effectively truncates the `data_shard` associated with `global_id`
     /// effective as of the system time.
     ///
     /// # Panics
-    /// - If `global_id` is not correlated to a collection.
+    /// - If `id` does not belong to a collection or is not registered as a
+    ///   managed collection.
     async fn truncate_managed_collection(&mut self, id: GlobalId) {
         let as_of = match self.state.collections[&id]
             .write_frontier
@@ -1539,7 +1557,7 @@ where
         self.append_to_managed_collection(id, negate).await;
     }
 
-    /// Append `updates` to the `data_shard` correlated with `global_id`
+    /// Append `updates` to the `data_shard` associated with `global_id`
     /// effective as of the system time.
     ///
     /// # Panics
