@@ -2454,6 +2454,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
         // Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),
+        Builtin::StorageCollection(&MZ_STORAGE_SHARDS),
     ]);
 
     builtins
