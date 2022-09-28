@@ -47,7 +47,7 @@ pub use relation::{
 };
 pub use relation::{ProtoAggregateFunc, ProtoColumnOrder, ProtoRowSetFinishing, ProtoTableFunc};
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
-pub use scalar::{like_pattern, EvalError, MirScalarExpr};
+pub use scalar::{like_pattern, EvalError, FilterCharacteristics, MirScalarExpr};
 pub use scalar::{ProtoDomainLimit, ProtoEvalError, ProtoMirScalarExpr};
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an

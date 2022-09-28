@@ -856,6 +856,7 @@ select min(a) from t_pk where a between 38 and 195 and a = (select a from t wher
 
 # check that literal errors are not lifted beyond Joins, but also that that doesn't lead to
 # a stack overflow due to LiteralLifting and JoinImplementation fighting against each other
+# Also, this query has a tricky join ordering, see comment in `differential::plan`.
 statement ok
 create table t1 (f1 double precision, f2 double precision not null);
 

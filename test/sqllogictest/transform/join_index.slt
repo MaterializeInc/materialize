@@ -189,7 +189,7 @@ Explained Query:
     Filter (#0) IS NOT NULL AND (#3) IS NOT NULL // { arity: 6 }
       Join on=(#0 = #2 AND #3 = #4) type=differential // { arity: 6 }
         implementation
-          %0 » %1[#0] » %2[#0]
+          %1 » %0[#0] » %2[#0]
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Get materialize.public.foo // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -517,3 +517,163 @@ NULL
 NULL
 NULL
 NULL
+
+# FilterCharacteristics and IndexedFilter
+
+statement ok
+CREATE TABLE big(a int not null, b int not null, c int not null, d int not null, e int not null, f int not null, g int not null, h int not null, i int not null, j int not null, k int not null, x int, y int, s string);
+
+statement ok
+CREATE INDEX big_idx_a on big(a);
+
+statement ok
+CREATE INDEX big_idx_b on big(b);
+
+statement ok
+CREATE INDEX big_idx_c on big(c);
+
+statement ok
+CREATE INDEX big_idx_d on big(d);
+
+statement ok
+CREATE INDEX big_idx_e on big(e);
+
+statement ok
+CREATE INDEX big_idx_f on big(f);
+
+statement ok
+CREATE INDEX big_idx_g on big(g);
+
+statement ok
+CREATE INDEX big_idx_h on big(h);
+
+statement ok
+CREATE INDEX big_idx_i on big(i);
+
+statement ok
+CREATE INDEX big_idx_j on big(j);
+
+statement ok
+CREATE INDEX big_idx_k on big(k);
+
+statement ok
+CREATE INDEX big_idx_y on big(y);
+
+# In the last Delta path (%10):
+# - From %9 to %5, there are decreasing FilterCharacteristics.
+# - %2 to %4 are all in the any_filter category.
+# - %0 and %1 don't have any filters.
+query T multiline
+EXPLAIN WITH(arity, join_impls) SELECT * FROM big as t0, big as t1, big as t2, big as t3, big as t4, big as t5, big as t6, big as t7, big as t8, big as t9, big as t10
+WHERE
+t0.a = t1.b AND
+t1.b = t2.c AND
+t2.c = t3.d AND
+t3.d = t4.e AND
+t4.e = t5.f AND
+t5.f = t6.g AND
+t6.g = t7.h AND
+t7.h = t8.i AND
+t8.i = t9.j AND
+t9.j = t10.k AND
+t9.x = 71 AND
+t8.s LIKE 'a%' AND
+t7.x IS NULL AND
+t6.x BETWEEN 3 AND 8 AND
+t5.x > 5 AND
+t4.s NOT LIKE 'b%' AND
+t3.x != t3.y AND
+(NOT (t2.x = t2.y))
+;
+----
+Explained Query:
+  Project (#0..=#14, #0, #16..=#29, #0, #31..=#44, #0, #46..=#59, #0, #61..=#74, #0, #76..=#89, #0, #91..=#104, #0, #106..=#119, #0, #121..=#134, #0, #136..=#149, #0, #151..=#153) // { arity: 154 }
+    Filter (#109) IS NULL AND "a%" ~~(#125) AND (#137 = 71) AND (#95 <= 8) AND (#81 > 5) AND (#95 >= 3) AND NOT("b%" ~~(#69)) AND (#39 != #40) AND (#53 != #54) // { arity: 154 }
+      Join on=(eq(#0, #15, #30, #45, #60, #75, #90, #105, #120, #135, #150)) type=delta // { arity: 154 }
+        implementation
+          %0 » %9[#9] » %8[#8] » %7[#7] » %6[#6] » %5[#5] » %2[#2] » %3[#3] » %4[#4] » %1[#1] » %10[#10]
+          %1 » %9[#9] » %8[#8] » %7[#7] » %6[#6] » %5[#5] » %2[#2] » %3[#3] » %4[#4] » %0[#0] » %10[#10]
+          %2 » %9[#9] » %8[#8] » %7[#7] » %6[#6] » %5[#5] » %3[#3] » %4[#4] » %0[#0] » %1[#1] » %10[#10]
+          %3 » %9[#9] » %8[#8] » %7[#7] » %6[#6] » %5[#5] » %2[#2] » %4[#4] » %0[#0] » %1[#1] » %10[#10]
+          %4 » %9[#9] » %8[#8] » %7[#7] » %6[#6] » %5[#5] » %2[#2] » %3[#3] » %0[#0] » %1[#1] » %10[#10]
+          %5 » %9[#9] » %8[#8] » %7[#7] » %6[#6] » %2[#2] » %3[#3] » %4[#4] » %0[#0] » %1[#1] » %10[#10]
+          %6 » %9[#9] » %8[#8] » %7[#7] » %5[#5] » %2[#2] » %3[#3] » %4[#4] » %0[#0] » %1[#1] » %10[#10]
+          %7 » %9[#9] » %8[#8] » %6[#6] » %5[#5] » %2[#2] » %3[#3] » %4[#4] » %0[#0] » %1[#1] » %10[#10]
+          %8 » %9[#9] » %7[#7] » %6[#6] » %5[#5] » %2[#2] » %3[#3] » %4[#4] » %0[#0] » %1[#1] » %10[#10]
+          %9 » %8[#8] » %7[#7] » %6[#6] » %5[#5] » %2[#2] » %3[#3] » %4[#4] » %0[#0] » %1[#1] » %10[#10]
+          %10 » %9[#9] » %8[#8] » %7[#7] » %6[#6] » %5[#5] » %2[#2] » %3[#3] » %4[#4] » %0[#0] » %1[#1]
+        ArrangeBy keys=[[#0]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#1]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#2]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#3]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#4]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#5]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#6]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#7]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#8]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#9]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#10]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+
+Used Indexes:
+  - materialize.public.big_idx_a
+  - materialize.public.big_idx_b
+  - materialize.public.big_idx_c
+  - materialize.public.big_idx_d
+  - materialize.public.big_idx_e
+  - materialize.public.big_idx_f
+  - materialize.public.big_idx_g
+  - materialize.public.big_idx_h
+  - materialize.public.big_idx_i
+  - materialize.public.big_idx_j
+  - materialize.public.big_idx_k
+
+EOF
+
+# IndexedFilter should
+# - come before like (i.e., same category as literal_equality)
+# - not prevent planning a Delta join
+query T multiline
+EXPLAIN WITH(arity, join_impls) SELECT * FROM big as t0, big as t1, big as t2
+WHERE
+t0.a = t1.b AND
+t1.b = t2.c AND
+t1.y = 42 AND
+t0.s LIKE 'a%'
+;
+----
+Explained Query:
+  Project (#0..=#14, #0, #16..=#27, #29, #30, #0, #32..=#42) // { arity: 42 }
+    Filter "a%" ~~(#13) // { arity: 43 }
+      Join on=(eq(#0, #15, #31)) type=delta // { arity: 43 }
+        implementation
+          %0 » %1[#1] » %2[#2]
+          %1 » %0[#0] » %2[#2]
+          %2 » %1[#1] » %0[#0]
+        ArrangeBy keys=[[#0]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[#1]] // { arity: 15 }
+          Join on=(#12 = #14) type=indexed_filter // { arity: 15 }
+            ArrangeBy keys=[[#12]] // { arity: 14 }
+              Get materialize.public.big // { arity: 14 }
+            Constant // { arity: 1 }
+              - (42)
+        ArrangeBy keys=[[#2]] // { arity: 14 }
+          Get materialize.public.big // { arity: 14 }
+
+Used Indexes:
+  - materialize.public.big_idx_a
+  - materialize.public.big_idx_c
+  - materialize.public.big_idx_y
+
+EOF

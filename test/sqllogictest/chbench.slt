@@ -384,7 +384,7 @@ Explained Query:
         Project (#1..=#3, #10, #14) // { arity: 5 }
           Join on=(#0 = #9 AND eq(#1, #4, #7, #12) AND eq(#2, #5, #8, #13) AND eq(#3, #6, #11)) type=differential // { arity: 15 }
             implementation
-              %3 » %1[#0, #1, #2] » %2[#0, #1, #2] » %0[#0, #1, #2]
+              %3 » %2[#0, #1, #2] » %0[#0, #1, #2] » %1[#0, #1, #2]
             ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
               Project (#0..=#2) // { arity: 3 }
                 Filter "A%" ~~(padchar(#9)) // { arity: 22 }
@@ -599,7 +599,7 @@ Explained Query:
           Filter (((#22 = "GERMANY") AND (#24 = "CAMBODIA")) OR ((#22 = "CAMBODIA") AND (#24 = "GERMANY"))) // { arity: 25 }
             Join on=(#0 = #4 AND #1 = #21 AND #2 = #8 AND #3 = #9 AND #5 = #11 AND eq(#6, #12, #17) AND eq(#7, #13, #18) AND #14 = #16 AND #20 = #23) type=differential // { arity: 25 }
               implementation
-                %2 » %3[#0, #1, #2] » %4[#0, #1, #2] » %1[#0, #1] » %0[#0] » l0[#0] » l0[#0]
+                %2 » %3[#0, #1, #2] » %4[#0, #1, #2] » %1[#0, #1] » l0[#0] » %0[#0] » l0[#0]
               ArrangeBy keys=[[#0]] // { arity: 2 }
                 Project (#0, #3) // { arity: 2 }
                   Get materialize.public.supplier // { arity: 7 }
@@ -673,7 +673,7 @@ Explained Query:
           Project (#11, #16, #24) // { arity: 3 }
             Join on=(eq(#0, #3, #9) AND #1 = #5 AND #2 = #23 AND #4 = #10 AND #6 = #12 AND eq(#7, #13, #18) AND eq(#8, #14, #19) AND #15 = #17 AND #20 = #21 AND #22 = #25) type=differential // { arity: 26 }
               implementation
-                %3 » %4[#0, #1, #2] » %5[#0, #1, #2] » %2[#0, #1] » %0[#0] » %1[#0] » %6[#0] » %7[#0] » %8[#0]
+                %3 » %4[#0, #1, #2] » %5[#0, #1, #2] » %2[#0, #1] » %0[#0] » %1[#0] » %6[#0] » %8[#0] » %7[#0]
               ArrangeBy keys=[[#0]] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Filter (#0 < 1000) AND "%b" ~~(padchar(#4)) // { arity: 5 }
@@ -1377,7 +1377,7 @@ Explained Query:
                       Filter (date_to_timestamp(#25) > 2010-05-23 12:00:00) // { arity: 30 }
                         Join on=(eq(#1, #23, #29)) type=differential // { arity: 30 }
                           implementation
-                            %1 » %3[#0] » %2[#4] » %0[]
+                            %2 » %3[#0] » %1[#0] » %0[]
                           ArrangeBy keys=[[]] // { arity: 1 }
                             Project (#0) // { arity: 1 }
                               Get l0 // { arity: 3 }
