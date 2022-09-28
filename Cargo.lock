@@ -3164,7 +3164,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.27.0-alpha.22.post"
+version = "0.27.0-alpha.23.post"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3261,7 +3261,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.27.0-alpha.22.post"
+version = "0.27.0-alpha.23.post"
 dependencies = [
  "anyhow",
  "askama",
@@ -4246,7 +4246,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storaged"
-version = "0.27.0-alpha.22.post"
+version = "0.27.0-alpha.23.post"
 dependencies = [
  "anyhow",
  "axum",
