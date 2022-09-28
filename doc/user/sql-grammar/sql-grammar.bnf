@@ -80,7 +80,7 @@ create_source_kafka ::=
   ('INCLUDE'
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
   )?
-  ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
+  ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'))?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_kinesis ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name

@@ -122,10 +122,6 @@ CREATE SOURCE kafka_repl
   ENVELOPE DEBEZIUM;
 ```
 
-Note that:
-
-- If log compaction is enabled for your Debezium topic, you must use `ENVELOPE DEBEZIUM UPSERT`.
-
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
 
 For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check out [Using Debezium](/integrations/debezium/).
@@ -228,10 +224,6 @@ offset
 13
 ```
 
-Note that:
-
-- Using the `INCLUDE OFFSET` option with Debezium requires `UPSERT` semantics.
-
 ### Setting start offsets
 
 To start consuming a Kafka stream from a specific offset, you can use the `start_offset` option.
@@ -249,7 +241,6 @@ Note that:
 
 - If fewer offsets than partitions are provided, the remaining partitions will start at offset 0. This is true if you provide `start_offset=1` or `start_offset=[1, ...]`.
 - If more offsets than partitions are provided, then any partitions added later will incorrectly be read from that offset. So, if you have a single partition, but you provide `start_offset=[1,2]`, when you add the second partition you will miss the first 2 records of data.
-- Using an offset with a source envelope that can supply updates or deletes requires that Materialize handle possibly nonsensical events (e.g. an update for a row that was never inserted). For that reason, starting at an offset requires either a `NONE` envelope or a `(DEBEZIUM) UPSERT` envelope.
 
 #### Time-based offsets
 
