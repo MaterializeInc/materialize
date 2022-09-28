@@ -56,12 +56,12 @@ use crate::command::{
     ReplicaId, SourceInstanceDesc,
 };
 use crate::logging::{LogVariant, LogView, LoggingConfig};
-use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
+use crate::response::{PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
 use self::orchestrator::ComputeOrchestrator;
-use self::replicated::{ActiveReplication, ActiveReplicationResponse};
+use self::replicated::{ActiveReplication, ActiveReplicationResponse, FrontierBounds};
 
 mod orchestrator;
 mod replicated;
@@ -83,9 +83,9 @@ pub struct ComputeInstanceEvent {
 
 /// Responses from the compute controller.
 pub enum ComputeControllerResponse<T> {
-    /// See [`ComputeResponse::PeekResponse`].
+    /// See [`ComputeResponse::PeekResponse`](crate::response::ComputeResponse::PeekResponse).
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// See [`ComputeResponse::SubscribeResponse`].
+    /// See [`ComputeResponse::SubscribeResponse`](crate::response::ComputeResponse::SubscribeResponse).
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// A notification that we heard a response from the given replica at the
     /// given time.
@@ -662,28 +662,19 @@ where
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
-        let (instance_id, ar_response) = match self.compute.stashed_response.take() {
+        let (instance_id, response) = match self.compute.stashed_response.take() {
             Some(resp) => resp,
             None => return Ok(None),
-        };
-
-        let response = match ar_response {
-            ActiveReplicationResponse::ComputeResponse(resp) => resp,
-            ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when) => {
-                return Ok(Some(ComputeControllerResponse::ReplicaHeartbeat(
-                    replica_id, when,
-                )))
-            }
         };
 
         let mut instance = self.instance(instance_id)?;
 
         match response {
-            ComputeResponse::FrontierUppers(updates) => {
+            ActiveReplicationResponse::FrontierUppers(updates) => {
                 instance.update_write_frontiers(&updates).await?;
                 Ok(None)
             }
-            ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+            ActiveReplicationResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 instance.remove_peeks(&[uuid].into()).await?;
                 Ok(Some(ComputeControllerResponse::PeekResponse(
                     uuid,
@@ -691,28 +682,22 @@ where
                     otel_ctx,
                 )))
             }
-            ComputeResponse::SubscribeResponse(global_id, response) => {
-                let new_upper = match &response {
-                    SubscribeResponse::Batch(SubscribeBatch { lower, upper, .. }) => {
-                        // Ensure there are no gaps in the subscribe stream we receive.
-                        assert_eq!(
-                            lower,
-                            &instance.compute.collections[&global_id].write_frontier
-                        );
-
-                        upper.clone()
-                    }
-                    // The subscribe will not be written to again, but we should not confuse that
-                    // with the source of the SUBSCRIBE being complete through this time.
-                    SubscribeResponse::DroppedAt(_) => Antichain::new(),
+            ActiveReplicationResponse::SubscribeResponse(global_id, response) => {
+                if let SubscribeResponse::Batch(SubscribeBatch { lower, .. }) = &response {
+                    // Ensure there are no gaps in the subscribe stream we receive.
+                    assert_eq!(
+                        lower,
+                        &instance.compute.collections[&global_id].write_frontier_upper,
+                    );
                 };
-                instance
-                    .update_write_frontiers(&[(global_id, new_upper)])
-                    .await?;
+
                 Ok(Some(ComputeControllerResponse::SubscribeResponse(
                     global_id, response,
                 )))
             }
+            ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when) => Ok(Some(
+                ComputeControllerResponse::ReplicaHeartbeat(replica_id, when),
+            )),
         }
     }
 }
@@ -1102,7 +1087,8 @@ where
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.compute.collection_mut(id) {
-                let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
+                let mut new_read_capability =
+                    policy.frontier(collection.write_frontier_lower.borrow());
 
                 if timely::order::PartialOrder::less_equal(
                     &collection.implied_capability,
@@ -1148,7 +1134,7 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, Antichain<T>)],
+        updates: &[(GlobalId, FrontierBounds<T>)],
     ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, new_upper) in updates.iter() {
@@ -1157,11 +1143,16 @@ where
                 .collection_mut(*id)
                 .expect("Reference to absent collection");
 
-            collection.write_frontier.join_assign(new_upper);
+            collection
+                .write_frontier_upper
+                .join_assign(&new_upper.upper);
+            collection
+                .write_frontier_lower
+                .join_assign(&new_upper.lower);
 
             let mut new_read_capability = collection
                 .read_policy
-                .frontier(collection.write_frontier.borrow());
+                .frontier(collection.write_frontier_lower.borrow());
             if timely::order::PartialOrder::less_equal(
                 &collection.implied_capability,
                 &new_read_capability,
@@ -1188,7 +1179,7 @@ where
         let storage_updates: Vec<_> = updates
             .iter()
             .filter(|(id, _)| self.storage_controller.collection(*id).is_ok())
-            .cloned()
+            .map(|(id, bounds)| (*id, bounds.upper.clone()))
             .collect();
         self.storage_controller
             .update_write_frontiers(&storage_updates)
@@ -1333,8 +1324,14 @@ pub struct CollectionState<T> {
     /// Compute identifiers on which this collection depends.
     compute_dependencies: Vec<GlobalId>,
 
-    /// Reported write frontier.
-    write_frontier: Antichain<T>,
+    /// Upper bound of write frontiers reported by all replicas.
+    ///
+    /// Used to determine valid times at which the collection can be read.
+    write_frontier_upper: Antichain<T>,
+    /// Lower bound of write frontiers reported by all replicas.
+    ///
+    /// Used to determine times that can be compacted.
+    write_frontier_lower: Antichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -1352,7 +1349,8 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
-            write_frontier: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier_upper: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier_lower: Antichain::from_elem(Timestamp::minimum()),
         }
     }
 
@@ -1368,6 +1366,6 @@ impl<T: Timestamp> CollectionState<T> {
 
     /// Reports the current write frontier.
     pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier.borrow()
+        self.write_frontier_upper.borrow()
     }
 }
