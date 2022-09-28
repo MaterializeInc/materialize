@@ -79,7 +79,7 @@ SELECT auction_id,
        item,
        amount
 FROM highest_bid_per_auction
-WHERE extract(epoch FROM end_time) * 1000 < mz_logical_timestamp();
+WHERE end_time < mz_now();
 ```
 
 [//]: # "TODO(morsapaes) Add more elaborate examples with \timing that show

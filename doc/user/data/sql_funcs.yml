@@ -453,12 +453,12 @@
       <br><br>
       **Note**: This function generally behaves like a [non-pure] function, but
       can be used in limited contexts in materialized views as a [temporal filter](/sql/patterns/temporal-filters/).
-    url: now_and_mz_logical_timestamp
+    url: now_and_mz_now
     unmaterializable: true
 
   - signature: now() -> timestamptz
     description: 'The `timestamp with time zone` representing when the query was executed.'
-    url: now_and_mz_logical_timestamp
+    url: now_and_mz_now
     unmaterializable: true
 
   - signature: timestamp AT TIME ZONE zone -> timestamptz

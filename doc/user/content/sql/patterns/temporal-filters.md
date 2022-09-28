@@ -10,33 +10,33 @@ menu:
 
 Temporal filters allow you to implement several windowing idioms (tumbling, hopping, and sliding), in addition to more nuanced temporal queries.
 
-A "temporal filter" is a `WHERE` or `HAVING` clause which uses the function [`mz_logical_timestamp`](/sql/functions/now_and_mz_logical_timestamp) to represent the current time through which your data is viewed.
+A "temporal filter" is a `WHERE` or `HAVING` clause which uses the function [`mz_now`](/sql/functions/now_and_mz_now) to represent the current time through which your data is viewed.
 Temporal filters have their own name because they are one of very few instances where you can materialize a view containing a function that changes on its own rather than as a result of changes to your data.
-Even if your input data does not change, your query results can change as the time represented by `mz_logical_timestamp()` changes.
+Even if your input data does not change, your query results can change as the time represented by `mz_now()` changes.
 
 ## Details
 
-You can only use `mz_logical_timestamp()` to establish a temporal filter under the following conditions:
+You can only use `mz_now()` to establish a temporal filter under the following conditions:
 
--   `mz_logical_timestamp` appears in a `WHERE` or `HAVING` clause.
--   The clause must directly compare `mz_logical_timestamp()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_logical_timestamp()`,
-    or be part of a conjunction phrase (`AND`) which directly compares `mz_logical_timestamp()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_logical_timestamp()`.
+-   `mz_now` appears in a `WHERE` or `HAVING` clause.
+-   The clause must directly compare `mz_now()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_now()`,
+    or be part of a conjunction phrase (`AND`) which directly compares `mz_now()` to a [`numeric`](/sql/types/numeric) expression not containing `mz_now()`.
 -   The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN`).
 
-    At the moment, you can't use the `!=` operator with `mz_logical_timestamp()` (we're working on it).
+    At the moment, you can't use the `!=` operator with `mz_now()`.
 
 Let's take a look at an example.
 
-The `SELECT` query below uses one value of `mz_logical_timestamp()` to filter out records inserted after or deleted before that value, which is filled in with the time at which the query executes.
+The `SELECT` query below uses one value of `mz_now()` to filter out records inserted after or deleted before that value, which is filled in with the time at which the query executes.
 
 ```sql
 SELECT count(*)
 FROM events
-WHERE mz_logical_timestamp() >= insert_ms
-  AND mz_logical_timestamp() < delete_ms;
+WHERE mz_now() >= insert_ms
+  AND mz_now() < delete_ms;
 ```
 
-The query counts `events` with `insert_ms` before or at the time represented by `mz_logical_timestamp()` and `delete_ms` after that time.
+The query counts `events` with `insert_ms` before or at the time represented by `mz_now()` and `delete_ms` after that time.
 
 We can create a materialized view of the same query:
 
@@ -44,12 +44,12 @@ We can create a materialized view of the same query:
 CREATE MATERIALIZED VIEW active_events AS
 SELECT count(*)
 FROM events
-WHERE mz_logical_timestamp() >= insert_ms
-  AND mz_logical_timestamp() < delete_ms;
+WHERE mz_now() >= insert_ms
+  AND mz_now() < delete_ms;
 ```
 
 At each logical time, the view `active_events` contains exactly the results of the `SELECT` query above.
-As `mz_logical_timestamp()` moves forward in time, the events included change, newer events now meeting the time requirement and older events no longer doing so.
+As `mz_now()` moves forward in time, the events included change, newer events now meeting the time requirement and older events no longer doing so.
 You do not need to insert a deletion event and can rely on the query to maintain the result for you as time advances.
 
 ## Windowing idioms
@@ -69,9 +69,9 @@ SELECT content, insert_ms
 FROM events
 -- The event should appear in only one interval of duration `PERIOD_MS`.
 -- The interval begins here ...
-WHERE mz_logical_timestamp() >= PERIOD_MS * (insert_ms / PERIOD_MS)
+WHERE mz_now() >= PERIOD_MS * (insert_ms / PERIOD_MS)
 -- ... and ends here.
-  AND mz_logical_timestamp() < PERIOD_MS * (1 + insert_ms / PERIOD_MS)
+  AND mz_now() < PERIOD_MS * (1 + insert_ms / PERIOD_MS)
 ```
 
 Tumbling windows are useful for maintaining constantly refreshed answers to questions like "How many orders did we receive during each hour of each day?"
@@ -92,9 +92,9 @@ SELECT content, insert_ms
 FROM events
 -- The event should appear in `INTERVALS` intervals each of width `PERIOD_MS`.
 -- The interval begins here ...
-WHERE mz_logical_timestamp() >= PERIOD_MS * (insert_ms / PERIOD_MS)
+WHERE mz_now() >= PERIOD_MS * (insert_ms / PERIOD_MS)
 -- ... and ends here.
-  AND mz_logical_timestamp() < INTERVALS * (PERIOD_MS + insert_ms / PERIOD_MS)
+  AND mz_now() < INTERVALS * (PERIOD_MS + insert_ms / PERIOD_MS)
 ```
 
 Note that when `INTERVALS` is one, this query is identical to the query above it.
@@ -117,9 +117,9 @@ FROM events
 -- The event should appear inside the interval that begins at
 -- `insert_ms` and ends at  `insert_ms + INTERVAL_MS`.
 -- The interval begins here ..
-WHERE mz_logical_timestamp() >= insert_ms
+WHERE mz_now() >= insert_ms
 -- ... and ends here.
-  AND mz_logical_timestamp() < insert_ms + INTERVAL_MS
+  AND mz_now() < insert_ms + INTERVAL_MS
 ```
 
 Sliding windows are useful for maintaining the answers to questions like "How many orders did we get in the past five minutes?"
@@ -130,7 +130,7 @@ Obviously, a record must be present for it to pass a temporal filter.
 If a record is presented to Materialize at a time later than its `insert_ms` column (or the equivalent), it will only be included at the later time.
 
 Streaming data often arrives just a bit later than intended. You can account for this in the temporal filter by introducing a grace period, adding a fixed
-amount to each expression you compare to `mz_logical_timestamp()`.
+amount to each expression you compare to `mz_now()`.
 
 If you think your data may arrive up to ten seconds late, you could add a grace period of ten seconds to each time.
 This holds back the production of correct answers by ten seconds, but does not omit data up to ten seconds late.
@@ -140,8 +140,8 @@ This holds back the production of correct answers by ten seconds, but does not o
 CREATE MATERIALIZED VIEW grace AS
 SELECT content, insert_ms, delete_ms
 FROM events
-WHERE mz_logical_timestamp() >= insert_ms + GRACE_MS
-  AND mz_logical_timestamp() < delete_ms + GRACE_MS;
+WHERE mz_now() >= insert_ms + GRACE_MS
+  AND mz_now() < delete_ms + GRACE_MS;
 ```
 
 Grace periods can be applied to any of the moving window idioms.
@@ -150,7 +150,7 @@ Grace periods can be applied to any of the moving window idioms.
 
 ### Windowing
 
-<!-- This example also appears in now_and_mz_logical_timestamp -->
+<!-- This example also appears in now_and_mz_now -->
 
 For this example, you'll need to create a sample data source and create a materialized view from it for later reference.
 
@@ -166,12 +166,12 @@ CREATE TABLE events (
 CREATE MATERIALIZED VIEW valid AS
 SELECT content, insert_ms, delete_ms
 FROM events
-WHERE mz_logical_timestamp() >= insert_ms
-  AND mz_logical_timestamp() < delete_ms;
+WHERE mz_now() >= insert_ms
+  AND mz_now() < delete_ms;
 ```
 
 Next, you'll populate the table with timestamp data.
-The epoch extracted from `now()` is measured in seconds, so it's multiplied by 1000 to match the milliseconds in `mz_logical_timestamp()`.
+The epoch extracted from `now()` is measured in seconds, so it's multiplied by 1000 to match the milliseconds in `mz_now()`.
 
 ```sql
 INSERT INTO events VALUES (
@@ -194,11 +194,11 @@ INSERT INTO events VALUES (
 Then, before 100,000 ms (or 1.67 minutes) elapse, run the following query to see all the records:
 
 ```sql
-SELECT *, mz_logical_timestamp() FROM valid;
+SELECT *, mz_now() FROM valid;
 ```
 
 ```nofmt
- content |   insert_ms   |   delete_ms   | mz_logical_timestamp
+ content |   insert_ms   |   delete_ms   | mz_now
 ---------+---------------+---------------+----------------------
  hello   | 1620853325858 | 1620853425858 |        1620853337180
  goodbye | 1620853325862 | 1620853525862 |        1620853337180
@@ -223,8 +223,8 @@ SELECT
   DATE_TRUNC('minute', to_timestamp(insert_ms / 1000)) as insert_bucket,
   DATE_TRUNC('minute', to_timestamp(delete_ms / 1000)) as delete_bucket
 FROM events
-WHERE mz_logical_timestamp() >= insert_ms
-  AND mz_logical_timestamp() < delete_ms;
+WHERE mz_now() >= insert_ms
+  AND mz_now() < delete_ms;
 ```
 
 Re-insert some rows to make sure there is data available, and run the following query to see all the records and their respective buckets:

@@ -306,7 +306,7 @@ CREATE MATERIALIZED VIEW market_orders AS
         ((text::jsonb)->'timestamp')::bigint * 1000 AS timestamp_ms
       FROM market_orders_raw
     )
-  WHERE mz_logical_timestamp() BETWEEN timestamp_ms AND timestamp_ms + 30000
+  WHERE mz_now() BETWEEN timestamp_ms AND timestamp_ms + 30000
 ```
 
 ### One-shot sources
@@ -329,7 +329,7 @@ CREATE MATERIALIZED VIEW market_orders AS
         ((text::jsonb)->'timestamp')::bigint * 1000 AS timestamp_ms
       FROM market_orders_raw
     )
-  WHERE mz_logical_timestamp() BETWEEN timestamp_ms AND timestamp_ms + 30000
+  WHERE mz_now() BETWEEN timestamp_ms AND timestamp_ms + 30000
 ```
 
 The idea here is to force you to type out the `SOURCE` definition every time you
