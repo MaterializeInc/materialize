@@ -113,8 +113,6 @@ CREATE SOURCE kafka_repl
     ENVELOPE DEBEZIUM;
 ```
 
-If log compaction is enabled for your Debezium topic, you must use `ENVELOPE DEBEZIUM UPSERT`. This will require **more memory** in Materialize, as it needs to track state proportional to the number of unique primary keys in the changing data.
-
 #### Transaction support
 
 Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/mysql.html#mysql-transaction-metadata) that can be used to preserve transactional boundaries downstream. We are working on using this topic to support transaction-aware processing in Materialize ([#7537](https://github.com/MaterializeInc/materialize/issues/7537))!
