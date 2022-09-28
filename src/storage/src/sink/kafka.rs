@@ -458,7 +458,7 @@ impl KafkaSinkState {
         };
 
         let sink_state = KafkaSinkStateEnum::Init(Some(ProgressInitState {
-            topic: connection.consistency.topic,
+            topic: connection.progress.topic,
             key: format!("mz-sink-{sink_id}"),
             progress_client_config,
         }));
@@ -738,7 +738,7 @@ impl KafkaSinkState {
 
             if partitions.len() != 1 {
                 bail!(
-                    "Consistency topic {} should contain a single partition, but instead contains {} partitions",
+                    "Progress topic {} should contain a single partition, but instead contains {} partitions",
                     progress_topic, partitions.len(),
                 );
             }
