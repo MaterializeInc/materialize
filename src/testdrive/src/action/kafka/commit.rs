@@ -59,11 +59,7 @@ async fn get_src_id(source: &str, state: &mut State) -> Result<String, anyhow::E
 
 #[async_trait]
 impl Action for VerifyCommitAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let env_id = get_env_id(state).await?;
         let source_id = get_src_id(&self.source, state).await?;
         let topic = format!("testdrive-{}-{}", self.topic, state.seed);

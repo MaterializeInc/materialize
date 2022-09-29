@@ -44,21 +44,6 @@ pub struct IngestAction {
     omit_value: bool,
 }
 
-impl IngestAction {
-    /// Whether the action causes a schema to be published
-    /// to CSR
-    pub fn publish(&self) -> bool {
-        match &self.format {
-            Format::Avro {
-                confluent_wire_format,
-                ..
-            } => *confluent_wire_format,
-            Format::Protobuf { .. } => false,
-            Format::Bytes { .. } => false,
-        }
-    }
-}
-
 #[derive(Clone)]
 enum Format {
     Avro {
@@ -334,32 +319,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
 
 #[async_trait]
 impl Action for IngestAction {
-    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
-        if self.publish() {
-            let subjects = state
-                .ccsr_client
-                .list_subjects()
-                .await
-                .context("listing schema registry subjects")?;
-
-            let stale_subjects: Vec<_> = subjects
-                .iter()
-                .filter(|s| s.starts_with(&self.topic_prefix))
-                .collect();
-
-            for subject in stale_subjects {
-                println!("Deleting stale schema registry subject {}", subject);
-                match state.ccsr_client.delete_subject(&subject).await {
-                    Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
-                    Err(e) => return Err(e.into()),
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic_name = &format!("{}-{}", self.topic_prefix, state.seed);
         println!(
             "Ingesting data into Kafka topic {} with repeat {}",

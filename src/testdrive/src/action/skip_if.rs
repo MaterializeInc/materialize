@@ -26,11 +26,7 @@ pub fn build_skip_if(cmd: BuiltinCommand) -> Result<SkipIfAction, anyhow::Error>
 
 #[async_trait]
 impl Action for SkipIfAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let stmt = state
             .pgclient
             .prepare(&self.query)

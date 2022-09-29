@@ -39,11 +39,7 @@ pub fn build_verify_slot(mut cmd: BuiltinCommand) -> Result<VerifySlotAction, an
 
 #[async_trait]
 impl Action for VerifySlotAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let (client, conn_handle) = postgres_client(&self.connection).await?;
 
         Retry::default()

@@ -85,13 +85,7 @@ pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, anyhow::Err
 
 #[async_trait]
 impl Action for AppendAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        // Files are written to a fresh temporary directory, so no need to
-        // explicitly remove the file here.
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = state.temp_path.join(&self.path);
         println!("Appending to file {}", path.display());
         let file = OpenOptions::new()
@@ -126,11 +120,7 @@ pub fn build_delete(mut cmd: BuiltinCommand) -> Result<DeleteAction, anyhow::Err
 
 #[async_trait]
 impl Action for DeleteAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let path = state.temp_path.join(&self.path);
         println!("Deleting file {}", path.display());
         fs::remove_file(&path).await?;

@@ -31,11 +31,7 @@ pub fn build_execute(mut cmd: BuiltinCommand) -> Result<ExecuteAction, anyhow::E
 
 #[async_trait]
 impl Action for ExecuteAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let client = state
             .sql_server_clients
             .get_mut(&self.name)

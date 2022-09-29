@@ -35,11 +35,7 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Err
 
 #[async_trait]
 impl Action for VerifyAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let stream_name = format!("testdrive-{}-{}", self.stream_prefix, state.seed);
 
         let mut shard_iterators = get_shard_iterators(&state.kinesis_client, &stream_name).await?;

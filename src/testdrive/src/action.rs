@@ -31,6 +31,7 @@ use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::now::NOW_ZERO;
 use once_cell::sync::Lazy;
 use rand::Rng;
+use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use url::Url;
@@ -310,25 +311,125 @@ impl State {
         Ok(())
     }
 
+    /// Delete Kafka topics + CCSR subjects that were created in this run
+    pub async fn reset_kafka(&mut self) -> Result<(), anyhow::Error> {
+        let mut errors: Vec<anyhow::Error> = Vec::new();
+
+        let metadata = self.kafka_producer.client().fetch_metadata(
+            None,
+            Some(std::cmp::max(Duration::from_secs(1), self.default_timeout)),
+        )?;
+
+        let testdrive_topics: Vec<_> = metadata
+            .topics()
+            .iter()
+            .filter_map(|t| {
+                if t.name().starts_with(&"testdrive-") {
+                    Some(t.name())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !testdrive_topics.is_empty() {
+            match self
+                .kafka_admin
+                .delete_topics(&testdrive_topics, &self.kafka_admin_opts)
+                .await
+            {
+                Ok(res) => {
+                    if res.len() != testdrive_topics.len() {
+                        errors.push(anyhow!(
+                            "kafka topic deletion returned {} results, but exactly {} expected",
+                            res.len(),
+                            testdrive_topics.len()
+                        ));
+                    }
+                    for (res, topic) in res.iter().zip(testdrive_topics.iter()) {
+                        match res {
+                            Ok(_)
+                            | Err((_, rdkafka::types::RDKafkaErrorCode::UnknownTopicOrPartition)) => {
+                                ()
+                            }
+                            Err((_, err)) => {
+                                errors.push(anyhow!("unable to delete {}: {}", topic, err));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    errors.push(e.into());
+                }
+            };
+        }
+
+        match self
+            .ccsr_client
+            .list_subjects()
+            .await
+            .context("listing schema registry subjects")
+        {
+            Ok(subjects) => {
+                let testdrive_subjects: Vec<_> = subjects
+                    .iter()
+                    .filter(|s| s.starts_with(&"testdrive-"))
+                    .collect();
+
+                for subject in testdrive_subjects {
+                    match self.ccsr_client.delete_subject(&subject).await {
+                        Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
+                        Err(e) => errors.push(e.into()),
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(e);
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            bail!(
+                "deleting Kafka topics: {} errors: {}",
+                errors.len(),
+                errors.into_iter().map(|e| e.to_string_alt()).join("\n")
+            );
+        }
+    }
+
     /// Delete the Kinesis streams created for this run of testdrive.
     pub async fn reset_kinesis(&mut self) -> Result<(), anyhow::Error> {
         if self.kinesis_stream_names.is_empty() {
             return Ok(());
         }
-        println!(
-            "Deleting Kinesis streams {}",
-            self.kinesis_stream_names.join(", ")
-        );
+
+        let mut errors: Vec<anyhow::Error> = Vec::new();
+
         for stream_name in &self.kinesis_stream_names {
-            self.kinesis_client
+            if let Err(e) = self
+                .kinesis_client
                 .delete_stream()
                 .enforce_consumer_deletion(true)
                 .stream_name(stream_name)
                 .send()
                 .await
-                .context(format!("deleting Kinesis stream: {}", stream_name))?;
+                .context(format!("deleting Kinesis stream: {}", stream_name))
+            {
+                errors.push(e);
+            }
         }
-        Ok(())
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            bail!(
+                "deleting Kinesis streams: {} errors: {}",
+                errors.len(),
+                errors.into_iter().map(|e| e.to_string_alt()).join("\n")
+            );
+        }
     }
 
     /// Delete S3 buckets that were created in this run
@@ -425,13 +526,11 @@ pub enum ControlFlow {
 
 #[async_trait]
 pub trait Action {
-    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error>;
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error>;
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error>;
 }
 
 pub trait SyncAction: Send + Sync {
-    fn undo(&self, state: &mut State) -> Result<(), anyhow::Error>;
-    fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error>;
+    fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error>;
 }
 
 #[async_trait]
@@ -439,12 +538,8 @@ impl<T> Action for T
 where
     T: SyncAction,
 {
-    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
-        tokio::task::block_in_place(|| self.undo(state))
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        tokio::task::block_in_place(|| self.redo(state))
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+        tokio::task::block_in_place(|| self.run(state))
     }
 }
 

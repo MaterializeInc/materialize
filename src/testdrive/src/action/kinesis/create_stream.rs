@@ -37,11 +37,7 @@ pub fn build_create_stream(mut cmd: BuiltinCommand) -> Result<CreateStreamAction
 
 #[async_trait]
 impl Action for CreateStreamAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
         println!("Creating Kinesis stream {}", stream_name);
 
