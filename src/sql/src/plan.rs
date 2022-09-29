@@ -250,7 +250,6 @@ pub struct CreateRolePlan {
 #[derive(Debug)]
 pub struct CreateComputeInstancePlan {
     pub name: String,
-    pub config: Option<ComputeInstanceIntrospectionConfig>,
     pub replicas: Vec<(String, ComputeInstanceReplicaConfig)>,
 }
 

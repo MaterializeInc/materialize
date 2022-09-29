@@ -2206,7 +2206,6 @@ pub fn plan_create_cluster(
 
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
         name: normalize::ident(name),
-        config: None,
         replicas,
     }))
 }

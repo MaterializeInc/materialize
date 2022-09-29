@@ -29,7 +29,6 @@ use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
 };
-use mz_sql::plan::ComputeInstanceIntrospectionConfig;
 use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage::types::sources::Timeline;
 
@@ -217,10 +216,6 @@ async fn migrate<S: Append>(
             )?;
             let default_instance = ComputeInstanceValue {
                 name: "default".into(),
-                config: Some(ComputeInstanceIntrospectionConfig {
-                    debugging: false,
-                    interval: Duration::from_secs(1),
-                }),
             };
             let default_replica = ComputeInstanceReplicaValue {
                 compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
@@ -233,7 +228,7 @@ async fn migrate<S: Append>(
                     },
                     logging: SerializedComputeInstanceReplicaLogging {
                         log_logging: false,
-                        interval: Duration::from_secs(1),
+                        interval: Some(Duration::from_secs(1)),
                         sources: None,
                         views: None,
                     },
@@ -481,19 +476,12 @@ impl<S: Append> Connection<S> {
 
     pub async fn load_compute_instances(
         &mut self,
-    ) -> Result<
-        Vec<(
-            ComputeInstanceId,
-            String,
-            Option<ComputeInstanceIntrospectionConfig>,
-        )>,
-        Error,
-    > {
+    ) -> Result<Vec<(ComputeInstanceId, String)>, Error> {
         Ok(COLLECTION_COMPUTE_INSTANCES
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| (k.id, v.name, v.config))
+            .map(|(k, v)| (k.id, v.name))
             .collect())
     }
 
@@ -938,7 +926,6 @@ impl<'a, S: Append> Transaction<'a, S> {
     pub fn insert_compute_instance(
         &mut self,
         cluster_name: &str,
-        config: &Option<ComputeInstanceIntrospectionConfig>,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
         let id = self.get_and_increment_id(COMPUTE_ID_ALLOC_KEY.to_string())?;
@@ -946,7 +933,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             ComputeInstanceKey { id },
             ComputeInstanceValue {
                 name: cluster_name.to_string(),
-                config: config.clone(),
             },
         ) {
             return Err(Error::new(ErrorKind::ClusterAlreadyExists(
@@ -982,13 +968,8 @@ impl<'a, S: Append> Transaction<'a, S> {
     ) -> Result<ReplicaId, Error> {
         let id = self.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
         let mut compute_instance_id = None;
-        for (
-            ComputeInstanceKey { id },
-            ComputeInstanceValue {
-                name,
-                config: _config,
-            },
-        ) in self.compute_instances.items()
+        for (ComputeInstanceKey { id }, ComputeInstanceValue { name }) in
+            self.compute_instances.items()
         {
             if &name == compute_name {
                 compute_instance_id = Some(id);
@@ -1491,7 +1472,6 @@ struct ComputeInstanceKey {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeInstanceValue {
     name: String,
-    config: Option<ComputeInstanceIntrospectionConfig>,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]

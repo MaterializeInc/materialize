@@ -239,7 +239,9 @@ pub struct ComputeInstanceReplicaLogging {
     /// Whether to enable logging for the logging dataflows.
     pub log_logging: bool,
     /// The interval at which to log.
-    pub interval: Duration,
+    ///
+    /// A `None` value indicates that logging is disabled.
+    pub interval: Option<Duration>,
     /// Log sources of this replica.
     pub sources: Vec<(LogVariant, GlobalId)>,
     /// Log views of this replica.
@@ -247,6 +249,11 @@ pub struct ComputeInstanceReplicaLogging {
 }
 
 impl ComputeInstanceReplicaLogging {
+    /// Return whether logging is enabled.
+    pub fn enabled(&self) -> bool {
+        self.interval.is_some()
+    }
+
     /// Return all ids of the persisted introspection views contained.
     pub fn view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.views.iter().map(|(_, id)| *id)

@@ -649,25 +649,22 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn sequence_create_compute_instance(
         &mut self,
         session: &Session,
-        CreateComputeInstancePlan {
-            name,
-            config: compute_instance_config,
-            replicas,
-        }: CreateComputeInstancePlan,
+        CreateComputeInstancePlan { name, replicas }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_compute_instance");
-        let arranged_introspection_sources = if compute_instance_config.is_some() {
-            self.catalog.allocate_arranged_introspection_sources().await
-        } else {
-            Vec::new()
-        };
+
+        // The catalog items for the arranged introspection sources are shared between all replicas
+        // of a compute instance, so we create them unconditionally during instance creation.
+        // Whether a replica actually maintains introspection arrangements is determined by the
+        // per-replica introspection configuration.
+        let arranged_introspection_sources =
+            self.catalog.allocate_arranged_introspection_sources().await;
         let arranged_introspection_source_ids: Vec<_> = arranged_introspection_sources
             .iter()
             .map(|(_, id)| *id)
             .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
-            config: compute_instance_config.clone(),
             arranged_introspection_sources,
         }];
 
@@ -736,7 +733,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let views = self.catalog.allocate_persisted_introspection_views().await;
                 ComputeInstanceReplicaLogging {
                     log_logging: config.debugging,
-                    interval: config.interval,
+                    interval: Some(config.interval),
                     sources,
                     views,
                 }
@@ -783,7 +780,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("compute instance must exist after creation");
         self.controller.compute.create_instance(
             instance.id,
-            instance.logging.clone(),
+            None,
             self.catalog.system_config().max_result_size(),
         )?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
@@ -891,7 +888,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let views = self.catalog.allocate_persisted_introspection_views().await;
             ComputeInstanceReplicaLogging {
                 log_logging: config.debugging,
-                interval: config.interval,
+                interval: Some(config.interval),
                 sources,
                 views,
             }
@@ -1882,13 +1879,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 return Ok(());
             }
 
-            // If logging is not initialized for the cluster, no indexes are set
-            // up for log sources. This check ensures that we don't try to read
-            // from the raw sources, which is not supported.
-            if compute_instance.logging.is_none() {
-                return Err(AdapterError::IntrospectionDisabled { log_names });
-            }
-
             // Reading from log sources on replicated compute instances is only
             // allowed if a target replica is selected. Otherwise, we have no
             // way of knowing which replica we read the introspection data from.
@@ -1900,6 +1890,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     return Err(AdapterError::UntargetedLogRead { log_names });
                 }
             }
+
+            // Ensure that logging is initialized for the target replica, lest
+            // we try to peek a non-existing arrangement.
+            let replica_id = target_replica.unwrap();
+            let replica = &compute_instance.replicas_by_id[&replica_id];
+            if !replica.config.logging.enabled() {
+                return Err(AdapterError::IntrospectionDisabled { log_names });
+            }
+
             Ok(())
         }
 

@@ -80,17 +80,30 @@ DROP CLUSTER REPLICA test.replica_b;
 statement ok
 SELECT * FROM mz_internal.mz_compute_exports
 
-# Verify that querying introspection data is disallowed on clusters with
-# introspection disabled.
+# Verify that querying introspection data is disallowed on replicas with
+# introspection disabled, but allowed on introspection-enabled replicas
+# in the same cluster.
 
 statement ok
 DROP CLUSTER test CASCADE
 
 statement ok
 CREATE CLUSTER test
-  REPLICAS (replica_a (SIZE '1', INTROSPECTION INTERVAL 0))
+  REPLICAS (
+    replica_a (SIZE '1', INTROSPECTION INTERVAL 0),
+    replica_b (SIZE '1', INTROSPECTION INTERVAL 1)
+  )
 
-query error cannot read log sources on cluster with disabled introspection
+statement ok
+SET cluster_replica = replica_a
+
+query error cannot read log sources of replica with disabled introspection
+SELECT * FROM mz_internal.mz_compute_exports
+
+statement ok
+SET cluster_replica = replica_b
+
+statement ok
 SELECT * FROM mz_internal.mz_compute_exports
 
 # Clean up.
