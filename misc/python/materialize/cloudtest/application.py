@@ -66,7 +66,7 @@ class Application:
 class MaterializeApplication(Application):
     def __init__(self, release_mode: bool) -> None:
         self.environmentd = EnvironmentdService()
-        self.testdrive = Testdrive()
+        self.testdrive = Testdrive(release_mode=release_mode)
         self.release_mode = release_mode
 
         self.resources = [
@@ -76,7 +76,7 @@ class MaterializeApplication(Application):
             *SSH_RESOURCES,
             Minio(),
             AdminRoleBinding(),
-            EnvironmentdStatefulSet(),
+            EnvironmentdStatefulSet(release_mode=release_mode),
             self.environmentd,
             self.testdrive,
         ]

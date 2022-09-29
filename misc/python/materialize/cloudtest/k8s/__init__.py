@@ -61,8 +61,8 @@ class K8sResource:
     def create(self) -> None:
         assert False
 
-    def image(self, service: str) -> str:
-        repo = mzbuild.Repository(ROOT)
+    def image(self, service: str, release_mode: bool) -> str:
+        repo = mzbuild.Repository(ROOT, release_mode=release_mode)
         deps = repo.resolve_dependencies([repo.images[service]])
         rimage = deps[service]
         return rimage.spec()
