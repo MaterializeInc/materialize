@@ -21,7 +21,7 @@ steps:
           - { value: kafka-matrix }
           - { value: kafka-multi-broker }
           - { value: redpanda-testdrive }
-          - { value: redpanda-testdrive-aarch64 }
+#         - { value: redpanda-testdrive-aarch64 }
           - { value: upgrade }
           - { value: limits }
           - { value: cluster-limits }
@@ -137,16 +137,17 @@ steps:
           composition: testdrive
           args: [--redpanda, --aws-region=us-east-2]
 
-  - id: redpanda-testdrive-aarch64
-    label: ":panda_face: :racing_car: testdrive aarch64"
-    timeout_in_minutes: 600
-    agents:
-      queue: linux-aarch64
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: testdrive
-          args: [--redpanda, --aws-region=us-east-2]
+# Disabled due to taking too long for the value provided
+#  - id: redpanda-testdrive-aarch64
+#    label: ":panda_face: :racing_car: testdrive aarch64"
+#    timeout_in_minutes: 600
+#    agents:
+#      queue: linux-aarch64
+#    plugins:
+#      - ./ci/plugins/scratch-aws-access: ~
+#      - ./ci/plugins/mzcompose:
+#          composition: testdrive
+#          args: [--redpanda, --aws-region=us-east-2]
 
   - id: upgrade
     label: "Upgrade testing"
