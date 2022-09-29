@@ -33,8 +33,8 @@ use crate::catalog::builtin::{
     MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
     MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS,
-    MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE, MZ_TABLES,
-    MZ_TYPES, MZ_VIEWS,
+    MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, MaterializedView, Sink,
@@ -806,33 +806,19 @@ impl CatalogState {
 
     pub fn pack_storage_usage_update(
         &self,
-        event: &VersionedStorageUsage,
+        VersionedStorageUsage::V1(event): &VersionedStorageUsage,
     ) -> Result<BuiltinTableUpdate, Error> {
-        let (id, object_id, size_bytes, collection_timestamp): (u64, &Option<String>, u64, u64) =
-            match event {
-                VersionedStorageUsage::V1(ev) => {
-                    (ev.id, &ev.object_id, ev.size_bytes, ev.collection_timestamp)
-                }
-            };
-
-        let table = self.resolve_builtin_table(&MZ_STORAGE_USAGE);
-        let object_id_val = match object_id {
-            Some(s) => Datum::String(s),
-            None => Datum::Null,
-        };
-        let dt = mz_ore::now::to_datetime(collection_timestamp).naive_utc();
-
+        let id = self.resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
         let row = Row::pack_slice(&[
-            Datum::UInt64(id),
-            object_id_val,
-            Datum::UInt64(size_bytes),
-            Datum::TimestampTz(DateTime::from_utc(dt, Utc).try_into().expect("must fit")),
+            Datum::UInt64(event.id),
+            Datum::from(event.shard_id.as_deref()),
+            Datum::UInt64(event.size_bytes),
+            Datum::TimestampTz(
+                mz_ore::now::to_datetime(event.collection_timestamp)
+                    .try_into()
+                    .expect("must fit"),
+            ),
         ]);
-        let diff = 1;
-        Ok(BuiltinTableUpdate {
-            id: table,
-            row,
-            diff,
-        })
+        Ok(BuiltinTableUpdate { id, row, diff: 1 })
     }
 }
