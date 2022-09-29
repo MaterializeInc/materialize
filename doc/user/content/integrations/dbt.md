@@ -41,11 +41,11 @@ Setting up a dbt project with Materialize is similar to setting it up with any o
 
     `materialize` should be listed under "Plugins". If this is not the case, double-check that the virtual environment is activated!
 
-2. To get started, make sure you have a Materialize account.
+1. To get started, make sure you have a Materialize account.
 
 ## Create and configure a dbt project
 
-A [dbt project](https://docs.getdbt.com/docs/building-a-dbt-project/projects) is a directory that contains all dbt needs to run and keep track of your transformations. At a minimum, it must have a project file (`dbt_project.yml`) and at least one [model](#build-and-run-dbt-models) (`.sql`).
+A [dbt project](https://docs.getdbt.com/docs/building-a-dbt-project/projects) is a directory that contains all dbt needs to run and keep track of your transformations. At a minimum, it must have a project file (`dbt_project.yml`) and at least one [model](#dbt-models) (`.sql`).
 
 To create a new project, run:
 
@@ -67,7 +67,7 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
     **Note:** If you started from an existing project but it's your first time setting up dbt, it's possible that this file doesn't exist yet. You can manually create it in the suggested location.
 
-2. Open `profiles.yml` and adapt it to connect to your Materialize instance using the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize).
+1. Open `profiles.yml` and adapt it to connect to your Materialize instance using the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize).
 
     As an example, the following profile would allow you to connect to Materialize in two different environments: a developer environment (`dev`) and a production environment (`prod`).
 
@@ -103,7 +103,7 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
     The `target` parameter allows you to configure the [target environment](https://docs.getdbt.com/docs/guides/managing-environments#how-do-i-maintain-different-environments-with-dbt) that dbt will use to run your models.
 
-3. To test the connection to Materialize, run:
+1. To test the connection to Materialize, run:
 
     ```bash
     dbt debug
@@ -130,7 +130,6 @@ To connect to a Kafka broker or Postgres database you first need to create a con
 Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
 {{</ note >}}
 
-
 {{< tabs tabID="1" >}} {{< tab "Kafka">}}
 Create a [kafka source](/sql/create-source/kafka/).
 
@@ -154,10 +153,12 @@ Create a [postgres source](/sql/create-source/postgres/).
 CREATE SOURCE IF NOT EXISTS {{ this }}
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
 ```
+
 **Note:** The [pre-hook](https://docs.getdbt.com/reference/resource-configs/pre-hook-post-hook) defined above is used to create the replication views that reproduce the publication's original tables.
 {{< /tab >}} {{< /tabs >}}
 
 Sources are defined in `.yml` files nested under a `sources:` key.
+
 ```yaml
 sources:
   - name: postgres
@@ -170,6 +171,7 @@ sources:
     tables:
       - name: kafka_topic_a
 ```
+
 The sources above would be compiled to:
 ```
 database.schema.postgres_table_a
@@ -197,10 +199,12 @@ SELECT
     col_a, ...
 FROM {{ source('kafka','kafka_topic_a') }}
 ```
+
 The model above would be compiled to `database.schema.view_a`.
 One thing to note here is that the model depends on the kafka source defined above. To express this dependency and track the **lineage** of your project, you can use the dbt [source()](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
 
 #### materialized views
+
 This is where Materialize goes beyond dbt's incremental models (and traditional databases), with [materialized views](/sql/create-materialized-view) that **continuously update** as the underlying data changes:
 
 **Filename:** models/materialized_view_a.sql
@@ -211,26 +215,34 @@ SELECT
     col_a, ...
 FROM {{ ref('view_a') }}
 ```
+
 The model above would be compiled to `database.schema.materialized_view_a`.
 Here, the model depends on the view from above, and is defined as such via the dbt [ref()](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
 
 ### Configuration
+
 `source`, `view`, and `materialized view` materializations accept the following additional configuration options.
 
 #### cluster
-Use the [cluster](sql/create-cluster/) option to specify the cluster in which the materialization is created. If unspecified, the default cluster for the connection is used.
+
+Use the [cluster](/sql/create-cluster/) option to specify the cluster in which the materialization is created. If unspecified, the default cluster for the connection is used.
+
 ```sql
 {{ config(materialized='materializedview', cluster='cluster_a') }}
 ```
+
 #### indexes
-Use the indexes option to define a list of [indexes](sql/create-index/) on a materialization. Each Materialize index can have three components:
+
+Use the indexes option to define a list of [indexes](/sql/create-index/) on a materialization. Each Materialize index can have three components:
 - columns (list, required): one or more columns on which the index is defined
 - name (string, optional): the name for the index. If unspecified, Materialize will use the materialization name and column names provided.
 - cluster (string, optional): the cluster to use to create the index. If unspecified, indexes will be created in the cluster used to create the materialization.
+
 ```sql
 {{ config(materialized='view',
           indexes=[{'columns': ['col_a'], 'cluster': 'cluster_a'}]) }}
 ```
+
 ## Build and run dbt
 
 1. [Run](https://docs.getdbt.com/reference/commands/run) the dbt models:
@@ -268,7 +280,6 @@ Use the indexes option to define a list of [indexes](sql/create-index/) on a mat
 
 That's it! From here on, Materialize makes sure that your models are **incrementally updated** as new data streams in, and that you get **fresh and correct results** with millisecond latency whenever you query your views.
 
-
 ## Test and document a dbt project
 
 ### Continuous testing
@@ -289,7 +300,7 @@ Using dbt in a streaming context means that you're able to run data quality and 
 
     **Note:** As an alternative, you can specify the `--store-failures` flag when running `dbt test`.
 
-2. Add tests to your models using the `tests` property in the model configuration `.yml` files:
+1. Add tests to your models using the `tests` property in the model configuration `.yml` files:
 
     ```yaml
     models:
@@ -305,7 +316,7 @@ Using dbt in a streaming context means that you're able to run data quality and 
 
     The type of test and the columns being tested are used as a base for naming the test materialized views. For example, the configuration above would create views named `not_null_col_a` and `unique_col_a`.
 
-3. Run the tests:
+1. Run the tests:
 
     ```bash
     dbt test
@@ -315,7 +326,7 @@ Using dbt in a streaming context means that you're able to run data quality and 
 
     This guarantees that your tests keep running in the background as views that are automatically updated as soon as an assertion fails.
 
-4. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that the schema storing the tests has been created, as well as the test materialized views:
+1. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that the schema storing the tests has been created, as well as the test materialized views:
 
     ```bash
     psql "postgres://<user>:<password>@<host>:6875/materialize"
@@ -351,13 +362,13 @@ If you've already created `.yml` files with helpful [properties](https://docs.ge
 
     dbt will grab any additional project information and Materialize catalog metadata, then compile it into `.json` files (`manifest.json` and `catalog.json`, respectively) that can be used to feed the documentation website. You can find the compiled files under `/target`, in the dbt project folder.
 
-2. Launch the documentation website. By default, this command starts a web server on port 8000:
+1. Launch the documentation website. By default, this command starts a web server on port 8000:
 
     ```bash
     dbt docs serve #--port <port>
     ```
 
-3. In a browser, navigate to `localhost:8000`. There, you can find an overview of your dbt project, browse existing models and metadata, and in general keep track of what's going on.
+1. In a browser, navigate to `localhost:8000`. There, you can find an overview of your dbt project, browse existing models and metadata, and in general keep track of what's going on.
 
     If you click **View Lineage Graph** in the lower right corner, you can even inspect the lineage of your streaming pipelines!
 
