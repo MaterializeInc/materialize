@@ -109,31 +109,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
-        let object_id = None;
+        let mut ops = vec![];
+        for (shard_id, size_bytes) in shard_sizes {
+            ops.push(catalog::Op::UpdateStorageUsage {
+                shard_id: shard_id.map(|shard_id| shard_id.to_string()),
+                size_bytes,
+            });
+        }
 
-        let mut unk_storage = 0;
-        let mut known_storage = 0;
-        for (key, val) in shard_sizes {
-            match key {
-                Some(_) => known_storage += val,
-                None => unk_storage += val,
-            }
-        }
-        // TODO(jpepin): What, if anything, do we want to do with orphaned storage?
-        if unk_storage > 0 {
-            tracing::debug!("Found {} bytes of orphaned storage", unk_storage);
-        }
-        if let Err(err) = self
-            .catalog_transact(
-                None,
-                vec![catalog::Op::UpdateStorageUsage {
-                    object_id,
-                    size_bytes: known_storage,
-                }],
-                |_| Ok(()),
-            )
-            .await
-        {
+        if let Err(err) = self.catalog_transact(None, ops, |_| Ok(())).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
         self.schedule_storage_usage_collection().await;

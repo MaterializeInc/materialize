@@ -1364,12 +1364,12 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =
             .with_column("error", ScalarType::String.nullable(true))
             .with_column("metadata", ScalarType::Jsonb.nullable(true)),
     });
-pub static MZ_STORAGE_USAGE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_storage_usage",
-    schema: MZ_CATALOG_SCHEMA,
+pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_storage_usage_by_shard",
+    schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::UInt64.nullable(false))
-        .with_column("object_id", ScalarType::String.nullable(true))
+        .with_column("shard_id", ScalarType::String.nullable(true))
         .with_column("size_bytes", ScalarType::UInt64.nullable(false))
         .with_column(
             "collection_timestamp",
@@ -2340,7 +2340,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
-        Builtin::Table(&MZ_STORAGE_USAGE),
+        Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),

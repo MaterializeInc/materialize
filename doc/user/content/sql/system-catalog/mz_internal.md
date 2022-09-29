@@ -15,6 +15,10 @@ The objects in the `mz_internal` schema are not part of Materialize's stable int
 Backwards-incompatible changes to these tables may be made at any time.
 {{< /warning >}}
 
+{{< warning >}}
+Not all objects in the `mz_internal` schema are documented.
+{{< /warning >}}
+
 ### `mz_arrangement_sharing`
 
 The `mz_arrangement_sharing` source describes how many times each [arrangement]
