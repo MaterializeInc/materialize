@@ -41,6 +41,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "testdrive",
         f"--seed={args.seed}",
         "--kafka-option=group.id=group1",
+        "--no-reset",
         "before-restart.td",
     )
     c.kill("materialized")
