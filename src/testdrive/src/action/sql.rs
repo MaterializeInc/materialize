@@ -169,6 +169,7 @@ impl Action for SqlAction {
             | CreateSchema(_)
             | CreateSource(_)
             | CreateSink(_)
+            | CreateMaterializedView(_)
             | CreateView(_)
             | CreateViews(_)
             | CreateTable(_)
