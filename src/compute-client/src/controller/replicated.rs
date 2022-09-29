@@ -22,7 +22,7 @@
 //! compacted frontiers, as the underlying resources to rebuild them any earlier may not
 //! exist any longer.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::time::Duration;
 
 use anyhow::bail;
@@ -43,10 +43,9 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
-use mz_storage::controller::CollectionMetadata;
 
 use crate::command::{CommunicationConfig, ComputeCommand, ComputeCommandHistory, Peek, ReplicaId};
-use crate::logging::LogVariant;
+use crate::logging::LoggingConfig;
 use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -530,8 +529,8 @@ struct ReplicaState<T> {
     _task: AbortOnDropHandle<()>,
     /// The network addresses of the processes that make up the replica.
     addrs: Vec<String>,
-    /// Where to persist introspection sources
-    persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+    /// The logging config specific to this replica.
+    logging_config: Option<LoggingConfig>,
     /// The communication config specific to this replica.
     communication_config: CommunicationConfig,
 }
@@ -544,18 +543,8 @@ impl<T> ReplicaState<T> {
     fn specialize_command(&self, command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
         // Set new replica ID and obtain set the sinked logs specific to this replica
         if let ComputeCommand::CreateInstance(config) = command {
-            // Set sink_logs
-            if let Some(logging) = &mut config.logging {
-                logging.sink_logs = self.persisted_logs.clone();
-                tracing::debug!(
-                    "Enabling sink_logs at replica {:?}: {:?}",
-                    replica_id,
-                    &logging.sink_logs
-                );
-            };
-
-            // Set replica id
             config.replica_id = replica_id;
+            config.logging = self.logging_config.clone();
         }
 
         if let ComputeCommand::CreateTimely(comm_config) = command {
@@ -576,7 +565,7 @@ where
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
-        persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+        logging_config: Option<LoggingConfig>,
         communication_config: CommunicationConfig,
     ) {
         // Launch a task to handle communication with the replica
@@ -604,7 +593,7 @@ where
             response_rx,
             _task: task.abort_on_drop(),
             addrs,
-            persisted_logs,
+            logging_config,
             communication_config,
         };
 
@@ -618,11 +607,13 @@ where
                 .expect("Channel to client has gone away!")
         }
 
-        // Start tracking frontiers of persisted_logs collections.
-        for (id, _) in replica_state.persisted_logs.values() {
-            let frontier = Antichain::from_elem(Timestamp::minimum());
-            let previous = self.state.log_uppers.insert(*id, frontier);
-            assert!(previous.is_none());
+        // Start tracking frontiers of persisted log collections.
+        if let Some(logging) = &replica_state.logging_config {
+            for (id, _) in logging.sink_logs.values() {
+                let frontier = Antichain::from_elem(Timestamp::minimum());
+                let previous = self.state.log_uppers.insert(*id, frontier);
+                assert!(previous.is_none());
+            }
         }
 
         // Add replica to tracked state.
@@ -641,18 +632,20 @@ where
         let replica_state = self.replicas.remove(&id).expect("replica not found");
 
         // Cease tracking frontiers of persisted_logs collections.
-        for (id, _) in replica_state.persisted_logs.values() {
-            let previous = self.state.log_uppers.remove(id);
-            assert!(previous.is_some());
+        if let Some(logging) = &replica_state.logging_config {
+            for (id, _) in logging.sink_logs.values() {
+                let previous = self.state.log_uppers.remove(id);
+                assert!(previous.is_some());
+            }
         }
     }
 
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let addrs = self.replicas[&id].addrs.clone();
-        let persisted_logs = self.replicas[&id].persisted_logs.clone();
+        let logging_config = self.replicas[&id].logging_config.clone();
         let communication_config = self.replicas[&id].communication_config.clone();
         self.remove_replica(id);
-        self.add_replica(id, addrs, persisted_logs, communication_config);
+        self.add_replica(id, addrs, logging_config, communication_config);
     }
 
     // We avoid implementing `GenericClient` here, because the protocol between

@@ -377,7 +377,7 @@ impl<S: Append + 'static> Coordinator<S> {
         for instance in self.catalog.compute_instances() {
             self.controller.compute.create_instance(
                 instance.id,
-                None,
+                instance.log_indexes.clone(),
                 self.catalog.system_config().max_result_size(),
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {

@@ -665,7 +665,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
-            arranged_introspection_sources,
+            arranged_introspection_sources: arranged_introspection_sources.clone(),
         }];
 
         let azs = self.catalog.state().availability_zones();
@@ -778,9 +778,13 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
+        let arranged_logs = arranged_introspection_sources
+            .into_iter()
+            .map(|(log, id)| (log.variant.clone(), id))
+            .collect();
         self.controller.compute.create_instance(
             instance.id,
-            None,
+            arranged_logs,
             self.catalog.system_config().max_result_size(),
         )?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
