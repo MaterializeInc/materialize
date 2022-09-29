@@ -1085,7 +1085,7 @@ pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
 
 pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_view_keys",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("column", ScalarType::UInt64.nullable(false))
@@ -1094,7 +1094,7 @@ pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
     BuiltinTable {
         name: "mz_view_foreign_keys",
-        schema: MZ_CATALOG_SCHEMA,
+        schema: MZ_INTERNAL_SCHEMA,
         desc: RelationDesc::empty()
             .with_column("child_id", ScalarType::String.nullable(false))
             .with_column("child_column", ScalarType::UInt64.nullable(false))
