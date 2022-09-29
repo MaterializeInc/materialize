@@ -50,7 +50,7 @@ class EnvironmentdService(K8sService):
 
 
 class EnvironmentdStatefulSet(K8sStatefulSet):
-    def __init__(self) -> None:
+    def __init__(self, release_mode: bool) -> None:
         metadata = V1ObjectMeta(name="environmentd", labels={"app": "environmentd"})
         label_selector = V1LabelSelector(match_labels={"app": "environmentd"})
 
@@ -75,10 +75,10 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         container = V1Container(
             name="environmentd",
-            image=self.image("environmentd"),
+            image=self.image("environmentd", release_mode),
             args=[
-                "--storaged-image=" + self.image("storaged"),
-                "--computed-image=" + self.image("computed"),
+                "--storaged-image=" + self.image("storaged", release_mode),
+                "--computed-image=" + self.image("computed", release_mode),
                 "--availability-zone=kind-worker",
                 "--availability-zone=kind-worker2",
                 "--availability-zone=kind-worker3",
