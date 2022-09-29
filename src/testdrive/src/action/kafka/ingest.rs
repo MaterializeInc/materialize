@@ -443,6 +443,7 @@ impl Action for IngestAction {
                     row,
                     &hashmap! { "kafka-ingest.iteration".into() => iteration.to_string() },
                     &None,
+                    action::PARSING_VAR_REGEX,
                     false,
                 )?;
                 let mut row = row.as_bytes();

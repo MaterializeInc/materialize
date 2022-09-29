@@ -142,6 +142,7 @@ pub struct Config {
 pub struct State {
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
+    runtime_vars: HashMap<String, String>,
     seed: u32,
     temp_path: PathBuf,
     _tempfile: Option<tempfile::TempDir>,
@@ -534,10 +535,12 @@ pub(crate) async fn build(
             Command::Builtin(builtin) => Some(builtin.name.clone()),
             _ => None,
         };
-        let subst =
-            |msg: &str| substitute_vars(msg, &vars, &ignore_prefix, false).map_err(wrap_err);
-        let subst_re =
-            |msg: &str| substitute_vars(msg, &vars, &ignore_prefix, true).map_err(wrap_err);
+        let subst = |msg: &str| {
+            substitute_vars(msg, &vars, &ignore_prefix, PARSING_VAR_REGEX, false).map_err(wrap_err)
+        };
+        let subst_re = |msg: &str| {
+            substitute_vars(msg, &vars, &ignore_prefix, PARSING_VAR_REGEX, true).map_err(wrap_err)
+        };
 
         let action: Box<dyn Action + Send + Sync> = match cmd.command {
             Command::Builtin(mut builtin) => {
@@ -677,16 +680,19 @@ pub(crate) async fn build(
     Ok(out)
 }
 
+pub const PARSING_VAR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
+pub const RUNTIME_VAR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"!!\{([^}]+)\}").unwrap());
+
 /// Substituted `${}`-delimited variables from `vars` into `msg`
 fn substitute_vars(
     msg: &str,
     vars: &HashMap<String, String>,
     ignore_prefix: &Option<String>,
+    regex: Lazy<Regex>,
     regex_escape: bool,
 ) -> Result<String, anyhow::Error> {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
     let mut err = None;
-    let out = RE.replace_all(msg, |caps: &Captures| {
+    let out = regex.replace_all(msg, |caps: &Captures| {
         let name = &caps[1];
         if let Some(ignore_prefix) = &ignore_prefix {
             if name.starts_with(format!("{}.", ignore_prefix).as_str()) {
@@ -874,6 +880,7 @@ pub async fn create_state(
     let state = State {
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
+        runtime_vars: HashMap::new(),
         seed,
         temp_path,
         _tempfile,

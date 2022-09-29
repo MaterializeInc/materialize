@@ -32,7 +32,7 @@ use mz_sql_parser::ast::{
     CreateTableStatement, CreateViewStatement, Raw, ReplicaDefinition, Statement, ViewDefinition,
 };
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{self, Action, ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
 
 pub struct SqlAction {
@@ -291,9 +291,17 @@ impl SqlAction {
     }
 
     async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
+        let query = action::substitute_vars(
+            query,
+            &state.runtime_vars,
+            &None,
+            action::RUNTIME_VAR_REGEX,
+            false,
+        )?;
+
         let stmt = state
             .pgclient
-            .prepare(query)
+            .prepare(&query)
             .await
             .context("preparing query failed")?;
         let mut actual: Vec<_> = state
