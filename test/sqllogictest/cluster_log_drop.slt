@@ -30,7 +30,7 @@ SELECT (SELECT COUNT(*) FROM mz_catalog.mz_sources WHERE name NOT LIKE '%_1') - 
 query T rowsort
 SELECT (SELECT COUNT(*) FROM mz_catalog.mz_views WHERE name NOT LIKE '%_1') - (SELECT COUNT(*) FROM mz_catalog.mz_views WHERE name LIKE '%_1');
 ----
-27
+28
 
 
 # The default cluster also has log sources, thus we should have one set active at boot.

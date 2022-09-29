@@ -480,7 +480,6 @@ mz_secrets
 mz_sinks
 mz_sources
 mz_ssh_tunnel_connections
-mz_storage_usage
 mz_tables
 mz_types
 mz_views
@@ -491,6 +490,7 @@ name
 mz_cluster_replicas
 mz_objects
 mz_relations
+mz_storage_usage
 
 # Check default sources, tables, and views in mz_internal.
 
@@ -543,6 +543,9 @@ mz_worker_compute_import_frontiers_1            log   <null>
 > SHOW TABLES FROM mz_internal
 name
 ----
+mz_storage_usage_by_shard
+mz_view_foreign_keys
+mz_view_keys
 
 > SHOW VIEWS FROM mz_internal
 name
