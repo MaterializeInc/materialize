@@ -29,6 +29,7 @@ from materialize.cloudtest.wait import wait
 class Application:
     resources: List[K8sResource]
     images: List[str]
+    release_mode: bool
 
     def __init__(self) -> None:
         self.create()
@@ -39,7 +40,7 @@ class Application:
             resource.create()
 
     def acquire_images(self) -> None:
-        repo = mzbuild.Repository(ROOT)
+        repo = mzbuild.Repository(ROOT, release_mode=self.release_mode)
         for image in self.images:
             deps = repo.resolve_dependencies([repo.images[image]])
             deps.acquire()
@@ -63,9 +64,10 @@ class Application:
 
 
 class MaterializeApplication(Application):
-    def __init__(self) -> None:
+    def __init__(self, release_mode: bool) -> None:
         self.environmentd = EnvironmentdService()
         self.testdrive = Testdrive()
+        self.release_mode = release_mode
 
         self.resources = [
             *POSTGRES_RESOURCES,
