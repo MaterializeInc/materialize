@@ -80,7 +80,7 @@ dbt manages all your connection configurations (or, profiles) in a file called [
           threads: 1
           host: <host>
           port: 6875
-          user: <user>
+          user: <user@domain.com>
           pass: <password>
           database: materialize
           schema: public
@@ -91,7 +91,7 @@ dbt manages all your connection configurations (or, profiles) in a file called [
           threads: 1
           host: <host>
           port: 6875
-          user: <user>
+          user: <user@domain.com>
           pass: <password>
           database: <dev_database>
           schema: <dev_schema>
@@ -123,7 +123,7 @@ Create a materialization for each SQL statement you're planning to deploy. Each 
 ### Sources
 
 In dbt, using a [source](https://docs.getdbt.com/docs/building-a-dbt-project/using-sources) makes it possible to name and describe the data loaded into Materialize.
-You can instruct dbt to create a [source](/sql/create-source) in Materialize using the custom `source` [materialization](#materializations), which allows for injecting the complete source statement into your `.sql` file.
+You can instruct dbt to create a [source](/sql/create-source) in Materialize using the custom `source` materialization, which allows for injecting the complete source statement into your `.sql` file.
 
 {{< note >}}
 To connect to a Kafka broker or PostgreSQL database, you first need to create a connection that specifies access and authentication parameters.
