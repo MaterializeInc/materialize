@@ -37,11 +37,7 @@ pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, anyhow::E
 
 #[async_trait]
 impl Action for ConnectAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let opts_url = mysql_async::Opts::from_url(&self.url)
             .map_err(|_| anyhow!("Unable to parse MySQL URL {}", self.url))?;
         let opts = mysql_async::OptsBuilder::from_opts(opts_url).pass(self.password.clone());

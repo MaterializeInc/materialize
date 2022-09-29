@@ -40,11 +40,7 @@ pub fn build_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, anyhow::Error
 }
 
 impl SyncAction for SleepAction {
-    fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    fn redo(&self, _: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    fn run(&self, _: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let sleep = if self.random {
             let mut rng = rand::thread_rng();
             rng.gen_range(Duration::from_secs(0)..self.duration)

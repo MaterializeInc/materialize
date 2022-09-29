@@ -156,11 +156,7 @@ async fn get_topic(
 
 #[async_trait]
 impl Action for VerifyAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic: String = match &self.source {
             Topic::FromSink(sink) => get_topic(&sink, "topic", state).await?,
             Topic::Named(name) => name.clone(),
@@ -540,11 +536,7 @@ pub fn build_verify_schema(mut cmd: BuiltinCommand) -> Result<VerifySchemaAction
 
 #[async_trait]
 impl Action for VerifySchemaAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic = get_topic(&self.sink, "topic", state).await?;
 
         match &self.format {

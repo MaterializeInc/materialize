@@ -7,14 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
-use std::time::Duration;
-
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use rdkafka::admin::{NewTopic, TopicReplication};
-use rdkafka::error::RDKafkaErrorCode;
-use rdkafka::producer::Producer;
 
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
@@ -50,53 +45,7 @@ pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, 
 
 #[async_trait]
 impl Action for CreateTopicAction {
-    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
-        let metadata = state.kafka_producer.client().fetch_metadata(
-            None,
-            Some(cmp::max(Duration::from_secs(1), state.default_timeout)),
-        )?;
-
-        let stale_kafka_topics: Vec<_> = metadata
-            .topics()
-            .iter()
-            .filter_map(|t| {
-                if t.name().starts_with(&self.topic_prefix) {
-                    Some(t.name())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if !stale_kafka_topics.is_empty() {
-            println!(
-                "Deleting stale Kafka topics {}",
-                stale_kafka_topics.join(", ")
-            );
-            let res = state
-                .kafka_admin
-                .delete_topics(&stale_kafka_topics, &state.kafka_admin_opts)
-                .await?;
-            if res.len() != stale_kafka_topics.len() {
-                bail!(
-                    "kafka topic deletion returned {} results, but exactly {} expected",
-                    res.len(),
-                    stale_kafka_topics.len()
-                );
-            }
-            for (res, topic) in res.iter().zip(stale_kafka_topics.iter()) {
-                match res {
-                    Ok(_) | Err((_, RDKafkaErrorCode::UnknownTopicOrPartition)) => (),
-                    Err((_, err)) => {
-                        eprintln!("warning: unable to delete {}: {}", topic, err)
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         // NOTE(benesch): it is critical that we invent a new topic name on
         // every testdrive run. We previously tried to delete and recreate the
         // topic with a fixed name, but ran into serious race conditions in

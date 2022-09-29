@@ -85,16 +85,11 @@ async fn run_line_reader(
 
     if config.reset {
         state.reset_materialize().await?;
-
-        for a in actions.iter().rev() {
-            let undo = a.action.undo(&mut state);
-            undo.await.map_err(|e| PosError::new(e, a.pos))?
-        }
     }
 
     for a in &actions {
-        let redo = a.action.redo(&mut state);
-        match redo.await.map_err(|e| PosError::new(e, a.pos))? {
+        let run = a.action.run(&mut state);
+        match run.await.map_err(|e| PosError::new(e, a.pos))? {
             ControlFlow::Continue => (),
             ControlFlow::Break => break,
         }
@@ -102,6 +97,10 @@ async fn run_line_reader(
 
     if config.reset {
         let mut errors = Vec::new();
+
+        if let Err(e) = state.reset_kafka().await {
+            errors.push(e);
+        }
 
         if let Err(e) = state.reset_s3().await {
             errors.push(e);

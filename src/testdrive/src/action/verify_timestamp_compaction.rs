@@ -50,12 +50,7 @@ pub fn build_verify_timestamp_compaction_action(
 
 #[async_trait]
 impl Action for VerifyTimestampCompactionAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        // Can't undo a verification.
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let item_id = state
             .with_catalog_copy(|catalog| {
                 catalog
