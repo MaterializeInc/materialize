@@ -315,6 +315,10 @@ impl State {
     pub async fn reset_kafka(&mut self) -> Result<(), anyhow::Error> {
         let mut errors: Vec<anyhow::Error> = Vec::new();
 
+        if self.kafka_topics.is_empty() {
+            return Ok(());
+        }
+
         let metadata = self.kafka_producer.client().fetch_metadata(
             None,
             Some(std::cmp::max(Duration::from_secs(1), self.default_timeout)),
