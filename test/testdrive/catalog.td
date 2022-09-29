@@ -483,8 +483,6 @@ mz_ssh_tunnel_connections
 mz_storage_usage
 mz_tables
 mz_types
-mz_view_foreign_keys
-mz_view_keys
 mz_views
 
 > SHOW VIEWS FROM mz_catalog

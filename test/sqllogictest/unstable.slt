@@ -36,10 +36,10 @@ CREATE DEFAULT INDEX ON mz_internal.mz_scheduling_elapsed_1
 # mz_view_keys and mz_view_foreign_keys are unstable.
 
 statement error cannot create view with unstable dependencies
-CREATE VIEW v AS SELECT * FROM mz_view_keys
+CREATE VIEW v AS SELECT * FROM mz_internal.mz_view_keys
 
 statement error cannot create index with unstable dependencies
-CREATE DEFAULT INDEX ON mz_view_foreign_keys
+CREATE DEFAULT INDEX ON mz_internal.mz_view_foreign_keys
 
 # Other system tables are stable.
 
@@ -55,4 +55,4 @@ statement ok
 SELECT * FROM mz_internal.mz_peek_active_1
 
 statement ok
-SELECT * FROM mz_view_keys
+SELECT * FROM mz_internal.mz_view_keys
