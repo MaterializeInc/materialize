@@ -13,7 +13,7 @@ aliases:
 
 ## Speedup
 
-Use indexes to speedup queries. Improvements can be significant, reducing some query times down to single-digit milliseconds. In particular, when the query filters only by the indexed fields.
+Use indexes to speed up queries. Improvements can be significant, reducing some query times down to single-digit milliseconds. In particular, when the query filters only by the indexed fields.
 
 Building an efficient index for distinct **clauses** and **operators** can be puzzling. To create the correct one, use the following sections, separated by clauses, as a guide:
 
@@ -35,7 +35,7 @@ Clause                    | Index                                               
 `WHERE x = $1 AND y = $2` | `CREATE INDEX ON view_name (x, y);`                                     |
 `WHERE x = $1 OR y = $2`  | `CREATE INDEX ON view_name (x);`<br /> `CREATE INDEX ON view_name (y);` |
 
-**Note:** to speedup a query using a multi-column index, as in `WHERE x = $1 AND y = $2;`, the query must use all the fields in the index chained together via the `AND` operator.
+**Note:** to speedup a query using a multi-column index, as in `WHERE x = $1 AND y = $2`, the query must use all the fields in the index chained together via the `AND` operator.
 
 ### `JOIN`
 Speedup a query using a `JOIN` on two relations by indexing their join keys:
