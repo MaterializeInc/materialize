@@ -100,11 +100,11 @@ use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, ComputeInstanceIntrospectionConfig,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, ComputeInstanceReplicaConfig,
+    ComputeInstanceReplicaIntrospectionConfig, CreateComputeInstancePlan,
+    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, RotateKeysPlan, Secret,
     Sink, Source, StorageHostConfig, Table, Type, View,
@@ -2256,7 +2256,7 @@ fn plan_replica_config(
         .map(|OptionalInterval(i)| i)
         .unwrap_or(Some(DEFAULT_INTROSPECTION_INTERVAL));
     let introspection = match introspection_interval {
-        Some(interval) => Some(ComputeInstanceIntrospectionConfig {
+        Some(interval) => Some(ComputeInstanceReplicaIntrospectionConfig {
             interval: interval.duration()?,
             debugging: introspection_debugging.unwrap_or(false),
         }),

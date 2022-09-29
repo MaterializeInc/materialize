@@ -260,9 +260,9 @@ pub struct CreateComputeInstanceReplicaPlan {
     pub config: ComputeInstanceReplicaConfig,
 }
 
-/// Configuration of introspection for a compute instance.
+/// Configuration of introspection for a compute instance replica.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
-pub struct ComputeInstanceIntrospectionConfig {
+pub struct ComputeInstanceReplicaIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
     /// The interval at which to introspect.
@@ -275,12 +275,12 @@ pub enum ComputeInstanceReplicaConfig {
         addrs: BTreeSet<String>,
         compute_addrs: BTreeSet<String>,
         workers: NonZeroUsize,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
+        introspection: Option<ComputeInstanceReplicaIntrospectionConfig>,
     },
     Managed {
         size: String,
         availability_zone: Option<String>,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
+        introspection: Option<ComputeInstanceReplicaIntrospectionConfig>,
     },
 }
 
