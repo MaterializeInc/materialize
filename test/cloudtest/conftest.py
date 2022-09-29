@@ -13,5 +13,9 @@ from materialize.cloudtest.application import MaterializeApplication
 
 
 @pytest.fixture(scope="session")
-def mz() -> MaterializeApplication:
-    return MaterializeApplication()
+def mz(pytestconfig) -> MaterializeApplication:
+    return MaterializeApplication(release_mode=(not pytestconfig.getoption("dev")))
+
+
+def pytest_addoption(parser):
+    parser.addoption("--dev", action="store_true")
