@@ -115,38 +115,6 @@ of the index.
 
 ## Examples
 
-### Optimizing joins with indexes
-
-You can optimize the performance of `JOIN` on two relations by ensuring their
-join keys are the key columns in an index.
-
-```sql
-CREATE MATERIALIZED VIEW active_customers AS
-    SELECT guid, geo_id, last_active_on
-    FROM customer_source
-    WHERE last_active_on > now() - INTERVAL '30' DAYS;
-
-CREATE INDEX active_customers_geo_idx ON active_customers (geo_id);
-
-CREATE MATERIALIZED VIEW active_customer_per_geo AS
-    SELECT geo.name, count(*)
-    FROM geo_regions AS geo
-    JOIN active_customers ON active_customers.geo_id = geo.id
-    GROUP BY geo.name;
-```
-
-In the above example, the index `active_customers_geo_idx`...
-
--   Helps us because it contains a key that the view `active_customer_per_geo` can
-    use to look up values for the join condition (`active_customers.geo_id`).
-
-    Because this index is exactly what the query requires, the Materialize
-    optimizer will choose to use `active_customers_geo_idx` rather than build
-    and maintain a private copy of the index just for this query.
-
--   Obeys our restrictions by containing only a subset of columns in the result
-    set.
-
 ### Materializing views
 
 You can convert a non-materialized view into a materialized view by adding an
@@ -167,36 +135,8 @@ are automatically created contain an index of all columns in the result set,
 unless they contain a unique key. (Remember that indexes store a copy of a
 row's indexed columns _and_ a copy of the entire row.)
 
-### Speed up filtering with indexes
-
-You can set up an index over a column were filtering by literal values or expressions are common to improve the performance.
-
-```sql
-CREATE MATERIALIZED VIEW active_customers AS
-    SELECT guid, geo_id, last_active_on
-    FROM customer_source
-    GROUP BY geo_id;
-
-CREATE INDEX active_customers_idx ON active_customers (guid);
-
-SELECT * FROM active_customers WHERE guid = 'd868a5bf-2430-461d-a665-40418b1125e7';
-
--- Using expressions
-CREATE INDEX active_customers_exp_idx ON active_customers (upper(guid));
-
-SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7';
-
--- Filter using an expression in one field and a literal in another field
-CREATE INDEX active_customers_exp_field_idx ON active_customers (upper(guid), geo_id);
-
-SELECT * FROM active_customers WHERE upper(guid) = 'D868A5BF-2430-461D-A665-40418B1125E7' and geo_id = 'ID_8482';
-```
-
-Create an index with an expression to improve query performance over a frequent used expression and
-avoid building downstream views to apply the function like the one used in the example: `upper()`.
-Take into account that aggregations like `count()` are not possible to use as expressions.
-
 ## Related pages
 
 -   [`SHOW INDEX`](../show-index)
 -   [`DROP INDEX`](../drop-index)
+-   [`Optimization`](/ops/optimization)
