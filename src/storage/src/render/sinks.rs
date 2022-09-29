@@ -63,7 +63,8 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
 
     // TODO(teskje): Remove envelope-wrapping once the Kafka sink has been
     // moved to STORAGE.
-    let ok_collection = apply_sink_envelope(sink, &sink_render, ok_collection.as_collection());
+    let ok_collection =
+        apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
 
     let sink_token = sink_render.render_continuous_sink(
         storage_state,
@@ -84,6 +85,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
 
 #[allow(clippy::borrowed_box)]
 fn apply_sink_envelope<G>(
+    sink_id: GlobalId,
     sink: &StorageSinkDesc<CollectionMetadata>,
     sink_render: &Box<dyn SinkRender<G>>,
     collection: Collection<G, Row, Diff>,
@@ -180,8 +182,9 @@ where
         Some(SinkEnvelope::Upsert) => {
             let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
 
-            let collection = combined.map(|(k, v)| {
-                let v = upsert_format(v);
+            let from = sink.from;
+            let collection = combined.map(move |(k, v)| {
+                let v = upsert_format(v, sink_id, from);
                 (k, v)
             });
             collection
