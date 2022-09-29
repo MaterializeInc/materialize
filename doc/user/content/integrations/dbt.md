@@ -45,7 +45,7 @@ Setting up a dbt project with Materialize is similar to setting it up with any o
 
 ## Create and configure a dbt project
 
-A [dbt project](https://docs.getdbt.com/docs/building-a-dbt-project/projects) is a directory that contains all dbt needs to run and keep track of your transformations. At a minimum, it must have a project file (`dbt_project.yml`) and at least one [model](#dbt-models) (`.sql`).
+A [dbt project](https://docs.getdbt.com/docs/building-a-dbt-project/projects) is a directory that contains all dbt needs to run and keep track of your transformations. At a minimum, it must have a project file (`dbt_project.yml`) and at least one [model](#build-and-run-dbt-models) (`.sql`).
 
 To create a new project, run:
 
@@ -111,7 +111,7 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
     If the output reads `All checks passed!`, you're good to go! The [dbt documentation](https://docs.getdbt.com/docs/guides/debugging-errors#types-of-errors) has some helpful pointers in case you run into errors.
 
-## Materializations
+## Build and run dbt models
 
 For dbt to know how to persist (or not) a transformation, the model needs to be associated with a [materialization](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/materializations) strategy.
 Because Materialize is optimized for real-time transformations of streaming data and the core of dbt is built around batch, the `dbt-materialize` adapter implements a few custom materialization types:
@@ -120,18 +120,18 @@ Because Materialize is optimized for real-time transformations of streaming data
 
 Create a materialization for each SQL statement you're planning to deploy. Each individual materialization should be stored as a `.sql` file under the directory defined by `model-paths` in `dbt_project.yml`.
 
-### dbt sources
+### Sources
 
 In dbt, using a [source](https://docs.getdbt.com/docs/building-a-dbt-project/using-sources) makes it possible to name and describe the data loaded into Materialize.
 You can instruct dbt to create a [source](/sql/create-source) in Materialize using the custom `source` [materialization](#materializations), which allows for injecting the complete source statement into your `.sql` file.
 
 {{< note >}}
-To connect to a Kafka broker or Postgres database you first need to create a connection that specifies access and authentication parameters.
+To connect to a Kafka broker or PostgreSQL database, you first need to create a connection that specifies access and authentication parameters.
 Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
 {{</ note >}}
 
 {{< tabs tabID="1" >}} {{< tab "Kafka">}}
-Create a [kafka source](/sql/create-source/kafka/).
+Create a [Kafka source](/sql/create-source/kafka/).
 
 **Filename:** sources/kafka_topic_a.sql
 ```sql
@@ -142,8 +142,8 @@ CREATE SOURCE IF NOT EXISTS {{ this }}
   FORMAT TEXT
 ```
 
-{{< /tab >}} {{< tab "Postgres">}}
-Create a [postgres source](/sql/create-source/postgres/).
+{{< /tab >}} {{< tab "PostgreSQL">}}
+Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 **Filename:** sources/postgres.sql
 ```sql
@@ -154,7 +154,7 @@ CREATE SOURCE IF NOT EXISTS {{ this }}
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
 ```
 
-**Note:** The [pre-hook](https://docs.getdbt.com/reference/resource-configs/pre-hook-post-hook) defined above is used to create the replication views that reproduce the publication's original tables.
+The [pre-hook](https://docs.getdbt.com/reference/resource-configs/pre-hook-post-hook) defined above is used to create the replication views that reproduce the publication's original tables.
 {{< /tab >}} {{< /tabs >}}
 
 Sources are defined in `.yml` files nested under a `sources:` key.
@@ -179,17 +179,17 @@ database.schema.postgres_table_b
 database.schema.kafka_topic_a
 ```
 
-**Note:** The `{{ this }}` [relation](https://docs.getdbt.com/reference/dbt-jinja-functions/this) allows you to generate a fully-qualified name from a base object name.
+* Use the `{{ this }}` [relation](https://docs.getdbt.com/reference/dbt-jinja-functions/this) to generate a fully-qualified name for the source from the base model name.
 
-**Note:** The `{{ target }}` [relation](https://docs.getdbt.com/reference/dbt-jinja-functions/target) allows you to grab information about your current Materialize connection.
+* To grab information about your current Materialize connection, use the `{{ target }}` [relation](https://docs.getdbt.com/reference/dbt-jinja-functions/target).
 
-### dbt models
+### Views and materialized views
 
 In dbt, a [model](https://docs.getdbt.com/docs/building-a-dbt-project/building-models#getting-started) is a `SELECT` statement that encapsulates a data transformation you want to run on top of your database.
 
 When you use dbt with Materialize, **your models stay up-to-date** without manual or configured refreshes. This allows you to efficiently transform streaming data using the same thought process you'd use for batch transformations on top of any other database.
 
-#### views
+#### Views
 
 dbt models are materialized as `views` by default, so to create a [view](/sql/create-view) in Materialize you can simply provide the SQL statement in the model (and skip the `materialized` configuration parameter).
 
@@ -201,9 +201,9 @@ FROM {{ source('kafka','kafka_topic_a') }}
 ```
 
 The model above would be compiled to `database.schema.view_a`.
-One thing to note here is that the model depends on the kafka source defined above. To express this dependency and track the **lineage** of your project, you can use the dbt [source()](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
+One thing to note here is that the model depends on the Kafka source defined above. To express this dependency and track the **lineage** of your project, you can use the dbt [source()](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
 
-#### materialized views
+#### Materialized views
 
 This is where Materialize goes beyond dbt's incremental models (and traditional databases), with [materialized views](/sql/create-materialized-view) that **continuously update** as the underlying data changes:
 
@@ -217,7 +217,7 @@ FROM {{ ref('view_a') }}
 ```
 
 The model above would be compiled to `database.schema.materialized_view_a`.
-Here, the model depends on the view from above, and is defined as such via the dbt [ref()](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
+Here, the model depends on the view defined above, and is referenced as such via the dbt [ref()](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
 
 ### Configuration
 
