@@ -73,6 +73,11 @@ impl Action for VerifyCommitAction {
             "group.id",
             format!("materialize-{}-kafka-{}", env_id, source_id),
         );
+        println!(
+            "Verifying committed kafka offset for topic ({}) and consumer group ({})",
+            topic,
+            config.get("group.id").unwrap()
+        );
         Retry::default()
             .max_duration(state.default_timeout)
             .retry_async_canceling(|_| async {

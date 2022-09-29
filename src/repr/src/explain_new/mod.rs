@@ -37,6 +37,12 @@ use serde::{Serialize, Serializer};
 
 use crate::{ColumnType, GlobalId, Row, ScalarType};
 
+#[cfg(feature = "tracing_")]
+mod tracing;
+
+#[cfg(feature = "tracing_")]
+pub use self::tracing::{trace_plan, PlanTrace, TraceEntry};
+
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ExplainFormat {
@@ -351,7 +357,7 @@ impl From<serde_json::Error> for ExplainError {
 }
 
 /// A set of options for controlling the output of [`Explain`] implementations.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ExplainConfig {
     /// Show the number of columns.
     pub arity: bool,

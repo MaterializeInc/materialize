@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! DOT format `EXPLAIN` support for `QGM` structures.
+//! `EXPLAIN ... AS DOT` support for QGM structures.
 
 use std::fmt;
 

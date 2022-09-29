@@ -367,7 +367,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connection, encoding) = match connection {
+    let (external_connection, connection_id, encoding) = match connection {
         CreateSourceConnection::Kafka(mz_sql_parser::ast::KafkaSourceConnection {
             connection:
                 mz_sql_parser::ast::KafkaConnection {
@@ -490,7 +490,7 @@ pub fn plan_create_source(
 
             let connection = SourceConnection::Kafka(connection);
 
-            (connection, encoding)
+            (connection, Some(item.id()), encoding)
         }
         CreateSourceConnection::Kinesis {
             connection: aws_connection,
@@ -526,7 +526,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
                 SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
-            (connection, encoding)
+            (connection, Some(item.id()), encoding)
         }
         CreateSourceConnection::S3 {
             connection: aws_connection,
@@ -581,7 +581,7 @@ pub fn plan_create_source(
                     Compression::None => mz_storage::types::sources::Compression::None,
                 },
             });
-            (connection, encoding)
+            (connection, Some(item.id()), encoding)
         }
         CreateSourceConnection::Postgres {
             connection,
@@ -613,7 +613,7 @@ pub fn plan_create_source(
 
             let encoding =
                 SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Postgres));
-            (connection, encoding)
+            (connection, Some(item.id()), encoding)
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let load_generator = match generator {
@@ -633,7 +633,7 @@ pub fn plan_create_source(
                 load_generator,
                 tick_micros,
             });
-            (connection, generator.data_encoding())
+            (connection, None, generator.data_encoding())
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -782,6 +782,7 @@ pub fn plan_create_source(
 
     let source = Source {
         create_sql,
+        connection_id,
         source_desc: SourceDesc {
             connection: external_connection,
             encoding,
@@ -1612,7 +1613,7 @@ pub fn plan_create_sink(
         return Err(PlanError::UpsertSinkWithoutKey);
     }
 
-    let connection_builder = match connection {
+    let (connection_id, connection_builder) = match connection {
         CreateSinkConnection::Kafka { connection, .. } => kafka_sink_builder(
             scx,
             connection,
@@ -1631,6 +1632,7 @@ pub fn plan_create_sink(
         sink: Sink {
             create_sql,
             from: from.id(),
+            connection_id: Some(connection_id),
             connection_builder,
             envelope,
         },
@@ -1704,7 +1706,7 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-) -> Result<StorageSinkConnectionBuilder, PlanError> {
+) -> Result<(GlobalId, StorageSinkConnectionBuilder), PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
     let connection = match item.connection()? {
@@ -1812,12 +1814,12 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let environment_id = &scx.catalog.config().environment_id;
     let consistency_config = KafkaConsistencyConfig::Progress {
-        topic: connection
-            .progress_topic
-            .clone()
-            .unwrap_or_else(|| format!("_materialize-progress-{environment_id}-{connection_id}")),
+        topic: connection.progress_topic.clone().unwrap_or_else(|| {
+            scx.catalog
+                .config()
+                .default_kafka_sink_progress_topic(connection_id)
+        }),
     };
 
     if partition_count == 0 || partition_count < -1 {
@@ -1845,8 +1847,9 @@ fn kafka_sink_builder(
         bytes: retention_bytes,
     };
 
-    Ok(StorageSinkConnectionBuilder::Kafka(
-        KafkaSinkConnectionBuilder {
+    Ok((
+        connection_id,
+        StorageSinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
             connection_id,
             connection,
             options: config_options,
@@ -1860,7 +1863,7 @@ fn kafka_sink_builder(
             key_desc_and_indices,
             value_desc,
             retention,
-        },
+        }),
     ))
 }
 
@@ -2959,11 +2962,7 @@ pub fn describe_drop_cluster_replica(
 
 pub fn plan_drop_cluster_replica(
     scx: &StatementContext,
-    DropClusterReplicasStatement {
-        if_exists,
-        names,
-        cascade,
-    }: DropClusterReplicasStatement,
+    DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
 ) -> Result<Plan, PlanError> {
     let mut names_out = Vec::with_capacity(names.len());
     for QualifiedReplica { cluster, replica } in names {
@@ -2975,29 +2974,6 @@ pub fn plan_drop_cluster_replica(
         let replica_name = replica.into_string();
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
-            if !cascade {
-                let (log_ids, view_ids) = instance.replica_logs_and_views(&replica_name).unwrap();
-
-                // Check if we have an item that depends on the replica's logs or log views
-                for id in log_ids.iter().chain(view_ids.iter()) {
-                    let log_item = scx.catalog.get_item(&id);
-                    for id in log_item.used_by() {
-                        // Dependencies on log views can be removed without cascade.
-                        if !view_ids.contains(id) {
-                            let dep = scx.catalog.get_item(id);
-                            if dependency_prevents_drop(ObjectType::Source, dep) {
-                                sql_bail!(
-                                    "cannot drop replica {} of cluster {}: still depended upon by catalog item '{}'",
-                                    replica_name.quoted(),
-                                    instance.name().quoted(),
-                                    scx.catalog.resolve_full_name(dep.name())
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
             names_out.push((instance.name().to_string(), replica_name));
         } else {
             // If "IF EXISTS" supplied, names allowed to be missing,

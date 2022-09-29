@@ -57,7 +57,7 @@ use mz_stash::{self, StashError, TypedCollection};
 
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::protocol::client::{
-    ExportSinkCommand, IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
+    CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
     StorageCommand, StorageResponse, Update,
 };
 use crate::types::errors::DataflowError;
@@ -974,7 +974,7 @@ where
                     .storage_metadata
                     .get_resume_upper(&persist_client, &desc.desc.envelope)
                     .await;
-                let augmented_ingestion = IngestSourceCommand {
+                let augmented_ingestion = CreateSourceCommand {
                     id,
                     description: desc,
                     resume_upper,
@@ -990,7 +990,7 @@ where
                         ),
                     )
                     .await?;
-                client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
+                client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
             }
         }
 
@@ -1072,7 +1072,7 @@ where
                 .initial_as_of
                 .maybe_fast_forward(&from_since);
 
-            let cmd = ExportSinkCommand {
+            let cmd = CreateSinkCommand {
                 id,
                 description: StorageSinkDesc {
                     from,
@@ -1095,7 +1095,7 @@ where
             // Provision a storage host for the ingestion.
             let client = self.hosts.provision(id, host_config).await?;
 
-            client.send(StorageCommand::ExportSinks(vec![cmd]));
+            client.send(StorageCommand::CreateSinks(vec![cmd]));
         }
         Ok(())
     }

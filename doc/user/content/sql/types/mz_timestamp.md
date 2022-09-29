@@ -1,20 +1,19 @@
 ---
-title: "MzTimestamp type"
+title: "mz_timestamp type"
 description: "Expresses an internal timestamp"
 menu:
   main:
     parent: 'sql-types'
 ---
 
-`mztimestamp` data expresses an internal timestamp.
+`mz_timestamp` data expresses an internal timestamp.
 
-## `mztimestamp` info
+## `mz_timestamp` info
 
 Detail | Info
 -------|------
-**Quick Syntax** | `MZTIMESTAMP 946684800000`
 **Size** | 8 bytes
-**Catalog name** | `pg_catalog.mztimestamp`
+**Catalog name** | `mz_catalog.mz_timestamp`
 **OID** | 16552
 **Min value** | 0
 **Max value** | 18446744073709551615
@@ -33,16 +32,16 @@ Integer, numeric, and text casts must be in the form of milliseconds since the U
 
 From | To | Required context
 -----|----|--------
-`mztimestamp` | `text` | Assignment
-`text` | `mztimestamp` | Assignment
-`uint4` | `mztimestamp` | Implicit
-`uint8` | `mztimestamp` | Implicit
-`int4` | `mztimestamp` | Implicit
-`int8` | `mztimestamp` | Implicit
-`numeric` | `mztimestamp` | Implicit
-`timestamp` | `mztimestamp` | Implicit
-`timestamptz` | `mztimestamp` | Implicit
+`mz_timestamp` | `text` | Assignment
+`text` | `mz_timestamp` | Assignment
+`uint4` | `mz_timestamp` | Implicit
+`uint8` | `mz_timestamp` | Implicit
+`int4` | `mz_timestamp` | Implicit
+`int8` | `mz_timestamp` | Implicit
+`numeric` | `mz_timestamp` | Implicit
+`timestamp` | `mz_timestamp` | Implicit
+`timestamptz` | `mz_timestamp` | Implicit
 
 ### Valid operations
 
-There are no supported operations or functions on `mztimestamp` types.
+There are no supported operations or functions on `mz_timestamp` types.

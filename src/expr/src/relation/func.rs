@@ -131,14 +131,14 @@ where
     Datum::from(x)
 }
 
-fn max_mztimestamp<'a, I>(datums: I) -> Datum<'a>
+fn max_mz_timestamp<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<mz_repr::Timestamp> = datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_mztimestamp())
+        .map(|d| d.unwrap_mz_timestamp())
         .max();
     Datum::from(x)
 }
@@ -313,14 +313,14 @@ where
     Datum::from(x)
 }
 
-fn min_mztimestamp<'a, I>(datums: I) -> Datum<'a>
+fn min_mz_timestamp<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<mz_repr::Timestamp> = datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_mztimestamp())
+        .map(|d| d.unwrap_mz_timestamp())
         .min();
     Datum::from(x)
 }
@@ -1497,7 +1497,7 @@ impl AggregateFunc {
             AggregateFunc::MaxUInt16 => max_uint16(datums),
             AggregateFunc::MaxUInt32 => max_uint32(datums),
             AggregateFunc::MaxUInt64 => max_uint64(datums),
-            AggregateFunc::MaxMzTimestamp => max_mztimestamp(datums),
+            AggregateFunc::MaxMzTimestamp => max_mz_timestamp(datums),
             AggregateFunc::MaxFloat32 => max_float32(datums),
             AggregateFunc::MaxFloat64 => max_float64(datums),
             AggregateFunc::MaxBool => max_bool(datums),
@@ -1512,7 +1512,7 @@ impl AggregateFunc {
             AggregateFunc::MinUInt16 => min_uint16(datums),
             AggregateFunc::MinUInt32 => min_uint32(datums),
             AggregateFunc::MinUInt64 => min_uint64(datums),
-            AggregateFunc::MinMzTimestamp => min_mztimestamp(datums),
+            AggregateFunc::MinMzTimestamp => min_mz_timestamp(datums),
             AggregateFunc::MinFloat32 => min_float32(datums),
             AggregateFunc::MinFloat64 => min_float64(datums),
             AggregateFunc::MinBool => min_bool(datums),

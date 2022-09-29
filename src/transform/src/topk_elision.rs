@@ -18,12 +18,20 @@ use mz_expr::MirRelationExpr;
 pub struct TopKElision;
 
 impl crate::Transform for TopKElision {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "topk_elision")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.try_visit_mut_post(&mut |e| self.action(e))
+        let result = relation.try_visit_mut_post(&mut |e| self.action(e));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

@@ -12,11 +12,6 @@ menu:
 Materialize exposes a system catalog that contains metadata about the running
 Materialize instance.
 
-{{< warning >}}
-The system tables are not part of Materialize's stable interface.
-Backwards-incompatible changes to these tables may be made at any time.
-{{< /warning >}}
-
 ## Details
 
 The system catalog consists of three schemas that are implicitly available in
@@ -149,15 +144,25 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
+### `mz_kafka_connections`
+
+The `mz_kafka_connections` table contains a row for each Kafka connection in the
+system.
+
+Field                 | Type           | Meaning
+----------------------|----------------|--------
+`id`                  | [`text`]       | The ID of the connection.
+`brokers`             | [`text array`] | The addresses of the Kafka brokers to connect to.
+`sink_progress_topic` | [`text`]       | The name of the Kafka topic where any sinks associated with this connection will track their progress information and other metadata. The contents of this topic are unspecified.
+
 ### `mz_kafka_sinks`
 
 The `mz_kafka_sinks` table contains a row for each Kafka sink in the system.
 
 Field                | Type     | Meaning
 ---------------------|----------|--------
-`sink_id`            | [`text`] | The ID of the sink.
+`id`                 | [`text`] | The ID of the sink.
 `topic`              | [`text`] | The name of the Kafka topic into which the sink is writing.
-`progress_topic`     | [`text`] | The name of the Kafka topic where the sink will track its progress information and other metadata. The contents of this topic are unspecified. If no progress topic name was specified for the given connection, Materialize will use a default based on the environment name and Kafka connection ID.
 
 ### `mz_list_types`
 
@@ -261,6 +266,7 @@ Field            | Type        | Meaning
 `schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
 `name`           | [`text`]    | The name of the sink.
 `type`           | [`text`]    | The type of the sink: `kafka`.
+`connection_id`  | [`text`]    | The ID of the connection associated with the sink, if any.
 
 ### `mz_sources`
 
@@ -273,6 +279,7 @@ Field            | Type       | Meaning
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
 `type`           | [`text`]   | The type of the source: `kafka` or `postgres`.
+`connection_id`  | [`text`]   | The ID of the connection associated with the source, if any.
 
 ### `mz_storage_usage`
 
@@ -361,6 +368,11 @@ Materialize with minor changes to the `pg_catalog` compatibility shim.
 
 The following sections describe the available objects in the `mz_internal`
 schema.
+
+{{< warning >}}
+The objects in the `mz_internal` schema are not part of Materialize's stable interface.
+Backwards-incompatible changes to these tables may be made at any time.
+{{< /warning >}}
 
 ### `mz_arrangement_sharing`
 
@@ -468,7 +480,7 @@ For per-worker frontier information, see
 Field        | Type       | Meaning
 -------------|------------|--------
 `export_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
-`time`       | [`mztimestamp`] | The next timestamp at which the output may change.
+`time`       | [`mz_timestamp`] | The next timestamp at which the output may change.
 
 ### `mz_compute_import_frontiers`
 
@@ -484,7 +496,7 @@ Field       | Type       | Meaning
 ------------|------------|--------
 `export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
-`time`      | [`mztimestamp`] | The next timestamp at which the source instantiation may change.
+`time`      | [`mz_timestamp`] | The next timestamp at which the source instantiation may change.
 
 ### `mz_message_counts`
 
@@ -509,7 +521,7 @@ Field      | Type       | Meaning
 `id`       | [`uuid`]   | The ID of the peek request.
 `worker_id`| [`bigint`] | The ID of the worker thread servicing the peek.
 `index_id` | [`text`]   | The ID of the index the peek is targeting.
-`time`     | [`mztimestamp`] | The timestamp the peek has requested.
+`time`     | [`mz_timestamp`] | The timestamp the peek has requested.
 
 ### `mz_peek_durations`
 
@@ -640,7 +652,7 @@ Field       | Type       | Meaning
 ------------|------------|--------
 `export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
-`time`      | [`mztimestamp`] | The next timestamp at which the dataflow may change.
+`time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
 ### `mz_worker_compute_import_frontiers`
 
@@ -657,7 +669,7 @@ Field       | Type       | Meaning
 `export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `source_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
-`time`      | [`mztimestamp`] | The next timestamp at which the dataflow may change.
+`time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
 ## `information_schema`
 
@@ -680,6 +692,7 @@ Materialize should use the documented [`mz_catalog`](#mz_catalog) API instead.
 [`bytea`]: /sql/types/bytea
 [`double precision`]: /sql/types/double-precision
 [`jsonb`]: /sql/types/jsonb
+[`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`oid`]: /sql/types/oid
 [`text`]: /sql/types/text

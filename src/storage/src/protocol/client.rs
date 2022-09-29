@@ -104,18 +104,18 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// initial state.
     InitializationComplete,
     /// Create the enumerated sources, each associated with its identifier.
-    IngestSources(Vec<IngestSourceCommand<T>>),
+    CreateSources(Vec<CreateSourceCommand<T>>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-    ExportSinks(Vec<ExportSinkCommand<T>>),
+    CreateSinks(Vec<CreateSinkCommand<T>>),
 }
 
 /// A command that starts ingesting the given ingestion description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct IngestSourceCommand<T> {
+pub struct CreateSourceCommand<T> {
     /// The id of the storage collection being ingested.
     pub id: GlobalId,
     /// The description of what source type should be ingested and what post-processing steps must
@@ -125,7 +125,7 @@ pub struct IngestSourceCommand<T> {
     pub resume_upper: Antichain<T>,
 }
 
-impl Arbitrary for IngestSourceCommand<mz_repr::Timestamp> {
+impl Arbitrary for CreateSourceCommand<mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -144,54 +144,54 @@ impl Arbitrary for IngestSourceCommand<mz_repr::Timestamp> {
     }
 }
 
-impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoIngestSourceCommand {
-        ProtoIngestSourceCommand {
+impl RustType<ProtoCreateSourceCommand> for CreateSourceCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoCreateSourceCommand {
+        ProtoCreateSourceCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
             resume_upper: Some(self.resume_upper.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoIngestSourceCommand) -> Result<Self, TryFromProtoError> {
-        Ok(IngestSourceCommand {
-            id: proto.id.into_rust_if_some("ProtoIngestSourceCommand::id")?,
+    fn from_proto(proto: ProtoCreateSourceCommand) -> Result<Self, TryFromProtoError> {
+        Ok(CreateSourceCommand {
+            id: proto.id.into_rust_if_some("ProtoCreateSourceCommand::id")?,
             description: proto
                 .description
-                .into_rust_if_some("ProtoIngestSourceCommand::description")?,
+                .into_rust_if_some("ProtoCreateSourceCommand::description")?,
             resume_upper: proto
                 .resume_upper
-                .into_rust_if_some("ProtoIngestSourceCommand::resume_upper")?,
+                .into_rust_if_some("ProtoCreateSourceCommand::resume_upper")?,
         })
     }
 }
 
-impl RustType<ProtoExportSinkCommand> for ExportSinkCommand<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoExportSinkCommand {
-        ProtoExportSinkCommand {
+impl RustType<ProtoCreateSinkCommand> for CreateSinkCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoCreateSinkCommand {
+        ProtoCreateSinkCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoExportSinkCommand) -> Result<Self, TryFromProtoError> {
-        Ok(ExportSinkCommand {
-            id: proto.id.into_rust_if_some("ProtoExportSinkCommand::id")?,
+    fn from_proto(proto: ProtoCreateSinkCommand) -> Result<Self, TryFromProtoError> {
+        Ok(CreateSinkCommand {
+            id: proto.id.into_rust_if_some("ProtoCreateSinkCommand::id")?,
             description: proto
                 .description
-                .into_rust_if_some("ProtoExportSinkCommand::description")?,
+                .into_rust_if_some("ProtoCreateSinkCommand::description")?,
         })
     }
 }
 
 /// A command that starts exporting the given sink description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ExportSinkCommand<T> {
+pub struct CreateSinkCommand<T> {
     pub id: GlobalId,
     pub description: StorageSinkDesc<CollectionMetadata, T>,
 }
 
-impl Arbitrary for ExportSinkCommand<mz_repr::Timestamp> {
+impl Arbitrary for CreateSinkCommand<mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -211,16 +211,16 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
         ProtoStorageCommand {
             kind: Some(match self {
                 StorageCommand::InitializationComplete => InitializationComplete(()),
-                StorageCommand::IngestSources(ingestions) => IngestSources(ProtoIngestSources {
-                    ingestions: ingestions.into_proto(),
+                StorageCommand::CreateSources(sources) => CreateSources(ProtoCreateSources {
+                    sources: sources.into_proto(),
                 }),
                 StorageCommand::AllowCompaction(collections) => {
                     AllowCompaction(ProtoAllowCompaction {
                         collections: collections.into_proto(),
                     })
                 }
-                StorageCommand::ExportSinks(exports) => ExportSinks(ProtoExportSinks {
-                    exports: exports.into_proto(),
+                StorageCommand::CreateSinks(sinks) => CreateSinks(ProtoCreateSinks {
+                    sinks: sinks.into_proto(),
                 }),
             }),
         }
@@ -229,15 +229,15 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
     fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
         use proto_storage_command::Kind::*;
         match proto.kind {
-            Some(IngestSources(ProtoIngestSources { ingestions })) => {
-                Ok(StorageCommand::IngestSources(ingestions.into_rust()?))
+            Some(CreateSources(ProtoCreateSources { sources })) => {
+                Ok(StorageCommand::CreateSources(sources.into_rust()?))
             }
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
             Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
-            Some(ExportSinks(ProtoExportSinks { exports })) => {
-                Ok(StorageCommand::ExportSinks(exports.into_rust()?))
+            Some(CreateSinks(ProtoCreateSinks { sinks })) => {
+                Ok(StorageCommand::CreateSinks(sinks.into_rust()?))
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageCommand::kind",
@@ -252,10 +252,10 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            proptest::collection::vec(any::<IngestSourceCommand<mz_repr::Timestamp>>(), 1..4)
-                .prop_map(StorageCommand::IngestSources),
-            proptest::collection::vec(any::<ExportSinkCommand<mz_repr::Timestamp>>(), 1..4)
-                .prop_map(StorageCommand::ExportSinks),
+            proptest::collection::vec(any::<CreateSourceCommand<mz_repr::Timestamp>>(), 1..4)
+                .prop_map(StorageCommand::CreateSources),
+            proptest::collection::vec(any::<CreateSinkCommand<mz_repr::Timestamp>>(), 1..4)
+                .prop_map(StorageCommand::CreateSinks),
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
@@ -354,7 +354,7 @@ where
 {
     fn observe_command(&mut self, command: &StorageCommand<T>) {
         match command {
-            StorageCommand::IngestSources(ingestions) => {
+            StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {
                     let mut frontier = MutableAntichain::new();
                     frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
@@ -363,7 +363,7 @@ where
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", ingestion.id, command);
                 }
             }
-            StorageCommand::ExportSinks(exports) => {
+            StorageCommand::CreateSinks(exports) => {
                 for export in exports {
                     let mut frontier = MutableAntichain::new();
                     frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));

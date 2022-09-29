@@ -313,8 +313,8 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 ScalarType::Date => Value::Date(datum.unwrap_date().unix_epoch_days()),
                 ScalarType::Time => Value::Long({
                     let time = datum.unwrap_time();
-                    (time.num_seconds_from_midnight() * 1_000_000) as i64
-                        + (time.nanosecond() as i64) / 1_000
+                    i64::from(time.num_seconds_from_midnight()) * 1_000_000
+                        + i64::from(time.nanosecond()) / 1_000
                 }),
                 ScalarType::Timestamp => Value::Timestamp(datum.unwrap_timestamp()),
                 ScalarType::TimestampTz => Value::Timestamp(datum.unwrap_timestamptz().naive_utc()),
@@ -397,7 +397,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .collect();
                     Value::Record(fields)
                 }
-                ScalarType::MzTimestamp => Value::String(datum.unwrap_mztimestamp().to_string()),
+                ScalarType::MzTimestamp => Value::String(datum.unwrap_mz_timestamp().to_string()),
             };
             if typ.nullable {
                 val = Value::Union {

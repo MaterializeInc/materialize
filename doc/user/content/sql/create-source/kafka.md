@@ -57,13 +57,7 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`client_id`                          | `text`    | Use the supplied value as the Kafka client identifier.
-`group_id_prefix`                    | `text`    | Use the specified prefix in the consumer group ID. The resulting `group.id` looks like `<group_id_prefix>materialize-X-Y`, where `X` and `Y` are values that allow multiple concurrent Kafka consumers from the same topic.
-`isolation_level`                    | `text`    | Default: `read_committed`. Controls how to read messages that were transactionally written to Kafka. Supported options are `read_committed` to read only committed messages and `read_uncommitted` to read all messages, including those that are part of an open transaction or were aborted.
-`statistics_interval_ms`             | `int`     | `librdkafka` statistics emit interval in `ms`. A value of 0 disables statistics. Statistics can be queried using the `mz_kafka_source_statistics` system table. Accepts values [0, 86400000].
-`topic_metadata_refresh_interval_ms` | `int`     | Default: `300000`. Sets the frequency in `ms` at which the system checks for new partitions. Accepts values [0,3600000].
-`enable_auto_commit`                 | `boolean` | Default: `false`. Controls whether or not Materialize commits read offsets back into Kafka. This is purely for consumer progress monitoring and does not cause Materialize to resume reading from where it left off across restarts.
-`fetch_message_max_bytes` | `int` | Default: `134217728`. Controls the initial maximum number of bytes per topic+partition to request when fetching messages from the broker. If the client encounters a message larger than this value it will gradually try to increase it until the entire message can be fetched. Accepts values [1, 1000000000].
+`TOPIC`                              | `text`    | The Kafka topic you want to subscribe to.
 
 ### `WITH` options
 
@@ -122,10 +116,6 @@ CREATE SOURCE kafka_repl
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM;
 ```
-
-Note that:
-
-- If log compaction is enabled for your Debezium topic, you must use `ENVELOPE DEBEZIUM UPSERT`.
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
 
@@ -229,43 +219,37 @@ offset
 13
 ```
 
-Note that:
-
-- Using the `INCLUDE OFFSET` option with Debezium requires `UPSERT` semantics.
-
 ### Setting start offsets
 
-To start consuming a Kafka stream from a specific offset, you can use the `start_offset` option.
+To start consuming a Kafka stream from a specific offset, you can use the `START OFFSET` option.
 
 ```sql
 CREATE SOURCE kafka_offset
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   -- Start reading from the earliest offset in the first partition,
   -- the second partition at 10, and the third partition at 100
-  WITH (start_offset=[0,10,100])
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'data', START OFFSET=[0,10,100])
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
 Note that:
 
-- If fewer offsets than partitions are provided, the remaining partitions will start at offset 0. This is true if you provide `start_offset=1` or `start_offset=[1, ...]`.
-- If more offsets than partitions are provided, then any partitions added later will incorrectly be read from that offset. So, if you have a single partition, but you provide `start_offset=[1,2]`, when you add the second partition you will miss the first 2 records of data.
-- Using an offset with a source envelope that can supply updates or deletes requires that Materialize handle possibly nonsensical events (e.g. an update for a row that was never inserted). For that reason, starting at an offset requires either a `NONE` envelope or a `(DEBEZIUM) UPSERT` envelope.
+- If fewer offsets than partitions are provided, the remaining partitions will start at offset 0. This is true if you provide `START OFFSET=1` or `START OFFSET=[1, ...]`.
+- If more offsets than partitions are provided, then any partitions added later will incorrectly be read from that offset. So, if you have a single partition, but you provide `START OFFSET=[1,2]`, when you add the second partition you will miss the first 2 records of data.
 
 #### Time-based offsets
 
-It's also possible to set a start offset based on Kafka timestamps, using the `kafka_time_offset` option. This approach sets the start offset for each available partition based on the Kafka timestamp and the source behaves as if `start_offset` was provided directly.
+It's also possible to set a start offset based on Kafka timestamps, using the `START TIMESTAMP` option. This approach sets the start offset for each available partition based on the Kafka timestamp and the source behaves as if `START OFFSET` was provided directly.
 
-It's important to note that `kafka_time_offset` is a property of the source: it will be calculated _once_ at the time the `CREATE SOURCE` statement is issued. This means that the computed start offsets will be the **same** for all views depending on the source and **stable** across restarts.
+It's important to note that `START TIMESTAMP` is a property of the source: it will be calculated _once_ at the time the `CREATE SOURCE` statement is issued. This means that the computed start offsets will be the **same** for all views depending on the source and **stable** across restarts.
 
 If you need to limit the amount of data maintained as state after source creation, consider using [temporal filters](/sql/patterns/temporal-filters/) instead.
 
-#### `WITH` options
+#### `CONNECTION` options
 
 Field               | Value | Description
 --------------------|-------|--------------------
-`start_offset`      | `int` | Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers, and the source must use either `ENVELOPE NONE` or `(DEBEZIUM) UPSERT`.
-`kafka_time_offset` | `int` | Use the specified value to set `start_offset` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used.
+`START OFFSET`      | `int` | Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers.
+`START TIMESTAMP`   | `int` | Use the specified value to set `START OFFSET` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used.
 
 #### `KEY STRATEGY` and `VALUE STRATEGY`
 
@@ -369,7 +353,6 @@ CREATE VIEW jsonified_kafka_source AS
 ```sql
 CREATE SOURCE proto_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  WITH (cache = true)
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 

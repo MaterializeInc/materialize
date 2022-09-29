@@ -187,7 +187,7 @@ async fn create_mz_objects(config: MzConfig) -> Result<()> {
         if config.low_memory {
             mz::drop_indexes(&client).await?;
         }
-        let sink_topic = mz::create_kafka_sink(
+        mz::create_kafka_sink(
             &client,
             &config.kafka_url,
             config::KAFKA_SINK_TOPIC_NAME,
@@ -201,7 +201,7 @@ async fn create_mz_objects(config: MzConfig) -> Result<()> {
                 &config.kafka_url,
                 &config.schema_registry_url,
                 config::REINGESTED_SINK_SOURCE_NAME,
-                &sink_topic,
+                config::KAFKA_SINK_TOPIC_NAME,
             )
             .await?;
             mz::init_sink_views(&client, config::REINGESTED_SINK_SOURCE_NAME).await?;

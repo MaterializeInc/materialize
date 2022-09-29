@@ -18,8 +18,6 @@ Field | Use
 **IF EXISTS** | Do not return an error if the specified cluster replica does not exist.
 _cluster_name_ | The cluster you want to remove a replica from. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
 _replica&lowbar;name_ | The cluster replica you want to drop. For available cluster replicas, see [`SHOW CLUSTER REPLICAS`](../show-cluster-replicas).
-**CASCADE** | Remove the cluster replica and any objects depending on its introspection tables.
-**RESTRICT** | Do not drop the cluster replica if it has dependencies. _(Default)_
 
 ## Examples
 

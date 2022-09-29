@@ -271,7 +271,7 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         (UInt64, Float64) => Implicit: CastUint64ToFloat64(func::CastUint64ToFloat64),
         (UInt64, String) => Assignment: CastUint64ToString(func::CastUint64ToString),
 
-        // MZTIMESTAMP
+        // MZ_TIMESTAMP
         (MzTimestamp, String) => Assignment: CastMzTimestampToString(func::CastMzTimestampToString),
         (String, MzTimestamp) => Assignment: CastStringToMzTimestamp(func::CastStringToMzTimestamp),
         (UInt64, MzTimestamp) => Implicit: CastUint64ToMzTimestamp(func::CastUint64ToMzTimestamp),

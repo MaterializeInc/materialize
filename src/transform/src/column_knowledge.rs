@@ -43,14 +43,23 @@ impl CheckedRecursion for ColumnKnowledge {
 
 impl crate::Transform for ColumnKnowledge {
     /// Transforms an expression through accumulated knowledge.
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "column_knowledge")
+    )]
     fn transform(
         &self,
         expr: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
         let mut knowledge_stack = Vec::<DatumKnowledge>::new();
-        self.harvest(expr, &mut HashMap::new(), &mut knowledge_stack)
-            .map(|_| ())
+        let result = self
+            .harvest(expr, &mut HashMap::new(), &mut knowledge_stack)
+            .map(|_| ());
+        mz_repr::explain_new::trace_plan(&*expr);
+        result
     }
 }
 

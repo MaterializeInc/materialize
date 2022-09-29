@@ -213,15 +213,15 @@ where
     Nestable::Yes
 }
 
-/// Parses an `mztimestamp` from `s`.
-pub fn parse_mztimestamp(s: &str) -> Result<crate::Timestamp, ParseError> {
+/// Parses an `mz_timestamp` from `s`.
+pub fn parse_mz_timestamp(s: &str) -> Result<crate::Timestamp, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::invalid_input_syntax("mztimestamp", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("mz_timestamp", s).with_details(e))
 }
 
-/// Writes an `mztimestamp` to `buf`.
-pub fn format_mztimestamp<F>(buf: &mut F, u: crate::Timestamp) -> Nestable
+/// Writes an `mz_timestamp` to `buf`.
+pub fn format_mz_timestamp<F>(buf: &mut F, u: crate::Timestamp) -> Nestable
 where
     F: FormatBuffer,
 {

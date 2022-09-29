@@ -20,11 +20,11 @@ use timely::progress::Timestamp;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
-use mz_compute_client::controller::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
+use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceReplicaConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;
-use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType};
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
@@ -532,14 +532,14 @@ impl<S: Append> Connection<S> {
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
     pub async fn load_system_gids(
         &mut self,
-    ) -> Result<BTreeMap<(String, String), (GlobalId, u64)>, Error> {
+    ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, u64)>, Error> {
         Ok(COLLECTION_SYSTEM_GID_MAPPING
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(|(k, v)| {
                 (
-                    (k.schema_name, k.object_name),
+                    (k.schema_name, k.object_type, k.object_name),
                     (GlobalId::System(v.id), v.fingerprint),
                 )
             })
@@ -588,6 +588,7 @@ impl<S: Append> Connection<S> {
         let mappings = mappings.into_iter().map(
             |SystemObjectMapping {
                  schema_name,
+                 object_type,
                  object_name,
                  id,
                  fingerprint,
@@ -600,6 +601,7 @@ impl<S: Append> Connection<S> {
                 (
                     GidMappingKey {
                         schema_name,
+                        object_type,
                         object_name,
                     },
                     GidMappingValue { id, fingerprint },
@@ -648,7 +650,7 @@ impl<S: Append> Connection<S> {
         replica_id: ReplicaId,
         compute_instance_id: ComputeInstanceId,
         name: String,
-        config: &ConcreteComputeInstanceReplicaConfig,
+        config: &ComputeInstanceReplicaConfig,
     ) -> Result<(), Error> {
         let key = ComputeInstanceReplicaKey { id: replica_id };
         let val = ComputeInstanceReplicaValue {
@@ -1466,6 +1468,7 @@ struct IdAllocValue {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct GidMappingKey {
     schema_name: String,
+    object_type: CatalogItemType,
     object_name: String,
 }
 

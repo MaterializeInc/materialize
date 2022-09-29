@@ -296,7 +296,7 @@ impl std::str::FromStr for Timestamp {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self {
-            internal: s.parse().map_err(|_| "could not parse mztimestamp")?,
+            internal: s.parse().map_err(|_| "could not parse mz_timestamp")?,
         })
     }
 }

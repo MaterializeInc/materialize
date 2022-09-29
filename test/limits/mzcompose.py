@@ -513,7 +513,7 @@ class KafkaSinksSameSource(Generator):
                      > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
                      > CREATE SINK s{i} FROM v1
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
-                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM
                      """
                 )
@@ -1438,8 +1438,8 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                          > CREATE MATERIALIZED VIEW v_{cluster_name} AS
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
-                        > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                          FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+                         > CREATE CONNECTION IF NOT EXISTS kafka_conn
+                           FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
 
                          > CREATE CONNECTION IF NOT EXISTS csr_conn
                            FOR CONFLUENT SCHEMA REGISTRY

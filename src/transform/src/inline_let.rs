@@ -54,6 +54,12 @@ impl CheckedRecursion for InlineLet {
 }
 
 impl crate::Transform for InlineLet {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "inline_let")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -68,6 +74,7 @@ impl crate::Transform for InlineLet {
                 body: Box::new(relation.take_dangerous()),
             };
         }
+        mz_repr::explain_new::trace_plan(&*relation);
         Ok(())
     }
 }

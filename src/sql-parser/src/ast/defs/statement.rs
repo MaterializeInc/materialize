@@ -1440,9 +1440,6 @@ pub struct DropClusterReplicasStatement {
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
     pub names: Vec<QualifiedReplica>,
-    /// Whether `CASCADE` was specified. This will be `false` when
-    /// `RESTRICT` or no drop behavior at all was specified.
-    pub cascade: bool,
 }
 
 impl AstDisplay for DropClusterReplicasStatement {
@@ -1452,9 +1449,6 @@ impl AstDisplay for DropClusterReplicasStatement {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&display::comma_separated(&self.names));
-        if self.cascade {
-            f.write_str(" CASCADE");
-        }
     }
 }
 impl_display!(DropClusterReplicasStatement);
@@ -2237,6 +2231,21 @@ pub enum ExplainStageNew {
     PhysicalPlan,
     /// The complete trace of the plan through the optimizer
     Trace,
+}
+
+impl ExplainStageNew {
+    /// Return the tracing path that corresponds to a given stage.
+    pub fn path(&self) -> &'static str {
+        match self {
+            ExplainStageNew::RawPlan => "optimize/raw",
+            ExplainStageNew::QueryGraph => "optimize/qgm/raw",
+            ExplainStageNew::OptimizedQueryGraph => "optimize/qgm/optimized",
+            ExplainStageNew::DecorrelatedPlan => "optimize/hir_to_mir",
+            ExplainStageNew::OptimizedPlan => "optimize/global",
+            ExplainStageNew::PhysicalPlan => "optimize/mir_to_lir",
+            ExplainStageNew::Trace => unreachable!(),
+        }
+    }
 }
 
 impl AstDisplay for ExplainStageNew {

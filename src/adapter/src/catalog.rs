@@ -31,8 +31,7 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
     ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceReplicaAllocation,
-    ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLocation,
-    ConcreteComputeInstanceReplicaLogging,
+    ComputeInstanceReplicaConfig, ComputeInstanceReplicaLocation, ComputeInstanceReplicaLogging,
 };
 use mz_compute_client::logging::{
     LogVariant, LogView, LoggingConfig as DataflowLoggingConfig, DEFAULT_LOG_VARIANTS,
@@ -74,7 +73,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinStorageCollection, BuiltinTable, BuiltinType, Fingerprint,
     BUILTINS, BUILTIN_ROLE_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
-    MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    MZ_TEMP_SCHEMA, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
@@ -259,6 +258,23 @@ impl CatalogState {
         }
     }
 
+    /// Indicates whether the indicated item is considered stable or not.
+    ///
+    /// Only stable items can be used as dependencies of other catalog items.
+    pub fn is_stable(&self, id: GlobalId) -> bool {
+        let item = self.get_entry(&id).item();
+
+        match item {
+            CatalogItem::Table(_) => {
+                !(id == self.resolve_builtin_table(&MZ_VIEW_KEYS)
+                    || id == self.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS))
+            }
+            CatalogItem::Log(_) => false,
+            // In general, an item is stable iff all its dependencies are stable.
+            item => item.uses().iter().all(|id| self.is_stable(*id)),
+        }
+    }
+
     pub fn resolve_full_name(
         &self,
         name: &QualifiedObjectName,
@@ -358,7 +374,7 @@ impl CatalogState {
     /// Create and insert the per replica log sources and log views.
     fn insert_replica_introspection_items(
         &mut self,
-        persisted_logs: &ConcreteComputeInstanceReplicaLogging,
+        persisted_logs: &ComputeInstanceReplicaLogging,
         replica_id: u64,
     ) {
         for (variant, source_id) in persisted_logs.get_sources() {
@@ -481,6 +497,7 @@ impl CatalogState {
             .flatten()
     }
 
+    /// Associates a name, `GlobalId`, and entry.
     fn insert_item(
         &mut self,
         id: GlobalId,
@@ -536,11 +553,18 @@ impl CatalogState {
             &entry.name().qualifiers.schema_spec,
             conn_id,
         );
-        if let CatalogItem::Func(_) = entry.item() {
-            schema.functions.insert(entry.name.item.clone(), entry.id);
+
+        let prev_id = if let CatalogItem::Func(_) = entry.item() {
+            schema.functions.insert(entry.name.item.clone(), entry.id)
         } else {
-            schema.items.insert(entry.name.item.clone(), entry.id);
-        }
+            schema.items.insert(entry.name.item.clone(), entry.id)
+        };
+
+        assert!(
+            prev_id.is_none(),
+            "builtin name collision on {:?}",
+            entry.name.item.clone()
+        );
 
         self.entry_by_id.insert(entry.id, entry.clone());
     }
@@ -688,7 +712,7 @@ impl CatalogState {
         on_instance: ComputeInstanceId,
         replica_name: String,
         replica_id: ReplicaId,
-        config: ConcreteComputeInstanceReplicaConfig,
+        config: ComputeInstanceReplicaConfig,
     ) {
         self.insert_replica_introspection_items(&config.persisted_logs, replica_id);
         let replica = ComputeInstanceReplica {
@@ -1202,7 +1226,7 @@ pub struct ComputeInstance {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ComputeInstanceReplica {
-    pub config: ConcreteComputeInstanceReplicaConfig,
+    pub config: ComputeInstanceReplicaConfig,
     pub process_status: HashMap<ProcessId, ComputeInstanceEvent>,
 }
 
@@ -1252,6 +1276,9 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
+    pub connection_id: Option<GlobalId>,
+    // TODO(benesch): this field contains connection information that could be
+    // derived from the connection ID. Too hard to fix at the moment.
     pub source_desc: SourceDesc,
     pub desc: RelationDesc,
     pub timeline: Timeline,
@@ -1263,6 +1290,9 @@ pub struct Source {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
+    pub connection_id: Option<GlobalId>,
+    // TODO(benesch): this field duplicates information that could be derived
+    // from the connection ID. Too hard to fix at the moment.
     pub connection: StorageSinkConnectionState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
@@ -1662,8 +1692,16 @@ struct AllocatedBuiltinSystemIds<T> {
     migrated_builtins: Vec<(GlobalId, u64)>,
 }
 
+/// Functions can share the same name as any other catalog item type
+/// within a given schema.
+/// For example, a function can have the same name as a type, e.g.
+/// 'date'.
+/// As such, system objects are keyed in the catalog storage by the
+/// tuple (schema_name, object_type, object_name), which is guaranteed
+/// to be unique.
 pub struct SystemObjectMapping {
     schema_name: String,
+    object_type: CatalogItemType,
     object_name: String,
     id: GlobalId,
     fingerprint: u64,
@@ -1892,7 +1930,11 @@ impl<S: Append> Catalog<S> {
                     .collect(),
                 |builtin| {
                     persisted_builtin_ids
-                        .get(&(builtin.schema().to_string(), builtin.name().to_string()))
+                        .get(&(
+                            builtin.schema().to_string(),
+                            builtin.catalog_item_type(),
+                            builtin.name().to_string(),
+                        ))
                         .cloned()
                 },
             )
@@ -1978,6 +2020,7 @@ impl<S: Append> Catalog<S> {
             .iter()
             .map(|(builtin, id)| SystemObjectMapping {
                 schema_name: builtin.schema().to_string(),
+                object_type: builtin.catalog_item_type(),
                 object_name: builtin.name().to_string(),
                 id: *id,
                 fingerprint: builtin.fingerprint(),
@@ -2049,16 +2092,16 @@ impl<S: Append> Catalog<S> {
                     if inst.logging.is_some() {
                         catalog.allocate_persisted_introspection_items().await
                     } else {
-                        ConcreteComputeInstanceReplicaLogging::ConcreteViews(vec![], vec![])
+                        ComputeInstanceReplicaLogging::ConcreteViews(vec![], vec![])
                     }
                 }
 
                 SerializedComputeInstanceReplicaLogging::ConcreteViews(x, y) => {
-                    ConcreteComputeInstanceReplicaLogging::ConcreteViews(x.clone(), y.clone())
+                    ComputeInstanceReplicaLogging::ConcreteViews(x.clone(), y.clone())
                 }
             };
 
-            let config = ConcreteComputeInstanceReplicaConfig {
+            let config = ComputeInstanceReplicaConfig {
                 location: catalog.concretize_replica_location(serialized_config.location)?,
                 persisted_logs: persisted_logs.clone(),
             };
@@ -2197,14 +2240,19 @@ impl<S: Append> Catalog<S> {
         let AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
-            ..
+            migrated_builtins,
         } = self
             .allocate_system_ids(BUILTINS::types().collect(), |typ| {
                 persisted_builtin_ids
-                    .get(&(typ.schema.to_string(), typ.name.to_string()))
+                    .get(&(
+                        typ.schema.to_string(),
+                        CatalogItemType::Type,
+                        typ.name.to_string(),
+                    ))
                     .cloned()
             })
             .await?;
+        assert!(migrated_builtins.is_empty(), "types cannot be migrated");
         let name_to_id_map: HashMap<&str, GlobalId> = all_builtins
             .into_iter()
             .map(|(typ, id)| (typ.name, id))
@@ -2257,6 +2305,7 @@ impl<S: Append> Catalog<S> {
             .iter()
             .map(|(typ, id)| SystemObjectMapping {
                 schema_name: typ.schema.to_string(),
+                object_type: CatalogItemType::Type,
                 object_name: typ.name.to_string(),
                 id: *id,
                 fingerprint: typ.fingerprint(),
@@ -2346,7 +2395,7 @@ impl<S: Append> Catalog<S> {
     ///
     /// Objects need to be dropped starting from the leafs of the DAG going up towards the roots,
     /// and they need to be recreated starting at the root of the DAG and going towards the leafs.
-    async fn generate_builtin_migration_metadata(
+    pub async fn generate_builtin_migration_metadata(
         &mut self,
         migrated_ids: Vec<(GlobalId, u64)>,
     ) -> Result<BuiltinMigrationMetadata, Error> {
@@ -2354,6 +2403,7 @@ impl<S: Append> Catalog<S> {
 
         let mut object_queue: VecDeque<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
         let mut visited_set: HashSet<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
+        let mut topological_sort = Vec::new();
         let mut ancestor_ids = HashMap::new();
 
         let id_fingerprint_map: HashMap<GlobalId, u64> = migrated_ids.into_iter().collect();
@@ -2387,6 +2437,7 @@ impl<S: Append> Catalog<S> {
                     id,
                     SystemObjectMapping {
                         schema_name: schema_name.to_string(),
+                        object_type: entry.item_type(),
                         object_name: entry.name.item.clone(),
                         id: new_id,
                         fingerprint: *fingerprint,
@@ -2394,6 +2445,29 @@ impl<S: Append> Catalog<S> {
                 );
             }
 
+            // Defer adding the create/drop ops until we know more about the dependency graph.
+            topological_sort.push((entry, new_id));
+
+            ancestor_ids.insert(id, new_id);
+
+            // Add children to queue.
+            for dependant in &entry.used_by {
+                if !visited_set.contains(&dependant) {
+                    object_queue.push_back(*dependant);
+                    visited_set.insert(*dependant);
+                } else {
+                    // If dependant is a child of the current node, then we need to make sure that
+                    // it appears later in the topologically sorted list.
+                    if let Some(idx) = topological_sort.iter().position(|(_, id)| id == dependant) {
+                        let dependant = topological_sort.remove(idx);
+                        topological_sort.push(dependant);
+                    }
+                }
+            }
+        }
+
+        for (entry, new_id) in topological_sort {
+            let id = entry.id();
             // Push drop commands.
             match entry.item() {
                 CatalogItem::Table(_) | CatalogItem::Source(_) => {
@@ -2439,16 +2513,6 @@ impl<S: Append> Catalog<S> {
             migration_metadata
                 .all_create_ops
                 .push((new_id, entry.oid, name, item_rebuilder));
-
-            ancestor_ids.insert(id, new_id);
-
-            // Add children to queue.
-            for dependant in &entry.used_by {
-                if !visited_set.contains(&dependant) {
-                    object_queue.push_back(*dependant);
-                    visited_set.insert(*dependant);
-                }
-            }
         }
 
         // Reverse drop commands.
@@ -2716,6 +2780,16 @@ impl<S: Append> Catalog<S> {
 
     pub async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().await.allocate_user_id().await
+    }
+
+    pub async fn test_only_dont_use_in_production_allocate_system_id(
+        &mut self,
+    ) -> Result<GlobalId, Error> {
+        self.storage()
+            .await
+            .allocate_system_ids(1)
+            .await
+            .map(|ids| ids.into_element())
     }
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
@@ -3100,14 +3174,14 @@ impl<S: Append> Catalog<S> {
     pub fn concretize_replica_location(
         &self,
         location: SerializedComputeInstanceReplicaLocation,
-    ) -> Result<ConcreteComputeInstanceReplicaLocation, AdapterError> {
+    ) -> Result<ComputeInstanceReplicaLocation, AdapterError> {
         let cluster_replica_sizes = &self.state.cluster_replica_sizes;
         let location = match location {
             SerializedComputeInstanceReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
-            } => ConcreteComputeInstanceReplicaLocation::Remote {
+            } => ComputeInstanceReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
@@ -3133,7 +3207,7 @@ impl<S: Append> Catalog<S> {
                         expected,
                     }
                 })?;
-                ConcreteComputeInstanceReplicaLocation::Managed {
+                ComputeInstanceReplicaLocation::Managed {
                     allocation: allocation.clone(),
                     availability_zone,
                     size,
@@ -3225,7 +3299,7 @@ impl<S: Append> Catalog<S> {
                 id: ReplicaId,
                 name: String,
                 on_cluster_name: String,
-                config: ConcreteComputeInstanceReplicaConfig,
+                config: ComputeInstanceReplicaConfig,
             },
             CreateItem {
                 id: GlobalId,
@@ -3506,9 +3580,7 @@ impl<S: Append> Catalog<S> {
                         &name,
                         &config.clone().into(),
                     )?;
-                    if let ConcreteComputeInstanceReplicaLocation::Managed { size, .. } =
-                        &config.location
-                    {
+                    if let ComputeInstanceReplicaLocation::Managed { size, .. } = &config.location {
                         let details = EventDetails::CreateComputeInstanceReplicaV1(
                             mz_audit_log::CreateComputeInstanceReplicaV1 {
                                 cluster_id: id,
@@ -3540,6 +3612,8 @@ impl<S: Append> Catalog<S> {
                     name,
                     item,
                 } => {
+                    self.ensure_no_unstable_uses(&item)?;
+
                     if item.is_temporary() {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
                             || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
@@ -4189,6 +4263,25 @@ impl<S: Append> Catalog<S> {
         })
     }
 
+    fn ensure_no_unstable_uses(&self, item: &CatalogItem) -> Result<(), AdapterError> {
+        let unstable_dependencies: Vec<_> = item
+            .uses()
+            .iter()
+            .filter(|id| !self.state.is_stable(**id))
+            .map(|id| self.state.get_entry(&id).name().item.clone())
+            .collect();
+
+        if unstable_dependencies.is_empty() {
+            Ok(())
+        } else {
+            let object_type = item.typ().to_string();
+            Err(AdapterError::UnstableDependency {
+                object_type,
+                unstable_dependencies,
+            })
+        }
+    }
+
     pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
         Ok(self.storage().await.consolidate(collections).await?)
     }
@@ -4267,6 +4360,7 @@ impl<S: Append> Catalog<S> {
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
+                connection_id: source.connection_id,
                 source_desc: source.source_desc,
                 desc: source.desc,
                 timeline,
@@ -4314,6 +4408,7 @@ impl<S: Append> Catalog<S> {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
+                connection_id: sink.connection_id,
                 connection: StorageSinkConnectionState::Pending(sink.connection_builder),
                 envelope: sink.envelope,
                 with_snapshot,
@@ -4447,7 +4542,7 @@ impl<S: Append> Catalog<S> {
     /// Called once per compute replica creation.
     pub async fn allocate_persisted_introspection_items(
         &mut self,
-    ) -> ConcreteComputeInstanceReplicaLogging {
+    ) -> ComputeInstanceReplicaLogging {
         let logs = {
             let log_amount = DEFAULT_LOG_VARIANTS.len();
             let system_ids = self
@@ -4468,7 +4563,7 @@ impl<S: Append> Catalog<S> {
                 .collect()
         };
 
-        ConcreteComputeInstanceReplicaLogging::ConcreteViews(
+        ComputeInstanceReplicaLogging::ConcreteViews(
             logs,
             self.allocate_persisted_introspection_views().await,
         )
@@ -4528,7 +4623,7 @@ pub enum Op {
     CreateComputeInstanceReplica {
         name: String,
         on_cluster_name: String,
-        config: ConcreteComputeInstanceReplicaConfig,
+        config: ComputeInstanceReplicaConfig,
     },
     CreateItem {
         id: GlobalId,
@@ -4596,7 +4691,7 @@ pub enum SerializedCatalogItem {
 }
 
 /// Serialized (stored alongside the replica) logging configuration of
-/// a replica. Serialized variant of ConcreteComputeInstanceReplicaLogging.
+/// a replica. Serialized variant of `ComputeInstanceReplicaLogging`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SerializedComputeInstanceReplicaLogging {
     /// Instantiate default logging configuration upon system start.
@@ -4606,30 +4701,30 @@ pub enum SerializedComputeInstanceReplicaLogging {
     ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
 }
 
-impl From<ConcreteComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
-    fn from(conc: ConcreteComputeInstanceReplicaLogging) -> Self {
-        match conc {
-            ConcreteComputeInstanceReplicaLogging::Default => Self::Default,
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(x, y) => Self::ConcreteViews(x, y),
+impl From<ComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
+    fn from(logging: ComputeInstanceReplicaLogging) -> Self {
+        match logging {
+            ComputeInstanceReplicaLogging::Default => Self::Default,
+            ComputeInstanceReplicaLogging::ConcreteViews(x, y) => Self::ConcreteViews(x, y),
         }
     }
 }
 
-/// A [`mz_sql::plan::ComputeInstanceReplicaConfig`] that is serialized as JSON and persisted
-/// to the catalog stash. This is a separate type to allow us to evolve the
-/// on-disk format independently from the SQL layer.
+/// A [`mz_compute_client::controller::ComputeInstanceReplicaConfig`] that is serialized as JSON
+/// and persisted to the catalog stash. This is a separate type to allow us to evolve the on-disk
+/// format independently from the SQL layer.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedComputeInstanceReplicaConfig {
     pub persisted_logs: SerializedComputeInstanceReplicaLogging,
     pub location: SerializedComputeInstanceReplicaLocation,
 }
 
-impl From<ConcreteComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
+impl From<ComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
     fn from(
-        ConcreteComputeInstanceReplicaConfig {
+        ComputeInstanceReplicaConfig {
             location,
             persisted_logs,
-        }: ConcreteComputeInstanceReplicaConfig,
+        }: ComputeInstanceReplicaConfig,
     ) -> Self {
         SerializedComputeInstanceReplicaConfig {
             persisted_logs: persisted_logs.into(),
@@ -4654,10 +4749,10 @@ pub enum SerializedComputeInstanceReplicaLocation {
     },
 }
 
-impl From<ConcreteComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
-    fn from(loc: ConcreteComputeInstanceReplicaLocation) -> Self {
+impl From<ComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
+    fn from(loc: ComputeInstanceReplicaLocation) -> Self {
         match loc {
-            ConcreteComputeInstanceReplicaLocation::Remote {
+            ComputeInstanceReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
@@ -4666,7 +4761,7 @@ impl From<ConcreteComputeInstanceReplicaLocation> for SerializedComputeInstanceR
                 compute_addrs,
                 workers,
             },
-            ConcreteComputeInstanceReplicaLocation::Managed {
+            ComputeInstanceReplicaLocation::Managed {
                 allocation: _,
                 size,
                 availability_zone,
@@ -5022,16 +5117,6 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
 
     fn replica_names(&self) -> HashSet<&String> {
         self.replica_id_by_name.keys().collect::<HashSet<_>>()
-    }
-
-    fn replica_logs_and_views(&self, name: &String) -> Option<(Vec<GlobalId>, Vec<GlobalId>)> {
-        let replica = self
-            .replicas_by_id
-            .get(self.replica_id_by_name.get(name)?)?;
-        Some((
-            replica.config.persisted_logs.get_source_ids().collect(),
-            replica.config.persisted_logs.get_view_ids().collect(),
-        ))
     }
 }
 

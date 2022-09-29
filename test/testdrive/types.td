@@ -33,7 +33,7 @@ _uint4
 _uint8
 _interval
 _jsonb
-_mztimestamp
+_mz_timestamp
 _numeric
 _oid
 _record
@@ -73,7 +73,7 @@ interval
 jsonb
 list
 map
-mztimestamp
+mz_timestamp
 numeric
 oid
 regclass

@@ -53,7 +53,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         sink.from,
         Arc::clone(&storage_state.persist_clients),
         sink.from_storage_metadata.clone(),
-        sink.as_of.frontier.clone(),
+        Some(sink.as_of.frontier.clone()),
         timely::progress::Antichain::new(),
         None,
         // Copy the logic in DeltaJoin/Get/Join to start.

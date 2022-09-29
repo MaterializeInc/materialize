@@ -610,27 +610,6 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // TODO: This is a temporary hack to allow us to support the special
-        // `date(expr)` cast function without needing to write a migration. It
-        // will be removed during a wipe week.
-        if let (FunctionArgs::Args { args, order_by }, None, None, false) =
-            (&args, &filter, &over, distinct)
-        {
-            if order_by.is_empty()
-                && args.len() == 1
-                && name.0.len() == 1
-                && name.0[0].as_str().eq_ignore_ascii_case("date")
-            {
-                return Ok(Expr::Cast {
-                    expr: Box::new(args[0].clone()),
-                    data_type: RawDataType::Other {
-                        name: RawObjectName::Name(name),
-                        typ_mod: Vec::new(),
-                    },
-                });
-            }
-        }
-
         Ok(Expr::Function(Function {
             name,
             args,
@@ -1646,7 +1625,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE",
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW or VIEWS, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
                     self.peek_token(),
                 )
             }
@@ -2063,14 +2042,10 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(ID)?;
                 KafkaConfigOptionName::ClientId
             }
-            ENABLE => match self.expect_one_of_keywords(&[AUTO, IDEMPOTENCE])? {
-                AUTO => {
-                    self.expect_keyword(COMMIT)?;
-                    KafkaConfigOptionName::EnableAutoCommit
-                }
-                IDEMPOTENCE => KafkaConfigOptionName::EnableIdempotence,
-                _ => unreachable!(),
-            },
+            ENABLE => {
+                self.expect_keyword(IDEMPOTENCE)?;
+                KafkaConfigOptionName::EnableIdempotence
+            }
             FETCH => {
                 self.expect_keywords(&[MESSAGE, crate::keywords::MAX, BYTES])?;
                 KafkaConfigOptionName::FetchMessageMaxBytes
@@ -3105,16 +3080,8 @@ impl<'a> Parser<'a> {
             let replica = p.parse_identifier()?;
             Ok(QualifiedReplica { cluster, replica })
         })?;
-        let cascade = matches!(
-            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
-            Some(CASCADE),
-        );
         Ok(Statement::DropClusterReplicas(
-            DropClusterReplicasStatement {
-                if_exists,
-                names,
-                cascade,
-            },
+            DropClusterReplicasStatement { if_exists, names },
         ))
     }
 

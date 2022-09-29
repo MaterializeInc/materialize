@@ -75,12 +75,13 @@ create_sink ::=
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' 'KAFKA' 'CONNECTION' connection_name 'TOPIC' topic with_options?
+  'FROM' 'KAFKA' 'CONNECTION' connection_name
+  '(' 'TOPIC' topic ( ( ',' connection_option )? ) ')'
   ('KEY FORMAT' format_spec 'VALUE FORMAT' format_spec | 'FORMAT' format_spec)
   ('INCLUDE'
     ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
   )?
-  ('ENVELOPE' ('NONE' | 'DEBEZIUM' ('UPSERT')? | 'UPSERT'))?
+  ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'))?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_kinesis ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
@@ -99,7 +100,7 @@ load_generator_option ::=
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
-  'PUBLICATION' publication_name
+  '(' 'PUBLICATION' publication_name ')'
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_s3 ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
@@ -155,7 +156,7 @@ drop_connection ::=
 drop_cluster ::=
   'DROP' 'CLUSTER' ('IF EXISTS')? cluster_name ('CASCADE' | 'RESTRICT')?
 drop_cluster_replica ::=
-  'DROP' 'CLUSTER' 'REPLICA' ('IF EXISTS')? cluster_name.replica_name ('CASCADE' | 'RESTRICT')?
+  'DROP' 'CLUSTER' 'REPLICA' ('IF EXISTS')? cluster_name.replica_name
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_index ::=

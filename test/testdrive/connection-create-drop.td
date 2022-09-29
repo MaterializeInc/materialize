@@ -33,12 +33,26 @@ name   create_sql
 ---------------------------------
 materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER = '${testdrive.kafka-addr}'"
 
-> SELECT brokers, progress_topic FROM mz_kafka_connections
-brokers                     progress_topic
-------------------------------------------
-{${testdrive.kafka-addr}} <null>
+> SELECT
+      brokers,
+      sink_progress_topic = '_materialize-progress-' || mz_environment_id() || '-' || id
+  FROM mz_kafka_connections
+  JOIN mz_connections USING (id)
+  WHERE name = 'testconn'
+{${testdrive.kafka-addr}}   true
 
 > DROP CONNECTION testconn
+
+> CREATE CONNECTION progress_override
+  FOR KAFKA BROKER '${testdrive.kafka-addr}',
+  PROGRESS TOPIC 'override_topic'
+
+> SELECT
+    brokers, sink_progress_topic
+  FROM mz_kafka_connections
+  JOIN mz_connections USING (id)
+  WHERE name = 'progress_override'
+{${testdrive.kafka-addr}}   override_topic
 
 ###
 # Test that connections work in creating a source
