@@ -392,13 +392,14 @@ As the `EXPLAIN` output contains parts that change between invocations, a `$ set
 
 # Using Variables
 
-> :warning: **all testdrive variables are initialized to their ultimate value at the start of the test**
->
-> The place where the variable is declared within the script does not matter.
->
-> :warning: **testdrive variables are read-only**
+## Static variables
 
-## Defining variables
+If your variables' values are known at the beginning of the test (e.g. schemas), you can use static variables.
+
+- Static variables are declared during parsing and are available to any statement after their declaration.
+- Static variables are "read-only"; they cannot be determined as the output of any command. For those variables, see **Runtime variables** below.
+
+### Defining variables
 
 #### `$ set name=value`
 
@@ -414,7 +415,7 @@ $ set schema={
     }
 ```
 
-## Referencing variables
+### Referencing variables
 
 #### `${variable_name}`
 
@@ -482,7 +483,7 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `testdrive.materialize-user`
 
-## Accessing the environment variables
+### Accessing the environment variables
 
 The environment variables are available uppercase, with an the `env.` prefix:
 
@@ -490,6 +491,41 @@ The environment variables are available uppercase, with an the `env.` prefix:
 > SELECT ${env.HOME}
 "{$env.HOME}"
 ```
+
+## Runtime variables
+
+If you want to use a variable that relies on the output of some action, you can use runtime variables.
+
+Actions that support runtime variables should have (or will need to learn) to add a `runtime-var=foo` option, which sets a runtime variable named foo, e.g.
+
+```
+$ protobuf-compile-descriptors inputs=test.proto output=test.proto runtime-var=test-schema
+```
+
+If you don't see a `runtime-var` used on a command elsehwere in testdrive tests, it's likely not supported yet; PRs welcome.
+
+### Referencing runtime variables
+
+You can reference runtime variables using a janky token:
+
+```
+!!{variable_name}
+```
+
+### Limitations
+
+**Not usable in `undo`**
+Runtime variables **are not** accessible during `undo` operations, and cannot be made to do so easily. This means you cannot e.g. use runtime variables as object names.
+
+**Only accessible via SQL**
+In the current implementation, runtime variables are accessible only within SQL statements, e.g.
+
+```
+> CREATE SOURCE input_proto
+  ... USING SCHEMA '!!{test-schema}' ...
+```
+
+If you need to add them elsewhere, PRs are welcome.
 
 # Dealing with variable output
 

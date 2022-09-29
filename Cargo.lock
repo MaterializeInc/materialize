@@ -4305,6 +4305,7 @@ dependencies = [
  "flate2",
  "futures",
  "globset",
+ "hex",
  "http",
  "itertools",
  "junit-report",

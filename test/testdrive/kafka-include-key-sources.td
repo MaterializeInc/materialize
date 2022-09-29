@@ -262,7 +262,7 @@ message Value {
     int32 measurement = 1;
 }
 
-$ protobuf-compile-descriptors inputs=test.proto output=test.proto
+$ protobuf-compile-descriptors inputs=test.proto output=test.proto runtime-var=test-schema
 
 $ kafka-create-topic topic=proto partitions=1
 
@@ -276,8 +276,8 @@ $ kafka-ingest topic=proto format=protobuf descriptor-file=test.proto message=Va
 
 > CREATE SOURCE input_proto
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-${testdrive.seed}')
-  KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
-  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
+  KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '!!{test-schema}'
+  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '!!{test-schema}'
   INCLUDE KEY
 
 > SELECT * FROM input_proto
@@ -295,8 +295,8 @@ $ kafka-ingest topic=proto-structured
 
 > CREATE SOURCE input_proto_structured
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-structured-${testdrive.seed}')
-  KEY FORMAT PROTOBUF MESSAGE '.KeyComplex' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
-  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
+  KEY FORMAT PROTOBUF MESSAGE '.KeyComplex' USING SCHEMA '!!{test-schema}'
+  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '!!{test-schema}'
   INCLUDE KEY AS key
 
 > SELECT key::text, (key).id1, (key).id2, measurement FROM input_proto_structured

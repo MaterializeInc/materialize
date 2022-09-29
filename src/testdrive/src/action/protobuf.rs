@@ -21,6 +21,7 @@ use crate::parser::BuiltinCommand;
 pub struct CompileDescriptorsAction {
     inputs: Vec<String>,
     output: String,
+    runtime_var: Option<String>,
 }
 
 pub fn build_compile_descriptors(
@@ -39,7 +40,12 @@ pub fn build_compile_descriptors(
             bail!("separators in paths are forbidden");
         }
     }
-    Ok(CompileDescriptorsAction { inputs, output })
+    let runtime_var = cmd.args.opt_string("runtime-var");
+    Ok(CompileDescriptorsAction {
+        inputs,
+        output,
+        runtime_var,
+    })
 }
 
 #[async_trait]
@@ -55,18 +61,26 @@ impl Action for CompileDescriptorsAction {
             None => protobuf_src::protoc(),
             Some(protoc) => PathBuf::from(protoc),
         };
+        let output_path = state.temp_path.join(&self.output);
         let status = Command::new(protoc)
             .arg("--include_imports")
             .arg("-I")
             .arg(&state.temp_path)
             .arg("--descriptor_set_out")
-            .arg(state.temp_path.join(&self.output))
+            .arg(output_path.clone())
             .args(&self.inputs)
             .status()
             .await
             .context("invoking protoc failed")?;
         if !status.success() {
             bail!("protoc exited unsuccessfully");
+        }
+        if let Some(var) = &self.runtime_var {
+            let res = std::fs::read(output_path)?;
+            let hex_encoded = hex::encode(res);
+            state
+                .runtime_vars
+                .insert(var.clone(), format!("\\x{hex_encoded}"));
         }
         Ok(ControlFlow::Continue)
     }
