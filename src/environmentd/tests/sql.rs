@@ -1761,7 +1761,7 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client
-        .batch_execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER TICK INTERVAL '1ms'")
+        .batch_execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1ms')")
         .unwrap();
 
     let row = client
