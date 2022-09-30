@@ -179,6 +179,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     }
 
     fn handle_allow_compaction(&mut self, list: Vec<(GlobalId, Antichain<Timestamp>)>) {
+        // Report the final uppers for collections we allow to compact to the empty frontier, to
+        // give clients that don't observe all commands the opportunity to clean up their state for
+        // these collections.
+        let mut final_uppers = Vec::new();
+
         for (id, frontier) in list {
             if frontier.is_empty() {
                 // Indicates that we may drop `id`, as there are no more valid times to read.
@@ -201,11 +206,18 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                         logger.log(ComputeEvent::Frontier(id, *time, -1));
                     }
                 }
+                if !frontier.is_empty() {
+                    final_uppers.push((id, Antichain::new()));
+                }
             } else {
                 self.compute_state
                     .traces
                     .allow_compaction(id, frontier.borrow());
             }
+        }
+
+        if !final_uppers.is_empty() {
+            self.send_compute_response(ComputeResponse::FrontierUppers(final_uppers));
         }
     }
 
