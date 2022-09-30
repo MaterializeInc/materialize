@@ -1256,9 +1256,9 @@ CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 
 parse-statement
-CREATE SOURCE lg FROM LOAD GENERATOR COUNTER TICK INTERVAL '1s'
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s')
 ----
-CREATE SOURCE lg FROM LOAD GENERATOR COUNTER TICK INTERVAL = '1s'
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL = '1s')
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("lg")]), col_names: [], connection: LoadGenerator { generator: Counter, options: [LoadGeneratorOption { name: TickInterval, value: Some(Value(String("1s"))) }] }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [] })
 

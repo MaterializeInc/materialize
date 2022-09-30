@@ -1011,8 +1011,9 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 f.write_str("LOAD GENERATOR ");
                 f.write_node(generator);
                 if !options.is_empty() {
-                    f.write_str(" ");
+                    f.write_str(" (");
                     f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
                 }
             }
         }

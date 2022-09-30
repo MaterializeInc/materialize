@@ -2477,10 +2477,13 @@ impl<'a> Parser<'a> {
                     AUCTION => LoadGenerator::Auction,
                     _ => unreachable!(),
                 };
-                let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
-                    vec![]
+                let options = if self.consume_token(&Token::LParen) {
+                    let options =
+                        self.parse_comma_separated(Parser::parse_load_generator_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
                 } else {
-                    self.parse_comma_separated(Parser::parse_load_generator_option)?
+                    vec![]
                 };
                 Ok(CreateSourceConnection::LoadGenerator { generator, options })
             }
