@@ -92,6 +92,7 @@ extra_lints=(
 
     # Purely redundant tokens
     clippy::borrowed_box
+    clippy::deref_addrof
     clippy::double_must_use
     clippy::double_parens
     clippy::extra_unused_lifetimes
