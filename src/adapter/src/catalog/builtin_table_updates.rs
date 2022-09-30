@@ -25,6 +25,7 @@ use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage::types::connections::KafkaConnection;
+use mz_storage::types::hosts::StorageHostConfig;
 use mz_storage::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
@@ -193,7 +194,7 @@ impl CatalogState {
         let name = &entry.name().item;
         let mut updates = match entry.item() {
             CatalogItem::Log(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "log", None, diff)
+                self.pack_source_update(id, oid, schema_id, name, "log", None, None, diff)
             }
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
@@ -204,6 +205,10 @@ impl CatalogState {
                 name,
                 source.source_desc.name(),
                 source.connection_id,
+                match &source.host_config {
+                    StorageHostConfig::Remote { .. } => None,
+                    StorageHostConfig::Managed { size, .. } => Some(size),
+                },
                 diff,
             ),
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
@@ -217,9 +222,16 @@ impl CatalogState {
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
-            CatalogItem::StorageCollection(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "storage collection", None, diff)
-            }
+            CatalogItem::StorageCollection(_) => self.pack_source_update(
+                id,
+                oid,
+                schema_id,
+                name,
+                "storage collection",
+                None,
+                None,
+                diff,
+            ),
         };
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
@@ -281,6 +293,7 @@ impl CatalogState {
         name: &str,
         source_desc_name: &str,
         connection_id: Option<GlobalId>,
+        size: Option<&str>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -292,6 +305,7 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(source_desc_name),
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
+                Datum::from(size),
             ]),
             diff,
         }]

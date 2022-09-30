@@ -245,8 +245,9 @@ Field            | Type       | Meaning
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
-`type`           | [`text`]   | The type of the source: `kafka` or `postgres`.
+`type`           | [`text`]   | The type of the source: `kafka`, `postgres`, or `load-generator`.
 `connection_id`  | [`text`]   | The ID of the connection associated with the source, if any.
+`size`           | [`text`]   | The [size](/sql/create-source/#sizing-a-source) of the source.
 
 ### `mz_storage_usage`
 
