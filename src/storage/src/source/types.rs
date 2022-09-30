@@ -534,7 +534,7 @@ impl SourceReaderMetrics {
         self.partition_metrics
             .entry(pid.clone())
             .or_insert_with(|| {
-                SourceReaderPartitionMetrics::new(&self.base_metrics, self.source_id, &pid)
+                SourceReaderPartitionMetrics::new(&self.base_metrics, self.source_id, pid)
             })
     }
 }
