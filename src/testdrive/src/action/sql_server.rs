@@ -10,5 +10,5 @@
 mod connect;
 mod execute;
 
-pub use connect::build_connect;
-pub use execute::build_execute;
+pub use connect::run_connect;
+pub use execute::run_execute;

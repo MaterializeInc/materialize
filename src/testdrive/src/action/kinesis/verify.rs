@@ -12,80 +12,69 @@ use std::str;
 use std::time::Instant;
 
 use anyhow::{bail, Context};
-use async_trait::async_trait;
 use aws_sdk_kinesis::Client as KinesisClient;
 use itertools::Itertools;
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
-pub struct VerifyAction {
-    stream_prefix: String,
-    expected_records: HashSet<String>,
-}
-
-pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Error> {
+pub async fn run_verify(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
     let stream_prefix = cmd.args.string("stream")?;
     cmd.args.done()?;
-    Ok(VerifyAction {
-        stream_prefix,
-        expected_records: cmd.input.into_iter().collect(),
-    })
-}
+    let expected_records = cmd.input.into_iter().collect();
 
-#[async_trait]
-impl Action for VerifyAction {
-    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let stream_name = format!("testdrive-{}-{}", self.stream_prefix, state.seed);
+    let stream_name = format!("testdrive-{}-{}", stream_prefix, state.seed);
 
-        let mut shard_iterators = get_shard_iterators(&state.kinesis_client, &stream_name).await?;
-        let timer = Instant::now();
-        let mut records: HashSet<String> = HashSet::new();
-        while let Some(iterator) = shard_iterators.pop_front() {
-            if let Some(iterator) = &iterator {
-                let output = state
-                    .kinesis_client
-                    .get_records()
-                    .shard_iterator(iterator)
-                    .send()
-                    .await
-                    .context("getting Kinesis records")?;
-                for record in output.records.unwrap() {
-                    records.insert(
-                        String::from_utf8(record.data.unwrap().into_inner())
-                            .context("converting Kinesis record bytes to string")?,
-                    );
-                }
-                match output.millis_behind_latest {
-                    // Test hack!
-                    // Assume all records have already been written to the stream. Once you've
-                    // caught up, you're done with that shard.
-                    // NOTE: this is not true for real Kinesis streams as data could still be
-                    // arriving.
-                    Some(0) => (),
-                    _ => shard_iterators.push_back(output.next_shard_iterator),
-                };
-                if timer.elapsed() > state.default_timeout {
-                    // Unable to read all Kinesis records in the default
-                    // time allotted -- fail.
-                    bail!("timeout reading from Kinesis stream: {}", stream_name);
-                }
+    let mut shard_iterators = get_shard_iterators(&state.kinesis_client, &stream_name).await?;
+    let timer = Instant::now();
+    let mut records: HashSet<String> = HashSet::new();
+    while let Some(iterator) = shard_iterators.pop_front() {
+        if let Some(iterator) = &iterator {
+            let output = state
+                .kinesis_client
+                .get_records()
+                .shard_iterator(iterator)
+                .send()
+                .await
+                .context("getting Kinesis records")?;
+            for record in output.records.unwrap() {
+                records.insert(
+                    String::from_utf8(record.data.unwrap().into_inner())
+                        .context("converting Kinesis record bytes to string")?,
+                );
+            }
+            match output.millis_behind_latest {
+                // Test hack!
+                // Assume all records have already been written to the stream. Once you've
+                // caught up, you're done with that shard.
+                // NOTE: this is not true for real Kinesis streams as data could still be
+                // arriving.
+                Some(0) => (),
+                _ => shard_iterators.push_back(output.next_shard_iterator),
+            };
+            if timer.elapsed() > state.default_timeout {
+                // Unable to read all Kinesis records in the default
+                // time allotted -- fail.
+                bail!("timeout reading from Kinesis stream: {}", stream_name);
             }
         }
-
-        // For now, we don't guarantee any type of ordering!
-        if records != self.expected_records {
-            let missing_records = &self.expected_records - &records;
-            let extra_records = &records - &self.expected_records;
-            bail!(
-                "kinesis records did not match:\nmissing:\n{}\nextra:\n{}",
-                missing_records.iter().join("\n"),
-                extra_records.iter().join("\n")
-            );
-        }
-
-        Ok(ControlFlow::Continue)
     }
+
+    // For now, we don't guarantee any type of ordering!
+    if records != expected_records {
+        let missing_records = &expected_records - &records;
+        let extra_records = &records - &expected_records;
+        bail!(
+            "kinesis records did not match:\nmissing:\n{}\nextra:\n{}",
+            missing_records.iter().join("\n"),
+            extra_records.iter().join("\n")
+        );
+    }
+
+    Ok(ControlFlow::Continue)
 }
 
 async fn get_shard_iterators(

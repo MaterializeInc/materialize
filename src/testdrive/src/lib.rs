@@ -15,6 +15,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
+use action::Run;
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
 
@@ -73,7 +74,7 @@ pub async fn run_string(config: &Config, filename: &Path, contents: &str) -> Res
         })
 }
 
-async fn run_line_reader(
+pub(crate) async fn run_line_reader(
     config: &Config,
     line_reader: &mut LineReader<'_>,
 ) -> Result<(), PosError> {
@@ -90,7 +91,6 @@ async fn run_line_reader(
     });
 
     let (mut state, state_cleanup) = action::create_state(config).await?;
-    let actions = action::build(cmds, &state).await?;
 
     if config.reset {
         // Delete any existing Materialize and Kafka state *before* the test
@@ -109,11 +109,16 @@ async fn run_line_reader(
         }
     }
 
-    for a in &actions {
-        let run = a.action.run(&mut state);
-        match run.await.map_err(|e| PosError::new(e, a.pos))? {
-            ControlFlow::Continue => (),
-            ControlFlow::Break => break,
+    let mut errors = Vec::new();
+
+    for cmd in cmds {
+        match cmd.run(&mut state).await {
+            Ok(ControlFlow::Continue) => (),
+            Ok(ControlFlow::Break) => break,
+            Err(e) => {
+                errors.push(e);
+                break;
+            }
         }
     }
 
@@ -124,33 +129,44 @@ async fn run_line_reader(
         // to e.g. skip cleaning up SQS resources because we failed to clean up
         // S3 resources.
 
-        let mut errors = vec![];
+        let mut reset_errors = vec![];
 
         if let Err(e) = state.reset_s3().await {
-            errors.push(e);
+            reset_errors.push(e);
         }
 
         if let Err(e) = state.reset_sqs().await {
-            errors.push(e);
+            reset_errors.push(e);
         }
 
         if let Err(e) = state.reset_kinesis().await {
-            errors.push(e);
+            reset_errors.push(e);
         }
 
         drop(state);
         if let Err(e) = state_cleanup.await {
-            errors.push(e);
+            reset_errors.push(e);
         }
 
-        if !errors.is_empty() {
-            return Err(anyhow!(
-                "cleanup failed: {} errors: {}",
-                errors.len(),
-                errors.into_iter().map(|e| e.to_string_alt()).join("\n"),
-            )
-            .into());
+        if !reset_errors.is_empty() {
+            errors.push(
+                anyhow!(
+                    "cleanup failed: {} errors: {}",
+                    reset_errors.len(),
+                    reset_errors
+                        .into_iter()
+                        .map(|e| e.to_string_alt())
+                        .join("\n"),
+                )
+                .into(),
+            );
         }
     }
-    Ok(())
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        // Only surface the first error encountered for sake of simplicity
+        Err(errors.remove(0))
+    }
 }

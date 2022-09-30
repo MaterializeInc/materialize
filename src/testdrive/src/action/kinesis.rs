@@ -12,7 +12,7 @@ mod ingest;
 mod update_shards;
 mod verify;
 
-pub use create_stream::build_create_stream;
-pub use ingest::build_ingest;
-pub use update_shards::build_update_shards;
-pub use verify::build_verify;
+pub use create_stream::run_create_stream;
+pub use ingest::run_ingest;
+pub use update_shards::run_update_shards;
+pub use verify::run_verify;
