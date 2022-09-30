@@ -51,7 +51,6 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
             true
             """
         ),
-        no_reset=True,
         seed=seed,
     )
 
@@ -77,14 +76,6 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
             """
         ),
         no_reset=True,
-        seed=seed,
-    )
-    # resets the environment
-    mz.testdrive.run(
-        input=dedent(
-            """
-            """
-        ),
         seed=seed,
     )
 
