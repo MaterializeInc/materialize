@@ -68,7 +68,7 @@ use crate::source::types::SourceConnection;
 use crate::source::types::SourceOutput;
 use crate::source::types::SourceReaderError;
 use crate::source::types::{
-    AsyncSourceToken, SourceMessage, SourceMetrics, SourceReader, SourceToken,
+    AsyncSourceToken, SourceMessage, SourceMetrics, SourceReader, SourceReaderMetrics, SourceToken,
 };
 use crate::source::types::{MaybeLength, SourceMessageType};
 use crate::source::util::async_source;
@@ -451,6 +451,7 @@ where
 
             async move {
                 // Setup time!
+                let mut source_metrics = SourceReaderMetrics::new(&base_metrics, id);
 
                 // Required to build the initial source_upper and to ensure the offset committer
                 // operator works correctly.
@@ -461,6 +462,13 @@ where
                 let mut source_upper = reclock_follower
                     .source_upper_at_frontier(resume_upper.borrow())
                     .expect("source_upper_at_frontier to be used correctly");
+
+                for (pid, offset) in source_upper.iter() {
+                    source_metrics
+                        .metrics_for_partition(pid)
+                        .source_resume_upper
+                        .set(offset.offset)
+                }
 
                 // Save this to pass into the stream creation
                 let initial_source_upper = source_upper.clone();
@@ -939,7 +947,7 @@ where
         timestamp_interval: _,
         encoding: _,
         storage_metadata: _,
-        resume_upper: _,
+        resume_upper,
         base_metrics,
         now: _,
         persist_clients: _,
@@ -969,6 +977,10 @@ where
         let metrics_name = upstream_name.clone().unwrap_or_else(|| name.clone());
         let mut source_metrics =
             SourceMetrics::new(&base_metrics, &metrics_name, id, &worker_id.to_string());
+
+        source_metrics
+            .resume_upper
+            .set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
         // Use this to retain capabilities from the remap_operator input.
         let mut cap_set = CapabilitySet::new();
