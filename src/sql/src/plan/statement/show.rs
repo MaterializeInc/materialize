@@ -345,7 +345,7 @@ fn show_sources<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let query = format!(
-        "SELECT name, type
+        "SELECT name, type, size
         FROM mz_catalog.mz_sources
         WHERE schema_id = {schema_spec}"
     );
