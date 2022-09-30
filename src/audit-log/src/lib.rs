@@ -134,8 +134,8 @@ serde_plain::derive_display_from_serialize!(ObjectType);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub enum EventDetails {
-    CreateComputeInstanceReplicaV1(CreateComputeInstanceReplicaV1),
-    DropComputeInstanceReplicaV1(DropComputeInstanceReplicaV1),
+    CreateComputeReplicaV1(CreateComputeReplicaV1),
+    DropComputeReplicaV1(DropComputeReplicaV1),
     FullNameV1(FullNameV1),
     NameV1(NameV1),
     RenameItemV1(RenameItemV1),
@@ -167,14 +167,14 @@ pub struct RenameItemV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct DropComputeInstanceReplicaV1 {
+pub struct DropComputeReplicaV1 {
     pub cluster_id: u64,
     pub cluster_name: String,
     pub replica_name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct CreateComputeInstanceReplicaV1 {
+pub struct CreateComputeReplicaV1 {
     pub cluster_id: u64,
     pub cluster_name: String,
     pub replica_name: String,
@@ -184,10 +184,10 @@ pub struct CreateComputeInstanceReplicaV1 {
 impl EventDetails {
     pub fn as_json(&self) -> serde_json::Value {
         match self {
-            EventDetails::CreateComputeInstanceReplicaV1(v) => {
+            EventDetails::CreateComputeReplicaV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
-            EventDetails::DropComputeInstanceReplicaV1(v) => {
+            EventDetails::DropComputeReplicaV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),

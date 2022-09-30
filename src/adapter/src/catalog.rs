@@ -30,8 +30,8 @@ use mz_audit_log::{
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
-    ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceReplicaAllocation,
-    ComputeInstanceReplicaConfig, ComputeInstanceReplicaLocation, ComputeInstanceReplicaLogging,
+    ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation, ComputeReplicaConfig,
+    ComputeReplicaLocation, ComputeReplicaLogging,
 };
 use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
@@ -390,7 +390,7 @@ impl CatalogState {
     /// Create and insert the per replica log sources and log views.
     fn insert_replica_introspection_items(
         &mut self,
-        logging: &ComputeInstanceReplicaLogging,
+        logging: &ComputeReplicaLogging,
         replica_id: u64,
     ) {
         for (variant, source_id) in &logging.sources {
@@ -709,15 +709,15 @@ impl CatalogState {
         assert!(self.compute_instances_by_name.insert(name, id).is_none());
     }
 
-    fn insert_compute_instance_replica(
+    fn insert_compute_replica(
         &mut self,
         on_instance: ComputeInstanceId,
         replica_name: String,
         replica_id: ReplicaId,
-        config: ComputeInstanceReplicaConfig,
+        config: ComputeReplicaConfig,
     ) {
         self.insert_replica_introspection_items(&config.logging, replica_id);
-        let replica = ComputeInstanceReplica {
+        let replica = ComputeReplica {
             config,
             process_status: HashMap::new(),
         };
@@ -754,7 +754,7 @@ impl CatalogState {
     ///
     /// This method returns `None` if no status was found for the given
     /// compute instance process because:
-    ///   * The given compute instance replica is not found. This can occur
+    ///   * The given compute replica is not found. This can occur
     ///     if we already dropped the replica from the catalog, but we still
     ///     receive status updates.
     ///   * The given replica process is not found. This is the case when we
@@ -1309,12 +1309,12 @@ pub struct ComputeInstance {
     /// Does not include introspection source indexes.
     pub exports: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
-    pub replicas_by_id: HashMap<ReplicaId, ComputeInstanceReplica>,
+    pub replicas_by_id: HashMap<ReplicaId, ComputeReplica>,
 }
 
 #[derive(Debug, Serialize, Clone)]
-pub struct ComputeInstanceReplica {
-    pub config: ComputeInstanceReplicaConfig,
+pub struct ComputeReplica {
+    pub config: ComputeReplicaConfig,
     pub process_status: HashMap<ProcessId, ComputeInstanceEvent>,
 }
 
@@ -2156,11 +2156,7 @@ impl<S: Append> Catalog<S> {
             catalog.state.insert_compute_instance(id, name, all_indexes);
         }
 
-        let replicas = catalog
-            .storage()
-            .await
-            .load_compute_instance_replicas()
-            .await?;
+        let replicas = catalog.storage().await.load_compute_replicas().await?;
         for (instance_id, replica_id, name, serialized_config) in replicas {
             let log_sources = match serialized_config.logging.sources {
                 Some(sources) => sources,
@@ -2171,13 +2167,13 @@ impl<S: Append> Catalog<S> {
                 None => catalog.allocate_persisted_introspection_views().await,
             };
 
-            let logging = ComputeInstanceReplicaLogging {
+            let logging = ComputeReplicaLogging {
                 log_logging: serialized_config.logging.log_logging,
                 interval: serialized_config.logging.interval,
                 sources: log_sources,
                 views: log_views,
             };
-            let config = ComputeInstanceReplicaConfig {
+            let config = ComputeReplicaConfig {
                 location: catalog.concretize_replica_location(serialized_config.location)?,
                 logging,
             };
@@ -2191,7 +2187,7 @@ impl<S: Append> Catalog<S> {
 
             catalog
                 .state
-                .insert_compute_instance_replica(instance_id, name, replica_id, config);
+                .insert_compute_replica(instance_id, name, replica_id, config);
         }
 
         let system_config = catalog.storage().await.load_system_configuration().await?;
@@ -2284,7 +2280,7 @@ impl<S: Append> Catalog<S> {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
             let instance = &catalog.state.compute_instances_by_id[id];
             for (replica_name, _replica_id) in &instance.replica_id_by_name {
-                builtin_table_updates.push(catalog.state.pack_compute_instance_replica_update(
+                builtin_table_updates.push(catalog.state.pack_compute_replica_update(
                     *id,
                     replica_name,
                     1,
@@ -3189,20 +3185,20 @@ impl<S: Append> Catalog<S> {
 
     pub fn concretize_replica_location(
         &self,
-        location: SerializedComputeInstanceReplicaLocation,
-    ) -> Result<ComputeInstanceReplicaLocation, AdapterError> {
+        location: SerializedComputeReplicaLocation,
+    ) -> Result<ComputeReplicaLocation, AdapterError> {
         let cluster_replica_sizes = &self.state.cluster_replica_sizes;
         let location = match location {
-            SerializedComputeInstanceReplicaLocation::Remote {
+            SerializedComputeReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
-            } => ComputeInstanceReplicaLocation::Remote {
+            } => ComputeReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
             },
-            SerializedComputeInstanceReplicaLocation::Managed {
+            SerializedComputeReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified,
@@ -3212,7 +3208,7 @@ impl<S: Append> Catalog<S> {
                     entries.sort_by_key(
                         |(
                             _name,
-                            ComputeInstanceReplicaAllocation {
+                            ComputeReplicaAllocation {
                                 scale, cpu_limit, ..
                             },
                         )| (scale, cpu_limit),
@@ -3223,7 +3219,7 @@ impl<S: Append> Catalog<S> {
                         expected,
                     }
                 })?;
-                ComputeInstanceReplicaLocation::Managed {
+                ComputeReplicaLocation::Managed {
                     allocation: allocation.clone(),
                     availability_zone,
                     size,
@@ -3339,11 +3335,11 @@ impl<S: Append> Catalog<S> {
                 // These are the legacy, active logs of this compute instance
                 arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
             },
-            CreateComputeInstanceReplica {
+            CreateComputeReplica {
                 id: ReplicaId,
                 name: String,
                 on_cluster_name: String,
-                config: ComputeInstanceReplicaConfig,
+                config: ComputeReplicaConfig,
             },
             CreateItem {
                 id: GlobalId,
@@ -3366,7 +3362,7 @@ impl<S: Append> Catalog<S> {
                 name: String,
                 introspection_source_index_ids: Vec<GlobalId>,
             },
-            DropComputeInstanceReplica {
+            DropComputeReplica {
                 name: String,
                 compute_id: ComputeInstanceId,
             },
@@ -3603,7 +3599,7 @@ impl<S: Append> Catalog<S> {
                         },
                     )?;
                 }
-                Op::CreateComputeInstanceReplica {
+                Op::CreateComputeReplica {
                     name,
                     on_cluster_name,
                     config,
@@ -3613,14 +3609,11 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
-                    let id = tx.insert_compute_instance_replica(
-                        &on_cluster_name,
-                        &name,
-                        &config.clone().into(),
-                    )?;
-                    if let ComputeInstanceReplicaLocation::Managed { size, .. } = &config.location {
-                        let details = EventDetails::CreateComputeInstanceReplicaV1(
-                            mz_audit_log::CreateComputeInstanceReplicaV1 {
+                    let id =
+                        tx.insert_compute_replica(&on_cluster_name, &name, &config.clone().into())?;
+                    if let ComputeReplicaLocation::Managed { size, .. } = &config.location {
+                        let details = EventDetails::CreateComputeReplicaV1(
+                            mz_audit_log::CreateComputeReplicaV1 {
                                 cluster_id: id,
                                 cluster_name: on_cluster_name.clone(),
                                 replica_name: name.clone(),
@@ -3640,7 +3633,7 @@ impl<S: Append> Catalog<S> {
                     catalog_action(
                         state,
                         builtin_table_updates,
-                        Action::CreateComputeInstanceReplica {
+                        Action::CreateComputeReplica {
                             id,
                             name,
                             on_cluster_name,
@@ -3780,9 +3773,9 @@ impl<S: Append> Catalog<S> {
                         },
                     )?;
                 }
-                Op::DropComputeInstanceReplica { name, compute_name } => {
+                Op::DropComputeReplica { name, compute_name } => {
                     let instance = state.resolve_compute_instance(&compute_name)?;
-                    tx.remove_compute_instance_replica(&name, instance.id)?;
+                    tx.remove_compute_replica(&name, instance.id)?;
 
                     let replica_id = instance.replica_id_by_name[&name];
                     let replica = &instance.replicas_by_id[&replica_id];
@@ -3796,19 +3789,18 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.push(update);
                     }
 
-                    builtin_table_updates.push(state.pack_compute_instance_replica_update(
+                    builtin_table_updates.push(state.pack_compute_replica_update(
                         instance.id,
                         &name,
                         -1,
                     ));
 
-                    let details = EventDetails::DropComputeInstanceReplicaV1(
-                        mz_audit_log::DropComputeInstanceReplicaV1 {
+                    let details =
+                        EventDetails::DropComputeReplicaV1(mz_audit_log::DropComputeReplicaV1 {
                             cluster_id: instance.id,
                             cluster_name: instance.name.clone(),
                             replica_name: name.clone(),
-                        },
-                    );
+                        });
                     state.add_to_audit_log(
                         session,
                         tx,
@@ -3823,7 +3815,7 @@ impl<S: Append> Catalog<S> {
                     catalog_action(
                         state,
                         builtin_table_updates,
-                        Action::DropComputeInstanceReplica { name, compute_id },
+                        Action::DropComputeReplica { name, compute_id },
                     )?;
                 }
                 Op::DropItem(id) => {
@@ -4155,7 +4147,7 @@ impl<S: Append> Catalog<S> {
                     }
                 }
 
-                Action::CreateComputeInstanceReplica {
+                Action::CreateComputeReplica {
                     id,
                     name,
                     on_cluster_name,
@@ -4163,16 +4155,11 @@ impl<S: Append> Catalog<S> {
                 } => {
                     let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
                     let introspection_ids: Vec<_> = config.logging.source_and_view_ids().collect();
-                    state.insert_compute_instance_replica(
-                        compute_instance_id,
-                        name.clone(),
-                        id,
-                        config,
-                    );
+                    state.insert_compute_replica(compute_instance_id, name.clone(), id, config);
                     for id in introspection_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
-                    builtin_table_updates.push(state.pack_compute_instance_replica_update(
+                    builtin_table_updates.push(state.pack_compute_replica_update(
                         compute_instance_id,
                         &name,
                         1,
@@ -4235,7 +4222,7 @@ impl<S: Append> Catalog<S> {
                     );
                 }
 
-                Action::DropComputeInstanceReplica { name, compute_id } => {
+                Action::DropComputeReplica { name, compute_id } => {
                     let instance = state
                         .compute_instances_by_id
                         .get_mut(&compute_id)
@@ -4653,10 +4640,10 @@ pub enum Op {
         name: String,
         arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     },
-    CreateComputeInstanceReplica {
+    CreateComputeReplica {
         name: String,
         on_cluster_name: String,
-        config: ComputeInstanceReplicaConfig,
+        config: ComputeReplicaConfig,
     },
     CreateItem {
         id: GlobalId,
@@ -4677,7 +4664,7 @@ pub enum Op {
     DropComputeInstance {
         name: String,
     },
-    DropComputeInstanceReplica {
+    DropComputeReplica {
         name: String,
         compute_name: String,
     },
@@ -4724,28 +4711,28 @@ pub enum SerializedCatalogItem {
 }
 
 /// Serialized (stored alongside the replica) logging configuration of
-/// a replica. Serialized variant of `ComputeInstanceReplicaLogging`.
+/// a replica. Serialized variant of `ComputeReplicaLogging`.
 ///
 /// A `None` value for `sources` or `views` indicates that we did not yet create them in the
 /// catalog. This is only used for initializing the default replica of the default compute
 /// instance.
 /// To indicate the absence of sources/views, use `Some(Vec::new())`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SerializedComputeInstanceReplicaLogging {
+pub struct SerializedComputeReplicaLogging {
     log_logging: bool,
     interval: Option<Duration>,
     sources: Option<Vec<(LogVariant, GlobalId)>>,
     views: Option<Vec<(LogView, GlobalId)>>,
 }
 
-impl From<ComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
+impl From<ComputeReplicaLogging> for SerializedComputeReplicaLogging {
     fn from(
-        ComputeInstanceReplicaLogging {
+        ComputeReplicaLogging {
             log_logging,
             interval,
             sources,
             views,
-        }: ComputeInstanceReplicaLogging,
+        }: ComputeReplicaLogging,
     ) -> Self {
         Self {
             log_logging,
@@ -4756,20 +4743,18 @@ impl From<ComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLog
     }
 }
 
-/// A [`mz_compute_client::controller::ComputeInstanceReplicaConfig`] that is serialized as JSON
+/// A [`mz_compute_client::controller::ComputeReplicaConfig`] that is serialized as JSON
 /// and persisted to the catalog stash. This is a separate type to allow us to evolve the on-disk
 /// format independently from the SQL layer.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-pub struct SerializedComputeInstanceReplicaConfig {
-    pub location: SerializedComputeInstanceReplicaLocation,
-    pub logging: SerializedComputeInstanceReplicaLogging,
+pub struct SerializedComputeReplicaConfig {
+    pub location: SerializedComputeReplicaLocation,
+    pub logging: SerializedComputeReplicaLogging,
 }
 
-impl From<ComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
-    fn from(
-        ComputeInstanceReplicaConfig { location, logging }: ComputeInstanceReplicaConfig,
-    ) -> Self {
-        SerializedComputeInstanceReplicaConfig {
+impl From<ComputeReplicaConfig> for SerializedComputeReplicaConfig {
+    fn from(ComputeReplicaConfig { location, logging }: ComputeReplicaConfig) -> Self {
+        SerializedComputeReplicaConfig {
             location: location.into(),
             logging: logging.into(),
         }
@@ -4777,7 +4762,7 @@ impl From<ComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConf
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SerializedComputeInstanceReplicaLocation {
+pub enum SerializedComputeReplicaLocation {
     Remote {
         addrs: BTreeSet<String>,
         compute_addrs: BTreeSet<String>,
@@ -4792,10 +4777,10 @@ pub enum SerializedComputeInstanceReplicaLocation {
     },
 }
 
-impl From<ComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLocation {
-    fn from(loc: ComputeInstanceReplicaLocation) -> Self {
+impl From<ComputeReplicaLocation> for SerializedComputeReplicaLocation {
+    fn from(loc: ComputeReplicaLocation) -> Self {
         match loc {
-            ComputeInstanceReplicaLocation::Remote {
+            ComputeReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
@@ -4804,7 +4789,7 @@ impl From<ComputeInstanceReplicaLocation> for SerializedComputeInstanceReplicaLo
                 compute_addrs,
                 workers,
             },
-            ComputeInstanceReplicaLocation::Managed {
+            ComputeReplicaLocation::Managed {
                 allocation: _,
                 size,
                 availability_zone,

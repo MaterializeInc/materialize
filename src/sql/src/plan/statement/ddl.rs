@@ -100,14 +100,14 @@ use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, ComputeInstanceReplicaConfig,
-    ComputeInstanceReplicaIntrospectionConfig, CreateComputeInstancePlan,
-    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, RotateKeysPlan, Secret,
-    Sink, Source, StorageHostConfig, Table, Type, View,
+    AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    ComputeReplicaIntrospectionConfig, CreateComputeInstancePlan, CreateComputeReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
+    DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index,
+    MaterializedView, Params, Plan, RotateKeysPlan, Secret, Sink, Source, StorageHostConfig, Table,
+    Type, View,
 };
 
 pub fn describe_create_database(
@@ -2230,7 +2230,7 @@ generate_extracted_config!(
 fn plan_replica_config(
     scx: &StatementContext,
     options: Vec<ReplicaOption<Aug>>,
-) -> Result<ComputeInstanceReplicaConfig, PlanError> {
+) -> Result<ComputeReplicaConfig, PlanError> {
     let ReplicaOptionExtracted {
         availability_zone,
         size,
@@ -2256,7 +2256,7 @@ fn plan_replica_config(
         .map(|OptionalInterval(i)| i)
         .unwrap_or(Some(DEFAULT_INTROSPECTION_INTERVAL));
     let introspection = match introspection_interval {
-        Some(interval) => Some(ComputeInstanceReplicaIntrospectionConfig {
+        Some(interval) => Some(ComputeReplicaIntrospectionConfig {
             interval: interval.duration()?,
             debugging: introspection_debugging.unwrap_or(false),
         }),
@@ -2293,7 +2293,7 @@ fn plan_replica_config(
 
             let workers = NonZeroUsize::new(workers.into())
                 .ok_or_else(|| sql_err!("WORKERS must be greater 0"))?;
-            Ok(ComputeInstanceReplicaConfig::Remote {
+            Ok(ComputeReplicaConfig::Remote {
                 addrs: remote_addrs,
                 compute_addrs,
                 workers,
@@ -2308,7 +2308,7 @@ fn plan_replica_config(
             if compute.is_some() {
                 sql_bail!("cannot specify SIZE and COMPUTE");
             }
-            Ok(ComputeInstanceReplicaConfig::Managed {
+            Ok(ComputeReplicaConfig::Managed {
                 size,
                 availability_zone,
                 introspection,
@@ -2338,13 +2338,11 @@ pub fn plan_create_cluster_replica(
     let _ = scx
         .catalog
         .resolve_compute_instance(Some(&of_cluster.to_string()))?;
-    Ok(Plan::CreateComputeInstanceReplica(
-        CreateComputeInstanceReplicaPlan {
-            name: normalize::ident(name),
-            of_cluster: of_cluster.to_string(),
-            config: plan_replica_config(scx, options)?,
-        },
-    ))
+    Ok(Plan::CreateComputeReplica(CreateComputeReplicaPlan {
+        name: normalize::ident(name),
+        of_cluster: of_cluster.to_string(),
+        config: plan_replica_config(scx, options)?,
+    }))
 }
 
 pub fn describe_create_secret(
@@ -2964,9 +2962,9 @@ pub fn plan_drop_cluster_replica(
         }
     }
 
-    Ok(Plan::DropComputeInstanceReplica(
-        DropComputeInstanceReplicaPlan { names: names_out },
-    ))
+    Ok(Plan::DropComputeReplicas(DropComputeReplicasPlan {
+        names: names_out,
+    }))
 }
 
 pub fn plan_drop_items(

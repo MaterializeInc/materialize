@@ -171,14 +171,14 @@ impl From<anyhow::Error> for ComputeError {
 
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ComputeInstanceReplicaConfig {
-    pub location: ComputeInstanceReplicaLocation,
-    pub logging: ComputeInstanceReplicaLogging,
+pub struct ComputeReplicaConfig {
+    pub location: ComputeReplicaLocation,
+    pub logging: ComputeReplicaLogging,
 }
 
 /// Size or location of a replica
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ComputeInstanceReplicaLocation {
+pub enum ComputeReplicaLocation {
     /// Out-of-process replica
     Remote {
         /// The network addresses of the processes in the replica.
@@ -192,7 +192,7 @@ pub enum ComputeInstanceReplicaLocation {
     /// A remote but managed replica
     Managed {
         /// The resource allocation for the replica.
-        allocation: ComputeInstanceReplicaAllocation,
+        allocation: ComputeReplicaAllocation,
         /// SQL size parameter used for allocation
         size: String,
         /// The replica's availability zone
@@ -203,11 +203,11 @@ pub enum ComputeInstanceReplicaLocation {
     },
 }
 
-impl ComputeInstanceReplicaLocation {
+impl ComputeReplicaLocation {
     pub fn get_az(&self) -> Option<&str> {
         match self {
-            ComputeInstanceReplicaLocation::Remote { .. } => None,
-            ComputeInstanceReplicaLocation::Managed {
+            ComputeReplicaLocation::Remote { .. } => None,
+            ComputeReplicaLocation::Managed {
                 availability_zone, ..
             } => Some(availability_zone),
         }
@@ -216,7 +216,7 @@ impl ComputeInstanceReplicaLocation {
 
 /// Resource allocations for a replica of a compute instance.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ComputeInstanceReplicaAllocation {
+pub struct ComputeReplicaAllocation {
     /// The memory limit for each process in the replica.
     pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
@@ -227,7 +227,7 @@ pub struct ComputeInstanceReplicaAllocation {
     pub workers: NonZeroUsize,
 }
 
-impl ComputeInstanceReplicaAllocation {
+impl ComputeReplicaAllocation {
     pub fn workers(&self) -> NonZeroUsize {
         self.workers
     }
@@ -235,7 +235,7 @@ impl ComputeInstanceReplicaAllocation {
 
 /// Logging configuration of a replica.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ComputeInstanceReplicaLogging {
+pub struct ComputeReplicaLogging {
     /// Whether to enable logging for the logging dataflows.
     pub log_logging: bool,
     /// The interval at which to log.
@@ -248,7 +248,7 @@ pub struct ComputeInstanceReplicaLogging {
     pub views: Vec<(LogView, GlobalId)>,
 }
 
-impl ComputeInstanceReplicaLogging {
+impl ComputeReplicaLogging {
     /// Return whether logging is enabled.
     pub fn enabled(&self) -> bool {
         self.interval.is_some()
@@ -476,10 +476,10 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        config: ComputeInstanceReplicaConfig,
+        config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
         let (addrs, communication_config) = match config.location {
-            ComputeInstanceReplicaLocation::Remote {
+            ComputeReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
@@ -492,7 +492,7 @@ where
                 };
                 (addrs, comm)
             }
-            ComputeInstanceReplicaLocation::Managed {
+            ComputeReplicaLocation::Managed {
                 allocation,
                 availability_zone,
                 ..
@@ -526,9 +526,9 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        config: ComputeInstanceReplicaConfig,
+        config: ComputeReplicaConfig,
     ) -> Result<(), ComputeError> {
-        if let ComputeInstanceReplicaLocation::Managed { .. } = config.location {
+        if let ComputeReplicaLocation::Managed { .. } = config.location {
             self.compute
                 .orchestrator
                 .drop_replica(instance_id, replica_id)
@@ -805,7 +805,7 @@ where
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
-        logging: ComputeInstanceReplicaLogging,
+        logging: ComputeReplicaLogging,
         communication_config: CommunicationConfig,
     ) -> Result<(), ComputeError> {
         let logging_config = if let Some(interval) = logging.interval {

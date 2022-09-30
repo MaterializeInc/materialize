@@ -18,7 +18,7 @@ use mz_orchestrator::{CpuLimit, MemoryLimit};
 
 /// Resource allocations for a storage host.
 ///
-/// Has some overlap with mz_controller::ComputeInstanceReplicaAllocation,
+/// Has some overlap with mz_compute_client::controller::ComputeReplicaAllocation,
 /// but keeping it separate for now due slightly different semantics.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct StorageHostResourceAllocation {

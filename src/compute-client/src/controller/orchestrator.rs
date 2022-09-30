@@ -23,7 +23,7 @@ use mz_orchestrator::{
 
 use crate::command::ReplicaId;
 
-use super::{ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceReplicaAllocation};
+use super::{ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation};
 
 pub(super) struct ComputeOrchestrator {
     inner: Arc<dyn NamespacedOrchestrator>,
@@ -42,7 +42,7 @@ impl ComputeOrchestrator {
         &self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        allocation: ComputeInstanceReplicaAllocation,
+        allocation: ComputeReplicaAllocation,
         availability_zone: String,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let service_name = generate_replica_service_name(instance_id, replica_id);

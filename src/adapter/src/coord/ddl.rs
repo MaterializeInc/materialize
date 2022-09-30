@@ -147,7 +147,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 // Drop timelines
                 timelines_to_drop.extend(self.remove_compute_instance_from_timeline(id));
-            } else if let catalog::Op::DropComputeInstanceReplica { name, compute_name } = op {
+            } else if let catalog::Op::DropComputeReplica { name, compute_name } = op {
                 let compute_instance = self.catalog.resolve_compute_instance(compute_name)?;
                 let replica_id = &compute_instance.replica_id_by_name[name];
                 let replica = &compute_instance.replicas_by_id[replica_id];
@@ -527,7 +527,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Op::CreateComputeInstance { .. } => {
                     new_clusters += 1;
                 }
-                Op::CreateComputeInstanceReplica {
+                Op::CreateComputeReplica {
                     on_cluster_name, ..
                 } => {
                     *new_replicas_per_cluster.entry(on_cluster_name).or_insert(0) += 1;
@@ -574,7 +574,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Op::DropComputeInstance { .. } => {
                     new_clusters -= 1;
                 }
-                Op::DropComputeInstanceReplica { compute_name, .. } => {
+                Op::DropComputeReplica { compute_name, .. } => {
                     *new_replicas_per_cluster.entry(compute_name).or_insert(0) -= 1;
                 }
                 Op::DropItem(id) => {

@@ -1243,7 +1243,7 @@ where
             | ExecuteResponse::AlteredObject(..)
             | ExecuteResponse::AlteredSystemConfiguraion
             | ExecuteResponse::CreatedComputeInstance { .. }
-            | ExecuteResponse::CreatedComputeInstanceReplica { .. }
+            | ExecuteResponse::CreatedComputeReplica { .. }
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }
@@ -1263,7 +1263,7 @@ where
             | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedComputeInstance
-            | ExecuteResponse::DroppedComputeInstanceReplicas
+            | ExecuteResponse::DroppedComputeReplica
             | ExecuteResponse::DroppedConnection
             | ExecuteResponse::DroppedDatabase
             | ExecuteResponse::DroppedIndex
