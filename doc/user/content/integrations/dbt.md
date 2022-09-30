@@ -148,7 +148,9 @@ Create a [PostgreSQL source](/sql/create-source/postgres/).
 **Filename:** sources/postgres.sql
 ```sql
 {{ config(materialized='source',
-    post_hook="CREATE VIEWS FROM SOURCE {{ this }} (table_a, table_b ...)") }}
+    post_hook="CREATE VIEWS FROM SOURCE {{ this }} (
+                table_a as {{ this.database }}.{{ this.schema }}.table_a,
+                table_b as {{ this.database }}.{{ this.schema }}.table_b, ...)") }}
 
 CREATE SOURCE IF NOT EXISTS {{ this }}
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
