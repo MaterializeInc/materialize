@@ -29,7 +29,7 @@ use crate::indexed::encoding::{
     decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart,
 };
 
-const INLINE_METADATA_KEY: &'static str = "MZ:inline";
+const INLINE_METADATA_KEY: &str = "MZ:inline";
 
 /// Encodes an BlobTraceBatchPart into the Parquet format.
 pub fn encode_trace_parquet<W: Write, T: Timestamp + Codec64>(

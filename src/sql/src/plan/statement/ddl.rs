@@ -342,7 +342,7 @@ pub fn plan_create_source(
     let legacy_with_options_original = legacy_with_options;
     let mut legacy_with_options = normalize::options(legacy_with_options_original)?;
 
-    const SAFE_WITH_OPTIONS: &'static [CreateSourceOptionName] = &[CreateSourceOptionName::Size];
+    const SAFE_WITH_OPTIONS: &[CreateSourceOptionName] = &[CreateSourceOptionName::Size];
 
     if !legacy_with_options.is_empty()
         || with_options

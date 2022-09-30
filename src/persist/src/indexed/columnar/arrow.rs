@@ -74,7 +74,7 @@ pub static SCHEMA_ARROW_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
     ]))
 });
 
-const INLINE_METADATA_KEY: &'static str = "MZ:inline";
+const INLINE_METADATA_KEY: &str = "MZ:inline";
 
 /// Encodes an BlobTraceBatchPart into the Arrow file format.
 ///

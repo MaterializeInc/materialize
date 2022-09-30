@@ -571,7 +571,7 @@ fn string_agg<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOr
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    const EMPTY_SEP: &'static str = "";
+    const EMPTY_SEP: &str = "";
 
     let datums = order_aggregate_datums(datums, order_by);
     let mut sep_value_pairs = datums.into_iter().filter_map(|d| {
