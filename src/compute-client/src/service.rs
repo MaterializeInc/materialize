@@ -23,7 +23,6 @@ use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::debug;
 use uuid::Uuid;
 
 use mz_repr::{Diff, GlobalId, Row};
@@ -144,36 +143,35 @@ where
     }
 
     /// Observes commands that move past, and prepares state for responses.
-    ///
-    /// In particular, this method installs and removes upper frontier maintenance.
     pub fn observe_command(&mut self, command: &ComputeCommand<T>) {
-        match command {
-            ComputeCommand::CreateTimely(_)
-            | ComputeCommand::CreateInstance(_)
-            | ComputeCommand::DropInstance => {
-                self.reset();
-            }
-            _ => (),
+        if let ComputeCommand::CreateTimely(_) = command {
+            self.reset();
+        } else {
+            // Note that we are not guaranteed to observe other compute commands than
+            // `CreateTimely`. The `Partitioned` compute client is used by `computed` processes,
+            // and in a multi-process replica only the first process receives all compute commands.
+            // We should therefore not add any logic here that relies on observing commands other
+            // than `CreateTimely`.
         }
+    }
 
-        // Temporary storage for identifiers to add to and remove from frontier tracking.
-        let mut start = Vec::new();
-        let mut cease = Vec::new();
-        command.frontier_tracking(&mut start, &mut cease);
-        // Apply the determined effects of the command to `self.uppers`.
-        for id in start.into_iter() {
-            let mut frontier = MutableAntichain::new();
-            frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-            let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
-            let previous = self.uppers.insert(id, (frontier, part_frontiers));
-            assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command);
-        }
-        for id in cease.into_iter() {
-            let previous = self.uppers.remove(&id);
-            if previous.is_none() {
-                debug!("Protocol error: ceasing frontier tracking for absent identifier {:?} due to command {:?}", id, command);
-            }
-        }
+    fn start_frontier_tracking(&mut self, id: GlobalId) {
+        let mut frontier = MutableAntichain::new();
+        frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+        let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
+        let previous = self.uppers.insert(id, (frontier, part_frontiers));
+        assert!(
+            previous.is_none(),
+            "starting frontier tracking for already present identifier {id}"
+        );
+    }
+
+    fn cease_frontier_tracking(&mut self, id: GlobalId) {
+        let previous = self.uppers.remove(&id);
+        assert!(
+            previous.is_some(),
+            "ceasing frontier tracking for absent identifier {id}",
+        );
     }
 }
 
@@ -211,17 +209,28 @@ where
                 let mut new_uppers = Vec::new();
 
                 for (id, new_shard_upper) in list {
-                    if let Some((frontier, shard_frontiers)) = self.uppers.get_mut(&id) {
-                        let old_upper = frontier.frontier().to_owned();
-                        let shard_upper = &mut shard_frontiers[shard_id];
-                        frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
-                        frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
-                        shard_upper.join_assign(&new_shard_upper);
+                    // Initialize frontier tracking state for this collection, if necessary.
+                    if !self.uppers.contains_key(&id) {
+                        self.start_frontier_tracking(id);
+                    }
 
-                        let new_upper = frontier.frontier();
-                        if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
-                            new_uppers.push((id, new_upper.to_owned()));
-                        }
+                    let (frontier, shard_frontiers) = self.uppers.get_mut(&id).unwrap();
+
+                    let old_upper = frontier.frontier().to_owned();
+                    let shard_upper = &mut shard_frontiers[shard_id];
+                    frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
+                    frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
+                    shard_upper.join_assign(&new_shard_upper);
+
+                    let new_upper = frontier.frontier();
+                    if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
+                        new_uppers.push((id, new_upper.to_owned()));
+                    }
+
+                    if new_upper.is_empty() {
+                        // All shards have reported advancement to the empty frontier, so we do not
+                        // expect further updates for this collection.
+                        self.cease_frontier_tracking(id);
                     }
                 }
 
