@@ -65,10 +65,11 @@ create_secret ::=
     'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
-create_sink ::=
+create_sink_kafka ::=
     'CREATE SINK' 'IF NOT EXISTS'? sink_name
     'FROM' item_name
-    'INTO' sink_kafka_connector
+    'INTO' kafka_sink_connection
+    ('KEY' '(' key_column ( ',' key_column )* ')')?
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))
     ('WITH' with_options)?
@@ -220,12 +221,8 @@ s3_format_spec ::=
   'TEXT' |
   'BYTES'
 sink_format_spec ::=
-  'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url with_options?|
+  'AVRO USING' csr_connection |
   'JSON'
-consistency_format_spec ::=
-  'AVRO USING' (
-        'CONFLUENT SCHEMA REGISTRY' url with_options?
-        )
 compression ::= 'COMPRESSION' ('NONE' | 'GZIP')
 key_constraint ::= ('PRIMARY KEY' '(' (col_name) ( ( ',' col_name ) )* ')' 'NOT ENFORCED')
 func_at_time_zone ::=
@@ -269,9 +266,11 @@ jsonb_agg ::=
     'jsonb_agg' '(' expression ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 jsonb_object_agg ::=
   'jsonb_object_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
-sink_kafka_connector ::=
-    'KAFKA' 'CONNECTION' conn (with_options)?
-    ('KEY' '(' key_column ( ',' key_column )* ')')?
+kafka_sink_connection ::=
+    'KAFKA' 'CONNECTION' connection_name
+    '(' 'TOPIC' topic ( ( ',' connection_option )? ) ')'
+csr_connection ::=
+  'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name '(' ( ',' connection_option )? ')'
 list_agg ::=
   'list_agg' '(' value  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 lit_cast ::=

@@ -32,11 +32,7 @@ pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, anyhow::E
 
 #[async_trait]
 impl Action for ConnectAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let (client, _) = postgres_client(&self.url).await?;
         state.postgres_clients.insert(self.name.clone(), client);
         Ok(ControlFlow::Continue)

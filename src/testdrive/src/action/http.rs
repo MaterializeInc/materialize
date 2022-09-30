@@ -34,11 +34,7 @@ pub fn build_request(mut cmd: BuiltinCommand) -> Result<RequestAction, anyhow::E
 
 #[async_trait]
 impl Action for RequestAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, _: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, _: &mut State) -> Result<ControlFlow, anyhow::Error> {
         println!("$ http-request {} {}\n{}", self.method, self.url, self.body);
 
         let client = reqwest::Client::new();

@@ -40,11 +40,7 @@ pub fn build_create_bucket(mut cmd: BuiltinCommand) -> Result<CreateBucketAction
 
 #[async_trait]
 impl Action for CreateBucketAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Creating S3 bucket {}", bucket);
 
@@ -111,11 +107,7 @@ pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, anyh
 
 #[async_trait]
 impl Action for PutObjectAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Put S3 object {}/{}", bucket, self.key);
 
@@ -167,11 +159,7 @@ pub fn build_delete_object(mut cmd: BuiltinCommand) -> Result<DeleteObjectAction
 
 #[async_trait]
 impl Action for DeleteObjectAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         println!("Deleting S3 objects {}: {}", bucket, self.keys.join(", "));
         state
@@ -229,11 +217,7 @@ pub fn build_add_notifications(
 
 #[async_trait]
 impl Action for AddBucketNotifications {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
         let queue = format!("{}-{}", self.queue_prefix, state.seed);
 

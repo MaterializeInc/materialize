@@ -250,11 +250,19 @@ fn build_row_schema_field<F: FnMut() -> String>(
             "type": "long",
             "logicalType": "timestamp-micros"
         }),
-        ScalarType::Interval => json!({
-            "type": "fixed",
-            "size": 12,
-            "logicalType": "duration"
-        }),
+        ScalarType::Interval => {
+            let name = format!("{AVRO_NAMESPACE}.interval");
+            if names_seen.contains(&name) {
+                json!(name)
+            } else {
+                names_seen.insert(name.clone());
+                json!({
+                "type": "fixed",
+                "size": 16,
+                "name": name,
+                })
+            }
+        }
         ScalarType::Bytes => json!("bytes"),
         ScalarType::String | ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
             json!("string")

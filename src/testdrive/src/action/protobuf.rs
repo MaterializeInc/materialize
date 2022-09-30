@@ -44,13 +44,7 @@ pub fn build_compile_descriptors(
 
 #[async_trait]
 impl Action for CompileDescriptorsAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        // Files are written to a fresh temporary directory, so no need to
-        // explicitly remove the file here.
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let protoc = match env::var_os("PROTOC") {
             None => protobuf_src::protoc(),
             Some(protoc) => PathBuf::from(protoc),

@@ -47,11 +47,7 @@ pub fn build_publish(mut cmd: BuiltinCommand) -> Result<PublishAction, anyhow::E
 
 #[async_trait]
 impl Action for PublishAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let mut references = vec![];
         for reference in &self.references {
             let subject = state
@@ -86,11 +82,7 @@ pub fn build_wait(mut cmd: BuiltinCommand) -> Result<WaitSchemaAction, anyhow::E
 
 #[async_trait]
 impl Action for WaitSchemaAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         Retry::default()
             .initial_backoff(Duration::from_millis(50))
             .factor(1.5)

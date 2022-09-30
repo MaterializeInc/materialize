@@ -26,11 +26,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
-use mz_sql_parser::ast::{
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionStatement,
-    CreateDatabaseStatement, CreateSchemaStatement, CreateSecretStatement, CreateSourceStatement,
-    CreateTableStatement, CreateViewStatement, Raw, ReplicaDefinition, Statement, ViewDefinition,
-};
+use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
@@ -58,100 +54,7 @@ pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
 
 #[async_trait]
 impl Action for SqlAction {
-    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
-        match &self.stmt {
-            Statement::CreateDatabase(CreateDatabaseStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP DATABASE IF EXISTS {}", name),
-                )
-                .await
-            }
-            Statement::CreateSchema(CreateSchemaStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP SCHEMA IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateSource(CreateSourceStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP SOURCE IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateView(CreateViewStatement {
-                definition: ViewDefinition { name, .. },
-                ..
-            }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP VIEW IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateTable(CreateTableStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP TABLE IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateCluster(CreateClusterStatement { name, .. }) => {
-                // Modifying the default cluster causes an enormous headache in
-                // isolating tests from one another, so testdrive won't let you.
-                assert_ne!(
-                    name,
-                    &mz_sql::ast::Ident::from("default"),
-                    "testdrive cannot create default cluster"
-                );
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP CLUSTER IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateClusterReplica(CreateClusterReplicaStatement {
-                definition: ReplicaDefinition { name, .. },
-                of_cluster,
-                ..
-            }) => {
-                // Modifying the default cluster causes an enormous headache in
-                // isolating tests from one another, so testdrive won't let you.
-                assert_ne!(
-                    of_cluster.to_string(),
-                    "default",
-                    "testdrive cannot create default cluster replicas"
-                );
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!(
-                        "DROP CLUSTER REPLICA IF EXISTS {} FROM {}",
-                        name, of_cluster
-                    ),
-                )
-                .await
-            }
-            Statement::CreateSecret(CreateSecretStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP SECRET IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateConnection(CreateConnectionStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP CONNECTION IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            _ => Ok(()),
-        }
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::*;
 
         let query = &self.cmd.query;
@@ -169,6 +72,7 @@ impl Action for SqlAction {
             | CreateSchema(_)
             | CreateSource(_)
             | CreateSink(_)
+            | CreateMaterializedView(_)
             | CreateView(_)
             | CreateViews(_)
             | CreateTable(_)
@@ -195,7 +99,7 @@ impl Action for SqlAction {
             false => Retry::default().max_duration(state.timeout).max_tries(1),
         }
         .retry_async_canceling(|retry_state| async move {
-            match self.try_redo(state, &query).await {
+            match self.try_run(state, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();
@@ -268,17 +172,7 @@ impl Action for SqlAction {
 }
 
 impl SqlAction {
-    async fn try_drop(
-        &self,
-        pgclient: &mut tokio_postgres::Client,
-        query: &str,
-    ) -> Result<(), anyhow::Error> {
-        print_query(&query);
-        pgclient.query(query, &[]).await?;
-        Ok(())
-    }
-
-    async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
+    async fn try_run(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
         let stmt = state
             .pgclient
             .prepare(query)
@@ -442,11 +336,7 @@ pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, anyhow::Erro
 
 #[async_trait]
 impl Action for FailSqlAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::{Commit, Rollback};
 
         let query = &self.query;
@@ -471,7 +361,7 @@ impl Action for FailSqlAction {
                 .max_tries(state.max_tries),
             false => Retry::default().max_duration(state.timeout).max_tries(1),
         }.retry_async_canceling(|retry_state| async move {
-            match self.try_redo(state, &query).await {
+            match self.try_run(state, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();
@@ -514,7 +404,7 @@ impl Action for FailSqlAction {
 }
 
 impl FailSqlAction {
-    async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
+    async fn try_run(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
         match state.pgclient.query(query, &[]).await {
             Ok(_) => bail!("query succeeded, but expected {}", self.expected_error),
             Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
@@ -666,7 +556,7 @@ impl<'a> FromSql<'a> for Uint4 {
     }
 
     fn accepts(ty: &Type) -> bool {
-        ty.oid() == mz_pgrepr::oid::TYPE_UINT8_OID
+        ty.oid() == mz_pgrepr::oid::TYPE_UINT4_OID
     }
 }
 

@@ -40,11 +40,7 @@ pub fn build_regex_unset(_cmd: BuiltinCommand) -> Result<RegexAction, anyhow::Er
 
 #[async_trait]
 impl Action for RegexAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         match self {
             RegexAction::Set { regex, replacement } => {
                 state.regex = Some(regex.clone());
@@ -77,11 +73,7 @@ pub fn build_sql_timeout(mut cmd: BuiltinCommand) -> Result<SqlTimeoutAction, an
 
 #[async_trait]
 impl Action for SqlTimeoutAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         state.timeout = self.duration.unwrap_or(state.default_timeout);
         if !self.force {
             // Bump the timeout to be at least the default timeout unless the
@@ -105,11 +97,7 @@ pub fn build_max_tries(mut cmd: BuiltinCommand) -> Result<MaxTriesAction, anyhow
 
 #[async_trait]
 impl Action for MaxTriesAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         state.max_tries = self.max_tries.unwrap_or(state.default_max_tries);
         Ok(ControlFlow::Continue)
     }

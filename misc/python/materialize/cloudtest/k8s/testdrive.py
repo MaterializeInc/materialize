@@ -17,12 +17,12 @@ from materialize.cloudtest.wait import wait
 
 
 class Testdrive(K8sPod):
-    def __init__(self) -> None:
+    def __init__(self, release_mode: bool) -> None:
         metadata = V1ObjectMeta(name="testdrive")
 
         container = V1Container(
             name="testdrive",
-            image=self.image("testdrive"),
+            image=self.image("testdrive", release_mode),
             command=["sleep", "infinity"],
         )
 
