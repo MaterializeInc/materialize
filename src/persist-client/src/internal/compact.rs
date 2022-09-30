@@ -194,6 +194,8 @@ where
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
         let should_compact = req.inputs.len() >= self.cfg.compaction_heuristic_min_inputs
+            || req.inputs.iter().filter(|x| x.len > 0).count()
+                > self.cfg.compaction_heuristic_min_non_empty_inputs
             || req.inputs.iter().map(|x| x.len).sum::<usize>()
                 >= self.cfg.compaction_heuristic_min_updates;
         if !should_compact {
