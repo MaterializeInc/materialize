@@ -14,7 +14,6 @@ use std::io::{self, Write};
 use std::time::SystemTime;
 
 use anyhow::{bail, Context};
-use async_trait::async_trait;
 use md5::{Digest, Md5};
 use postgres_array::Array;
 use regex::Regex;
@@ -28,7 +27,7 @@ use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
 use mz_sql_parser::ast::{Raw, Statement};
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
 
 pub struct SqlAction {
@@ -36,7 +35,11 @@ pub struct SqlAction {
     stmt: Statement<Raw>,
 }
 
-pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
+pub async fn run_sql(cmd: SqlCommand, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    build_sql(cmd)?.run(state).await
+}
+
+fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
     if stmts.len() != 1 {
@@ -52,8 +55,7 @@ pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
     })
 }
 
-#[async_trait]
-impl Action for SqlAction {
+impl SqlAction {
     async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::*;
 
@@ -156,8 +158,8 @@ impl Action for SqlAction {
                     if disk_state != mem_state {
                         bail!(
                             "the on-disk state of the catalog does not match its in-memory state\n\
-                             disk:{}\n\
-                             mem:{}",
+                         disk:{}\n\
+                         mem:{}",
                             disk_state,
                             mem_state
                         );
@@ -169,9 +171,6 @@ impl Action for SqlAction {
 
         Ok(ControlFlow::Continue)
     }
-}
-
-impl SqlAction {
     async fn try_run(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
         let stmt = state
             .pgclient
@@ -304,7 +303,10 @@ impl fmt::Display for ErrorMatcher {
     }
 }
 
-pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, anyhow::Error> {
+pub async fn run_fail_sql(
+    cmd: FailSqlCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
 
@@ -327,15 +329,16 @@ pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, anyhow::Erro
         SqlExpectedError::Timeout => ErrorMatcher::Timeout,
     };
 
-    Ok(FailSqlAction {
+    FailSqlAction {
         query: cmd.query,
         expected_error,
         stmt,
-    })
+    }
+    .run(state)
+    .await
 }
 
-#[async_trait]
-impl Action for FailSqlAction {
+impl FailSqlAction {
     async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::{Commit, Rollback};
 
