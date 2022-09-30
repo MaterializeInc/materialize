@@ -527,16 +527,16 @@ mz_message_counts_sent_internal                 log
 mz_message_counts_sent_internal_1               log
 mz_peek_active                                  log
 mz_peek_active_1                                log
-mz_peek_durations                               log
-mz_peek_durations_1                             log
+mz_raw_peek_durations                           log
+mz_raw_peek_durations_1                         log
+mz_raw_worker_compute_delays                    log
+mz_raw_worker_compute_delays_1                  log
 mz_scheduling_elapsed_internal                  log
 mz_scheduling_elapsed_internal_1                log
-mz_scheduling_histogram_internal                log
-mz_scheduling_histogram_internal_1              log
+mz_raw_compute_operator_durations_internal      log
+mz_raw_compute_operator_durations_internal_1    log
 mz_scheduling_parks_internal                    log
 mz_scheduling_parks_internal_1                  log
-mz_worker_compute_delays                        log
-mz_worker_compute_delays_1                      log
 mz_worker_compute_frontiers                     log
 mz_worker_compute_frontiers_1                   log
 mz_worker_compute_import_frontiers              log
@@ -563,8 +563,14 @@ mz_compute_frontiers
 mz_compute_frontiers_1
 mz_compute_import_frontiers
 mz_compute_import_frontiers_1
+mz_compute_operator_durations
+mz_compute_operator_durations_1
 mz_message_counts
 mz_message_counts_1
+mz_peek_durations
+mz_peek_durations_1
+mz_raw_compute_operator_durations
+mz_raw_compute_operator_durations_1
 mz_records_per_dataflow
 mz_records_per_dataflow_1
 mz_records_per_dataflow_global
@@ -573,10 +579,10 @@ mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_1
 mz_scheduling_elapsed
 mz_scheduling_elapsed_1
-mz_scheduling_histogram
-mz_scheduling_histogram_1
 mz_scheduling_parks
 mz_scheduling_parks_1
+mz_worker_compute_delays
+mz_worker_compute_delays_1
 
 > CREATE SCHEMA tester
 
