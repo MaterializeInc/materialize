@@ -69,7 +69,7 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 ## Detail
 
 - Materialize currently only supports Avro or JSON-formatted sinks that write to a Kafka topic.
-- Materialize stores information about the sink's topic name in the [`mz_kafka_sinks`](/sql/system-catalog/#mz_kafka_sinks) system table. See the [examples](#examples) below for more details.
+- Materialize stores information about the sink's topic name in the [`mz_kafka_sinks`](/sql/system-catalog/mz_catalog#mz_kafka_sinks) system table. See the [examples](#examples) below for more details.
 - For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink. If needed, the fullnames for these schemas can be specified with the `AVRO KEY FULLNAME` and `AVRO VALUE FULLNAME` options.
 
 ### Debezium envelope details
@@ -131,7 +131,7 @@ If the topic does not exist, Materialize will use the Kafka Admin API to create 
 
 For Avro-encoded sinks, Materialize will publish the sink's Avro schema to the Confluent Schema Registry. Materialize will not publish schemas for JSON-encoded sinks.
 
-You can find the topic name and other metadata for each Kafka sink by querying [`mz_kafka_sinks`](/sql/system-catalog/#mz_kafka_sinks).
+You can find the topic name and other metadata for each Kafka sink by querying [`mz_kafka_sinks`](/sql/system-catalog/mz_catalog#mz_kafka_sinks).
 
 {{< note >}}
 {{% kafka-sink-drop  %}}

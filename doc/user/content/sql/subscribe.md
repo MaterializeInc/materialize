@@ -184,7 +184,7 @@ Below are the recommended ways to work around this.
 The recommended way to use `SUBSCRIBE` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
 These must be used within a transaction, with [a single `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
 This allows you to limit the number of rows and the time window of your requests.
-As an example, let's subscribe to the [`mz_scheduling_elapsed`](/sql/system-catalog/#mz_scheduling_elapsed) system table, which shows the total amount of time each worker spends in each dataflow.
+As an example, let's subscribe to the [`mz_scheduling_elapsed`](/sql/system-catalog/mz_internal#mz_scheduling_elapsed) system table, which shows the total amount of time each worker spends in each dataflow.
 
 First, declare a `SUBSCRIBE` cursor:
 

@@ -76,7 +76,7 @@ There are several aspects of the product that are not considered part of
 Materialize's stable interface:
 
   * Features that are in beta (labeled as such in the documentation)
-  * Objects in the [system catalog](/sql/system-tables)
+  * Objects in the [system catalog](/sql/system-catalog)
   * Any undocumented features or behavior
 
 These unstable interfaces are not subject to the backwards-compatibility policy.
