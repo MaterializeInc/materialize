@@ -28,10 +28,13 @@ SERVICES = [
     Testdrive(default_timeout="120s"),
 ]
 
+def workflow_default(c: Composition) -> None:
+    c.workflow("sink-networking")
+
 #
-# Test the kafka sink resumption logic
+# Test the kafka sink resumption logic in the presence of networking problems
 #
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_sink_networking(c: Composition) -> None:
     c.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy"]
     )
@@ -53,12 +56,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "--max-errors=1",
             f"--seed={seed}{i}",
             f"--temp-dir=/share/tmp/kafka-resumption-{seed}{i}",
-            "setup.td",
-            failure_mode,
-            "during.td",
-            "sleep.td",
-            "toxiproxy-restore-connection.td",
-            "verify-success.td",
-            "cleanup.td",
+            "sink-networking/setup.td",
+            f"sink-networking/{failure_mode}",
+            "sink-networking/during.td",
+            "sink-networking/sleep.td",
+            "sink-networking/toxiproxy-restore-connection.td",
+            "sink-networking/verify-success.td",
+            "sink-networking/cleanup.td",
         )
         c.kill("toxiproxy")
