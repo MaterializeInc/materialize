@@ -23,6 +23,7 @@ use mz_ore::display::DisplayExt;
 use self::action::ControlFlow;
 use self::error::{ErrorLocation, PosError};
 use self::parser::LineReader;
+use self::parser::{BuiltinCommand, Command};
 
 mod action;
 mod error;
@@ -80,11 +81,32 @@ async fn run_line_reader(
     // reconnections for every file. For now it's nice to not open any
     // connections until after parsing.
     let cmds = parser::parse(line_reader)?;
+
+    let has_kafka_cmd = cmds.iter().any(|cmd| {
+        matches!(
+            &cmd.command,
+            Command::Builtin(BuiltinCommand { name, .. }) if name.starts_with("kafka-"),
+        )
+    });
+
     let (mut state, state_cleanup) = action::create_state(config).await?;
     let actions = action::build(cmds, &state).await?;
 
     if config.reset {
+        // Delete any existing Materialize and Kafka state *before* the test
+        // script starts. We don't clean up Materialize or Kafka state at the
+        // end of the script because it's useful to leave the state around,
+        // e.g., for debugging, or when using a testdrive script to set up
+        // Materialize for further tinkering.
+
         state.reset_materialize().await?;
+
+        // Only try to clean up Kafka state if the test script uses a Kafka
+        // action. Tests that don't use Kafka likely don't have a Kafka
+        // broker available.
+        if has_kafka_cmd {
+            state.reset_kafka().await?;
+        }
     }
 
     for a in &actions {
@@ -96,11 +118,13 @@ async fn run_line_reader(
     }
 
     if config.reset {
-        let mut errors = Vec::new();
+        // Clean up AWS state at the end of the run. Unlike Materialize and
+        // Kafka state, leaving around AWS resources costs real money. We
+        // intentionally don't stop at the first error because we don't want
+        // to e.g. skip cleaning up SQS resources because we failed to clean up
+        // S3 resources.
 
-        if let Err(e) = state.reset_kafka().await {
-            errors.push(e);
-        }
+        let mut errors = vec![];
 
         if let Err(e) = state.reset_s3().await {
             errors.push(e);
