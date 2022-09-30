@@ -550,8 +550,8 @@ pub enum CatalogError {
     UnknownRole(String),
     /// Unknown compute instance.
     UnknownComputeInstance(String),
-    /// Unknown compute instance replica.
-    UnknownComputeInstanceReplica(String),
+    /// Unknown compute replica.
+    UnknownComputeReplica(String),
     /// Unknown item.
     UnknownItem(String),
     /// Unknown function.
@@ -578,7 +578,7 @@ impl fmt::Display for CatalogError {
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),
-            Self::UnknownComputeInstanceReplica(name) => {
+            Self::UnknownComputeReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)
             }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),

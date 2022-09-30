@@ -227,8 +227,8 @@ pub enum ExecuteResponse {
     CreatedComputeInstance {
         existed: bool,
     },
-    /// The requested compute instance replica was created.
-    CreatedComputeInstanceReplica {
+    /// The requested compute replica was created.
+    CreatedComputeReplica {
         existed: bool,
     },
     /// The requested index was created.
@@ -283,8 +283,8 @@ pub enum ExecuteResponse {
     DroppedConnection,
     /// The requested compute instance was dropped.
     DroppedComputeInstance,
-    /// The requested compute instance replicas were dropped.
-    DroppedComputeInstanceReplicas,
+    /// The requested compute replica was dropped.
+    DroppedComputeReplica,
     /// The requested database was dropped.
     DroppedDatabase,
     /// The requested role was dropped.
@@ -384,7 +384,7 @@ impl ExecuteResponse {
             CreatedSchema { .. } => created!("schema"),
             CreatedRole => created!("role"),
             CreatedComputeInstance { .. } => created!("cluster"),
-            CreatedComputeInstanceReplica { .. } => created!("cluster replica"),
+            CreatedComputeReplica { .. } => created!("cluster replica"),
             CreatedIndex { .. } => created!("index"),
             CreatedSecret { .. } => created!("secret"),
             CreatedSink { .. } => created!("sink"),
@@ -402,7 +402,7 @@ impl ExecuteResponse {
             DiscardedAll => Some("DISCARD ALL".into()),
             DroppedConnection => dropped!("connection"),
             DroppedComputeInstance => dropped!("cluster"),
-            DroppedComputeInstanceReplicas => dropped!("cluster replica"),
+            DroppedComputeReplica => dropped!("cluster replica"),
             DroppedDatabase => dropped!("database"),
             DroppedRole => dropped!("role"),
             DroppedSchema => dropped!("schema"),
@@ -475,7 +475,7 @@ impl ExecuteResponse {
             CreatedComputeInstance { existed } => {
                 existed!(*existed, SqlState::DUPLICATE_OBJECT, "cluster")
             }
-            CreatedComputeInstanceReplica { existed } => {
+            CreatedComputeReplica { existed } => {
                 existed!(*existed, SqlState::DUPLICATE_OBJECT, "cluster replica")
             }
             CreatedTable { existed } => {
@@ -574,7 +574,7 @@ impl ExecuteResponse {
             | DiscardedAll
             | DroppedConnection
             | DroppedComputeInstance
-            | DroppedComputeInstanceReplicas
+            | DroppedComputeReplica
             | DroppedDatabase
             | DroppedRole
             | DroppedSchema
@@ -634,7 +634,7 @@ impl ExecuteResponse {
             CreateSchema => vec![CreatedSchema],
             CreateRole => vec![CreatedRole],
             CreateComputeInstance => vec![CreatedComputeInstance],
-            CreateComputeInstanceReplica => vec![CreatedComputeInstanceReplica],
+            CreateComputeReplica => vec![CreatedComputeReplica],
             CreateSource => vec![CreatedSource, CreatedSources],
             CreateSecret => vec![CreatedSecret],
             CreateSink => vec![CreatedSink],
@@ -652,7 +652,7 @@ impl ExecuteResponse {
             DropSchema => vec![DroppedSchema],
             DropRoles => vec![DroppedRole],
             DropComputeInstances => vec![DroppedComputeInstance],
-            DropComputeInstanceReplica => vec![DroppedComputeInstanceReplicas],
+            DropComputeReplicas => vec![DroppedComputeReplica],
             DropItems => vec![
                 DroppedConnection,
                 DroppedSource,

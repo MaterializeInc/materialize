@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeInstanceReplicaLocation, ComputeInstanceStatus,
+    ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
@@ -118,7 +118,7 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_instance_replica_update(
+    pub(super) fn pack_compute_replica_update(
         &self,
         compute_instance_id: ComputeInstanceId,
         name: &str,
@@ -129,13 +129,13 @@ impl CatalogState {
         let replica = &instance.replicas_by_id[&id];
 
         let (size, az) = match &replica.config.location {
-            ComputeInstanceReplicaLocation::Managed {
+            ComputeReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified: _,
                 allocation: _,
             } => (Some(&**size), Some(availability_zone.as_str())),
-            ComputeInstanceReplicaLocation::Remote { .. } => (None, None),
+            ComputeReplicaLocation::Remote { .. } => (None, None),
         };
 
         BuiltinTableUpdate {

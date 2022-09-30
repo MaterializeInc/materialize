@@ -847,7 +847,7 @@ pub async fn serve<S: Append + 'static>(
         availability_zones.push(DUMMY_AVAILABILITY_ZONE.into());
     }
     // Shuffle availability zones for unbiased selection in
-    // Coordinator::sequence_create_compute_instance_replica.
+    // Coordinator::sequence_create_compute_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
     let (mut catalog, builtin_migration_metadata, builtin_table_updates) =

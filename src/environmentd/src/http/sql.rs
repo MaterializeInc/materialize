@@ -321,7 +321,7 @@ async fn execute_stmt(
         | ExecuteResponse::CreatedSchema { .. }
         | ExecuteResponse::CreatedRole
         | ExecuteResponse::CreatedComputeInstance { .. }
-        | ExecuteResponse::CreatedComputeInstanceReplica { .. }
+        | ExecuteResponse::CreatedComputeReplica { .. }
         | ExecuteResponse::CreatedTable { .. }
         | ExecuteResponse::CreatedIndex { .. }
         | ExecuteResponse::CreatedSecret { .. }
@@ -339,7 +339,7 @@ async fn execute_stmt(
         | ExecuteResponse::DroppedSchema
         | ExecuteResponse::DroppedRole
         | ExecuteResponse::DroppedComputeInstance
-        | ExecuteResponse::DroppedComputeInstanceReplicas
+        | ExecuteResponse::DroppedComputeReplica
         | ExecuteResponse::DroppedSource
         | ExecuteResponse::DroppedIndex
         | ExecuteResponse::DroppedSink
