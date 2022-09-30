@@ -79,6 +79,11 @@ pub(crate) mod internal {
 // TODO: Remove this in favor of making it possible for all PersistClients to be
 // created by the PersistCache.
 pub use crate::internal::metrics::Metrics;
+/// Utilities related to metrics.
+pub mod metrics {
+    pub use crate::internal::metrics::encode_ts_metric;
+    pub use crate::internal::metrics::Metrics;
+}
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.

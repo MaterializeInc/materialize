@@ -1068,28 +1068,12 @@ impl ShardMetrics {
         }
     }
 
-    fn encode_ts_metric<T: Codec64>(ts: &Antichain<T>) -> i64 {
-        // We have two problems in mapping a persist frontier into a metric.
-        // First is that we only have a `T: Timestamp+Codec64`. Second, is
-        // mapping an antichain to a single counter value. We solve both by
-        // taking advantage of the fact that in practice, timestamps in mz are
-        // currently always a u64 (and if we switch them, it will be to an i64).
-        // This means that for all values that mz would actually produce,
-        // interpreting the the encoded bytes as a little-endian i64 will work.
-        // Both of them impl PartialOrder, so in practice, there will always be
-        // zero or one elements in the antichain.
-        match ts.elements().first() {
-            Some(ts) => i64::from_le_bytes(Codec64::encode(ts)),
-            None => i64::MAX,
-        }
-    }
-
     pub fn set_since<T: Codec64>(&self, since: &Antichain<T>) {
-        self.since.set(Self::encode_ts_metric(since))
+        self.since.set(encode_ts_metric(since))
     }
 
     pub fn set_upper<T: Codec64>(&self, upper: &Antichain<T>) {
-        self.upper.set(Self::encode_ts_metric(upper))
+        self.upper.set(encode_ts_metric(upper))
     }
 
     pub fn set_encoded_rollup_size(&self, encoded_rollup_size: usize) {
@@ -1457,5 +1441,22 @@ impl Consensus for MetricsConsensus {
             .truncated_count
             .inc_by(u64::cast_from(deleted));
         Ok(deleted)
+    }
+}
+
+/// Encode a frontier into an i64 acceptable for use in metrics.
+pub fn encode_ts_metric<T: Codec64>(ts: &Antichain<T>) -> i64 {
+    // We have two problems in mapping a persist frontier into a metric.
+    // First is that we only have a `T: Timestamp+Codec64`. Second, is
+    // mapping an antichain to a single counter value. We solve both by
+    // taking advantage of the fact that in practice, timestamps in mz are
+    // currently always a u64 (and if we switch them, it will be to an i64).
+    // This means that for all values that mz would actually produce,
+    // interpreting the the encoded bytes as a little-endian i64 will work.
+    // Both of them impl PartialOrder, so in practice, there will always be
+    // zero or one elements in the antichain.
+    match ts.elements().first() {
+        Some(ts) => i64::from_le_bytes(Codec64::encode(ts)),
+        None => i64::MAX,
     }
 }
