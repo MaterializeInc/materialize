@@ -186,7 +186,7 @@ fn evaluate(
     let arena = RowArena::new();
     // Each predicate is tested in order.
     for predicate in predicates.iter() {
-        if predicate.eval(&datums[..], &arena)? != Datum::True {
+        if predicate.eval(datums, &arena)? != Datum::True {
             return Ok(None);
         }
     }
