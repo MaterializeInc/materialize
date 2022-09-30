@@ -1045,6 +1045,7 @@ impl_display_t!(CreateSourceConnection);
 pub enum LoadGenerator {
     Counter,
     Auction,
+    Datums,
     Tpch,
 }
 
@@ -1053,6 +1054,7 @@ impl AstDisplay for LoadGenerator {
         match self {
             Self::Counter => f.write_str("COUNTER"),
             Self::Auction => f.write_str("AUCTION"),
+            Self::Datums => f.write_str("DATUMS"),
             Self::Tpch => f.write_str("TPCH"),
         }
     }

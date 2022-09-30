@@ -497,6 +497,9 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
                 mz_pgrepr::oid::TYPE_UINT8_OID => {
                     row.get::<_, Option<Uint8>>(i).map(|x| x.0.to_string())
                 }
+                mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_OID => {
+                    row.get::<_, Option<MzTimestamp>>(i).map(|x| x.0)
+                }
                 _ => bail!("unsupported SQL type in testdrive: {:?}", ty),
             },
         }
@@ -549,6 +552,18 @@ impl<'a> FromSql<'a> for Uint8 {
     }
 }
 
+struct MzTimestamp(String);
+
+impl<'a> FromSql<'a> for MzTimestamp {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<MzTimestamp, Box<dyn Error + Sync + Send>> {
+        Ok(MzTimestamp(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_OID
+    }
+}
+
 struct TestdriveRow<'a>(&'a Vec<String>);
 
 impl Display for TestdriveRow<'_> {
@@ -556,7 +571,7 @@ impl Display for TestdriveRow<'_> {
         let mut cols = Vec::<String>::new();
 
         for col_str in &self.0[0..self.0.len()] {
-            if col_str.contains(' ') || col_str.contains('"') {
+            if col_str.contains(' ') || col_str.contains('"') || col_str.is_empty() {
                 cols.push(format!("{:?}", col_str));
             } else {
                 cols.push(col_str.to_string());

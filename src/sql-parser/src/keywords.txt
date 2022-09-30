@@ -86,6 +86,7 @@ Current
 Cursor
 Database
 Databases
+Datums
 Day
 Days
 Deallocate

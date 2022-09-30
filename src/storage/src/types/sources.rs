@@ -1777,6 +1777,7 @@ impl crate::source::types::SourceConnection for LoadGeneratorSourceConnection {
 pub enum LoadGenerator {
     Auction,
     Counter,
+    Datums,
     Tpch {
         count_supplier: i64,
         count_part: i64,
@@ -1827,6 +1828,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_orders: *count_orders,
                     count_clerk: *count_clerk,
                 }),
+                LoadGenerator::Datums => ProtoGenerator::Datums(()),
             }),
             tick_micros: self.tick_micros,
         }
@@ -1853,6 +1855,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_orders,
                     count_clerk,
                 },
+                ProtoGenerator::Datums(()) => LoadGenerator::Datums,
             },
             tick_micros: proto.tick_micros,
         })
