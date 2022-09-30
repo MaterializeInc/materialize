@@ -293,8 +293,8 @@ pub enum LogView {
     MzDataflowNames,
     MzDataflowOperatorDataflows,
     MzDataflowOperatorReachability,
-    MzMaterializationFrontiers,
-    MzMaterializationSourceFrontiers,
+    MzComputeFrontiers,
+    MzComputeImportFrontiers,
     MzMessageCounts,
     MzPeekDurations,
     MzRawComputeOperatorDurations,
@@ -314,8 +314,8 @@ pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
         LogView::MzDataflowNames,
         LogView::MzDataflowOperatorDataflows,
         LogView::MzDataflowOperatorReachability,
-        LogView::MzMaterializationFrontiers,
-        LogView::MzMaterializationSourceFrontiers,
+        LogView::MzComputeFrontiers,
+        LogView::MzComputeImportFrontiers,
         LogView::MzMessageCounts,
         LogView::MzPeekDurations,
         LogView::MzRecordsPerDataflowOperator,
@@ -420,7 +420,7 @@ impl LogView {
                 "mz_dataflow_operator_reachability_{}",
             ),
 
-            LogView::MzMaterializationFrontiers => (
+            LogView::MzComputeFrontiers => (
                 "SELECT
                     export_id, pg_catalog.min(time) AS time
                 FROM mz_internal.mz_worker_compute_frontiers_{}
@@ -428,7 +428,7 @@ impl LogView {
                 "mz_compute_frontiers_{}",
             ),
 
-            LogView::MzMaterializationSourceFrontiers => (
+            LogView::MzComputeImportFrontiers => (
                 "SELECT
                     export_id, import_id, pg_catalog.min(time) AS time
                 FROM mz_internal.mz_worker_compute_import_frontiers_{}
