@@ -528,15 +528,15 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
     for tc in extended_test_cases {
         let mut queries = vec![];
         for (query, params) in tc.requests.into_iter() {
-            queries.push(mz_environmentd::http::ExtendedRequest {
-                query: query.to_string(),
-                params: params
+            queries.push(json!({
+                "query": query.to_string(),
+                "params": params
                     .iter()
                     .map(|p| p.map(str::to_string))
                     .collect::<Vec<_>>(),
-            });
+            }));
         }
-        let req = mz_environmentd::http::HttpSqlRequest::Extended { queries };
+        let req = json!({ "queries": queries });
         let res = Client::new().post(url.clone()).json(&req).send()?;
         assert_eq!(res.status(), tc.status, "{:?}: {:?}", req, res.text());
         assert_eq!(res.text()?, tc.body, "{:?}", req);
