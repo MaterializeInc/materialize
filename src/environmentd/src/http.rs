@@ -16,23 +16,20 @@
 // Axum handlers must use async, but often don't actually use `await`.
 #![allow(clippy::unused_async)]
 
-use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::extract::{FromRequest, RequestParts};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::IntoMakeService;
 use axum::{routing, Extension, Router};
 use futures::future::TryFutureExt;
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
-use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
@@ -51,6 +48,7 @@ use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingTargetCallbacks;
 
+use crate::server::{ConnectionHandler, Server};
 use crate::BUILD_INFO;
 
 mod catalog;
@@ -59,7 +57,7 @@ mod root;
 mod sql;
 
 #[derive(Debug, Clone)]
-pub struct Config {
+pub struct HttpConfig {
     pub tls: Option<TlsConfig>,
     pub frontegg: Option<FronteggAuthentication>,
     pub adapter_client: mz_adapter::Client,
@@ -79,23 +77,20 @@ pub enum TlsMode {
 }
 
 #[derive(Debug)]
-pub struct Server {
+pub struct HttpServer {
     tls: Option<TlsConfig>,
-    // NOTE(benesch): this `Mutex` is silly, but necessary because using this
-    // server requires `Sync` and `Router` is not `Sync` by default. It is
-    // unlikely to be a performance problem in practice.
-    router: Mutex<Router>,
+    router: Router,
 }
 
-impl Server {
+impl HttpServer {
     pub fn new(
-        Config {
+        HttpConfig {
             tls,
             frontegg,
             adapter_client,
             allowed_origin,
-        }: Config,
-    ) -> Server {
+        }: HttpConfig,
+    ) -> HttpServer {
         let tls_mode = tls.as_ref().map(|tls| tls.mode);
         let frontegg = Arc::new(frontegg);
         let router = Router::new()
@@ -130,45 +125,105 @@ impl Server {
                     .expose_headers(Any)
                     .max_age(Duration::from_secs(60) * 60),
             );
-        Server {
-            tls,
-            router: Mutex::new(router),
-        }
+        HttpServer { tls, router }
     }
 
     fn tls_context(&self) -> Option<&SslContext> {
         self.tls.as_ref().map(|tls| &tls.context)
     }
+}
 
-    pub async fn handle_connection(&self, conn: TcpStream) -> Result<(), anyhow::Error> {
-        let (conn, conn_protocol) = match &self.tls_context() {
-            Some(tls_context) => {
-                let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
-                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                    let _ = ssl_stream.get_mut().shutdown().await;
-                    return Err(e.into());
+impl Server for HttpServer {
+    const NAME: &'static str = "http";
+
+    fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler {
+        let router = self.router.clone();
+        let tls_context = self.tls_context().cloned();
+        Box::pin(async {
+            let (conn, conn_protocol) = match tls_context {
+                Some(tls_context) => {
+                    let mut ssl_stream = SslStream::new(Ssl::new(&tls_context)?, conn)?;
+                    if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                        let _ = ssl_stream.get_mut().shutdown().await;
+                        return Err(e.into());
+                    }
+                    let client_cert = ssl_stream.ssl().peer_certificate();
+                    (
+                        MaybeHttpsStream::Https(ssl_stream),
+                        ConnProtocol::Https { client_cert },
+                    )
                 }
-                let client_cert = ssl_stream.ssl().peer_certificate();
-                (
-                    MaybeHttpsStream::Https(ssl_stream),
-                    ConnProtocol::Https { client_cert },
-                )
-            }
-            _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
-        };
-        let router = self.router.lock().expect("lock poisoned").clone();
-        let svc = router.layer(Extension(conn_protocol));
-        let http = hyper::server::conn::Http::new();
-        http.serve_connection(conn, svc).err_into().await
+                _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
+            };
+            let svc = router.layer(Extension(conn_protocol));
+            let http = hyper::server::conn::Http::new();
+            http.serve_connection(conn, svc).err_into().await
+        })
     }
+}
 
-    // Handler functions are attached by various submodules. They all have a
-    // signature of the following form:
-    //
-    //     fn handle_foo(req) -> impl Future<Output = anyhow::Result<Result<Body>>>
-    //
-    // If you add a new handler, please add it to the most appropriate
-    // submodule, or create a new submodule if necessary. Don't add it here!
+pub struct InternalHttpConfig {
+    pub metrics_registry: MetricsRegistry,
+    pub tracing_target_callbacks: TracingTargetCallbacks,
+}
+
+pub struct InternalHttpServer {
+    router: Router,
+}
+
+impl InternalHttpServer {
+    pub fn new(
+        InternalHttpConfig {
+            metrics_registry,
+            tracing_target_callbacks,
+        }: InternalHttpConfig,
+    ) -> InternalHttpServer {
+        let router = Router::new()
+            .route(
+                "/metrics",
+                routing::get(move || async move {
+                    mz_http_util::handle_prometheus(&metrics_registry).await
+                }),
+            )
+            .route(
+                "/api/livez",
+                routing::get(mz_http_util::handle_liveness_check),
+            )
+            .route(
+                "/api/opentelemetry/config",
+                routing::put(move |payload| async move {
+                    mz_http_util::handle_modify_filter_target(
+                        tracing_target_callbacks.tracing,
+                        payload,
+                    )
+                    .await
+                }),
+            )
+            .route(
+                "/api/stderr/config",
+                routing::put(move |payload| async move {
+                    mz_http_util::handle_modify_filter_target(
+                        tracing_target_callbacks.stderr,
+                        payload,
+                    )
+                    .await
+                }),
+            );
+        InternalHttpServer { router }
+    }
+}
+
+#[async_trait]
+impl Server for InternalHttpServer {
+    const NAME: &'static str = "internal_http";
+
+    fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler {
+        let router = self.router.clone();
+        Box::pin(async {
+            let http = hyper::server::conn::Http::new();
+            http.serve_connection(conn, router).err_into().await
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -331,58 +386,4 @@ async fn auth<B>(
 
     // Run the request.
     Ok(next.run(req).await)
-}
-
-#[derive(Clone)]
-pub struct InternalServer {
-    metrics_registry: MetricsRegistry,
-    tracing_target_callbacks: TracingTargetCallbacks,
-}
-
-impl InternalServer {
-    pub fn new(
-        metrics_registry: MetricsRegistry,
-        tracing_target_callbacks: TracingTargetCallbacks,
-    ) -> Self {
-        Self {
-            metrics_registry,
-            tracing_target_callbacks,
-        }
-    }
-
-    pub fn bind(self, addr: SocketAddr) -> axum::Server<AddrIncoming, IntoMakeService<Router>> {
-        let metrics_registry = self.metrics_registry;
-        let router = Router::new()
-            .route(
-                "/metrics",
-                routing::get(move || async move {
-                    mz_http_util::handle_prometheus(&metrics_registry).await
-                }),
-            )
-            .route(
-                "/api/livez",
-                routing::get(mz_http_util::handle_liveness_check),
-            )
-            .route(
-                "/api/opentelemetry/config",
-                routing::put(move |payload| async move {
-                    mz_http_util::handle_modify_filter_target(
-                        self.tracing_target_callbacks.tracing,
-                        payload,
-                    )
-                    .await
-                }),
-            )
-            .route(
-                "/api/stderr/config",
-                routing::put(move |payload| async move {
-                    mz_http_util::handle_modify_filter_target(
-                        self.tracing_target_callbacks.stderr,
-                        payload,
-                    )
-                    .await
-                }),
-            );
-        axum::Server::bind(&addr).serve(router.into_make_service())
-    }
 }
