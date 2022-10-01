@@ -1176,7 +1176,7 @@ DROP CONNECTION conn1
 DropObjects(DropObjectsStatement { object_type: Connection, if_exists: false, names: [UnresolvedObjectName([Ident("conn1")])], cascade: false })
 
 parse-statement
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') LEGACYWITH (consistency = 'lug') FORMAT BYTES
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT BYTES
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') LEGACYWITH (consistency = 'lug') FORMAT BYTES
 =>
@@ -1270,9 +1270,9 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, legacy_with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Remote, value: Some(Value(String("johto:42"))) }] })
 
-# Ensure that we can parse legacy and non-legacy options
+# Ensure that we can parse options
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') legacywith (a = 'hmm') with (REMOTE 'johto:42');
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (REMOTE 'johto:42');
 ----
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') LEGACYWITH (a = 'hmm') WITH (REMOTE = 'johto:42')
 =>

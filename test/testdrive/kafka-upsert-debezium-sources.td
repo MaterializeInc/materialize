@@ -198,15 +198,6 @@ id creature
 -----------
 3  triceratops
 
-# Test that it doesn't work with full deduplication
-! CREATE SOURCE upsert_full_dedupe
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
-  LEGACYWITH (deduplication = 'full')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:unexpected parameters for CREATE SOURCE: deduplication
-
-
 # test include metadata
 > CREATE SOURCE upsert_metadata
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
