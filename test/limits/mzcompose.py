@@ -43,7 +43,7 @@ class Generator:
         print("> DROP SCHEMA IF EXISTS public CASCADE;")
         print(f"> CREATE SCHEMA public /* {cls} */;")
         print(
-            "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}"
+            "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}"
         )
 
     @classmethod
@@ -1366,7 +1366,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             c.testdrive(
                 dedent(
                     """
-                    $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}
+                    $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
                     """
                     f"""

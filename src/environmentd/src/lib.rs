@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
@@ -208,11 +209,15 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Start the internal HTTP server.
     //
     // We start this server before we've completed initialization so that
-    // metrics are accessible during initialization.
+    // metrics are accessible during initialization. Some internal HTTP
+    // endpoints require the adapter to be initialized; requests to those
+    // endpoints block until the adapter client is installed.
+    let (internal_http_adapter_client_tx, internal_http_adapter_client_rx) = oneshot::channel();
     task::spawn(|| "internal_http_server", {
         let internal_http_server = InternalHttpServer::new(InternalHttpConfig {
             metrics_registry: config.metrics_registry.clone(),
             tracing_target_callbacks: config.tracing_target_callbacks,
+            adapter_client_rx: internal_http_adapter_client_rx,
         });
         server::serve(internal_http_conns, internal_http_server)
     });
@@ -273,6 +278,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         segment_api_key: config.segment_api_key,
     })
     .await?;
+
+    // Install an adapter client in the internal HTTP server.
+    internal_http_adapter_client_tx
+        .send(adapter_client.clone())
+        .expect("internal HTTP server should not drop first");
 
     // Launch SQL server.
     task::spawn(|| "sql_server", {

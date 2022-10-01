@@ -634,7 +634,7 @@ class Testdrive(Service):
                 f"--kafka-addr={kafka_url}",
                 "--schema-registry-url=http://schema-registry:8081",
                 f"--materialize-url={materialize_url}",
-                f"--materialize-url-internal={materialize_url_internal}",
+                f"--materialize-internal-url={materialize_url_internal}",
             ]
 
         if aws_region:
