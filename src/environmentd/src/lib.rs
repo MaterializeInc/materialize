@@ -44,7 +44,7 @@ use mz_storage::types::connections::ConnectionContext;
 
 use crate::tcp_connection::ConnectionHandler;
 
-pub mod http;
+mod http;
 pub mod tcp_connection;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
