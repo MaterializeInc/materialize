@@ -2163,18 +2163,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_aws_connection_option(&mut self) -> Result<AwsConnectionOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[ACCESS, SECRET, TOKEN])? {
-            ACCESS => {
-                self.expect_keywords(&[KEY, ID])?;
-                AwsConnectionOptionName::AccessKeyId
-            }
-            SECRET => {
-                self.expect_keywords(&[ACCESS, KEY])?;
-                AwsConnectionOptionName::SecretAccessKey
-            }
-            TOKEN => AwsConnectionOptionName::Token,
-            _ => unreachable!(),
-        };
+        let name =
+            match self.expect_one_of_keywords(&[ACCESS, ENDPOINT, REGION, ROLE, SECRET, TOKEN])? {
+                ACCESS => {
+                    self.expect_keywords(&[KEY, ID])?;
+                    AwsConnectionOptionName::AccessKeyId
+                }
+                ENDPOINT => AwsConnectionOptionName::Endpoint,
+                REGION => AwsConnectionOptionName::Region,
+                ROLE => {
+                    self.expect_keyword(ARN)?;
+                    AwsConnectionOptionName::RoleArn
+                }
+                SECRET => {
+                    self.expect_keywords(&[ACCESS, KEY])?;
+                    AwsConnectionOptionName::SecretAccessKey
+                }
+                TOKEN => AwsConnectionOptionName::Token,
+                _ => unreachable!(),
+            };
 
         let _ = self.consume_token(&Token::Eq);
         Ok(AwsConnectionOption {
@@ -2205,7 +2212,6 @@ impl<'a> Parser<'a> {
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
         let connection = self.parse_create_source_connection()?;
-        let legacy_with_options = self.parse_legacy_with_options()?;
         let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
             Some(KEY) => {
                 self.expect_keyword(FORMAT)?;
@@ -2240,7 +2246,6 @@ impl<'a> Parser<'a> {
             name,
             col_names,
             connection,
-            legacy_with_options,
             format,
             include_metadata,
             envelope,
@@ -3269,14 +3274,6 @@ impl<'a> Parser<'a> {
 
     fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
         if self.parse_keyword(WITH) {
-            self.parse_with_options(true)
-        } else {
-            Ok(vec![])
-        }
-    }
-
-    fn parse_legacy_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
-        if self.parse_keyword(LEGACYWITH) {
             self.parse_with_options(true)
         } else {
             Ok(vec![])

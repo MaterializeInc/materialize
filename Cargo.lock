@@ -4058,6 +4058,7 @@ dependencies = [
  "enum-kinds",
  "globset",
  "hex",
+ "http",
  "itertools",
  "mz-build-info",
  "mz-ccsr",

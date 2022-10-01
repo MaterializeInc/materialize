@@ -41,7 +41,7 @@ use mz_sql_parser::ast::{
     SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
-use mz_storage::types::connections::aws::AwsCredentials;
+use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
 use mz_storage::types::connections::{
     Connection, CsrConnectionHttpAuth, KafkaConnection, KafkaSecurity, KafkaTlsConfig, SaslConfig,
     StringOrSecret, TlsIdentity,
@@ -328,7 +328,6 @@ pub fn plan_create_source(
         name,
         col_names,
         connection,
-        legacy_with_options,
         envelope,
         if_not_exists,
         format,
@@ -339,15 +338,11 @@ pub fn plan_create_source(
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
-    let legacy_with_options_original = legacy_with_options;
-    let mut legacy_with_options = normalize::options(legacy_with_options_original)?;
-
     const SAFE_WITH_OPTIONS: &[CreateSourceOptionName] = &[CreateSourceOptionName::Size];
 
-    if !legacy_with_options.is_empty()
-        || with_options
-            .iter()
-            .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+    if with_options
+        .iter()
+        .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
     {
         scx.require_unsafe_mode(&format!(
             "creating sources with WITH options other than {}",
@@ -508,21 +503,12 @@ pub fn plan_create_source(
                 ),
             };
 
-            let region = arn
-                .region
-                .ok_or_else(|| sql_err!("Provided ARN does not include an AWS region"))?;
-
             let item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws_connection = match item.connection()? {
-                Connection::Aws(connection) => connection.clone(),
+            let aws = match item.connection()? {
+                Connection::Aws(aws) => aws.clone(),
                 _ => sql_bail!("{} is not an AWS connection", item.name()),
             };
 
-            let aws = normalize::aws_config(
-                &mut legacy_with_options,
-                Some(region.into()),
-                aws_connection,
-            )?;
             let encoding = get_encoding(scx, format, &envelope, connection)?;
             let connection =
                 SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
@@ -537,12 +523,11 @@ pub fn plan_create_source(
             scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
 
             let item = scx.get_item_by_resolved_name(aws_connection)?;
-            let aws_connection = match item.connection()? {
-                Connection::Aws(connection) => connection.clone(),
+            let aws = match item.connection()? {
+                Connection::Aws(aws) => aws.clone(),
                 _ => sql_bail!("{} is not an AWS connection", item.name()),
             };
 
-            let aws = normalize::aws_config(&mut legacy_with_options, None, aws_connection)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {
@@ -792,8 +777,6 @@ pub fn plan_create_source(
         },
         desc,
     };
-
-    normalize::ensure_empty_options(&legacy_with_options, "CREATE SOURCE")?;
 
     Ok(Plan::CreateSource(CreateSourcePlan {
         name,
@@ -2065,7 +2048,12 @@ pub fn plan_create_type(
                 };
             }
 
-            normalize::ensure_empty_options(&with_options, "CREATE TYPE")?;
+            if !with_options.is_empty() {
+                sql_bail!(
+                    "unexpected parameters for CREATE TYPE: {}",
+                    with_options.keys().join(",")
+                )
+            }
         }
         CreateTypeAs::Record { ref column_defs } => {
             for column_def in column_defs {
@@ -2645,22 +2633,41 @@ generate_extracted_config!(
     AwsConnectionOption,
     (AccessKeyId, StringOrSecret),
     (SecretAccessKey, with_options::Secret),
-    (Token, StringOrSecret)
+    (Token, StringOrSecret),
+    (Endpoint, String),
+    (Region, String),
+    (RoleArn, String)
 );
 
-impl TryFrom<AwsConnectionOptionExtracted> for AwsCredentials {
+impl TryFrom<AwsConnectionOptionExtracted> for AwsConfig {
     type Error = PlanError;
 
     fn try_from(options: AwsConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(AwsCredentials {
-            access_key_id: options
-                .access_key_id
-                .ok_or_else(|| sql_err!("ACCESS KEY ID option is required"))?,
-            secret_access_key: options
-                .secret_access_key
-                .ok_or_else(|| sql_err!("SECRET ACCESS KEY option is required"))?
-                .into(),
-            session_token: options.token,
+        Ok(AwsConfig {
+            credentials: AwsCredentials {
+                access_key_id: options
+                    .access_key_id
+                    .ok_or_else(|| sql_err!("ACCESS KEY ID option is required"))?,
+                secret_access_key: options
+                    .secret_access_key
+                    .ok_or_else(|| sql_err!("SECRET ACCESS KEY option is required"))?
+                    .into(),
+                session_token: options.token,
+            },
+            endpoint: match options.endpoint {
+                // TODO(benesch): this should not treat an empty endpoint as
+                // equivalent to a `NULL` endpoint, but making that change now
+                // would break testdrive. AWS connections are all behind unsafe
+                // mode right now, so no particular urgency to correct this.
+                Some(endpoint) if !endpoint.is_empty() => {
+                    let endpoint = http::Uri::from_str(&endpoint)
+                        .map_err(|e| PlanError::Unstructured(e.to_string()))?;
+                    Some(SerdeUri(endpoint))
+                }
+                _ => None,
+            },
+            region: options.region,
+            role: options.role_arn.map(|arn| AwsAssumeRole { arn }),
         })
     }
 }
@@ -2692,7 +2699,7 @@ pub fn plan_create_connection(
         }
         CreateConnection::Aws { with_options } => {
             let c = AwsConnectionOptionExtracted::try_from(with_options)?;
-            let connection = AwsCredentials::try_from(c)?;
+            let connection = AwsConfig::try_from(c)?;
             Connection::Aws(connection)
         }
         CreateConnection::Ssh { with_options } => {

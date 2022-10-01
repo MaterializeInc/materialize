@@ -26,7 +26,8 @@ here is a second test string
 
 > CREATE CONNECTION kinesis_bad_conn FOR AWS
   ACCESS KEY ID = 'fake_access_key_id',
-  SECRET ACCESS KEY = SECRET kinesis_bad_conn_secret;
+  SECRET ACCESS KEY = SECRET kinesis_bad_conn_secret,
+  ENDPOINT = '${testdrive.aws-endpoint}';
 
 ! CREATE SOURCE custom_source
   FROM KINESIS CONNECTION kinesis_bad_conn
@@ -44,7 +45,6 @@ contains:dns error: failed to lookup address information: Name or service not kn
 > CREATE SOURCE f
   FROM KINESIS CONNECTION kinesis_conn
   ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
-  LEGACYWITH (endpoint = '${testdrive.aws-endpoint}')
   FORMAT BYTES;
 
 > CREATE MATERIALIZED VIEW f_view

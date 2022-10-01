@@ -29,7 +29,6 @@ use mz_sql_parser::ast::{
     IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction, UnresolvedObjectName,
     UnresolvedSchemaName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
-use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
 
 use crate::names::{
     Aug, FullObjectName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
@@ -357,7 +356,6 @@ pub fn create_statement(
             name,
             col_names: _,
             connection: _,
-            legacy_with_options: _,
             format: _,
             include_metadata: _,
             envelope: _,
@@ -607,62 +605,6 @@ macro_rules! generate_extracted_config {
 }
 
 pub(crate) use generate_extracted_config;
-
-/// Ensures that the given set of options are empty, useful for validating that
-/// `WITH` options are all real, used options
-pub(crate) fn ensure_empty_options<V>(
-    with_options: &BTreeMap<String, V>,
-    context: &str,
-) -> Result<(), PlanError> {
-    if !with_options.is_empty() {
-        sql_bail!(
-            "unexpected parameters for {}: {}",
-            context,
-            with_options.keys().join(",")
-        )
-    }
-    Ok(())
-}
-
-/// Normalizes option values that contain AWS connection parameters.
-pub fn aws_config(
-    options: &mut BTreeMap<String, SqlValueOrSecret>,
-    region: Option<String>,
-    credentials: AwsCredentials,
-) -> Result<AwsConfig, PlanError> {
-    let mut extract = |key| match options.remove(key) {
-        // TODO: support secrets in S3
-        Some(SqlValueOrSecret::Value(Value::String(key))) => {
-            if !key.is_empty() {
-                Ok(Some(key))
-            } else {
-                Ok(None)
-            }
-        }
-        Some(_) => sql_bail!("{} must be a string", key),
-        _ => Ok(None),
-    };
-
-    let region = match region {
-        Some(region) => Some(region),
-        None => extract("region")?,
-    };
-    let endpoint = match extract("endpoint")? {
-        None => None,
-        Some(endpoint) => Some(SerdeUri(
-            endpoint
-                .parse()
-                .map_err(|e| sql_err!("parsing AWS endpoint: {e}"))?,
-        )),
-    };
-    let arn = extract("role_arn")?;
-    Ok(AwsConfig {
-        credentials,
-        region,
-        endpoint,
-        role: arn.map(|arn| AwsAssumeRole { arn }),
-    })
-}
 
 #[cfg(test)]
 mod tests {
