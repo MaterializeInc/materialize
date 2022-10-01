@@ -48,7 +48,7 @@ class Testdrive(K8sPod):
                 "--",
                 "testdrive",
                 "--materialize-url=postgres://materialize:materialize@environmentd:6875/materialize",
-                "--materialize-url-internal=postgres://materialize:materialize@environmentd:6877/materialize",
+                "--materialize-internal-url=postgres://materialize:materialize@environmentd:6877/materialize",
                 "--kafka-addr=redpanda:9092",
                 "--schema-registry-url=http://redpanda:8081",
                 "--default-timeout=300s",

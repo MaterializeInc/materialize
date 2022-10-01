@@ -25,7 +25,7 @@ use axum::extract::{FromRequest, RequestParts};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{routing, Extension, Router};
-use futures::future::TryFutureExt;
+use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -37,11 +37,12 @@ use openssl::x509::X509;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
+use tokio::sync::oneshot;
 use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
-use mz_adapter::catalog::HTTP_DEFAULT_USER;
+use mz_adapter::catalog::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_adapter::session::{ExternalUserMetadata, Session, User};
 use mz_adapter::SessionClient;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
@@ -93,12 +94,12 @@ impl HttpServer {
     ) -> HttpServer {
         let tls_mode = tls.as_ref().map(|tls| tls.mode);
         let frontegg = Arc::new(frontegg);
+        let (adapter_client_tx, adapter_client_rx) = oneshot::channel();
+        adapter_client_tx
+            .send(adapter_client)
+            .expect("rx known to be live");
         let router = Router::new()
             .route("/", routing::get(root::handle_home))
-            .route(
-                "/api/internal/catalog",
-                routing::get(catalog::handle_internal_catalog),
-            )
             .route("/api/sql", routing::post(sql::handle_sql))
             .route("/memory", routing::get(memory::handle_memory))
             .route(
@@ -111,7 +112,7 @@ impl HttpServer {
                 let frontegg = Arc::clone(&frontegg);
                 async move { auth(req, next, tls_mode, &frontegg).await }
             }))
-            .layer(Extension(adapter_client))
+            .layer(Extension(adapter_client_rx.shared()))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -165,6 +166,7 @@ impl Server for HttpServer {
 pub struct InternalHttpConfig {
     pub metrics_registry: MetricsRegistry,
     pub tracing_target_callbacks: TracingTargetCallbacks,
+    pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
 }
 
 pub struct InternalHttpServer {
@@ -176,6 +178,7 @@ impl InternalHttpServer {
         InternalHttpConfig {
             metrics_registry,
             tracing_target_callbacks,
+            adapter_client_rx,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
         let router = Router::new()
@@ -208,7 +211,16 @@ impl InternalHttpServer {
                     )
                     .await
                 }),
-            );
+            )
+            .route(
+                "/api/catalog",
+                routing::get(catalog::handle_internal_catalog),
+            )
+            .layer(Extension(AuthedUser {
+                user: SYSTEM_USER.clone(),
+                create_if_not_exists: false,
+            }))
+            .layer(Extension(adapter_client_rx.shared()));
         InternalHttpServer { router }
     }
 }
@@ -226,12 +238,15 @@ impl Server for InternalHttpServer {
     }
 }
 
+type Delayed<T> = Shared<oneshot::Receiver<T>>;
+
 #[derive(Clone)]
 enum ConnProtocol {
     Http,
     Https { client_cert: Option<X509> },
 }
 
+#[derive(Clone)]
 struct AuthedUser {
     user: User,
     create_if_not_exists: bool,
@@ -251,9 +266,20 @@ where
             user,
             create_if_not_exists,
         } = req.extensions().get::<AuthedUser>().unwrap();
-        let adapter_client = req.extensions().get::<mz_adapter::Client>().unwrap();
+        let adapter_client = req
+            .extensions()
+            .get::<Delayed<mz_adapter::Client>>()
+            .unwrap()
+            .clone();
 
         let adapter_client = adapter_client
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "adapter client missing".into(),
+                )
+            })?
             .new_conn()
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         let session = Session::new(adapter_client.conn_id(), user.clone());

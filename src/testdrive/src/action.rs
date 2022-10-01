@@ -100,10 +100,13 @@ pub struct Config {
     pub materialize_pgconfig: tokio_postgres::Config,
     /// The internal pgwire connection parameters for the Materialize instance that
     /// testdrive will connect to.
-    pub materialize_pgconfig_internal: tokio_postgres::Config,
+    pub materialize_internal_pgconfig: tokio_postgres::Config,
     /// The port for the public endpoints of the materialize instance that
     /// testdrive will connect to via HTTP.
     pub materialize_http_port: u16,
+    /// The port for the internal endpoints of the materialize instance that
+    /// testdrive will connect to via HTTP.
+    pub materialize_internal_http_port: u16,
     /// Session parameters to set after connecting to materialize.
     pub materialize_params: Vec<(String, String)>,
     /// An optional Postgres connection string to the catalog stash.
@@ -158,8 +161,8 @@ pub struct State {
     // === Materialize state. ===
     materialize_catalog_postgres_stash: Option<String>,
     materialize_sql_addr: String,
-    materialize_sql_addr_internal: String,
-    materialize_http_addr: String,
+    materialize_internal_sql_addr: String,
+    materialize_internal_http_addr: String,
     materialize_user: String,
     pgclient: tokio_postgres::Client,
 
@@ -249,8 +252,8 @@ impl State {
             self.materialize_sql_addr.clone(),
         );
         self.cmd_vars.insert(
-            "testdrive.materialize-sql-addr-internal".into(),
-            self.materialize_sql_addr_internal.clone(),
+            "testdrive.materialize-internal-sql-addr".into(),
+            self.materialize_internal_sql_addr.clone(),
         );
         self.cmd_vars.insert(
             "testdrive.materialize-user".into(),
@@ -317,8 +320,8 @@ impl State {
             self.materialize_sql_addr.clone(),
         );
         self.cmd_vars.insert(
-            "testdrive.materialize-sql-addr-internal".into(),
-            self.materialize_sql_addr_internal.clone(),
+            "testdrive.materialize-internal-sql-addr".into(),
+            self.materialize_internal_sql_addr.clone(),
         );
         self.cmd_vars.insert(
             "testdrive.materialize-user".into(),
@@ -408,7 +411,7 @@ impl State {
     pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
         let (inner_client, _) = postgres_client(&format!(
             "postgres://mz_system:materialize@{}",
-            self.materialize_sql_addr_internal
+            self.materialize_internal_sql_addr
         ))
         .await?;
         inner_client
@@ -849,15 +852,15 @@ pub async fn create_state(
 
     let (
         materialize_sql_addr,
-        materialize_sql_addr_internal,
-        materialize_http_addr,
+        materialize_internal_sql_addr,
+        materialize_internal_http_addr,
         materialize_user,
         pgclient,
         pgconn_task,
     ) = {
         let materialize_url = util::postgres::config_url(&config.materialize_pgconfig)?;
-        let materialize_url_internal =
-            util::postgres::config_url(&config.materialize_pgconfig_internal)?;
+        let materialize_internal_url =
+            util::postgres::config_url(&config.materialize_internal_pgconfig)?;
 
         let (pgclient, pgconn) = Retry::default()
             .max_duration(config.default_timeout)
@@ -891,20 +894,20 @@ pub async fn create_state(
             materialize_url.host_str().unwrap(),
             materialize_url.port().unwrap()
         );
-        let materialize_sql_addr_internal = format!(
+        let materialize_internal_sql_addr = format!(
             "{}:{}",
-            materialize_url_internal.host_str().unwrap(),
-            materialize_url_internal.port().unwrap()
+            materialize_internal_url.host_str().unwrap(),
+            materialize_internal_url.port().unwrap()
         );
-        let materialize_http_addr = format!(
+        let materialize_internal_http_addr = format!(
             "{}:{}",
-            materialize_url.host_str().unwrap(),
-            config.materialize_http_port
+            materialize_internal_url.host_str().unwrap(),
+            config.materialize_internal_http_port
         );
         (
             materialize_sql_addr,
-            materialize_sql_addr_internal,
-            materialize_http_addr,
+            materialize_internal_sql_addr,
+            materialize_internal_http_addr,
             materialize_user,
             pgclient,
             pgconn_task,
@@ -996,8 +999,8 @@ pub async fn create_state(
         // === Materialize state. ===
         materialize_catalog_postgres_stash,
         materialize_sql_addr,
-        materialize_sql_addr_internal,
-        materialize_http_addr,
+        materialize_internal_sql_addr,
+        materialize_internal_http_addr,
         materialize_user,
         pgclient,
 
