@@ -20,7 +20,7 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
@@ -40,7 +40,6 @@ use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 use tracing::debug;
@@ -58,7 +57,7 @@ use mz_stash::{self, StashError, TypedCollection};
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::protocol::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
-    StorageCommand, StorageResponse, TimestamplessUpdate, Update,
+    StorageCommand, StorageResponse, Update,
 };
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
@@ -582,10 +581,9 @@ pub struct StorageControllerState<
     /// without blocking the storage controller.
     persist_read_handles: persist_read_handles::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
-    /// Sender for collection management task
-    pub(super) task_tx: mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>,
-    /// Tracks which collections are managed.
-    pub(super) managed_collections: Arc<Mutex<HashSet<GlobalId>>>,
+
+    /// Interface for managed collections
+    pub(super) collection_manager: collection_mgmt::CollectionManager,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(super) introspection_ids: HashMap<IntrospectionType, GlobalId>,
 }
@@ -709,46 +707,11 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             .expect("could not connect to postgres storage stash");
         let stash = mz_stash::Memory::new(stash);
 
-        // Set up automatic timestamp advancer
-        let managed_collections = Arc::new(Mutex::new(HashSet::<GlobalId>::new()));
-        let task_collections = Arc::clone(&managed_collections);
-
         let persist_write_handles = persist_write_handles::PersistWorker::new(tx);
-        let task_handle = persist_write_handles.clone();
+        let collection_manager_write_handle = persist_write_handles.clone();
 
-        let (task_tx, mut rx) = mpsc::channel::<(GlobalId, Vec<(Row, Diff)>)>(1);
-
-        mz_ore::task::spawn(|| "ControllerManagedCollectionWriter", async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let collections = &mut *task_collections.lock().await;
-
-                        let now = T::from(now());
-                        let updates = collections.iter().map(|id| {
-                            (*id, vec![], now.clone())
-                        }).collect::<Vec<_>>();
-
-                        // Failures don't matter when advancing collections' uppers.
-                        let _ = task_handle.monotonic_append(updates).await;
-                    },
-                    cmd = rx.recv() => {
-                        if let Some((id, updates)) = cmd {
-                            assert!(task_collections.lock().await.contains(&id));
-
-                            let updates = vec![(id, updates.into_iter().map(|(row, diff)| TimestamplessUpdate {
-                                row,
-                                diff,
-                            }).collect::<Vec<_>>(), T::from(now()))];
-
-                            // TODO? Handle contention among multiple writers
-                            task_handle.monotonic_append(updates).await.unwrap().unwrap();
-                        }
-                    }
-                }
-            }
-        });
+        let collection_manager =
+            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now);
 
         Self {
             collections: BTreeMap::default(),
@@ -758,8 +721,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             persist_write_handles,
             persist_read_handles: persist_read_handles::PersistWorker::new(),
             stashed_response: None,
-            task_tx,
-            managed_collections,
+            collection_manager,
             introspection_ids: HashMap::new(),
         }
     }
@@ -957,7 +919,7 @@ where
                             "cannot have multiple IDs for introspection type"
                         );
 
-                        self.state.managed_collections.lock().await.insert(id);
+                        self.state.collection_manager.register_collection(id).await;
 
                         match i {
                             IntrospectionType::ShardMapping => {
@@ -1511,7 +1473,7 @@ impl<T: Timestamp> ExportState<T> {
 }
 
 #[async_trait(?Send)]
-pub trait CollectionManager: Debug + Send + StorageController {
+pub trait CollectionManagement: Debug + Send + StorageController {
     /// Appends `updates` to the collection correlated with `global_id` at a
     /// timestamp decided on by the implementor.
     async fn append_to_managed_collection(
@@ -1535,7 +1497,7 @@ pub trait CollectionManager: Debug + Send + StorageController {
 }
 
 #[async_trait(?Send)]
-impl<T> CollectionManager for Controller<T>
+impl<T> CollectionManagement for Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
@@ -1580,16 +1542,10 @@ where
     /// # Panics
     /// - If `id` is not registered as a managed collection.
     async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        assert!(
-            self.state.managed_collections.lock().await.contains(&id),
-            "cannot append collection before it's managed"
-        );
-
         self.state
-            .task_tx
-            .send((id, updates))
-            .await
-            .expect("rx hung up");
+            .collection_manager
+            .append_to_collection(id, updates)
+            .await;
     }
 
     /// Append `updates` to the `data_shard` correlated with `global_id`
@@ -2016,6 +1972,13 @@ mod persist_write_handles {
                                 let mut updates_outer = Vec::with_capacity(updates.len());
                                 for (id, update, at_least) in updates {
                                     let current_upper = write_handles[&id].upper().clone();
+                                    if update.is_empty() && current_upper.is_empty() {
+                                        // Ignore timestamp advancement for
+                                        // closed collections. TODO? Make this a
+                                        // correctable error
+                                        continue;
+                                    }
+
                                     let lower = if current_upper.less_than(&at_least) {
                                         at_least
                                     } else {
@@ -2023,7 +1986,7 @@ mod persist_write_handles {
                                             .elements()
                                             .iter()
                                             .min()
-                                            .expect("cannot append to closed collection")
+                                            .expect("cannot append data to closed collection")
                                             .clone()
                                     };
 
@@ -2206,8 +2169,16 @@ mod persist_write_handles {
         /// This lets the writer influence how far forward the timestamp will be
         /// advanced, while still guaranteeing that it will advance.
         ///
-        /// Note that it is still possible for the append operation to fail in
-        /// the face of contention from other writers.
+        /// Note it is still possible for the append operation to fail in the
+        /// face of contention from other writers.
+        ///
+        /// # Panics
+        /// - If appending non-empty `TimelessUpdate` to closed collections
+        ///   (i.e. those with empty uppers), whose uppers cannot be
+        ///   monotonically increased.
+        ///
+        ///   Collections with empty uppers can continue receiving empty
+        ///   updates, i.e. those used soley to advance collections' uppers.
         pub(crate) fn monotonic_append(
             &self,
             updates: Vec<(GlobalId, Vec<TimestamplessUpdate>, T)>,
@@ -2230,6 +2201,116 @@ mod persist_write_handles {
                     tracing::error!("could not forward command: {:?}", e);
                 }
             }
+        }
+    }
+}
+
+mod collection_mgmt {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    use differential_dataflow::lattice::Lattice;
+    use mz_ore::now::{EpochMillis, NowFn};
+    use timely::progress::Timestamp;
+    use tokio::sync::mpsc;
+    use tokio::sync::Mutex;
+
+    use mz_persist_types::Codec64;
+    use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
+
+    use crate::protocol::client::TimestamplessUpdate;
+
+    use super::persist_write_handles;
+
+    #[derive(Debug, Clone)]
+    pub struct CollectionManager {
+        collections: Arc<Mutex<HashSet<GlobalId>>>,
+        tx: mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>,
+    }
+
+    /// The `CollectionManager` provides two complementary functions:
+    /// - Providing an API to append values to a registered set of collections.
+    ///   For this usecase:
+    ///     - The `CollectionManager` expects to be the only writer.
+    ///     - Appending to a closed collection panics
+    /// - Automatically advancing the timestamp of managed collections every
+    ///   second. For this usecase:
+    ///     - The `CollectionManager` handles contention by permitting and ignoring errors.
+    ///     - Closed collections will not panic if they continue receiving these requests.
+    impl CollectionManager {
+        pub(super) fn new<
+            T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+        >(
+            write_handle: persist_write_handles::PersistWorker<T>,
+            now: NowFn,
+        ) -> CollectionManager {
+            let collections = Arc::new(Mutex::new(HashSet::new()));
+            let collections_outer = Arc::clone(&collections);
+            let (tx, mut rx) = mpsc::channel::<(GlobalId, Vec<(Row, Diff)>)>(1);
+
+            mz_ore::task::spawn(|| "ControllerManagedCollectionWriter", async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            let collections = &mut *collections.lock().await;
+
+                            let now = T::from(now());
+                            let updates = collections.iter().map(|id| {
+                                (*id, vec![], now.clone())
+                            }).collect::<Vec<_>>();
+
+                            // Failures don't matter when advancing collections'
+                            // uppers. This might fail when a storaged happens
+                            // to be writing to this concurrently. Advancing
+                            // uppers here is best-effort and only needs to
+                            // succeed if no one else is advancing it;
+                            // contention proves otherwise.
+                            let _ = write_handle.monotonic_append(updates).await.expect("sender hung up");
+                        },
+                        cmd = rx.recv() => {
+                            if let Some((id, updates)) = cmd {
+                                assert!(collections.lock().await.contains(&id));
+
+                                let updates = vec![(id, updates.into_iter().map(|(row, diff)| TimestamplessUpdate {
+                                    row,
+                                    diff,
+                                }).collect::<Vec<_>>(), T::from(now()))];
+
+                                // TODO? Handle contention among multiple writers
+                                write_handle.monotonic_append(updates)
+                                    .await
+                                    .expect("sender hung up")
+                                    .expect("no write contention on collections");
+                            }
+                        }
+                    }
+                }
+            });
+
+            CollectionManager {
+                tx,
+                collections: collections_outer,
+            }
+        }
+
+        /// Registers the collection as one that `CollectionManager` will:
+        /// - Automatically advance the upper of every second
+        /// - Accept appends for. However, note that when appending, the
+        ///   `CollectionManager` expects to be the only writer.
+        pub(super) async fn register_collection(&self, id: GlobalId) {
+            self.collections.lock().await.insert(id);
+        }
+
+        /// Appends `updates` to the collection correlated with `id`.
+        ///
+        /// # Panics
+        /// - If `id` does not belong to managed collections.
+        /// - If there is contention to write to the collection identified by
+        ///   `id`.
+        /// - If the collection closed.
+        pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+            self.tx.send((id, updates)).await.expect("rx hung up");
         }
     }
 }
