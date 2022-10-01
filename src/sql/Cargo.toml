@@ -14,6 +14,7 @@ chrono = { version = "0.4.22", default-features = false, features = ["clock", "s
 enum-kinds = "0.5.1"
 globset = "0.4.9"
 hex = "0.4.3"
+http = "0.2.8"
 itertools = "0.10.4"
 once_cell = "1.14.0"
 mz-build-info = { path = "../build-info" }

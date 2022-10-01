@@ -24,15 +24,13 @@ b3
 > CREATE CONNECTION s3_conn FOR AWS
   ACCESS KEY ID = '${testdrive.aws-access-key-id}',
   SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}';
+  TOKEN = '${testdrive.aws-token}',
+  REGION = '${testdrive.aws-region}',
+  ENDPOINT = '${testdrive.aws-endpoint}';
 
 > CREATE SOURCE s3_all
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT TEXT;
 
 > SELECT * FROM s3_all
@@ -46,10 +44,6 @@ b3
 > CREATE SOURCE s3_glob_a
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING '**/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT TEXT;
 
 > SELECT * FROM s3_glob_a
@@ -60,10 +54,6 @@ a3
 > CREATE SOURCE s3_just_a
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'short/a' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT TEXT;
 
 > SELECT * FROM s3_just_a
@@ -79,10 +69,6 @@ c,9
 > CREATE SOURCE csv_example (name, counts)
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING '*.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH 2 COLUMNS;
 
 > SELECT * FROM csv_example
@@ -118,10 +104,6 @@ $ s3-put-object bucket=test key=logs/2021/01/01/frontend.log
 > CREATE SOURCE frontend_logs
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'logs/**/*.log' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT REGEX '(?P<ip>[^ ]+) - - \[(?P<dt>[^]]+)\] "(?P<method>\w+) (?P<path>[^ ]+)[^"]+" (?P<status>\d+) (?P<content_length>\d+) "-" "(?P<user_agent>[^"]+)"';
 
 > SELECT dt, ip, user_agent FROM frontend_logs WHERE path = '/updates' ORDER BY dt
@@ -144,10 +126,6 @@ c3
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'short/*'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}', BUCKET SCAN 'testdrive-other-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT TEXT;
 
 > SELECT text FROM s3_multi ORDER BY text;
@@ -182,10 +160,6 @@ id,value
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'csv/*'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT CSV WITH HEADER (id, value);
 
 > SELECT id, value FROM s3_csv_headers

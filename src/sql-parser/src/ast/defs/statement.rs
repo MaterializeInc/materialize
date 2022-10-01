@@ -454,7 +454,6 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
     pub connection: CreateSourceConnection<T>,
-    pub legacy_with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
     pub envelope: Option<Envelope>,
@@ -486,11 +485,6 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         }
         f.write_str("FROM ");
         f.write_node(&self.connection);
-        if !self.legacy_with_options.is_empty() {
-            f.write_str(" LEGACYWITH (");
-            f.write_node(&display::comma_separated(&self.legacy_with_options));
-            f.write_str(")");
-        }
         f.write_node(&self.format);
         if !self.include_metadata.is_empty() {
             f.write_str(" INCLUDE ");
