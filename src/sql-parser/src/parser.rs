@@ -1704,7 +1704,10 @@ impl<'a> Parser<'a> {
             AvroSchema::Csr { csr_connection }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
-            let schema = self.parse_schema()?;
+            self.expect_keyword(SCHEMA)?;
+            let schema = Schema {
+                schema: self.parse_literal_string()?,
+            };
             let with_options = if self.consume_token(&Token::LParen) {
                 let with_options = self.parse_comma_separated(Parser::parse_avro_schema_option)?;
                 self.expect_token(&Token::RParen)?;
@@ -1742,7 +1745,10 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(MESSAGE) {
             let message_name = self.parse_literal_string()?;
             self.expect_keyword(USING)?;
-            let schema = self.parse_schema()?;
+            self.expect_keyword(SCHEMA)?;
+            let schema = Schema {
+                schema: self.parse_literal_string()?,
+            };
             Ok(ProtobufSchema::InlineSchema {
                 message_name,
                 schema,
@@ -1881,16 +1887,6 @@ impl<'a> Parser<'a> {
         };
 
         Ok(CsrConnectionProtobuf { connection, seed })
-    }
-
-    fn parse_schema(&mut self) -> Result<Schema, ParserError> {
-        self.expect_keyword(SCHEMA)?;
-        let schema = if self.parse_keyword(FILE) {
-            Schema::File(self.parse_literal_string()?.into())
-        } else {
-            Schema::Inline(self.parse_literal_string()?)
-        };
-        Ok(schema)
     }
 
     fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {

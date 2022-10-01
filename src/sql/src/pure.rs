@@ -291,13 +291,7 @@ async fn purify_source_format_single(
                 )
                 .await?
             }
-            AvroSchema::InlineSchema { schema, .. } => {
-                if let mz_sql_parser::ast::Schema::File(_) = schema {
-                    // See comment below about this branch for the protobuf
-                    // format.
-                    bail_unsupported!("FORMAT AVRO USING SCHEMA FILE");
-                }
-            }
+            AvroSchema::InlineSchema { .. } => {}
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connection } => {
@@ -310,22 +304,7 @@ async fn purify_source_format_single(
                 )
                 .await?;
             }
-            ProtobufSchema::InlineSchema {
-                message_name: _,
-                schema,
-            } => {
-                if let mz_sql_parser::ast::Schema::File(path) = schema {
-                    // We want to remove this feature, as it doesn't work in
-                    // cloud, but there are many tests that rely on this
-                    // feature that need to be updated first.
-                    let scx = StatementContext::new(None, &*catalog);
-                    scx.require_unsafe_mode("FORMAT PROTOBUF USING SCHEMA FILE")?;
-                    let descriptors = tokio::fs::read(path).await?;
-                    let mut buf = String::new();
-                    strconv::format_bytes(&mut buf, &descriptors);
-                    *schema = mz_sql_parser::ast::Schema::Inline(buf);
-                }
-            }
+            ProtobufSchema::InlineSchema { .. } => {}
         },
         Format::Csv {
             delimiter: _,
