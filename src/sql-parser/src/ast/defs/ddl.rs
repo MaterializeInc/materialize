@@ -22,33 +22,20 @@
 //! (commonly referred to as Data Definition Language, or DDL)
 
 use std::fmt;
-use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Schema {
-    File(PathBuf),
-    Inline(String),
+pub struct Schema {
+    pub schema: String,
 }
 
 impl AstDisplay for Schema {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::File(path) => {
-                f.write_str("SCHEMA FILE '");
-                f.write_node(&display::escape_single_quote_string(
-                    &path.display().to_string(),
-                ));
-                f.write_str("'");
-            }
-            Self::Inline(inner) => {
-                f.write_str("SCHEMA '");
-                f.write_node(&display::escape_single_quote_string(inner));
-                f.write_str("'");
-            }
-        }
+        f.write_str("SCHEMA '");
+        f.write_node(&display::escape_single_quote_string(&self.schema));
+        f.write_str("'");
     }
 }
 impl_display!(Schema);

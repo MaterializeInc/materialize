@@ -887,7 +887,7 @@ fn get_encoding_inner(
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
                 AvroSchema::InlineSchema {
-                    schema: mz_sql_parser::ast::Schema::Inline(schema),
+                    schema: mz_sql_parser::ast::Schema { schema },
                     with_options,
                 } => {
                     let AvroSchemaOptionExtracted {
@@ -901,12 +901,6 @@ fn get_encoding_inner(
                         csr_connection: None,
                         confluent_wire_format,
                     }
-                }
-                AvroSchema::InlineSchema {
-                    schema: mz_sql_parser::ast::Schema::File(_),
-                    ..
-                } => {
-                    unreachable!("File schema should already have been inlined")
                 }
                 AvroSchema::Csr {
                     csr_connection:
@@ -1006,14 +1000,9 @@ fn get_encoding_inner(
             }
             ProtobufSchema::InlineSchema {
                 message_name,
-                schema,
+                schema: mz_sql_parser::ast::Schema { schema },
             } => {
-                let descriptors = match schema {
-                    mz_sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(bytes)?,
-                    mz_sql_parser::ast::Schema::File(_) => {
-                        unreachable!("File schema should already have been inlined")
-                    }
-                };
+                let descriptors = strconv::parse_bytes(schema)?;
 
                 DataEncodingInner::Protobuf(ProtobufEncoding {
                     descriptors,
