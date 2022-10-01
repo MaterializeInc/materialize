@@ -27,7 +27,7 @@ PROTOBUF = dedent(
         string value2 = 2;
     }
 
-    $ protobuf-compile-descriptors inputs=test.proto output=test.proto
+    $ protobuf-compile-descriptors inputs=test.proto output=test.proto set-var=test-schema
     """
 )
 
@@ -78,8 +78,8 @@ class KafkaFormats(Check):
 
                 > CREATE SOURCE format_protobuf1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-protobuf-${testdrive.seed}')
-                  KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
-                  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
+                  KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
+                  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY
             """
             )
@@ -116,8 +116,8 @@ class KafkaFormats(Check):
 
                 > CREATE SOURCE format_protobuf2
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-protobuf-${testdrive.seed}')
-                  KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
-                  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
+                  KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
+                  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY
 
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-bytes
