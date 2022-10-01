@@ -36,6 +36,7 @@ bytes = "1.2.1"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.24"
 futures-util = "0.3"
+humantime = "2.1.0"
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore" }
 mz-persist = { path = "../persist" }
