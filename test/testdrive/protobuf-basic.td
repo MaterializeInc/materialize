@@ -56,7 +56,7 @@ message Basic {
     Nested message = 17;
 }
 
-$ protobuf-compile-descriptors inputs=basic.proto output=basic.pb
+$ protobuf-compile-descriptors inputs=basic.proto output=basic.pb set-var=basic-schema
 
 $ kafka-create-topic topic=basic partitions=1
 
@@ -72,7 +72,7 @@ $ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=Basi
 
 > CREATE SOURCE basic FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-basic-${testdrive.seed}')
-  FORMAT PROTOBUF MESSAGE '.Basic' USING SCHEMA FILE '${testdrive.temp-dir}/basic.pb'
+  FORMAT PROTOBUF MESSAGE '.Basic' USING SCHEMA '${basic-schema}'
 
 > SHOW COLUMNS FROM basic
 name       nullable  type
