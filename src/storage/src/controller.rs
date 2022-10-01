@@ -51,13 +51,13 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::protocol::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
-    StorageCommand, StorageResponse, Update,
+    StorageCommand, StorageResponse, TimestamplessUpdate, Update,
 };
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
@@ -548,7 +548,7 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
     S = mz_stash::Memory<mz_stash::Postgres>,
 > {
     /// Collections maintained by the storage controller.
@@ -577,7 +577,7 @@ pub struct StorageControllerState<
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct Controller<T: Timestamp + Lattice + Codec64> {
+pub struct Controller<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
     state: StorageControllerState<T>,
     /// Storage host provisioning and storage object assignment.
     hosts: StorageHosts<T>,
@@ -675,7 +675,7 @@ impl From<DataflowError> for StorageError {
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
+impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> StorageControllerState<T> {
     pub(super) async fn new(
         postgres_url: String,
         tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
@@ -708,7 +708,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait(?Send)]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1237,7 +1237,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1273,7 +1273,7 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1440,7 +1440,7 @@ pub trait CollectionManager: Debug + Send + StorageController {
 #[async_trait(?Send)]
 impl<T> CollectionManager for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + TimestampManipulation,
 
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
@@ -1733,7 +1733,7 @@ mod persist_read_handles {
 
 mod persist_write_handles {
 
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, VecDeque};
 
     use differential_dataflow::lattice::Lattice;
     use futures::stream::FuturesUnordered;
@@ -1743,22 +1743,22 @@ mod persist_write_handles {
 
     use mz_persist_client::write::WriteHandle;
     use mz_persist_types::Codec64;
-    use mz_repr::{Diff, GlobalId};
+    use mz_repr::{Diff, GlobalId, TimestampManipulation};
     use tracing::Instrument;
 
     use crate::controller::StorageError;
     use crate::protocol::client::StorageResponse;
-    use crate::protocol::client::Update;
+    use crate::protocol::client::{TimestamplessUpdate, Update};
     use crate::types::sources::SourceData;
 
     #[derive(Debug)]
-    pub struct PersistWorker<T: Timestamp + Lattice + Codec64> {
+    pub struct PersistWorker<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
         tx: UnboundedSender<(tracing::Span, PersistWorkerCmd<T>)>,
     }
 
     impl<T> Drop for PersistWorker<T>
     where
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + TimestampManipulation,
     {
         fn drop(&mut self) {
             self.send(PersistWorkerCmd::Shutdown);
@@ -1774,10 +1774,16 @@ mod persist_write_handles {
             Vec<(GlobalId, Vec<Update<T>>, T)>,
             tokio::sync::oneshot::Sender<Result<(), StorageError>>,
         ),
+        /// Appends `Vec<TimelessUpdate>` to `GlobalId` at, essentially,
+        /// `max(write_frontier, T)`.
+        MonotonicAppend(
+            Vec<(GlobalId, Vec<TimestamplessUpdate>, T)>,
+            tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+        ),
         Shutdown,
     }
 
-    impl<T: Timestamp + Lattice + Codec64> PersistWorker<T> {
+    impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWorker<T> {
         pub(crate) fn new(
             mut frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         ) -> Self {
@@ -1791,9 +1797,10 @@ mod persist_write_handles {
                     // We do this in case we can consolidate commands.
                     // It would be surprising to receive multiple concurrent `Append` commands,
                     // but we might receive multiple *empty* `Append` commands.
-                    let mut commands = vec![cmd];
+                    let mut commands = VecDeque::new();
+                    commands.push_back(cmd);
                     while let Ok(cmd) = rx.try_recv() {
-                        commands.push(cmd);
+                        commands.push_back(cmd);
                     }
 
                     // Accumulated updates and upper frontier.
@@ -1802,7 +1809,7 @@ mod persist_write_handles {
 
                     let mut shutdown = false;
 
-                    for (span, command) in commands {
+                    while let Some((span, command)) = commands.pop_front() {
                         match command {
                             PersistWorkerCmd::Register(id, write_handle) => {
                                 let previous = write_handles.insert(id, write_handle);
@@ -1838,6 +1845,38 @@ mod persist_write_handles {
                                     old_upper.join_assign(&Antichain::from_elem(upper));
                                 }
                                 all_responses.push(response);
+                            }
+                            PersistWorkerCmd::MonotonicAppend(updates, response) => {
+                                let mut updates_outer = Vec::with_capacity(updates.len());
+                                for (id, update, at_least) in updates {
+                                    let current_upper = write_handles[&id].upper().clone();
+                                    let lower = if current_upper.less_than(&at_least) {
+                                        at_least
+                                    } else {
+                                        current_upper
+                                            .elements()
+                                            .iter()
+                                            .min()
+                                            .expect("cannot append to closed collection")
+                                            .clone()
+                                    };
+
+                                    let upper = lower.step_forward();
+                                    let update = update
+                                        .into_iter()
+                                        .map(|TimestamplessUpdate { row, diff }| Update {
+                                            row,
+                                            diff,
+                                            timestamp: lower.clone(),
+                                        })
+                                        .collect::<Vec<_>>();
+
+                                    updates_outer.push((id, update, upper));
+                                }
+                                commands.push_front((
+                                    span,
+                                    PersistWorkerCmd::Append(updates_outer, response),
+                                ));
                             }
                             PersistWorkerCmd::Shutdown => {
                                 shutdown = true;
@@ -1990,6 +2029,30 @@ mod persist_write_handles {
                 rx
             } else {
                 self.send(PersistWorkerCmd::Append(updates, tx));
+                rx
+            }
+        }
+
+        /// Appends values to collections associated with `GlobalId`, but lets
+        /// the persist worker chose timestamps guaranteed to be monotonic and
+        /// that the time will be at least `T`.
+        ///
+        /// This lets the writer influence how far forward the timestamp will be
+        /// advanced, while still guaranteeing that it will advance.
+        ///
+        /// Note that it is still possible for the append operation to fail in
+        /// the face of contention from other writers.
+        pub(crate) fn motonic_append(
+            &self,
+            updates: Vec<(GlobalId, Vec<TimestamplessUpdate>, T)>,
+        ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if updates.is_empty() {
+                tx.send(Ok(()))
+                    .expect("rx has not been dropped at this point");
+                rx
+            } else {
+                self.send(PersistWorkerCmd::MonotonicAppend(updates, tx));
                 rx
             }
         }

@@ -45,7 +45,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, TimestampManipulation};
 use mz_storage::controller::StorageController;
 use mz_storage::protocol::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
@@ -192,7 +192,14 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
+    T: Timestamp
+        + Lattice
+        + TotalOrder
+        + TryInto<i64>
+        + TryFrom<i64>
+        + Codec64
+        + Unpin
+        + TimestampManipulation,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
