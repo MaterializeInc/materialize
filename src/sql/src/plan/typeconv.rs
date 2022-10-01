@@ -31,7 +31,7 @@ use crate::catalog::TypeCategory;
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
     let invoke = crate::func::sql_impl(expr);
     CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
-        let mut out = invoke(&ecx.qcx, vec![from_type.clone()]).ok()?;
+        let mut out = invoke(ecx.qcx, vec![from_type.clone()]).ok()?;
         Some(move |e| {
             out.splice_parameters(&[e], 0);
             out
@@ -651,7 +651,7 @@ fn get_cast(
         (Implicit, Implicit) => Some(&imp.template),
         _ => None,
     };
-    template.and_then(|template| (template.0)(ecx, ccx, &from, to))
+    template.and_then(|template| (template.0)(ecx, ccx, from, to))
 }
 
 /// Converts an expression to `ScalarType::String`.
@@ -759,12 +759,12 @@ pub fn guess_best_common_type(
             sql_bail!(
                 "{} types {} and {} cannot be matched",
                 ecx.name,
-                ecx.humanize_scalar_type(&candidate),
-                ecx.humanize_scalar_type(&typ),
+                ecx.humanize_scalar_type(candidate),
+                ecx.humanize_scalar_type(typ),
             );
         } else if TypeCategory::from_type(candidate).preferred_type().as_ref() != Some(candidate)
-            && can_cast(ecx, CastContext::Implicit, &candidate, &typ)
-            && !can_cast(ecx, CastContext::Implicit, &typ, &candidate)
+            && can_cast(ecx, CastContext::Implicit, candidate, typ)
+            && !can_cast(ecx, CastContext::Implicit, typ, candidate)
         {
             // The current candidate is not the preferred type for its category
             // and the next type is implicitly convertible to the current
@@ -795,7 +795,7 @@ pub fn plan_coerce<'a>(
             // (with either implicit or explicit semantics) via a separate call
             // to `plan_cast`.
             let coerce_to_base = &coerce_to.without_modifiers();
-            plan_cast(ecx, CastContext::Explicit, lit, &coerce_to_base)?
+            plan_cast(ecx, CastContext::Explicit, lit, coerce_to_base)?
         }
 
         LiteralRecord(exprs) => {
@@ -911,8 +911,8 @@ pub fn plan_cast(
             } else {
                 ""
             },
-            ecx.humanize_scalar_type(&from),
-            ecx.humanize_scalar_type(&to),
+            ecx.humanize_scalar_type(from),
+            ecx.humanize_scalar_type(to),
         ),
     };
 
@@ -922,7 +922,7 @@ pub fn plan_cast(
     // String-like types get special handling to match PostgreSQL.
     // See: https://github.com/postgres/postgres/blob/6b04abdfc/src/backend/parser/parse_coerce.c#L3205-L3223
     let from_category = TypeCategory::from_type(&from);
-    let to_category = TypeCategory::from_type(&to);
+    let to_category = TypeCategory::from_type(to);
     if from_category == TypeCategory::String && to_category != TypeCategory::String {
         // Converting from stringlike to something non-stringlike. Handle as if
         // `from` were a `ScalarType::String.
@@ -946,11 +946,11 @@ pub fn can_cast(
     mut cast_to: &ScalarType,
 ) -> bool {
     // All stringlike types are treated like `ScalarType::String` during casts.
-    if TypeCategory::from_type(&cast_from) == TypeCategory::String {
+    if TypeCategory::from_type(cast_from) == TypeCategory::String {
         cast_from = &ScalarType::String;
     }
-    if TypeCategory::from_type(&cast_to) == TypeCategory::String {
+    if TypeCategory::from_type(cast_to) == TypeCategory::String {
         cast_to = &ScalarType::String;
     }
-    get_cast(ecx, ccx, &cast_from, &cast_to).is_some()
+    get_cast(ecx, ccx, cast_from, cast_to).is_some()
 }

@@ -374,7 +374,7 @@ impl AstDisplay for CsvColumns {
                 f.write_str("HEADER");
                 if !names.is_empty() {
                     f.write_str(" (");
-                    f.write_node(&display::comma_separated(&names));
+                    f.write_node(&display::comma_separated(names));
                     f.write_str(")");
                 }
             }
@@ -794,23 +794,23 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
         match self {
             Self::Kafka { with_options } => {
                 f.write_str("KAFKA ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Csr { with_options } => {
                 f.write_str("CONFLUENT SCHEMA REGISTRY ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Postgres { with_options } => {
                 f.write_str("POSTGRES ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Aws { with_options } => {
                 f.write_str("AWS ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Ssh { with_options } => {
                 f.write_str("SSH TUNNEL ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
         }
     }
@@ -978,7 +978,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 f.write_node(connection);
                 if let Some(key) = key.as_ref() {
                     f.write_str(" KEY (");
-                    f.write_node(&display::comma_separated(&key));
+                    f.write_node(&display::comma_separated(key));
                     f.write_str(")");
                 }
             }
@@ -1025,7 +1025,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 f.write_node(generator);
                 if !options.is_empty() {
                     f.write_str(" ");
-                    f.write_node(&display::comma_separated(&options));
+                    f.write_node(&display::comma_separated(options));
                 }
             }
         }

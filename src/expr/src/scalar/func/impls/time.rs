@@ -177,7 +177,7 @@ impl fmt::Display for DatePartTime {
 pub fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> NaiveTime {
     let offset = match tz {
         Timezone::FixedOffset(offset) => offset,
-        Timezone::Tz(tz) => tz.offset_from_utc_datetime(&wall_time).fix(),
+        Timezone::Tz(tz) => tz.offset_from_utc_datetime(wall_time).fix(),
     };
     t + offset
 }

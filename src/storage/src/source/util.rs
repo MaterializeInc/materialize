@@ -159,7 +159,7 @@ where
     let (data_output, data_stream) = builder.new_output();
 
     let remap_input = builder.new_input_connection(
-        &input,
+        input,
         Pipeline,
         // As documented, the input does not
         // participate in progress tracking.

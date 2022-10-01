@@ -529,7 +529,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
             append_upper: truncate.upper().clone(),
         });
     }
-    return Ok(());
+    Ok(())
 }
 
 #[cfg(test)]

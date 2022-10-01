@@ -110,7 +110,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             Ok(Value::Json(j))
         }
         (JsonValue::String(s), SchemaPiece::Uuid) => {
-            let u = uuid::Uuid::parse_str(&s)?;
+            let u = uuid::Uuid::parse_str(s)?;
             Ok(Value::Uuid(u))
         }
         (JsonValue::String(s), SchemaPiece::Enum { symbols, .. }) => {

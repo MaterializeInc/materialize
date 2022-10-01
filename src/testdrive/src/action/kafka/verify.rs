@@ -166,7 +166,7 @@ pub async fn run_verify_action(
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let topic: String = match &verify_action.source {
-        Topic::FromSink(sink) => get_topic(&sink, "topic", state).await?,
+        Topic::FromSink(sink) => get_topic(sink, "topic", state).await?,
         Topic::Named(name) => name.clone(),
     };
 

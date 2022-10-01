@@ -81,7 +81,7 @@ impl NonNullRequirements {
                     if let Ok(rows) = rows {
                         let mut datum_vec = mz_repr::DatumVec::new();
                         rows.retain(|(row, _)| {
-                            let datums = datum_vec.borrow_with(&row);
+                            let datums = datum_vec.borrow_with(row);
                             columns.iter().all(|c| datums[*c] != mz_repr::Datum::Null)
                         })
                     }

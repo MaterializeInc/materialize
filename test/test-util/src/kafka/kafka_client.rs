@@ -74,7 +74,7 @@ impl KafkaClient {
     }
 
     pub fn send(&self, topic_name: &str, message: &[u8]) -> Result<DeliveryFuture, KafkaError> {
-        let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&topic_name)
+        let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(topic_name)
             .payload(message)
             .timestamp(chrono::Utc::now().timestamp_millis());
         self.producer.send_result(record).map_err(|(e, _message)| e)
@@ -86,7 +86,7 @@ impl KafkaClient {
         key: &[u8],
         message: Option<Vec<u8>>,
     ) -> Result<DeliveryFuture, KafkaError> {
-        let mut record: FutureRecord<_, _> = FutureRecord::to(&topic_name)
+        let mut record: FutureRecord<_, _> = FutureRecord::to(topic_name)
             .key(key)
             .timestamp(chrono::Utc::now().timestamp_millis());
         if let Some(message) = &message {

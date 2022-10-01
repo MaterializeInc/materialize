@@ -649,7 +649,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         let parent_id = self.catalog.resolve_builtin_log(parent_log).to_string();
                         pairs.into_iter().map(move |(c, p)| {
                             let row = Row::pack_slice(&[
-                                Datum::String(&log_id),
+                                Datum::String(log_id),
                                 Datum::UInt64(u64::cast_from(c)),
                                 Datum::String(&parent_id),
                                 Datum::UInt64(u64::cast_from(p)),
@@ -883,7 +883,7 @@ pub async fn serve<S: Append + 'static>(
                     let now = now.clone();
                     handle.block_on(timeline::DurableTimestampOracle::new(
                         initial_timestamp,
-                        move || (*&(now))().into(),
+                        move || (now)().into(),
                         *timeline::TIMESTAMP_PERSIST_INTERVAL,
                         |ts| catalog.persist_timestamp(&timeline, ts),
                     ))

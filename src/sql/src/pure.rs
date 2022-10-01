@@ -89,7 +89,7 @@ pub async fn purify_create_source(
         }) => {
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+                let item = scx.get_item_by_resolved_name(connection)?;
                 // Get Kafka connection
                 match item.connection()? {
                     Connection::Kafka(connection) => connection.clone(),
@@ -155,7 +155,7 @@ pub async fn purify_create_source(
         CreateSourceConnection::S3 { connection, .. } => {
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+                let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Aws(connection) => connection.clone(),
                     _ => bail!("{} is not an AWS connection", item.name()),
@@ -179,7 +179,7 @@ pub async fn purify_create_source(
 
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+                let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Aws(connection) => connection.clone(),
                     _ => bail!("{} is not an AWS connection", item.name()),
@@ -201,7 +201,7 @@ pub async fn purify_create_source(
         } => {
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+                let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Postgres(connection) => connection.clone(),
                     _ => bail!("{} is not a postgres connection", item.name()),
@@ -237,14 +237,7 @@ pub async fn purify_create_source(
         CreateSourceConnection::LoadGenerator { .. } => (),
     }
 
-    purify_source_format(
-        &*catalog,
-        format,
-        connection,
-        &envelope,
-        &connection_context,
-    )
-    .await?;
+    purify_source_format(&*catalog, format, connection, envelope, &connection_context).await?;
 
     Ok(stmt)
 }
@@ -386,7 +379,7 @@ async fn purify_csr_connection_proto(
         None => {
             let scx = StatementContext::new(None, &*catalog);
 
-            let ccsr_connection = match scx.get_item_by_resolved_name(&connection)?.connection()? {
+            let ccsr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
                 Connection::Csr(connection) => connection.clone(),
                 _ => bail!("{} is not a schema registry connection", connection),
             };
@@ -441,7 +434,7 @@ async fn purify_csr_connection_avro(
     } = csr_connection;
     if seed.is_none() {
         let scx = StatementContext::new(None, &*catalog);
-        let csr_connection = match scx.get_item_by_resolved_name(&connection)?.connection()? {
+        let csr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
             Connection::Csr(connection) => connection.clone(),
             _ => bail!("{} is not a schema registry connection", connection),
         };
@@ -543,7 +536,7 @@ async fn get_remote_csr_schema(
     topic: String,
 ) -> Result<Schema, anyhow::Error> {
     let value_schema_name = format!("{}-value", topic);
-    let value_schema = get_schema_with_strategy(&ccsr_client, value_strategy, &value_schema_name)
+    let value_schema = get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name)
         .await
         .with_context(|| {
             format!(
@@ -553,7 +546,7 @@ async fn get_remote_csr_schema(
         })?;
     let value_schema = value_schema.ok_or_else(|| anyhow!("No value schema found"))?;
     let subject = format!("{}-key", topic);
-    let key_schema = get_schema_with_strategy(&ccsr_client, key_strategy, &subject).await?;
+    let key_schema = get_schema_with_strategy(ccsr_client, key_strategy, &subject).await?;
     Ok(Schema {
         key_schema,
         value_schema,

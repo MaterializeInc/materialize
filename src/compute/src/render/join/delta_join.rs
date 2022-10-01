@@ -454,7 +454,7 @@ where
                                         // note: only the delta path for the first relation will see
                                         // updates at start-up time
                                         if source_relation == 0
-                                            || !inner_as_of.elements().contains(&time)
+                                            || !inner_as_of.elements().contains(time)
                                         {
                                             let temp_storage = RowArena::new();
                                             let mut datums_local =

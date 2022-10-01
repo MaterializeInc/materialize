@@ -377,7 +377,7 @@ where
         let mut needed_tokens = Vec::new();
         for import_id in import_ids {
             if let Some(token) = tokens.get(&import_id) {
-                needed_tokens.push(Rc::clone(&token));
+                needed_tokens.push(Rc::clone(token));
             }
         }
         let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {

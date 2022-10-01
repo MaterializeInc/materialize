@@ -128,7 +128,7 @@ impl<'a> LexBuf<'a> {
     /// Note that the entire string is returned, regardless of the position of
     /// the buffer's internal cursor.
     pub fn inner(&self) -> &'a str {
-        &self.buf
+        self.buf
     }
 }
 

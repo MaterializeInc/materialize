@@ -345,10 +345,10 @@ pub mod monoids {
 
     impl Semigroup for Top1Monoid {
         fn plus_equals(&mut self, rhs: &Self) {
-            let cmp = (&*self).cmp(rhs);
+            let cmp = (*self).cmp(rhs);
             // NB: Reminder that TopK returns the _minimum_ K items.
             if cmp == Ordering::Greater {
-                self.clone_from(&rhs);
+                self.clone_from(rhs);
             }
         }
 

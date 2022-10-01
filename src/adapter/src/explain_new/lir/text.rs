@@ -358,7 +358,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Availab
         let raw = &self.0.raw;
         writeln!(f, "{}raw={}", ctx.indent, raw)?;
         // arranged field
-        for (i, arrangement) in (&self.0.arranged).iter().enumerate() {
+        for (i, arrangement) in self.0.arranged.iter().enumerate() {
             let arrangement = Arrangement::from(arrangement);
             writeln!(f, "{}arrangements[{}]={}", ctx.indent, i, arrangement)?;
         }
@@ -382,7 +382,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, MapFilt
 
         // render `project` field iff not the identity projection
         if &outputs.len() != input_arity || outputs.iter().enumerate().any(|(i, p)| i != *p) {
-            let outputs = Indices(&outputs);
+            let outputs = Indices(outputs);
             writeln!(f, "{}project=({})", ctx.indent, outputs)?;
         }
         // render `filter` field iff predicates are present
@@ -721,7 +721,7 @@ impl<'a> fmt::Display for Arrangement<'a> {
         // prepare perumation map
         let permutation = &self.permutation;
         // prepare thinning
-        let thinning = Indices(&self.thinning);
+        let thinning = Indices(self.thinning);
         // write the arrangement spec
         write!(
             f,

@@ -76,7 +76,7 @@ pub async fn generate_and_put_records(
 ) -> Result<(), anyhow::Error> {
     let timer = std::time::Instant::now();
     // For each string, round robin puts across all of the shards.
-    let mut shard_starting_hash_keys = mz_kinesis_util::list_shards(&kinesis_client, &stream_name)
+    let mut shard_starting_hash_keys = mz_kinesis_util::list_shards(&kinesis_client, stream_name)
         .await?
         .into_iter()
         .map(|shard| {

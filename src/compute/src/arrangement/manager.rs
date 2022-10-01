@@ -156,13 +156,13 @@ impl TraceManager {
 
     /// Returns a reference to the trace for `id`, should it exist.
     pub fn get(&self, id: &GlobalId) -> Option<&TraceBundle> {
-        self.traces.get(&id)
+        self.traces.get(id)
     }
 
     /// Returns a mutable reference to the trace for `id`, should it
     /// exist.
     pub fn get_mut(&mut self, id: &GlobalId) -> Option<&mut TraceBundle> {
-        self.traces.get_mut(&id)
+        self.traces.get_mut(id)
     }
 
     /// Binds the arrangement for `id` to `trace`.
@@ -177,7 +177,7 @@ impl TraceManager {
     /// Removes the trace for `id`.
     pub fn del_trace(&mut self, id: &GlobalId) -> bool {
         self.maintenance_metrics.remove(id);
-        self.traces.remove(&id).is_some()
+        self.traces.remove(id).is_some()
     }
 
     /// Removes all managed traces.

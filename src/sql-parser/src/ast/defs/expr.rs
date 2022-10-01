@@ -358,7 +358,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
             Expr::HomogenizingFunction { function, exprs } => {
                 f.write_node(function);
                 f.write_str("(");
-                f.write_node(&display::comma_separated(&exprs));
+                f.write_node(&display::comma_separated(exprs));
                 f.write_str(")");
             }
             Expr::NullIf { l_expr, r_expr } => {
@@ -373,7 +373,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
             }
             Expr::Row { exprs } => {
                 f.write_str("ROW(");
-                f.write_node(&display::comma_separated(&exprs));
+                f.write_node(&display::comma_separated(exprs));
                 f.write_str(")");
             }
             Expr::Value(v) => {
@@ -847,10 +847,10 @@ impl<T: AstInfo> AstDisplay for FunctionArgs<T> {
         match self {
             FunctionArgs::Star => f.write_str("*"),
             FunctionArgs::Args { args, order_by } => {
-                f.write_node(&display::comma_separated(&args));
+                f.write_node(&display::comma_separated(args));
                 if !order_by.is_empty() {
                     f.write_str(" ORDER BY ");
-                    f.write_node(&display::comma_separated(&order_by));
+                    f.write_node(&display::comma_separated(order_by));
                 }
             }
         }

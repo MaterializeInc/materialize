@@ -453,11 +453,11 @@ fn propagates_null_from_subexpression(expr: &MirScalarExpr, operand: &MirScalarE
         func.propagates_nulls()
             && (exprs
                 .iter()
-                .any(|e| propagates_null_from_subexpression(&e, operand)))
+                .any(|e| propagates_null_from_subexpression(e, operand)))
     } else if let MirScalarExpr::CallBinary { func, expr1, expr2 } = &expr {
         func.propagates_nulls()
-            && (propagates_null_from_subexpression(&expr1, operand)
-                || propagates_null_from_subexpression(&expr2, operand))
+            && (propagates_null_from_subexpression(expr1, operand)
+                || propagates_null_from_subexpression(expr2, operand))
     } else if let MirScalarExpr::CallUnary { func, expr } = &expr {
         func.propagates_nulls() && propagates_null_from_subexpression(expr, operand)
     } else {

@@ -671,7 +671,7 @@ impl<'a> Lowerer<'a> {
             let maps = the_box
                 .columns
                 .iter()
-                .map(|c| Self::lower_expression(&c.expr, &column_map))
+                .map(|c| Self::lower_expression(&c.expr, column_map))
                 .try_collect()?;
             Ok(rel.map(maps).project(
                 (0..outer_arity)

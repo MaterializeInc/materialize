@@ -2806,7 +2806,7 @@ impl AbstractExpr for HirScalarExpr {
                     outers[*level - 1].column_types[*column].clone()
                 }
             }
-            HirScalarExpr::Parameter(n) => params[&n].clone().nullable(true),
+            HirScalarExpr::Parameter(n) => params[n].clone().nullable(true),
             HirScalarExpr::Literal(_, typ) => typ.clone(),
             HirScalarExpr::CallUnmaterializable(func) => func.output_type(),
             HirScalarExpr::CallUnary { expr, func } => {

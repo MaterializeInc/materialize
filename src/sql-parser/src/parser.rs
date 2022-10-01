@@ -1748,11 +1748,11 @@ impl<'a> Parser<'a> {
                 schema,
             })
         } else {
-            return self.expected(
+            self.expected(
                 self.peek_pos(),
                 "CONFLUENT SCHEMA REGISTRY or MESSAGE",
                 self.peek_token(),
-            );
+            )
         }
     }
 
@@ -3064,11 +3064,11 @@ impl<'a> Parser<'a> {
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
             Some(CASCADE),
         );
-        return Ok(Statement::DropClusters(DropClustersStatement {
+        Ok(Statement::DropClusters(DropClustersStatement {
             if_exists,
             names,
             cascade,
-        }));
+        }))
     }
 
     fn parse_drop_cluster_replicas(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3357,7 +3357,7 @@ impl<'a> Parser<'a> {
         } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
             Ok(WithOptionValue::Ident(ident))
         } else {
-            return self.expected(self.peek_pos(), "option value", self.peek_token());
+            self.expected(self.peek_pos(), "option value", self.peek_token())
         }
     }
 
@@ -3365,7 +3365,7 @@ impl<'a> Parser<'a> {
         if let Some(obj) = self.maybe_parse(Parser::parse_raw_name) {
             Ok(WithOptionValue::Object(obj))
         } else {
-            return self.expected(self.peek_pos(), "object", self.peek_token());
+            self.expected(self.peek_pos(), "object", self.peek_token())
         }
     }
 
@@ -3655,11 +3655,11 @@ impl<'a> Parser<'a> {
                 Token::Keyword(FALSE) => Ok(Value::Boolean(false)),
                 Token::Keyword(NULL) => Ok(Value::Null),
                 Token::Keyword(kw) => {
-                    return parser_err!(
+                    parser_err!(
                         self,
                         self.peek_prev_pos(),
                         format!("No value parser for keyword {}", kw)
-                    );
+                    )
                 }
                 Token::Op(ref op) if op == "-" => match self.next_token() {
                     Some(Token::Number(n)) => Ok(Value::Number(format!("-{}", n))),
@@ -4809,7 +4809,7 @@ impl<'a> Parser<'a> {
             if self.consume_token(&Token::LParen) {
                 return self.parse_derived_table_factor(Lateral);
             } else if self.parse_keywords(&[ROWS, FROM]) {
-                return Ok(self.parse_rows_from()?);
+                return self.parse_rows_from();
             } else {
                 let name = self.parse_object_name()?;
                 self.expect_token(&Token::LParen)?;

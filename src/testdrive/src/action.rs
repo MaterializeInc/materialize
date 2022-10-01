@@ -522,7 +522,7 @@ impl State {
                     .collect();
 
                 for subject in testdrive_subjects {
-                    match self.ccsr_client.delete_subject(&subject).await {
+                    match self.ccsr_client.delete_subject(subject).await {
                         Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
                         Err(e) => errors.push(e.into()),
                     }

@@ -204,7 +204,7 @@ mod tests {
         //    is successful because of the syntax supports multiple ways of
         //    specifying the same thing. So convert the new spec back into a
         //    TestEnum and compare the TestEnums.
-        let new_result = create_test_enum(&new_s, &args)?;
+        let new_result = create_test_enum(&new_s, args)?;
         if !new_result.eq(&result) {
             return Err(format!(
                 "Round trip failed. New spec:\n{}
