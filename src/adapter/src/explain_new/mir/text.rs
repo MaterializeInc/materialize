@@ -25,7 +25,7 @@ use std::fmt;
 use mz_expr::{
     explain::Indices, AggregateExpr, Id, JoinImplementation, MirRelationExpr, MirScalarExpr,
 };
-use mz_ore::str::{bracketed, closure_to_display, separated, IndentLike, StrExt};
+use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText};
 
 use crate::explain_new::{Displayable, PlanRenderingContext};
@@ -158,102 +158,132 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                     }),
                 );
 
-                if ctx.config.join_impls && implementation.is_implemented() {
-                    match implementation {
-                        JoinImplementation::Differential((head_idx, _head_key), tail) => {
-                            write!(f, "{}Filter {}", ctx.indent, equivalences)?;
-                            self.fmt_attributes(f, ctx)?;
+                if has_equivalences {
+                    write!(f, "{}Join on=({})", ctx.indent, equivalences)?;
+                } else {
+                    write!(f, "{}CrossJoin", ctx.indent)?;
+                }
+                if let Some(name) = implementation.name() {
+                    write!(f, " type={}", name)?;
+                }
+                self.fmt_attributes(f, ctx)?;
 
-                            debug_assert_eq!(inputs.len(), tail.len() + 1);
+                if ctx.config.join_impls {
+                    let input_name = |pos: &usize| -> String {
+                        match &inputs[*pos] {
+                            MirRelationExpr::Get { id, .. } => match id {
+                                Id::Local(id) => id.to_string(),
+                                Id::Global(id) => ctx
+                                    .humanizer
+                                    .humanize_id(*id)
+                                    .unwrap_or_else(|| format!("?{}", id)),
+                            },
+                            _ => format!("%{}", pos),
+                        }
+                    };
+                    ctx.indented(|ctx| {
+                        match implementation {
+                            JoinImplementation::Differential((head_idx, _head_key), tail) => {
+                                debug_assert_eq!(inputs.len(), tail.len() + 1);
 
-                            for (idx, key) in tail.iter().rev() {
-                                ctx.indent += 1;
-                                let key = separated_text(", ", key.iter().map(Displayable::from));
-                                writeln!(f, "{}LinearJoin using=[{}]", ctx.indent, key)?;
+                                writeln!(f, "{}implementation", ctx.indent)?;
                                 ctx.indented(|ctx| {
-                                    Displayable::from(&inputs[*idx]).fmt_text(f, ctx)
+                                    writeln!(
+                                        f,
+                                        "{}{} » {}",
+                                        ctx.indent,
+                                        input_name(head_idx),
+                                        separated(
+                                            " » ",
+                                            tail.iter().map(|(pos, key)| {
+                                                format!(
+                                                    "{} using [{}]",
+                                                    input_name(pos),
+                                                    separated_text(
+                                                        ", ",
+                                                        key.iter().map(Displayable::from)
+                                                    )
+                                                )
+                                            })
+                                        ),
+                                    )
                                 })?;
                             }
-                            ctx.indented(|ctx| {
-                                Displayable::from(&inputs[*head_idx]).fmt_text(f, ctx)
-                            })?;
-                            ctx.indent -= tail.len();
-                        }
-                        JoinImplementation::DeltaQuery(half_join_chains) => {
-                            write!(f, "{}Filter {}", ctx.indent, equivalences)?;
-                            self.fmt_attributes(f, ctx)?;
+                            JoinImplementation::DeltaQuery(half_join_chains) => {
+                                debug_assert_eq!(inputs.len(), half_join_chains.len());
 
-                            debug_assert_eq!(inputs.len(), half_join_chains.len());
-
-                            ctx.indent += 1;
-                            writeln!(f, "{}Union", ctx.indent)?;
-                            for (input, half_join_chain) in std::iter::zip(inputs, half_join_chains)
-                            {
-                                for (idx, key) in half_join_chain.iter().rev() {
-                                    ctx.indent += 1;
-                                    let key =
-                                        separated_text(", ", key.iter().map(Displayable::from));
-                                    writeln!(f, "{}HalfJoin using=[{}]", ctx.indent, key)?;
-                                    ctx.indented(|ctx| {
-                                        Displayable::from(&inputs[*idx]).fmt_text(f, ctx)
-                                    })?;
-                                }
-                                ctx.indented(|ctx| Displayable::from(input).fmt_text(f, ctx))?;
-                                ctx.indent -= half_join_chain.len();
-                            }
-                            ctx.indent -= 1;
-                        }
-                        JoinImplementation::IndexedFilter(_, key, rows) => {
-                            debug_assert_eq!(inputs.len(), 2);
-                            writeln!(
-                                f,
-                                "{}Lookup {}",
-                                ctx.indent,
-                                separated(
-                                    " OR ",
-                                    rows.iter().map(|row| {
-                                        bracketed(
-                                            "(",
-                                            ")",
+                                writeln!(f, "{}implementation", ctx.indent)?;
+                                ctx.indented(|ctx| {
+                                    for (pos, chain) in half_join_chains.iter().enumerate() {
+                                        writeln!(
+                                            f,
+                                            "{}{} » {}",
+                                            ctx.indent,
+                                            input_name(&pos),
                                             separated(
-                                                " AND ",
-                                                std::iter::zip(key, row.unpack()).map(
-                                                    |(expr, lit)| {
-                                                        closure_to_display(move |fmt| {
-                                                            write!(fmt, "{} = {}", expr, lit)
-                                                        })
-                                                    },
-                                                ),
-                                            ),
+                                                " » ",
+                                                chain.iter().map(|(pos, input)| {
+                                                    format!(
+                                                        "{} using [{}]",
+                                                        input_name(pos),
+                                                        separated_text(
+                                                            ", ",
+                                                            input.iter().map(Displayable::from)
+                                                        )
+                                                    )
+                                                })
+                                            )
+                                        )?;
+                                    }
+                                    Ok(())
+                                })?;
+                            }
+                            JoinImplementation::IndexedFilter(_, key, rows) => {
+                                debug_assert_eq!(inputs.len(), 2);
+                                writeln!(f, "{}implementation", ctx.indent)?;
+                                ctx.indented(|ctx| {
+                                    writeln!(
+                                        f,
+                                        "{}lookup {}",
+                                        ctx.indent,
+                                        separated(
+                                            " OR ",
+                                            rows.iter().map(|row| {
+                                                bracketed(
+                                                    "(",
+                                                    ")",
+                                                    separated(
+                                                        " AND ",
+                                                        std::iter::zip(key, row.unpack()).map(
+                                                            |(expr, lit)| {
+                                                                closure_to_display(move |fmt| {
+                                                                    write!(
+                                                                        fmt,
+                                                                        "{} = {}",
+                                                                        expr, lit
+                                                                    )
+                                                                })
+                                                            },
+                                                        ),
+                                                    ),
+                                                )
+                                            })
                                         )
-                                    })
-                                )
-                            )?;
-                            ctx.indented(|ctx| Displayable::from(&inputs[0]).fmt_text(f, ctx))?;
-                        }
-                        JoinImplementation::Unimplemented => {
-                            unreachable!();
-                        }
-                    }
-                } else {
-                    // unimplemented or impl_joins not set
-                    if has_equivalences {
-                        write!(f, "{}Join on=({})", ctx.indent, equivalences)?;
-                    } else {
-                        write!(f, "{}CrossJoin", ctx.indent)?;
-                    }
-                    if let Some(name) = implementation.name() {
-                        write!(f, " type={}", name)?;
-                    }
-                    self.fmt_attributes(f, ctx)?;
-
-                    ctx.indented(|ctx| {
-                        for input in inputs {
-                            Displayable::from(input).fmt_text(f, ctx)?;
+                                    )
+                                })?;
+                            }
+                            JoinImplementation::Unimplemented => {}
                         }
                         Ok(())
                     })?;
                 }
+
+                ctx.indented(|ctx| {
+                    for input in inputs {
+                        Displayable::from(input).fmt_text(f, ctx)?;
+                    }
+                    Ok(())
+                })?;
             }
             Reduce {
                 group_key,
