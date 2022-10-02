@@ -88,23 +88,17 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                     head = body.as_ref();
                 }
 
-                // The body comes first in the text output format in order to
-                // align with the format convention the dataflow is rendered
-                // top to bottom
-                write!(f, "{}Let", ctx.indent)?;
-                self.fmt_attributes(f, ctx)?;
-                ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    writeln!(f, "{}Where", ctx.indent)?;
-                    ctx.indented(|ctx| {
-                        for (id, value) in bindings.iter().rev() {
-                            writeln!(f, "{}{} =", ctx.indent, *id)?;
-                            ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
-                        }
-                        Ok(())
-                    })?;
+                    for (id, value) in bindings.iter() {
+                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                    }
                     Ok(())
                 })?;
+                write!(f, "{}Return", ctx.indent)?;
+                self.fmt_attributes(f, ctx)?;
+                ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
             }
             Get { id, .. } => {
                 match id {
