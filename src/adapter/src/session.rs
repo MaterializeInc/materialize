@@ -33,6 +33,7 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::vars::IsolationLevel;
 use crate::util::ComputeSinkId;
+use crate::AdapterNotice;
 
 pub use self::vars::{
     ClientSeverity, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
@@ -78,6 +79,7 @@ pub struct Session<T = mz_repr::Timestamp> {
     user: User,
     vars: SessionVars,
     drop_sinks: Vec<ComputeSinkId>,
+    notices: Vec<AdapterNotice>,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -105,6 +107,7 @@ impl<T: TimestampManipulation> Session<T> {
             user,
             vars: SessionVars::default(),
             drop_sinks: vec![],
+            notices: vec![],
         }
     }
 
@@ -302,6 +305,16 @@ impl<T: TimestampManipulation> Session<T> {
     /// cleared.
     pub fn add_drop_sink(&mut self, id: ComputeSinkId) {
         self.drop_sinks.push(id)
+    }
+
+    /// Adds a notice to the session.
+    pub fn add_notice(&mut self, notice: AdapterNotice) {
+        self.notices.push(notice)
+    }
+
+    /// Returns a draining iterator over the notices attached to the session.
+    pub fn drain_notices(&mut self) -> impl Iterator<Item = AdapterNotice> + '_ {
+        self.notices.drain(..)
     }
 
     /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
@@ -747,14 +760,4 @@ pub enum EndTransactionAction {
     Commit,
     /// Rollback the transaction.
     Rollback,
-}
-
-impl EndTransactionAction {
-    /// Returns the pgwire tag for this action.
-    pub fn tag(&self) -> &'static str {
-        match self {
-            EndTransactionAction::Commit => "COMMIT",
-            EndTransactionAction::Rollback => "ROLLBACK",
-        }
-    }
 }

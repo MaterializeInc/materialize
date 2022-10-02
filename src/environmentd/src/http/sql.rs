@@ -15,10 +15,8 @@ use itertools::izip;
 use serde::{Deserialize, Serialize};
 
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
-use mz_adapter::{
-    ExecuteResponse, ExecuteResponseKind, ExecuteResponsePartialError, PeekResponseUnary,
-    SessionClient,
-};
+use mz_adapter::{ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient};
+use mz_pgwire::Severity;
 use mz_repr::{Datum, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement};
@@ -86,33 +84,56 @@ enum SqlResult {
         rows: Vec<Vec<serde_json::Value>>,
         /// The name of the columns in the row.
         col_names: Vec<String>,
+        /// Any notices generated during execution of the query.
+        notices: Vec<Notice>,
     },
     /// The query executed successfully but did not return rows.
     Ok {
         ok: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        partial_err: Option<ExecuteResponsePartialError>,
+        /// Any notices generated during execution of the query.
+        notices: Vec<Notice>,
     },
     /// The query returned an error.
-    Err { error: String },
+    Err {
+        /// The error message.
+        error: String,
+        /// Any notices generated during execution of the query.
+        notices: Vec<Notice>,
+    },
 }
 
 impl SqlResult {
-    fn err(msg: impl std::fmt::Display) -> SqlResult {
-        SqlResult::Err {
-            error: msg.to_string(),
+    fn rows(
+        client: &mut SessionClient,
+        rows: Vec<Vec<serde_json::Value>>,
+        col_names: Vec<String>,
+    ) -> SqlResult {
+        SqlResult::Rows {
+            rows,
+            col_names,
+            notices: make_notices(client),
         }
     }
 
-    /// Generates a `SimpleResult::Ok` based on an `ExecuteResponse`.
-    ///
-    /// # Panics
-    /// - If `ExecuteResponse::partial_err(&res)` panics.
-    fn ok(res: ExecuteResponse) -> SqlResult {
-        let ok = res.tag();
-        let partial_err = res.partial_err();
-        SqlResult::Ok { ok, partial_err }
+    fn err(client: &mut SessionClient, msg: impl std::fmt::Display) -> SqlResult {
+        SqlResult::Err {
+            error: msg.to_string(),
+            notices: make_notices(client),
+        }
     }
+
+    fn ok(client: &mut SessionClient, res: ExecuteResponse) -> SqlResult {
+        SqlResult::Ok {
+            ok: res.tag(),
+            notices: make_notices(client),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct Notice {
+    message: String,
+    severity: String,
 }
 
 /// Executes an entire [`SqlRequest`].
@@ -139,7 +160,6 @@ async fn execute_request(
                     | ExecuteResponseKind::Subscribing
                     | ExecuteResponseKind::CopyTo
                     | ExecuteResponseKind::CopyFrom
-                    | ExecuteResponseKind::Raise
                     | ExecuteResponseKind::DeclaredCursor
                     | ExecuteResponseKind::ClosedCursor
             )
@@ -200,7 +220,7 @@ async fn execute_request(
             // Mirror the behavior of the PostgreSQL simple query protocol.
             // See the pgwire::protocol::StateMachine::query method for details.
             if let Err(e) = client.start_transaction(Some(num_stmts)).await {
-                results.push(SqlResult::err(e));
+                results.push(SqlResult::err(client, e));
                 break;
             }
             let res = execute_stmt(client, stmt, params).await;
@@ -214,6 +234,7 @@ async fn execute_request(
     if client.session().transaction().is_implicit() {
         client.end_transaction(EndTransactionAction::Commit).await?;
     }
+
     Ok(SqlResponse { results })
 }
 
@@ -228,13 +249,13 @@ async fn execute_stmt(
         .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
         .await
     {
-        return SqlResult::err(e);
+        return SqlResult::err(client, e);
     }
 
     let prep_stmt = match client.get_prepared_statement(EMPTY_PORTAL).await {
         Ok(stmt) => stmt,
         Err(err) => {
-            return SqlResult::err(err);
+            return SqlResult::err(client, err);
         }
     };
 
@@ -247,7 +268,7 @@ async fn execute_stmt(
             actual = raw_params.len(),
             expected = param_types.len()
         );
-        return SqlResult::err(message);
+        return SqlResult::err(client, message);
     }
 
     let buf = RowArena::new();
@@ -265,7 +286,7 @@ async fn execute_stmt(
                     Ok(param) => param.into_datum(&buf, &pg_typ),
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
-                        return SqlResult::err(msg);
+                        return SqlResult::err(client, msg);
                     }
                 }
             }
@@ -294,7 +315,7 @@ async fn execute_stmt(
         result_formats,
         revision,
     ) {
-        return SqlResult::err(err.to_string());
+        return SqlResult::err(client, err.to_string());
     }
 
     let desc = client
@@ -307,13 +328,13 @@ async fn execute_stmt(
     let res = match client.execute(EMPTY_PORTAL.into()).await {
         Ok(res) => res,
         Err(e) => {
-            return SqlResult::err(e);
+            return SqlResult::err(client, e);
         }
     };
 
     match res {
         ExecuteResponse::Canceled => {
-            SqlResult::err("statement canceled due to user request")
+            SqlResult::err(client, "statement canceled due to user request")
         }
         res @ (ExecuteResponse::CreatedConnection { .. }
         | ExecuteResponse::CreatedDatabase { .. }
@@ -350,17 +371,17 @@ async fn execute_stmt(
         | ExecuteResponse::DroppedConnection
         | ExecuteResponse::EmptyQuery
         | ExecuteResponse::Inserted(_)
+        | ExecuteResponse::Raised
         | ExecuteResponse::SetVariable { .. }
         | ExecuteResponse::StartedTransaction { .. }
-        | ExecuteResponse::TransactionExited {
-            ..
-        }
+        | ExecuteResponse::TransactionCommitted
+        | ExecuteResponse::TransactionRolledBack
         | ExecuteResponse::Updated(_)
         | ExecuteResponse::AlteredObject(_)
         | ExecuteResponse::AlteredIndexLogicalCompaction
         | ExecuteResponse::AlteredSystemConfiguraion
         | ExecuteResponse::Deallocate { .. }
-        | ExecuteResponse::Prepare) => SqlResult::ok(res),
+        | ExecuteResponse::Prepare) => SqlResult::ok(client, res),
         ExecuteResponse::SendingRows {
             future: rows,
             span: _,
@@ -368,10 +389,10 @@ async fn execute_stmt(
             let rows = match rows.await {
                 PeekResponseUnary::Rows(rows) => rows,
                 PeekResponseUnary::Error(e) => {
-                    return SqlResult::err(e);
+                    return SqlResult::err(client, e);
                 }
                 PeekResponseUnary::Canceled => {
-                    return SqlResult::err("statement canceled due to user request");
+                    return SqlResult::err(client, "statement canceled due to user request");
                 }
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
@@ -384,23 +405,33 @@ async fn execute_stmt(
                 let datums = datum_vec.borrow_with(&row);
                 sql_rows.push(datums.iter().map(From::from).collect());
             }
-            SqlResult::Rows {
-                rows: sql_rows,
-                col_names,
-            }
+            SqlResult::rows(client, sql_rows, col_names)
         }
         res @ (ExecuteResponse::Fetch { .. }
         | ExecuteResponse::Subscribing { .. }
         | ExecuteResponse::CopyTo { .. }
         | ExecuteResponse::CopyFrom { .. }
-        | ExecuteResponse::Raise { .. }
         | ExecuteResponse::DeclaredCursor
         | ExecuteResponse::ClosedCursor) => {
             SqlResult::err(
+                client,
                 format!("internal error: encountered prohibited ExecuteResponse {:?}.\n\n
 This is a bug. Can you please file an issue letting us know?\n
 https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=C-bug%2CC-triage&template=01-bug.yml",
             ExecuteResponseKind::from(res)))
         }
     }
+}
+
+fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
+    client
+        .session()
+        .drain_notices()
+        .map(|notice| Notice {
+            message: notice.to_string(),
+            severity: Severity::for_adapter_notice(&notice)
+                .as_str()
+                .to_lowercase(),
+        })
+        .collect()
 }
