@@ -191,5 +191,5 @@ up-to-date.
 
 ## Learn more
 
-- [Architecture overview](/overview/architecture) to understand Materialize's internal architecture
-- [API overview](/overview/key-concepts) to understand what Materialize's SQL API expresses
+- [Key concepts](/overview/key-concepts)
+- [Get started](/get-started)
