@@ -14,16 +14,6 @@ queries to named [views](../create-view) or [materialized views](../create-mater
  and to interactively query data maintained in Materialize. For interactive queries, you should consider creating [indexes](../create-index)
 on the underlying relations based on common query patterns.
 
-This is covered in much greater detail in our [architecture
-overview](../../overview/architecture), but here's a quick summary of how
-Materialize handles `SELECT` in different circumstances.
-
-Scenario | `SELECT` behavior
----------|------------------
-**Creating view** | The query description is bound to the name given to it by `CREATE VIEW`.
-**Reading from a source or materialized view** | Reads directly from the maintained data.
-**Querying non-materialized views** | Creates a dataflow, which is torn down after returning results to the client.
-
 ## Syntax
 
 {{< diagram "select-stmt.svg" >}}
@@ -63,8 +53,7 @@ different performance profile from performing a `SELECT` in an RDBMS.
 A materialized view has resource and latency costs that should
 be carefully considered depending on its main usage. Materialize must maintain
 the results of the query in durable storage, but often it must also maintain
-additional intermediate state. To learn more about the costs of
-materialization, check out our [architecture overview](../../overview/architecture).
+additional intermediate state.
 
 ### Reading from indexed relations
 
