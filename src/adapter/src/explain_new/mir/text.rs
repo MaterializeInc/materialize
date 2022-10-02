@@ -238,40 +238,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                                     Ok(())
                                 })?;
                             }
-                            JoinImplementation::IndexedFilter(_, key, rows) => {
-                                debug_assert_eq!(inputs.len(), 2);
-                                writeln!(f, "{}implementation", ctx.indent)?;
-                                ctx.indented(|ctx| {
-                                    writeln!(
-                                        f,
-                                        "{}lookup {}",
-                                        ctx.indent,
-                                        separated(
-                                            " OR ",
-                                            rows.iter().map(|row| {
-                                                bracketed(
-                                                    "(",
-                                                    ")",
-                                                    separated(
-                                                        " AND ",
-                                                        std::iter::zip(key, row.unpack()).map(
-                                                            |(expr, lit)| {
-                                                                closure_to_display(move |fmt| {
-                                                                    write!(
-                                                                        fmt,
-                                                                        "{} = {}",
-                                                                        expr, lit
-                                                                    )
-                                                                })
-                                                            },
-                                                        ),
-                                                    ),
-                                                )
-                                            })
-                                        )
-                                    )
-                                })?;
-                            }
+                            JoinImplementation::IndexedFilter(_, _, _) => {}
                             JoinImplementation::Unimplemented => {}
                         }
                         Ok(())
