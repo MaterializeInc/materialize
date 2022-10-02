@@ -26,13 +26,13 @@ contains:type "int4 list[]" does not exist
 ! SELECT ARRAY[LIST[1]];
 contains:integer list[] not yet supported
 
-> CREATE TYPE bigint_list AS LIST (element_type=bigint);
+> CREATE TYPE bigint_list AS LIST (ELEMENT TYPE = bigint);
 ! CREATE TABLE bigint_list_arr (f1 bigint_list[]);
 contains:type "bigint_list[]" does not exist
 
 ! SELECT ARRAY['{a => 1}'::map[text=>int]];
 contains:map[text=>integer][] not yet supported
 
-> CREATE TYPE bigint_map AS MAP (key_type=text, value_type=bigint);
+> CREATE TYPE bigint_map AS MAP (KEY TYPE = text, VALUE TYPE = bigint);
 ! CREATE TABLE bigint_map_map_array_table (f1 bigint_map[]);
 contains:type "bigint_map[]" does not exist

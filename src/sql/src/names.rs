@@ -577,29 +577,6 @@ impl fmt::Display for ResolvedDataType {
     }
 }
 
-impl ResolvedDataType {
-    pub(crate) fn get_ids(&self) -> Vec<GlobalId> {
-        let mut ids = Vec::new();
-        match self {
-            ResolvedDataType::AnonymousList(typ) => {
-                ids.extend(typ.get_ids());
-            }
-            ResolvedDataType::AnonymousMap {
-                key_type,
-                value_type,
-            } => {
-                ids.extend(key_type.get_ids());
-                ids.extend(value_type.get_ids());
-            }
-            ResolvedDataType::Named { id, .. } => {
-                ids.push(id.clone());
-            }
-            ResolvedDataType::Error => {}
-        };
-        ids
-    }
-}
-
 impl AstInfo for Aug {
     type NestedStatement = Statement<Raw>;
     type ObjectName = ResolvedObjectName;

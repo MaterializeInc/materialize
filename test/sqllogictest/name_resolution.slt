@@ -26,4 +26,3 @@ CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'broker';
 
 statement error materialize.public.not_a_secret is not a secret
 CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'broker', SASL PASSWORD = SECRET not_a_secret;
-

@@ -43,14 +43,14 @@ _field_type_        | The data type of a field indicated by _field_name_.
 
 Field | Use
 -----|-----
-`element_type` | Creates a custom [`list`](../types/list) whose elements are of `element_type`.
+`ELEMENT TYPE` | Creates a custom [`list`](../types/list) whose elements are of `ELEMENT TYPE`.
 
 ### `map` properties
 
 Field | Use
 -----|-----
-`key_type` | Creates a custom [`map`](../types/map) whose keys are of `key_type`. `key_type` must resolve to [`text`](../types/text).
-`value_type` | Creates a custom [`map`](../types/map) whose values are of `value_type`.
+`KEY TYPE` | Creates a custom [`map`](../types/map) whose keys are of `KEY TYPE`. `KEY TYPE` must resolve to [`text`](../types/text).
+`VALUE TYPE` | Creates a custom [`map`](../types/map) whose values are of `VALUE TYPE`.
 
 ## Details
 
@@ -71,7 +71,7 @@ custom type's properties.
 ### Custom `list`
 
 ```sql
-CREATE TYPE int4_list AS LIST (element_type = int4);
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 
 SELECT '{1,2}'::int4_list::text AS custom_list;
 ```
@@ -84,7 +84,7 @@ SELECT '{1,2}'::int4_list::text AS custom_list;
 ### Nested custom `list`
 
 ```sql
-CREATE TYPE int4_list_list AS LIST (element_type = int4_list);
+CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list);
 
 SELECT '{{1,2}}'::int4_list_list::text AS custom_nested_list;
 ```
@@ -97,7 +97,7 @@ SELECT '{{1,2}}'::int4_list_list::text AS custom_nested_list;
 ### Custom `map`
 
 ```sql
-CREATE TYPE int4_map AS MAP (key_type=text, value_type=int4);
+CREATE TYPE int4_map AS MAP (KEY TYPE = text, VALUE TYPE = int4);
 
 SELECT '{a=>1}'::int4_map::text AS custom_map;
 ```
@@ -110,7 +110,7 @@ SELECT '{a=>1}'::int4_map::text AS custom_map;
 ### Nested custom `map`
 
 ```sql
-CREATE TYPE int4_map_map AS MAP (key_type=text, value_type=int4_map);
+CREATE TYPE int4_map_map AS MAP (KEY TYPE = text, VALUE TYPE = int4_map);
 
 SELECT '{a=>{a=>1}}'::int4_map_map::text AS custom_nested_map;
 ```

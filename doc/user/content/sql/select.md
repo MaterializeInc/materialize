@@ -107,7 +107,7 @@ The following query hints are valid within the `OPTION` clause.
 
 Hint | Value type | Description
 ------|------------|------------
-`expected_group_size` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
+`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
 
 For an example, see [Using query hints](#using-query-hints).
 
@@ -216,7 +216,7 @@ SELECT a,
        min(b) AS min
 FROM example
 GROUP BY a
-OPTION (expected_group_size = 100)
+OPTIONS (EXPECTED GROUP SIZE = 100)
 ```
 
 Here the hint indicates that there may be up to a hundred distinct `(a, b)` pairs

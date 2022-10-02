@@ -17,7 +17,7 @@ use mz_repr::GlobalId;
 use mz_storage::types::connections::StringOrSecret;
 
 use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
-use crate::names::ResolvedObjectName;
+use crate::names::{ResolvedDataType, ResolvedObjectName};
 use crate::plan::{Aug, PlanError};
 
 pub trait TryFromValue<T>: Sized {
@@ -79,6 +79,21 @@ impl TryFromValue<WithOptionValue<Aug>> for Object {
 impl ImpliedValue for Object {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an object")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for ResolvedDataType {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        Ok(match v {
+            WithOptionValue::DataType(ty) => ty,
+            _ => sql_bail!("must provide a data type"),
+        })
+    }
+}
+
+impl ImpliedValue for ResolvedDataType {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a data type")
     }
 }
 
@@ -224,6 +239,23 @@ impl TryFromValue<Value> for u16 {
 impl ImpliedValue for u16 {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an integer value")
+    }
+}
+
+impl TryFromValue<Value> for u64 {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            Value::Number(v) => v
+                .parse::<u64>()
+                .map_err(|e| sql_err!("invalid unsigned numeric value: {e}")),
+            _ => sql_bail!("cannot use value as number"),
+        }
+    }
+}
+
+impl ImpliedValue for u64 {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an unsigned integer value")
     }
 }
 

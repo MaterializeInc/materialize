@@ -24,7 +24,7 @@ use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, Expr, FunctionArgs, Ident, ShowStatement, UnresolvedObjectName, WithOption,
+    AstInfo, Expr, FunctionArgs, Ident, ShowStatement, UnresolvedObjectName, WithOptionValue,
 };
 
 /// The most complete variant of a `SELECT` query expression, optionally
@@ -187,6 +187,36 @@ impl AstDisplay for SetOperator {
 }
 impl_display!(SetOperator);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SelectOptionName {
+    ExpectedGroupSize,
+}
+
+impl AstDisplay for SelectOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            SelectOptionName::ExpectedGroupSize => "EXPECTED GROUP SIZE",
+        })
+    }
+}
+impl_display!(SelectOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SelectOption<T: AstInfo> {
+    pub name: SelectOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for SelectOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
 /// A restricted variant of `SELECT` (without CTEs/`ORDER BY`), which may
 /// appear either as the only body item of an `SQLQuery`, or as an operand
 /// to a set operation like `UNION`.
@@ -204,7 +234,7 @@ pub struct Select<T: AstInfo> {
     /// HAVING
     pub having: Option<Expr<T>>,
     /// OPTION
-    pub options: Vec<WithOption<T>>,
+    pub options: Vec<SelectOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for Select<T> {

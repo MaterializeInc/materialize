@@ -223,23 +223,23 @@ v2      view
 
 # Test minimizing name qualification
 
-> CREATE TYPE int_list AS list (element_type=int4)
+> CREATE TYPE int_list AS list (ELEMENT TYPE = int4)
 
 > SELECT pg_typeof('{1}'::d.public.int_list)
 int_list
 
 > CREATE SCHEMA other
-> CREATE TYPE other.int_list AS list (element_type=int4)
+> CREATE TYPE other.int_list AS list (ELEMENT TYPE = int4)
 > SELECT pg_typeof('{1}'::d.other.int_list)
 other.int_list
 
 > CREATE DATABASE foo
 > CREATE SCHEMA foo.other
-> CREATE TYPE foo.other.int_list AS LIST (element_type=int4)
+> CREATE TYPE foo.other.int_list AS LIST (ELEMENT TYPE = int4)
 > SELECT pg_typeof('{1}'::foo.other.int_list)
 foo.other.int_list
 
-> CREATE TYPE bool AS LIST (element_type=int4)
+> CREATE TYPE bool AS LIST (ELEMENT TYPE = int4)
 ! SELECT '{1}'::bool
 contains:invalid input syntax for type boolean: "{1}"
 

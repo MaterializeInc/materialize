@@ -1731,10 +1731,9 @@ impl<'a> Parser<'a> {
 
     fn parse_avro_schema_option(&mut self) -> Result<AvroSchemaOption<Raw>, ParserError> {
         self.expect_keywords(&[CONFLUENT, WIRE, FORMAT])?;
-        let _ = self.consume_token(&Token::Eq);
         Ok(AvroSchemaOption {
             name: AvroSchemaOptionName::ConfluentWireFormat,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -1793,10 +1792,9 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         };
-        let _ = self.consume_token(&Token::Eq);
         Ok(CsrConfigOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -1992,11 +1990,9 @@ impl<'a> Parser<'a> {
             },
             _ => unreachable!(),
         };
-
-        let _ = self.consume_token(&Token::Eq);
         Ok(KafkaConnectionOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -2090,10 +2086,9 @@ impl<'a> Parser<'a> {
             },
             _ => unreachable!(),
         };
-        let _ = self.consume_token(&Token::Eq);
         Ok(KafkaConfigOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -2115,11 +2110,9 @@ impl<'a> Parser<'a> {
             PASSWORD => CsrConnectionOptionName::Password,
             _ => unreachable!(),
         };
-
-        let _ = self.consume_token(&Token::Eq);
         Ok(CsrConnectionOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -2152,14 +2145,10 @@ impl<'a> Parser<'a> {
             USER | USERNAME => PostgresConnectionOptionName::User,
             _ => unreachable!(),
         };
-
-        let _ = self.consume_token(&Token::Eq);
-        let value = match &name {
-            // Only objects (in particular, SSH connections) are valid parameters for SSH tunnels
-            PostgresConnectionOptionName::SshTunnel => Some(self.parse_with_option_value_object()?),
-            _ => self.parse_opt_with_option_value(false)?,
-        };
-        Ok(PostgresConnectionOption { name, value })
+        Ok(PostgresConnectionOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     fn parse_aws_connection_option(&mut self) -> Result<AwsConnectionOption<Raw>, ParserError> {
@@ -2182,11 +2171,9 @@ impl<'a> Parser<'a> {
                 TOKEN => AwsConnectionOptionName::Token,
                 _ => unreachable!(),
             };
-
-        let _ = self.consume_token(&Token::Eq);
         Ok(AwsConnectionOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -2197,11 +2184,9 @@ impl<'a> Parser<'a> {
             USER => SshConnectionOptionName::User,
             _ => unreachable!(),
         };
-
-        let _ = self.consume_token(&Token::Eq);
         Ok(SshConnectionOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -2319,10 +2304,9 @@ impl<'a> Parser<'a> {
     /// Parses a single valid option in the WITH block of a create source
     fn parse_source_option(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
         let name = self.parse_source_option_name()?;
-        let _ = self.consume_token(&Token::Eq);
         Ok(CreateSourceOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -2370,11 +2354,9 @@ impl<'a> Parser<'a> {
             SNAPSHOT => CreateSinkOptionName::Snapshot,
             _ => unreachable!(),
         };
-
-        let _ = self.consume_token(&Token::Eq);
         Ok(CreateSinkOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -2502,11 +2484,9 @@ impl<'a> Parser<'a> {
             PUBLICATION => PgConfigOptionName::Publication,
             _ => unreachable!(),
         };
-
-        let _ = self.consume_token(&Token::Eq);
         Ok(PgConfigOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -2522,7 +2502,7 @@ impl<'a> Parser<'a> {
         let _ = self.consume_token(&Token::Eq);
         Ok(LoadGeneratorOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -2729,9 +2709,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_index_option(&mut self) -> Result<IndexOption<Raw>, ParserError> {
-        let name = self.parse_index_option_name()?;
-        let _ = self.consume_token(&Token::Eq);
-        let value = self.parse_opt_with_option_value(false)?;
+        self.expect_keywords(&[LOGICAL, COMPACTION, WINDOW])?;
+        let name = IndexOptionName::LogicalCompactionWindow;
+        let value = self.parse_optional_option_value()?;
         Ok(IndexOption { name, value })
     }
 
@@ -2802,18 +2782,23 @@ impl<'a> Parser<'a> {
         self.expect_keyword(AS)?;
 
         match self.parse_one_of_keywords(&[LIST, MAP]) {
-            Some(as_type) => {
+            Some(LIST) => {
                 self.expect_token(&Token::LParen)?;
-                let with_options = self.parse_comma_separated(Parser::parse_data_type_option)?;
+                let options = self.parse_comma_separated(Parser::parse_create_type_list_option)?;
                 self.expect_token(&Token::RParen)?;
-
-                let as_type = match as_type {
-                    LIST => CreateTypeAs::List { with_options },
-                    MAP => CreateTypeAs::Map { with_options },
-                    _ => unreachable!(),
-                };
-
-                Ok(Statement::CreateType(CreateTypeStatement { name, as_type }))
+                Ok(Statement::CreateType(CreateTypeStatement {
+                    name,
+                    as_type: CreateTypeAs::List { options },
+                }))
+            }
+            Some(MAP) => {
+                self.expect_token(&Token::LParen)?;
+                let options = self.parse_comma_separated(Parser::parse_create_type_map_option)?;
+                self.expect_token(&Token::RParen)?;
+                Ok(Statement::CreateType(CreateTypeStatement {
+                    name,
+                    as_type: CreateTypeAs::Map { options },
+                }))
             }
             None => {
                 let column_defs = self.parse_composite_type_definition()?;
@@ -2823,15 +2808,34 @@ impl<'a> Parser<'a> {
                     as_type: CreateTypeAs::Record { column_defs },
                 }))
             }
+            _ => unreachable!(),
         }
     }
 
-    fn parse_data_type_option(&mut self) -> Result<WithOption<Raw>, ParserError> {
-        let key = self.parse_identifier()?;
-        self.expect_token(&Token::Eq)?;
-        Ok(WithOption {
-            key,
-            value: Some(WithOptionValue::DataType(self.parse_data_type()?)),
+    fn parse_create_type_list_option(&mut self) -> Result<CreateTypeListOption<Raw>, ParserError> {
+        self.expect_keywords(&[ELEMENT, TYPE])?;
+        let name = CreateTypeListOptionName::ElementType;
+        Ok(CreateTypeListOption {
+            name,
+            value: Some(self.parse_data_type_option_value()?),
+        })
+    }
+
+    fn parse_create_type_map_option(&mut self) -> Result<CreateTypeMapOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[KEY, VALUE])? {
+            KEY => {
+                self.expect_keyword(TYPE)?;
+                CreateTypeMapOptionName::KeyType
+            }
+            VALUE => {
+                self.expect_keyword(TYPE)?;
+                CreateTypeMapOptionName::ValueType
+            }
+            _ => unreachable!(),
+        };
+        Ok(CreateTypeMapOption {
+            name,
+            value: Some(self.parse_data_type_option_value()?),
         })
     }
 
@@ -2888,7 +2892,7 @@ impl<'a> Parser<'a> {
             WORKERS => ReplicaOptionName::Workers,
             _ => unreachable!(),
         };
-        let value = self.parse_opt_with_option_value(false)?;
+        let value = self.parse_optional_option_value()?;
         Ok(ReplicaOption { name, value })
     }
 
@@ -3083,13 +3087,11 @@ impl<'a> Parser<'a> {
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns(Mandatory)?;
-        let with_options = self.parse_opt_with_options()?;
 
         Ok(Statement::CreateTable(CreateTableStatement {
             name: table_name,
             columns,
             constraints,
-            with_options,
             if_not_exists,
             temporary,
         }))
@@ -3256,85 +3258,27 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_kw_options<T, F>(&mut self, f: F) -> Result<Vec<T>, ParserError>
-    where
-        F: FnMut(&mut Self) -> Result<T, ParserError>,
-    {
-        Ok(if self.parse_keyword(WITH) {
-            let expect_rparen = self.consume_token(&Token::LParen);
-            let o = self.parse_comma_separated(f)?;
-            if expect_rparen {
-                self.expect_token(&Token::RParen)?;
-            }
-            o
-        } else {
-            vec![]
-        })
-    }
-
-    fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
-        if self.parse_keyword(WITH) {
-            self.parse_with_options(true)
-        } else {
-            Ok(vec![])
+    fn parse_optional_option_value(&mut self) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
+        // The next token might be a value and might not. The only valid things
+        // that indicate no value would be `)` for end-of-options , `,` for
+        // another-option, or ';'/nothing for end-of-statement. Either of those
+        // means there's no value, anything else means we expect a valid value.
+        match self.peek_token() {
+            Some(Token::RParen) | Some(Token::Comma) | Some(Token::Semicolon) | None => Ok(None),
+            _ => Ok(Some(self.parse_option_value()?)),
         }
     }
 
-    fn parse_with_options(
-        &mut self,
-        require_equals: bool,
-    ) -> Result<Vec<WithOption<Raw>>, ParserError> {
-        self.expect_token(&Token::LParen)?;
-        let options =
-            self.parse_comma_separated(|parser| parser.parse_with_option(require_equals))?;
-        self.expect_token(&Token::RParen)?;
-        Ok(options)
-    }
-
-    /// If require_equals is true, parse options of the form `KEY = VALUE` or just
-    /// `KEY`. If require_equals is false, additionally support `KEY VALUE` (but still the others).
-    fn parse_with_option(&mut self, require_equals: bool) -> Result<WithOption<Raw>, ParserError> {
-        let key = self.parse_identifier()?;
-        let value = self.parse_opt_with_option_value(require_equals)?;
-        Ok(WithOption { key, value })
-    }
-
-    fn parse_opt_with_option_value(
-        &mut self,
-        require_equals: bool,
-    ) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
-        let has_eq = self.consume_token(&Token::Eq);
-        // No = was encountered and require_equals is false, so the next token
-        // might be a value and might not. The only valid things that indicate
-        // no value would be `)` for end-of-options , `,` for another-option, or
-        // ';'/nothing for end-of-statement. Either of those means there's no
-        // value, anything else means we expect a valid value.
-        let has_value = !matches!(
-            self.peek_token(),
-            Some(Token::RParen) | Some(Token::Comma) | Some(Token::Semicolon) | None
-        );
-        if has_value && !has_eq && require_equals {
-            return self.expected(self.peek_pos(), Token::Eq, self.peek_token());
-        }
-        Ok(if has_value {
-            Some(self.parse_with_option_value()?)
-        } else {
-            None
-        })
-    }
-
-    fn parse_with_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+    fn parse_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
         if self.parse_keyword(SECRET) {
-            // HACK(benesch): temporarily allow secret references of the form
-            // `KEY = SECRET db.schema.item`. `KEY = SECRET` is still allowed
-            // for backwards compatibility and parses as the ident `secret`.
-            // Once we have connections with explicit fields for secret
-            // references, we can remove this hack.
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
                 Ok(WithOptionValue::Secret(secret))
             } else {
                 Ok(WithOptionValue::Ident(Ident::new("secret")))
             }
+        } else if let Some(object) = self.maybe_parse(Parser::parse_raw_name) {
+            Ok(WithOptionValue::Object(object))
         } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
         } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
@@ -3344,12 +3288,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_with_option_value_object(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
-        if let Some(obj) = self.maybe_parse(Parser::parse_raw_name) {
-            Ok(WithOptionValue::Object(obj))
-        } else {
-            self.expected(self.peek_pos(), "object", self.peek_token())
-        }
+    fn parse_data_type_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        Ok(WithOptionValue::DataType(self.parse_data_type()?))
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3625,8 +3566,7 @@ impl<'a> Parser<'a> {
                 HEADER => CopyOptionName::Header,
                 _ => unreachable!(),
             };
-        let _ = self.consume_token(&Token::Eq);
-        let value = self.parse_opt_with_option_value(false)?;
+        let value = self.parse_optional_option_value()?;
         Ok(CopyOption { name, value })
     }
 
@@ -4448,8 +4388,11 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let options = if self.parse_keyword(OPTION) {
-            self.parse_with_options(true)?
+        let options = if self.parse_keyword(OPTIONS) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Self::parse_select_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
         } else {
             vec![]
         };
@@ -4462,6 +4405,15 @@ impl<'a> Parser<'a> {
             group_by,
             having,
             options,
+        })
+    }
+
+    fn parse_select_option(&mut self) -> Result<SelectOption<Raw>, ParserError> {
+        self.expect_keywords(&[EXPECTED, GROUP, SIZE])?;
+        let name = SelectOptionName::ExpectedGroupSize;
+        Ok(SelectOption {
+            name,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -5178,7 +5130,14 @@ impl<'a> Parser<'a> {
         } else {
             SubscribeRelation::Name(self.parse_raw_name()?)
         };
-        let options = self.parse_kw_options(Parser::parse_subscribe_option)?;
+        let options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Self::parse_subscribe_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::Subscribe(SubscribeStatement {
             relation,
@@ -5193,12 +5152,9 @@ impl<'a> Parser<'a> {
             SNAPSHOT => SubscribeOptionName::Snapshot,
             _ => unreachable!(),
         };
-
-        let _ = self.consume_token(&Token::Eq);
-
         Ok(SubscribeOption {
             name,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -5471,7 +5427,14 @@ impl<'a> Parser<'a> {
         };
         let _ = self.parse_keyword(FROM);
         let name = self.parse_identifier()?;
-        let options = self.parse_kw_options(Parser::parse_fetch_option)?;
+        let options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Self::parse_fetch_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
         Ok(Statement::Fetch(FetchStatement {
             name,
             count,
@@ -5481,10 +5444,9 @@ impl<'a> Parser<'a> {
 
     fn parse_fetch_option(&mut self) -> Result<FetchOption<Raw>, ParserError> {
         self.expect_keyword(TIMEOUT)?;
-        let _ = self.consume_token(&Token::Eq);
         Ok(FetchOption {
             name: FetchOptionName::Timeout,
-            value: self.parse_opt_with_option_value(false)?,
+            value: self.parse_optional_option_value()?,
         })
     }
 
