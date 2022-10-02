@@ -4,24 +4,23 @@
 
 [<img src="https://user-images.githubusercontent.com/23521087/168297221-5d346edc-3a55-4055-b355-281b4bd76963.png" width=55%>](https://materialize.com)
 
-Materialize is a streaming database for real-time applications.
+Materialize is a streaming database powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow), purpose-built for low-latency applications. It lets you ask complex questions about your data using SQL, and maintains the results of these SQL queries incrementally up-to-date as the underlying data changes.
 
-## Get started
+## Sign up for Early Access
 
-Check out [our getting started guide](https://materialize.com/docs/get-started/).
+We are rolling out Early Access to the new, cloud-native version of Materialize. [Sign up](https://materialize.com/register/) to get on the list! 🚀
 
 ## About
 
-Materialize lets you ask questions of your live data, which it answers and then maintains for you as your data continue to change. The moment you need a refreshed answer, you can get it in milliseconds. Materialize is designed to help you interactively explore your streaming data, perform data warehousing analytics against live relational data, or just increase the freshness *and* reduce the load of your dashboard and monitoring tasks.
+Materialize is designed to help you interactively explore your streaming data, perform analytics against live relational data, or just increase the freshness *and* reduce the load of your dashboard and monitoring tasks. The moment you need a refreshed answer, you can get it in milliseconds.
 
-Materialize focuses on providing correct and consistent answers with minimal latency. It does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL92 queries as *dataflows*, which can react efficiently to changes in your data as they happen. Materialize is powered by [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow), which connects the times at which your inputs change with the times of answers reported back to you.
+It focuses on providing correct and [consistent](https://materialize.com/docs/overview/isolation-level/) answers with minimal latency, and does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL92 queries as *dataflows*, which can react efficiently to changes in your data as they happen.
 
-We support a large fraction of  PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
+We support a large fraction of PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
 
 ## Get data in
 
-Materialize can read data from Kafka topics and direct Postgres connections.
-It also supports normal database tables to which you can insert, update, and delete rows.
+Materialize can read data from [Kafka](https://materialize.com/docs/sql/create-source/kafka/) and [Redpanda](https://materialize.com/docs/integrations/redpanda/), as well as directly from a [PostgreSQL](https://materialize.com/docs/sql/create-source/postgres/) replication stream. It also supports regular database tables to which you can insert, update, and delete rows.
 
 ## Transform, manipulate, and read your data
 
@@ -108,10 +107,6 @@ Check out [our documentation](https://materialize.com/docs/).
 Materialize is source-available and [licensed](LICENSE) under the BSL 1.1, converting to the open-source Apache 2.0 license after 4 years. As stated in the BSL, Materialize is free forever on a single node.
 
 Materialize is also available as [a paid cloud service](https://materialize.com/pricing/) with additional features such as high availability via multi-active replication.
-
-## How does it work?
-
-Materialize is built on top of [differential dataflow](https://github.com/TimelyDataflow/differential-dataflow) and [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow), and builds on a decade of cutting-edge stream processing research.
 
 ## For developers
 
