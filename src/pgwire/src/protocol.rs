@@ -24,6 +24,7 @@ use tokio::select;
 use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn, Instrument};
 
+use mz_adapter::catalog::SYSTEM_USER;
 use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
@@ -121,12 +122,22 @@ where
 
     let user = params.remove("user").unwrap_or_else(String::new);
 
-    // Validate that builtin roles only log in via an internal port.
-    if !internal && mz_adapter::catalog::is_reserved_name(user.as_str()) {
-        let msg = format!("unauthorized login to user '{user}'");
-        return conn
-            .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
-            .await;
+    if internal {
+        // The internal server can only be used to connect to the system user.
+        if user != SYSTEM_USER.name {
+            let msg = format!("unauthorized login to user '{user}'");
+            return conn
+                .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
+                .await;
+        }
+    } else {
+        // The external server cannot be used to connect to any system users.
+        if mz_adapter::catalog::is_reserved_name(user.as_str()) {
+            let msg = format!("unauthorized login to user '{user}'");
+            return conn
+                .send(ErrorResponse::fatal(SqlState::INSUFFICIENT_PRIVILEGE, msg))
+                .await;
+        }
     }
 
     // Validate that the connection is compatible with the TLS mode.
