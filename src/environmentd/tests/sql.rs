@@ -1429,6 +1429,11 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
         .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)
         .is_ok());
+    assert!(server
+        .pg_config_internal()
+        .user("mz_something_else")
+        .connect(postgres::NoTls)
+        .is_err());
 
     Ok(())
 }
