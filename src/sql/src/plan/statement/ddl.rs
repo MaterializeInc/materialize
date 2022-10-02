@@ -37,8 +37,9 @@ use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, LoadGenerator, SetVariableValue,
-    SshConnectionOption,
+    AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, LoadGenerator,
+    SetVariableValue, SshConnectionOption,
 };
 use mz_storage::source::generator::as_generator;
 use mz_storage::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
@@ -84,7 +85,7 @@ use crate::ast::{
     ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
     TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    Value, ViewDefinition, WithOptionValue,
+    Value, ViewDefinition,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
@@ -184,14 +185,9 @@ pub fn plan_create_table(
         name,
         columns,
         constraints,
-        with_options,
         if_not_exists,
         temporary,
     } = &stmt;
-
-    if !with_options.is_empty() {
-        bail_unsupported!("WITH options");
-    }
 
     let names: Vec<_> = columns
         .iter()
@@ -1974,12 +1970,13 @@ pub fn plan_create_type(
 ) -> Result<Plan, PlanError> {
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
     let CreateTypeStatement { name, as_type, .. } = stmt;
-    fn ensure_valid_data_type(
+
+    fn validate_data_type(
         scx: &StatementContext,
         data_type: &ResolvedDataType,
-        as_type: &CreateTypeAs<Aug>,
+        as_type: &str,
         key: &str,
-    ) -> Result<(), PlanError> {
+    ) -> Result<GlobalId, PlanError> {
         let item = match data_type {
             ResolvedDataType::Named {
                 id,
@@ -1991,19 +1988,19 @@ pub fn plan_create_type(
                     sql_bail!(
                         "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
                                 {}, you must use the default type",
-                        as_type.to_string().quoted(),
+                        as_type,
                         key,
                         full_name
                     );
                 }
                 scx.catalog.get_item(id)
             }
-            d => sql_bail!(
+            _ => sql_bail!(
                 "CREATE TYPE ... AS {}option {} can only use named data types, but \
                         found unnamed data type {}. Use CREATE TYPE to create a named type first",
-                as_type.to_string().quoted(),
+                as_type,
                 key,
-                d.to_ast_string(),
+                data_type.to_ast_string(),
             ),
         };
 
@@ -2017,56 +2014,47 @@ pub fn plan_create_type(
             Some(CatalogTypeDetails {
                 typ: CatalogType::Char,
                 ..
-            }) if matches!(as_type, CreateTypeAs::List { .. }) => {
-                bail_unsupported!("char list")
+            }) => {
+                bail_unsupported!("embedding char type in a list or map")
             }
-            _ => {}
+            _ => Ok(item.id()),
         }
-
-        Ok(())
     }
 
-    let mut depends_on = vec![];
-    let mut record_fields = vec![];
-    match &as_type {
-        CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
-            let mut with_options = normalize::option_objects(with_options);
-            let option_keys = match as_type {
-                CreateTypeAs::List { .. } => vec!["element_type"],
-                CreateTypeAs::Map { .. } => vec!["key_type", "value_type"],
-                _ => vec![],
-            };
-
-            for key in option_keys {
-                match with_options.remove(&key.to_string()) {
-                    Some(WithOptionValue::DataType(data_type)) => {
-                        ensure_valid_data_type(scx, &data_type, &as_type, key)?;
-                        depends_on.extend(data_type.get_ids());
-                    }
-                    Some(_) => sql_bail!("{} must be a data type", key),
-                    None => sql_bail!("{} parameter required", key),
-                };
+    let inner = match as_type {
+        CreateTypeAs::List { options } => {
+            let CreateTypeListOptionExtracted {
+                element_type,
+                seen: _,
+            } = CreateTypeListOptionExtracted::try_from(options)?;
+            let element_type =
+                element_type.ok_or_else(|| sql_err!("ELEMENT TYPE option is required"))?;
+            CatalogType::List {
+                element_reference: validate_data_type(scx, &element_type, "LIST ", "ELEMENT TYPE")?,
             }
-
-            if !with_options.is_empty() {
-                sql_bail!(
-                    "unexpected parameters for CREATE TYPE: {}",
-                    with_options.keys().join(",")
-                )
+        }
+        CreateTypeAs::Map { options } => {
+            let CreateTypeMapOptionExtracted {
+                key_type,
+                value_type,
+                seen: _,
+            } = CreateTypeMapOptionExtracted::try_from(options)?;
+            let key_type = key_type.ok_or_else(|| sql_err!("KEY TYPE option is required"))?;
+            let value_type = value_type.ok_or_else(|| sql_err!("VALUE TYPE option is required"))?;
+            CatalogType::Map {
+                key_reference: validate_data_type(scx, &key_type, "MAP ", "KEY TYPE")?,
+                value_reference: validate_data_type(scx, &value_type, "MAP ", "VALUE TYPE")?,
             }
         }
         CreateTypeAs::Record { ref column_defs } => {
+            let mut fields = vec![];
             for column_def in column_defs {
                 let data_type = &column_def.data_type;
                 let key = ident(column_def.name.clone());
-                ensure_valid_data_type(scx, data_type, &as_type, &key)?;
-                depends_on.extend(data_type.get_ids());
-                if let ResolvedDataType::Named { id, .. } = data_type {
-                    record_fields.push((ColumnName::from(key.clone()), *id));
-                } else {
-                    sql_bail!("field {} must be a named type", key)
-                }
+                let id = validate_data_type(scx, data_type, "", &key)?;
+                fields.push((ColumnName::from(key.clone()), id));
             }
+            CatalogType::Record { fields }
         }
     };
 
@@ -2075,43 +2063,19 @@ pub fn plan_create_type(
         sql_bail!("catalog item '{}' already exists", name);
     }
 
-    let inner = match as_type {
-        CreateTypeAs::List { .. } => CatalogType::List {
-            // works because you can't create a nested List without intermediate custom types
-            element_reference: *depends_on.get(0).expect("custom type to have element id"),
-        },
-        CreateTypeAs::Map { .. } => {
-            // works because you can't create a nested Map without intermediate custom types
-            let key_id = *depends_on.get(0).expect("key");
-            let value_id = *depends_on.get(1).expect("value");
-            let entry = scx.catalog.get_item(&key_id);
-            match entry.type_details() {
-                Some(CatalogTypeDetails {
-                    typ: CatalogType::String,
-                    ..
-                }) => {}
-                Some(_) => sql_bail!(
-                    "key_type must be text, got {}",
-                    scx.catalog.resolve_full_name(entry.name())
-                ),
-                None => unreachable!("already guaranteed id correlates to a type"),
-            }
-
-            CatalogType::Map {
-                key_reference: key_id,
-                value_reference: value_id,
-            }
-        }
-        CreateTypeAs::Record { .. } => CatalogType::Record {
-            fields: record_fields,
-        },
-    };
-
     Ok(Plan::CreateType(CreateTypePlan {
         name,
         typ: Type { create_sql, inner },
     }))
 }
+
+generate_extracted_config!(CreateTypeListOption, (ElementType, ResolvedDataType));
+
+generate_extracted_config!(
+    CreateTypeMapOption,
+    (KeyType, ResolvedDataType),
+    (ValueType, ResolvedDataType)
+);
 
 pub fn describe_create_role(
     _: &StatementContext,

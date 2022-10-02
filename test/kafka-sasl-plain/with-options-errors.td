@@ -40,4 +40,3 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
     SASL USERNAME = 'materialize',
     SSL CERTIFICATE AUTHORITY = '${arg.ca}';
 contains:invalid CONNECTION: under-specified security configuration
-

@@ -38,10 +38,10 @@ create type quad as (c1 complex, c2 complex);
 
 # and with various container types as fields
 statement ok
-CREATE TYPE int4_list AS LIST (element_type = int4);
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 
 statement ok
-CREATE TYPE int4_map AS MAP (key_type = text, value_type = int4);
+CREATE TYPE int4_map AS MAP (KEY TYPE = text, VALUE TYPE = int4);
 
 statement ok
 CREATE TYPE melange AS (a int[][], b text[], c int4_list, d int4_map);
