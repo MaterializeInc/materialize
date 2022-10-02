@@ -14,7 +14,7 @@ We are rolling out Early Access to the new, cloud-native version of Materialize.
 
 Materialize is designed to help you interactively explore your streaming data, perform analytics against live relational data, or just increase the freshness *and* reduce the load of your dashboard and monitoring tasks. The moment you need a refreshed answer, you can get it in milliseconds.
 
-It focuses on providing correct and [consistent](https://materialize.com/docs/overview/isolation-level/) answers with minimal latency, and does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL92 queries as *dataflows*, which can react efficiently to changes in your data as they happen.
+It focuses on providing correct and [consistent](https://materialize.com/docs/overview/isolation-level/) answers with minimal latency, and does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL queries as *dataflows*, which can react efficiently to changes in your data as they happen.
 
 We support a large fraction of PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
 
