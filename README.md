@@ -110,7 +110,7 @@ Materialize is also available as [a paid cloud service](https://materialize.com/
 
 ## For developers
 
-Materialize is written entirely in Rust.
+Materialize is primarily written in Rust.
 
 Developers can find docs at [doc/developer](doc/developer), and Rust API documentation is hosted at <https://dev.materialize.com/api/rust/>. The Materialize development roadmap is divided up into roughly month-long milestones, and [managed in GitHub](https://github.com/MaterializeInc/materialize/milestones?direction=asc&sort=due_date&state=open).
 
