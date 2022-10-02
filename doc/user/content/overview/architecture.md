@@ -1,6 +1,7 @@
 ---
 title: "Architecture overview"
 description: "Understand the different components that make Materialize a horizontally scalable, highly available distributed system."
+draft: true
 menu:
   main:
     parent: overview
