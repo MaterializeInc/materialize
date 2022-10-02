@@ -7,12 +7,13 @@ disable_h1: true
 weight: 1
 ---
 
-Materialize is a streaming database for real-time applications. It lets you ask complex questions about your data using SQL, and incrementally maintains the results of these SQL queries up-to-date as the underlying data changes.
+Materialize is a **streaming database** powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow), purpose-built for low-latency applications. It lets you ask complex questions about your data using **SQL**, and maintains the results of these SQL queries incrementally up-to-date as the underlying data changes.
 
-{{< callout primary_url="https://materialize.com/docs/unstable/get-started/" primary_text="Get Started">}}
-  # Get started with Materialize
+{{< callout primary_url="https://materialize.com/materialize-cloud-access/" primary_text="Get Early Access">}}
+# Cloud-native Materialize is here! 🚀
 
-  Follow this walkthrough to start creating live views on streaming data with Materialize.
+  We are rolling out access to the new, cloud-native version of Materialize: **horizontally scalable**, **highly available** and **persistent**.
+
 {{</ callout >}}
 
 {{< multilinkbox >}}
@@ -36,6 +37,5 @@ Materialize is a streaming database for real-time applications. It lets you ask 
 
 ## Learn more
 
-- [**Sign up for Materialize**](https://materialize.com/register/) to see it in action.
 - Check out the [**Materialize blog**](https://www.materialize.com/blog/) for the latest updates and Materialize deep-dives.
 - Check out [**What is Materialize?**](./overview/what-is-materialize) to learn more about what Materialize does and how it works.

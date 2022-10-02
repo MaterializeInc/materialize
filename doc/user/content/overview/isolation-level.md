@@ -1,12 +1,13 @@
 ---
-title: "Isolation Level"
-description: "The isolation level defines how Materialize isolates the execution of transactions."
+title: "Consistency guarantees"
+description: "Materialize supports different isolation levels that determine how it isolates the execution of transactions."
 aliases:
  - /sql/consistency
+ - /sql/isolation-level
 menu:
   main:
-    parent: 'reference'
-    weight: 160
+    parent: 'advanced'
+    weight: 6
 ---
 
 The SQL standard defines four levels of transaction isolation. In order of least strict to most strict they are:
@@ -82,7 +83,7 @@ large propagation delays. For example, if SQL-transaction T1 happens before SQL-
 table t, and T2 queries materialized view mv where mv is an expensive materialized view including t, then T2 may not see
 all the rows that were seen by T1 if they are executed close enough together in real time.
 
-## Strict Serializable
+## Strict serializable
 
 The Strict Serializable isolation level provides all the same guarantees as Serializable, with the addition that
 transactions are linearizable. That means that if SQL-transaction T1 happens before SQL-transaction T2 in real time,
@@ -100,7 +101,7 @@ and [strengthening correctness](https://github.com/MaterializeInc/materialize/is
 piece of data has been fully ingested from an upstream source AND is included in the results of some read transaction
 THEN all subsequent read transactions are guaranteed to see that piece of data.
 
-## Choosing the Right Isolation Level
+## Choosing the right isolation level
 
 It may not be immediately clear which isolation level is right for you. Materialize recommends to start with the default
 Strict Serializable isolation level. If you are noticing performance issues on reads, and your application does not need
