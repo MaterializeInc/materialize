@@ -297,13 +297,13 @@ pub struct StorageUsageV1 {
 impl StorageUsageV1 {
     pub fn new(
         id: u64,
-        object_id: Option<String>,
+        shard_id: Option<String>,
         size_bytes: u64,
         collection_timestamp: EpochMillis,
     ) -> StorageUsageV1 {
         StorageUsageV1 {
             id,
-            shard_id: object_id,
+            shard_id,
             size_bytes,
             collection_timestamp,
         }

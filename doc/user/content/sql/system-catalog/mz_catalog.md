@@ -257,7 +257,7 @@ snapshot collected by the system.
 
 | Field                  | Type                         | Meaning                                               |
 | ---------------------- | ---------------------------- | ----------------------------------------------------- |
-| `object_id`            | [`text`]                     | Materialize's unique ID for the storage object.       |
+| `shard_id`            | [`text`]                     | Materialize's unique ID for the storage object.       |
 | `size_bytes`           | [`bigint`]                   | The size in bytes of the storage object.              |
 | `collection_timestamp` | [`timestamp with time zone`] | The time at which the storage snapshot was collected. |
 {{< /comment >}}
