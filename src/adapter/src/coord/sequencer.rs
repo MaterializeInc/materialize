@@ -81,7 +81,7 @@ use crate::session::{
 };
 use crate::subscribe::PendingSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
-use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
+use crate::{guard_write_critical_section, session, PeekResponseUnary};
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -1156,8 +1156,12 @@ impl<S: Append + 'static> Coordinator<S> {
                         tx,
                         id,
                         oid,
-                        result: sink_connection::build(connection_builder, connection_context)
-                            .await,
+                        result: mz_storage::sink::build_sink_connection(
+                            connection_builder,
+                            connection_context,
+                        )
+                        .await
+                        .map_err(Into::into),
                     }));
                 if let Err(e) = result {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);

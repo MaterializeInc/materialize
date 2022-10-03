@@ -14,19 +14,20 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, Top
 
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
-use mz_storage::types::connections::{ConnectionContext, PopulateClientConfig};
-use mz_storage::types::sinks::{
+
+use crate::controller::StorageError;
+use crate::types::connections::{ConnectionContext, PopulateClientConfig};
+use crate::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
-    KafkaSinkConnectionRetention, KafkaSinkProgressConnection, PublishedSchemaInfo,
-    StorageSinkConnection, StorageSinkConnectionBuilder,
+    KafkaSinkConnectionRetention, KafkaSinkFormat, KafkaSinkProgressConnection,
+    PublishedSchemaInfo, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
 
-use crate::error::AdapterError;
-
-pub async fn build(
+/// Build a sink connection.
+pub async fn build_sink_connection(
     builder: StorageSinkConnectionBuilder,
     connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection, AdapterError> {
+) -> Result<StorageSinkConnection, StorageError> {
     match builder {
         StorageSinkConnectionBuilder::Kafka(k) => build_kafka(k, connection_context).await,
     }
@@ -38,7 +39,7 @@ async fn ensure_kafka_topic(
     mut partition_count: i32,
     mut replication_factor: i32,
     retention: KafkaSinkConnectionRetention,
-) -> Result<(), AdapterError> {
+) -> Result<(), StorageError> {
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
     // Newer versions of Kafka can instead send create topic requests with -1 and have this happen
@@ -55,7 +56,7 @@ async fn ensure_kafka_topic(
             })?;
 
         if metadata.brokers().len() == 0 {
-            coord_bail!("zero brokers discovered in metadata request");
+            Err(anyhow!("zero brokers discovered in metadata request"))?;
         }
 
         let broker = metadata.brokers()[0].id();
@@ -74,12 +75,12 @@ async fn ensure_kafka_topic(
         })?;
 
         if configs.len() != 1 {
-            coord_bail!(
+            Err(anyhow!(
                 "error creating topic {} for sink: broker {} returned {} config results, but one was expected",
                 topic,
                 broker,
                 configs.len()
-            );
+            ))?;
         }
 
         let config = configs.into_element().map_err(|e| {
@@ -113,11 +114,11 @@ async fn ensure_kafka_topic(
         }
 
         if partition_count == -1 {
-            coord_bail!("default was requested for partition_count, but num.partitions was not found in broker config");
+            Err(anyhow!("default was requested for partition_count, but num.partitions was not found in broker config"))?;
         }
 
         if replication_factor == -1 {
-            coord_bail!("default was requested for replication_factor, but default.replication.factor was not found in broker config");
+            Err(anyhow!("default was requested for replication_factor, but default.replication.factor was not found in broker config"))?;
         }
     }
 
@@ -158,7 +159,7 @@ async fn publish_kafka_schemas(
     key_schema_type: Option<mz_ccsr::SchemaType>,
     value_schema: &str,
     value_schema_type: mz_ccsr::SchemaType,
-) -> Result<(Option<i32>, i32), AdapterError> {
+) -> Result<(Option<i32>, i32), StorageError> {
     let value_schema_id = ccsr
         .publish_schema(
             &format!("{}-value", topic),
@@ -170,9 +171,8 @@ async fn publish_kafka_schemas(
         .context("unable to publish value schema to registry in kafka sink")?;
 
     let key_schema_id = if let Some(key_schema) = key_schema {
-        let key_schema_type = key_schema_type.ok_or_else(|| {
-            AdapterError::Unstructured(anyhow!("expected schema type for key schema"))
-        })?;
+        let key_schema_type =
+            key_schema_type.ok_or_else(|| anyhow!("expected schema type for key schema"))?;
         Some(
             ccsr.publish_schema(&format!("{}-key", topic), key_schema, key_schema_type, &[])
                 .await
@@ -188,7 +188,7 @@ async fn publish_kafka_schemas(
 async fn build_kafka(
     builder: KafkaSinkConnectionBuilder,
     connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection, AdapterError> {
+) -> Result<StorageSinkConnection, StorageError> {
     // Create Kafka topic
     let mut config = create_new_client_config(connection_context.librdkafka_log_level);
     builder
@@ -210,7 +210,7 @@ async fn build_kafka(
     .context("error registering kafka topic for sink")?;
 
     let published_schema_info = match builder.format {
-        mz_storage::types::sinks::KafkaSinkFormat::Avro {
+        KafkaSinkFormat::Avro {
             key_schema,
             value_schema,
             csr_connection,
@@ -234,7 +234,7 @@ async fn build_kafka(
                 value_schema_id,
             })
         }
-        mz_storage::types::sinks::KafkaSinkFormat::Json => None,
+        KafkaSinkFormat::Json => None,
     };
 
     let progress = match builder.consistency_config {
