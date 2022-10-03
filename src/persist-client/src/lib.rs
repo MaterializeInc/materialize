@@ -215,8 +215,8 @@ pub struct PersistConfig {
     /// if the number of updates is at least this many. Compaction is performed
     /// if any of the heuristic criteria are met (they are OR'd).
     pub compaction_heuristic_min_updates: usize,
-    /// The maximum number of parts (s3 blobs) that [crate::internal::compact::Compactor]
-    /// will read in parallel before back-pressuring calls on previous ones finishing.
+    /// The maximum number of parts (s3 blobs) that compaction will read in
+    /// parallel before back-pressuring calls on previous ones finishing.
     pub compaction_reads_max_outstanding_parts: usize,
     /// The maximum size of the connection pool to Postgres/CRDB when performing
     /// consensus reads and writes.
