@@ -378,7 +378,7 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 
 > DROP TABLE t1
 
-> CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_ list)
+> CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list)
 
 ! DROP TYPE int4_list
 contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.int4_list_list'

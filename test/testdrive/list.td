@@ -61,4 +61,4 @@ contains:cannot drop materialize.public.bool: still depended upon by catalog ite
 contains:char list not yet supported
 
 ! CREATE TYPE test_schema.bool AS LIST (ELEMENT TYPE = char)
-contains:char list not yet supported
+contains:embedding char type in a list or map not yet supported

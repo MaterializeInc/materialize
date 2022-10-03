@@ -1130,37 +1130,37 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT * FROM foo OPTIONS (bar = 7)
 ----
+error: Expected EXPECTED, found identifier "bar"
 SELECT * FROM foo OPTIONS (bar = 7)
-=>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [WithOption { key: Ident("bar"), value: Some(Value(Number("7"))) }] }), order_by: [], limit: None, offset: None }, as_of: None })
+                           ^
 
 parse-statement
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 7)
 ----
+error: Expected EXPECTED, found identifier "bar"
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 7)
-=>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("a")]), alias: None }, Expr { expr: Identifier([Ident("b")]), alias: None }, Expr { expr: Function(Function { name: UnresolvedObjectName([Ident("min")]), args: Args { args: [Identifier([Ident("c")])], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [Identifier([Ident("a")]), Identifier([Ident("b")])], having: None, options: [WithOption { key: Ident("bar"), value: Some(Value(Number("7"))) }] }), order_by: [], limit: None, offset: None }, as_of: None })
+                                                    ^
 
 parse-statement
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 'baz')
 ----
+error: Expected EXPECTED, found identifier "bar"
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 'baz')
-=>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("a")]), alias: None }, Expr { expr: Identifier([Ident("b")]), alias: None }, Expr { expr: Function(Function { name: UnresolvedObjectName([Ident("min")]), args: Args { args: [Identifier([Ident("c")])], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [Identifier([Ident("a")]), Identifier([Ident("b")])], having: None, options: [WithOption { key: Ident("bar"), value: Some(Value(String("baz"))) }] }), order_by: [], limit: None, offset: None }, as_of: None })
+                                                    ^
 
 parse-statement
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar)
 ----
+error: Expected EXPECTED, found identifier "bar"
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar)
-=>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("a")]), alias: None }, Expr { expr: Identifier([Ident("b")]), alias: None }, Expr { expr: Function(Function { name: UnresolvedObjectName([Ident("min")]), args: Args { args: [Identifier([Ident("c")])], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [Identifier([Ident("a")]), Identifier([Ident("b")])], having: None, options: [WithOption { key: Ident("bar"), value: None }] }), order_by: [], limit: None, offset: None }, as_of: None })
+                                                    ^
 
 parse-statement
 SELECT a, b, min(c) FROM ( SELECT a, b, min(d) as c GROUP BY a, b OPTIONS (bar = 7)) as agg GROUP BY a, b
 ----
-SELECT a, b, min(c) FROM (SELECT a, b, min(d) AS c GROUP BY a, b OPTIONS (bar = 7)) AS agg GROUP BY a, b
-=>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("a")]), alias: None }, Expr { expr: Identifier([Ident("b")]), alias: None }, Expr { expr: Function(Function { name: UnresolvedObjectName([Ident("min")]), args: Args { args: [Identifier([Ident("c")])], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("a")]), alias: None }, Expr { expr: Identifier([Ident("b")]), alias: None }, Expr { expr: Function(Function { name: UnresolvedObjectName([Ident("min")]), args: Args { args: [Identifier([Ident("d")])], order_by: [] }, filter: None, over: None, distinct: false }), alias: Some(Ident("c")) }], from: [], selection: None, group_by: [Identifier([Ident("a")]), Identifier([Ident("b")])], having: None, options: [WithOption { key: Ident("bar"), value: Some(Value(Number("7"))) }] }), order_by: [], limit: None, offset: None }, alias: Some(TableAlias { name: Ident("agg"), columns: [], strict: false }) }, joins: [] }], selection: None, group_by: [Identifier([Ident("a")]), Identifier([Ident("b")])], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+error: Expected joined table, found comma
+SELECT a, b, min(c) FROM ( SELECT a, b, min(d) as c GROUP BY a, b OPTIONS (bar = 7)) as agg GROUP BY a, b
+                                   ^
 
 # List subqueries
 parse-statement

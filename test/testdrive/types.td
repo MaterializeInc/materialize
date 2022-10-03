@@ -286,7 +286,7 @@ true
 
 # Ensure we don't allow unknown options
 ! CREATE TYPE whatever AS LIST (ELEMENT TYPE = int4, gus=int4);
-contains:unexpected parameters for CREATE TYPE: gus
+contains:Expected ELEMENT, found identifier
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET ALL

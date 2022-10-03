@@ -33,14 +33,15 @@ here is a second test string
   FROM KINESIS CONNECTION kinesis_bad_conn
   ARN 'arn:aws:kinesis:custom-region::stream/fake-stream'
   FORMAT BYTES;
-contains:dns error: failed to lookup address information: Name or service not known
+contains:Unable to validate AWS credentials
 
 > CREATE SECRET kinesis_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
 
 > CREATE CONNECTION kinesis_conn FOR AWS
   ACCESS KEY ID = '${testdrive.aws-access-key-id}',
   SECRET ACCESS KEY = SECRET kinesis_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}';
+  TOKEN = '${testdrive.aws-token}',
+  REGION = '${testdrive.aws-region}';
 
 > CREATE SOURCE f
   FROM KINESIS CONNECTION kinesis_conn

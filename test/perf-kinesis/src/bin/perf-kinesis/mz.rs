@@ -38,18 +38,17 @@ pub async fn create_source_and_views(
     let aws_connection = format!(
         "CREATE CONNECTION kinesis_conn FOR AWS
             ACCESS KEY ID = '{}',
-            SECRET ACCESS KEY = SECRET aws_secret_access_key
+            SECRET ACCESS KEY = SECRET aws_secret_access_key {}
             {};",
         credentials.access_key_id(),
-        if let Some(token) = credentials.session_token() {
-            format!(
-                ",
-                TOKEN = '{}'",
-                token
-            )
-        } else {
-            "".to_string()
-        }
+        match credentials.session_token() {
+            Some(token) => format!(", TOKEN = '{}'", token),
+            None => "".to_string(),
+        },
+        match config.region() {
+            Some(region) => format!(", REGION = '{}'", region),
+            None => "".to_string(),
+        },
     );
     info!("creating connection=> {}", aws_connection);
     client
