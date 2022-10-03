@@ -337,7 +337,7 @@ impl<'a> Parser<'a> {
         maybe!(self.maybe_parse(|parser| {
             let data_type = parser.parse_data_type()?;
             if data_type.to_string().as_str() == "interval" {
-                parser.parse_literal_interval()
+                Ok(Expr::Value(parser.parse_interval_value()?))
             } else {
                 Ok(Expr::Cast {
                     expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
@@ -368,7 +368,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(NULLIF) => self.parse_nullif_expr(),
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
-            Token::Keyword(INTERVAL) => self.parse_literal_interval(),
+            Token::Keyword(INTERVAL) => Ok(Expr::Value(self.parse_interval_value()?)),
             Token::Keyword(NOT) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
@@ -836,14 +836,14 @@ impl<'a> Parser<'a> {
     ///
     /// Some syntactically valid intervals:
     ///
-    ///   1. `INTERVAL '1' DAY`
-    ///   2. `INTERVAL '1-1' YEAR TO MONTH`
-    ///   3. `INTERVAL '1' SECOND`
-    ///   4. `INTERVAL '1:1' MINUTE TO SECOND
-    ///   5. `INTERVAL '1:1:1.1' HOUR TO SECOND (5)`
-    ///   6. `INTERVAL '1.111' SECOND (2)`
+    ///   - `INTERVAL '1' DAY`
+    ///   - `INTERVAL '1-1' YEAR TO MONTH`
+    ///   - `INTERVAL '1' SECOND`
+    ///   - `INTERVAL '1:1' MINUTE TO SECOND
+    ///   - `INTERVAL '1:1:1.1' HOUR TO SECOND (5)`
+    ///   - `INTERVAL '1.111' SECOND (2)`
     ///
-    fn parse_literal_interval(&mut self) -> Result<Expr<Raw>, ParserError> {
+    fn parse_interval_value(&mut self) -> Result<Value, ParserError> {
         // The first token in an interval is a string literal which specifies
         // the duration of the interval.
         let value = self.parse_literal_string()?;
@@ -912,13 +912,12 @@ impl<'a> Parser<'a> {
                 }
                 Err(_) => (DateTimeField::Year, DateTimeField::Second, None),
             };
-
-        Ok(Expr::Value(Value::Interval(IntervalValue {
+        Ok(Value::Interval(IntervalValue {
             value,
             precision_high,
             precision_low,
             fsec_max_precision,
-        })))
+        }))
     }
 
     /// Parse an operator following an expression
@@ -3277,6 +3276,13 @@ impl<'a> Parser<'a> {
             } else {
                 Ok(WithOptionValue::Ident(Ident::new("secret")))
             }
+        } else if self
+            .parse_one_of_keywords(&[NULL, TRUE, FALSE, INTERVAL])
+            .is_some()
+        {
+            // Put kw token back.
+            self.prev_token();
+            Ok(WithOptionValue::Value(self.parse_value()?))
         } else if let Some(object) = self.maybe_parse(Parser::parse_raw_name) {
             Ok(WithOptionValue::Object(object))
         } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
@@ -3577,6 +3583,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(TRUE) => Ok(Value::Boolean(true)),
                 Token::Keyword(FALSE) => Ok(Value::Boolean(false)),
                 Token::Keyword(NULL) => Ok(Value::Null),
+                Token::Keyword(INTERVAL) => Ok(self.parse_interval_value()?),
                 Token::Keyword(kw) => {
                     parser_err!(
                         self,
