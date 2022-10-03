@@ -41,6 +41,8 @@ pub struct IngestAction {
     headers: Option<Vec<(String, Option<String>)>>,
     omit_key: bool,
     omit_value: bool,
+    key_schema_id_var: Option<String>,
+    schema_id_var: Option<String>,
 }
 
 #[derive(Clone)]
@@ -191,6 +193,8 @@ pub fn build_ingest_action(mut cmd: BuiltinCommand) -> Result<IngestAction, anyh
     let repeat = cmd.args.opt_parse::<isize>("repeat")?.unwrap_or(1);
     let omit_key = cmd.args.opt_bool("omit-key")?.unwrap_or(false);
     let omit_value = cmd.args.opt_bool("omit-value")?.unwrap_or(false);
+    let schema_id_var = cmd.args.opt_parse("set-schema-id-var")?;
+    let key_schema_id_var = cmd.args.opt_parse("set-key-schema-id-var")?;
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro {
             schema: cmd.args.string("schema")?,
@@ -321,6 +325,8 @@ pub fn build_ingest_action(mut cmd: BuiltinCommand) -> Result<IngestAction, anyh
         headers,
         omit_key,
         omit_value,
+        schema_id_var,
+        key_schema_id_var,
     })
 }
 
@@ -334,71 +340,32 @@ pub async fn run_ingest_action(
         topic_name, action.repeat
     );
 
-    let ccsr_client = &state.ccsr_client;
-    let temp_path = &state.temp_path;
-    let make_transcoder = |format, typ| async move {
-        let ccsr_subject = format!("{}-{}", topic_name, typ);
-        match format {
-            Format::Avro {
-                schema,
-                confluent_wire_format,
-            } => {
-                if confluent_wire_format {
-                    let schema_id = ccsr_client
-                        .publish_schema(&ccsr_subject, &schema, mz_ccsr::SchemaType::Avro, &[])
-                        .await
-                        .context("publishing to schema registry")?;
-                    let schema = avro::parse_schema(&schema)
-                        .with_context(|| format!("parsing avro schema: {}", schema))?;
-                    Ok::<_, anyhow::Error>(Transcoder::ConfluentAvro { schema, schema_id })
-                } else {
-                    let schema = avro::parse_schema(&schema)
-                        .with_context(|| format!("parsing avro schema: {}", schema))?;
-                    Ok(Transcoder::PlainAvro { schema })
-                }
-            }
-            Format::Protobuf {
-                descriptor_file,
-                message,
-                confluent_wire_format,
-                schema_id_subject,
-                schema_message_id,
-            } => {
-                let schema_id = if confluent_wire_format {
-                    ccsr_client
-                        .get_schema_by_subject(
-                            schema_id_subject.as_deref().unwrap_or(&ccsr_subject),
-                        )
-                        .await
-                        .context("fetching schema from registry")?
-                        .id
-                } else {
-                    0
-                };
-
-                let bytes = fs::read(temp_path.join(descriptor_file))
-                    .await
-                    .context("reading protobuf descriptor file")?;
-                let fd =
-                    DescriptorPool::decode(&*bytes).context("parsing protobuf descriptor file")?;
-                let message = fd
-                    .get_message_by_name(&message)
-                    .ok_or_else(|| anyhow!("unknown message name {}", message))?;
-                Ok(Transcoder::Protobuf {
-                    message,
-                    confluent_wire_format,
-                    schema_id,
-                    schema_message_id,
-                })
-            }
-            Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),
+    let set_schema_id_var = |state: &mut State, schema_id_var, transcoder| match transcoder {
+        &Transcoder::ConfluentAvro { schema_id, .. } | &Transcoder::Protobuf { schema_id, .. } => {
+            state.cmd_vars.insert(schema_id_var, schema_id.to_string());
         }
+        _ => (),
     };
 
-    let value_transcoder = make_transcoder(action.format.clone(), "value").await?;
+    let value_transcoder = make_transcoder(
+        state,
+        action.format.clone(),
+        format!("{}-value", topic_name),
+    )
+    .await?;
+    if let Some(var) = action.schema_id_var {
+        set_schema_id_var(state, var, &value_transcoder);
+    }
+
     let key_transcoder = match action.key_format.clone() {
         None => None,
-        Some(f) => Some(make_transcoder(f, "key").await?),
+        Some(f) => {
+            let transcoder = make_transcoder(state, f, format!("{}-key", topic_name)).await?;
+            if let Some(var) = action.key_schema_id_var {
+                set_schema_id_var(state, var, &transcoder);
+            }
+            Some(transcoder)
+        }
     };
 
     let mut futs = FuturesUnordered::new();
@@ -468,4 +435,65 @@ pub async fn run_ingest_action(
         }
     }
     Ok(ControlFlow::Continue)
+}
+
+async fn make_transcoder(
+    state: &mut State,
+    format: Format,
+    ccsr_subject: String,
+) -> Result<Transcoder, anyhow::Error> {
+    match format {
+        Format::Avro {
+            schema,
+            confluent_wire_format,
+        } => {
+            if confluent_wire_format {
+                let schema_id = state
+                    .ccsr_client
+                    .publish_schema(&ccsr_subject, &schema, mz_ccsr::SchemaType::Avro, &[])
+                    .await
+                    .context("publishing to schema registry")?;
+                let schema = avro::parse_schema(&schema)
+                    .with_context(|| format!("parsing avro schema: {}", schema))?;
+                Ok::<_, anyhow::Error>(Transcoder::ConfluentAvro { schema, schema_id })
+            } else {
+                let schema = avro::parse_schema(&schema)
+                    .with_context(|| format!("parsing avro schema: {}", schema))?;
+                Ok(Transcoder::PlainAvro { schema })
+            }
+        }
+        Format::Protobuf {
+            descriptor_file,
+            message,
+            confluent_wire_format,
+            schema_id_subject,
+            schema_message_id,
+        } => {
+            let schema_id = if confluent_wire_format {
+                state
+                    .ccsr_client
+                    .get_schema_by_subject(schema_id_subject.as_deref().unwrap_or(&ccsr_subject))
+                    .await
+                    .context("fetching schema from registry")?
+                    .id
+            } else {
+                0
+            };
+
+            let bytes = fs::read(state.temp_path.join(descriptor_file))
+                .await
+                .context("reading protobuf descriptor file")?;
+            let fd = DescriptorPool::decode(&*bytes).context("parsing protobuf descriptor file")?;
+            let message = fd
+                .get_message_by_name(&message)
+                .ok_or_else(|| anyhow!("unknown message name {}", message))?;
+            Ok(Transcoder::Protobuf {
+                message,
+                confluent_wire_format,
+                schema_id,
+                schema_message_id,
+            })
+        }
+        Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),
+    }
 }
