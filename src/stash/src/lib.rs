@@ -408,6 +408,7 @@ pub trait Stash: std::fmt::Debug + Send {
 /// [`seal`]: Stash::seal
 /// [correctness vocabulary document]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md
 /// [`Collection`]: differential_dataflow::collection::Collection
+#[derive(Debug)]
 pub struct StashCollection<K, V> {
     pub id: Id,
     _kv: PhantomData<(K, V)>,
