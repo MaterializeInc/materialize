@@ -30,7 +30,7 @@ pub(crate) enum Command {
     /// Prints latest consensus rollup state as JSON
     StateRollup(StateArgs),
 
-    /// Prints the number of blobs
+    /// Prints the count and size of blobs in an environment
     BlobCount(BlobCountArgs),
 
     /// Prints the unreferenced blobs across all shards
