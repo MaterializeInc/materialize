@@ -191,10 +191,14 @@ impl LinearJoinPlan {
                 mfp.permute(permutation.clone(), key.len() + thinning.len());
                 let mfp = mfp.into_plan().unwrap().into_nontemporal().unwrap();
                 (
-                    Some(JoinClosure {
-                        ready_equivalences: vec![],
-                        before: mfp,
-                    }),
+                    if mfp.is_identity() {
+                        None
+                    } else {
+                        Some(JoinClosure {
+                            ready_equivalences: vec![],
+                            before: mfp,
+                        })
+                    },
                     Some(key.clone()),
                 )
             } else {

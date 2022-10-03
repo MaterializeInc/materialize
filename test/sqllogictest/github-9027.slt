@@ -426,19 +426,7 @@ Query:
                               "Column": 0
                             }
                           ],
-                          "initial_closure": {
-                            "ready_equivalences": [],
-                            "before": {
-                              "mfp": {
-                                "expressions": [],
-                                "predicates": [],
-                                "projection": [
-                                  0
-                                ],
-                                "input_arity": 1
-                              }
-                            }
-                          },
+                          "initial_closure": null,
                           "stage_plans": [
                             {
                               "lookup_relation": 2,
