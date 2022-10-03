@@ -44,9 +44,6 @@ pub enum SqlRequest {
     Simple {
         /// A query string containing zero or more queries delimited by
         /// semicolons.
-        // TODO: we can remove this alias once platforms issues these requests
-        // using `query`.
-        #[serde(alias = "sql")]
         query: String,
     },
     /// An extended query request.
@@ -59,9 +56,6 @@ pub enum SqlRequest {
 /// An request to execute a SQL query using the extended protocol.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExtendedRequest {
-    // TODO: we can remove this alias once platforms issues these requests
-    // using `query`.
-    #[serde(alias = "sql")]
     /// A query string containing zero or one queries.
     query: String,
     /// Optional parameters for the query.
