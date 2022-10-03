@@ -110,10 +110,10 @@ SELECT a, sum(b) AS a FROM t GROUP BY a OPTIONS (EXPECTED GROUP SIZE 100)
 
 # unless hint is bad
 query error expected_group_size must be a number
-SELECT a, sum(b) AS a FROM t GROUP BY a OPTION (EXPECTED GROUP SIZE = 'foo')
+SELECT a, sum(b) AS a FROM t GROUP BY a OPTIONS (EXPECTED GROUP SIZE = 'foo')
 
 query error
-SELECT a, sum(b) AS a FROM t GROUP BY a OPTION (EXPECTED GROUP SIZE = 0.1)
+SELECT a, sum(b) AS a FROM t GROUP BY a OPTIONS (EXPECTED GROUP SIZE = 0.1)
 
 # Test that an ordinal in a GROUP BY that refers to a column that is an
 # expression, rather than a simple column reference, works.

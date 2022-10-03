@@ -30,7 +30,7 @@ _target&lowbar;elem_ | Return identified columns or functions.
 _join&lowbar;expr_ | A join expression; for more details, see the [`JOIN` documentation](../join).
 **WHERE** _expression_ | Filter tuples by _expression_.
 **GROUP BY** _col&lowbar;ref_ | Group aggregations by _col&lowbar;ref_.
-**OPTION (** _hint&lowbar;list_ **)** | Specify one or more [query hints](#query-hints).
+**OPTIONS (** _hint&lowbar;list_ **)** | Specify one or more [query hints](#query-hints).
 **HAVING** _expression_ | Filter aggregations by _expression_.
 **ORDER BY** _col&lowbar;ref_... | Sort results in either **ASC** or **DESC** order (_default: **ASC**_).<br/><br/>Use the **NULLS FIRST** and **NULLS LAST** options to determine whether nulls appear before or after non-null values in the sort ordering _(default: **NULLS LAST** for **ASC**, **NULLS FIRST** for **DESC**)_.<br/><br>
 **LIMIT** | Limit the number of returned results to _integer_.

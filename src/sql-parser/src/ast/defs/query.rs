@@ -265,7 +265,7 @@ impl<T: AstInfo> AstDisplay for Select<T> {
             f.write_node(having);
         }
         if !self.options.is_empty() {
-            f.write_str(" OPTION (");
+            f.write_str(" OPTIONS (");
             f.write_node(&display::comma_separated(&self.options));
             f.write_str(")");
         }
