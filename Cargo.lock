@@ -713,6 +713,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "az"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b7e4c2464d97fe331d41de9d5db0def0a96f4d823b8b32a2efd503578988973"
+
+[[package]]
 name = "backoff"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2120,6 +2126,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gmp-mpfr-sys"
+version = "1.4.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea3f42dadb6c75f122e9aa87e757ef11d4282f664c9f2e6476a9c2c8970f9d19"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "h2"
 version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3191,8 +3207,10 @@ dependencies = [
  "mz-service",
  "mz-storage",
  "mz-timely-util",
+ "num-traits",
  "once_cell",
  "prometheus",
+ "rug",
  "scopeguard",
  "serde",
  "tikv-jemallocator",
@@ -5645,6 +5663,18 @@ checksum = "26b763cb66df1c928432cc35053f8bd4cec3335d8559fc16010017d16b3c1680"
 dependencies = [
  "libc",
  "winapi",
+]
+
+[[package]]
+name = "rug"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "203180f444c95eac53586ed04793ecf6454c5d28f9eca8eead815fc19e136c47"
+dependencies = [
+ "az",
+ "gmp-mpfr-sys",
+ "libc",
+ "serde",
 ]
 
 [[package]]

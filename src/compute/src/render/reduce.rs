@@ -22,6 +22,7 @@ use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
 use differential_dataflow::Collection;
 use mz_expr::MirScalarExpr;
+use rug::Rational;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
@@ -717,7 +718,7 @@ enum AccumInner {
     Float {
         /// Accumulates non-special float values, mapped to a fixed precision i128 domain to
         /// preserve associativity and commutativity
-        accum: i128,
+        accum: Rational,
         /// Counts +inf
         pos_infs: Diff,
         /// Counts -inf
@@ -754,7 +755,7 @@ impl Semigroup for AccumInner {
                 nans,
                 non_nulls,
             } => {
-                accum.is_zero()
+                *accum.numer() == 0
                     && pos_infs.is_zero()
                     && neg_infs.is_zero()
                     && nans.is_zero()
@@ -814,6 +815,7 @@ impl Semigroup for AccumInner {
                     non_nulls: other_non_nulls,
                 },
             ) => {
+                tracing::debug!("accum={:?}, other_accum={:?}", accum, other_accum);
                 *accum += other_accum;
                 *pos_infs += other_pos_infs;
                 *neg_infs += other_neg_infs;
@@ -897,7 +899,7 @@ impl Multiply<Diff> for AccumInner {
                 nans,
                 non_nulls,
             } => AccumInner::Float {
-                accum: accum * i128::from(factor),
+                accum: accum * factor,
                 pos_infs: pos_infs * factor,
                 neg_infs: neg_infs * factor,
                 nans: nans * factor,
@@ -1006,8 +1008,6 @@ where
     // generally the count, and then two aggregation-specific values. The size could be
     // reduced if we want to specialize for the aggregations.
 
-    let float_scale = f64::from(1 << 24);
-
     // Instantiate a default vector for diffs with the correct types at each
     // position.
     let zero_diffs: Vec<_> = full_aggrs
@@ -1019,7 +1019,7 @@ where
                     falses: 0,
                 },
                 AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => AccumInner::Float {
-                    accum: 0,
+                    accum: Rational::new(),
                     pos_infs: 0,
                     neg_infs: 0,
                     nans: 0,
@@ -1086,9 +1086,11 @@ where
                 // Map the floating point value onto a fixed precision domain
                 // All special values should map to zero, since they are tracked separately
                 let accum = if nans > 0 || pos_infs > 0 || neg_infs > 0 {
-                    0
+                    Rational::from(0)
                 } else {
-                    (n * float_scale) as i128
+                    let mut r = Rational::new();
+                    r.assign_f64(n).unwrap(); //TODO: Check that we capture all failure modes
+                    r
                 };
 
                 AccumInner::Float {
@@ -1263,6 +1265,7 @@ where
                     {
                         Datum::Null
                     } else {
+                        tracing::debug!("aggr.func={:?}, accum.inner={:?}", &aggr.func, &accum.inner);
                         match (&aggr.func, &accum.inner) {
                             (AggregateFunc::Count, AccumInner::SimpleNumber { non_nulls, .. }) => {
                                 Datum::Int64(*non_nulls)
@@ -1327,7 +1330,7 @@ where
                                 } else if *neg_infs > 0 {
                                     Datum::from(f32::NEG_INFINITY)
                                 } else {
-                                    Datum::from(((*accum as f64) / float_scale) as f32)
+                                    Datum::from(accum.to_f64())
                                 }
                             }
                             (
@@ -1349,7 +1352,7 @@ where
                                 } else if *neg_infs > 0 {
                                     Datum::from(f64::NEG_INFINITY)
                                 } else {
-                                    Datum::from((*accum as f64) / float_scale)
+                                    Datum::from(accum.to_f64())
                                 }
                             }
                             (
