@@ -220,7 +220,7 @@ pub async fn unreferenced_blobs(
 
     let state_versions = StateVersions::new(cfg, consensus, blob, Arc::clone(&metrics));
     let mut state_iter = match state_versions
-        .fetch_live_states::<K, V, u64, D>(&shard_id)
+        .fetch_live_states::<K, V, u64, D>(shard_id)
         .await
     {
         Ok(state_iter) => state_iter,
@@ -230,7 +230,7 @@ pub async fn unreferenced_blobs(
                 *kvtd = codec.actual;
             }
             state_versions
-                .fetch_live_states::<K, V, u64, D>(&shard_id)
+                .fetch_live_states::<K, V, u64, D>(shard_id)
                 .await?
         }
     };
