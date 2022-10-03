@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::iter::Peekable;
 use std::marker::PhantomData;
@@ -471,7 +471,11 @@ where
         // populate our heap with the updates from the first part of each run.
         // we have the memory to fetch each part in parallel, so we spawn a
         // task to fetch each one.
-        let mut initial_batch_parts = vec![];
+        let mut pending_initial_parts = VecDeque::with_capacity(usize::min(
+            runs.len(),
+            cfg.compaction_reads_max_outstanding_parts,
+        ));
+        let mut fetched_initial_parts = Vec::with_capacity(runs.len());
         for (part_desc, parts) in &mut runs {
             if let Some(part) = parts.next() {
                 let shard_id = shard_id.clone();
@@ -481,7 +485,7 @@ where
                 let key = part.key.clone();
                 let part_desc = (**part_desc).clone();
 
-                initial_batch_parts.push(mz_ore::task::spawn(
+                pending_initial_parts.push_back(mz_ore::task::spawn(
                     || "compaction::initial_fetch_batch_part",
                     async move {
                         fetch_batch_part(
@@ -495,17 +499,29 @@ where
                         .await
                     },
                 ));
+
+                if pending_initial_parts.len() > cfg.compaction_reads_max_outstanding_parts {
+                    let start = Instant::now();
+                    let part = pending_initial_parts
+                        .pop_front()
+                        .expect("pop failed when len was just > some usize")
+                        .await??;
+                    timings.part_fetching += start.elapsed();
+                    fetched_initial_parts.push(part);
+                }
             }
+        }
+
+        for part in pending_initial_parts {
+            let start = Instant::now();
+            fetched_initial_parts.push(part.await??);
+            timings.part_fetching += start.elapsed();
         }
 
         // serially add each fetched part into our heap. this will momentarily 2x
         // the memory required to store a given part, so this is done one at a time.
-        for (index, part) in initial_batch_parts.into_iter().enumerate() {
-            let start = Instant::now();
-            let mut part = part.await??;
-            timings.part_fetching += start.elapsed();
-
-            let start = Instant::now();
+        let start = Instant::now();
+        for (index, mut part) in fetched_initial_parts.into_iter().enumerate() {
             while let Some((k, v, mut t, d)) = part.next() {
                 t.advance_by(desc.since().borrow());
                 let d = D::decode(d);
@@ -515,8 +531,8 @@ where
                 sorted_updates.push(Reverse((((k, v), t, d), index)));
                 remaining_updates_by_run[index] += 1;
             }
-            timings.heap_population += start.elapsed();
         }
+        timings.heap_population += start.elapsed();
 
         // repeatedly pull off the least element from our heap, refilling from the originating run
         // if needed. the heap will be exhausted only when all parts from all input runs have been
