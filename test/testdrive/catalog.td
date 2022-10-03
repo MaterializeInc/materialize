@@ -490,6 +490,7 @@ name
 mz_cluster_replicas
 mz_objects
 mz_relations
+mz_storage_usage
 
 # Check default sources, tables, and views in mz_internal.
 

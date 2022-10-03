@@ -1409,6 +1409,20 @@ pub static MZ_STORAGE_SHARDS: Lazy<BuiltinStorageManagedTable> =
             .with_column("shard_id", ScalarType::String.nullable(false)),
     });
 
+pub static MZ_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_storage_usage",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_catalog.mz_storage_usage (object_id, size_bytes, collection_timestamp) AS
+SELECT
+    object_id,
+    sum(size_bytes),
+    collection_timestamp
+FROM
+    mz_internal.mz_storage_shards
+    JOIN mz_internal.mz_storage_usage_by_shard USING (shard_id)
+GROUP BY object_id, collection_timestamp",
+});
+
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",
     schema: MZ_CATALOG_SCHEMA,
@@ -2455,6 +2469,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
         // Builtin::StorageManagedTable(&MZ_SOURCE_STATUS_HISTORY),
         Builtin::StorageManagedTable(&MZ_STORAGE_SHARDS),
+        Builtin::View(&MZ_STORAGE_USAGE),
     ]);
 
     builtins

@@ -249,18 +249,17 @@ Field            | Type       | Meaning
 `connection_id`  | [`text`]   | The ID of the connection associated with the source, if any.
 `size`           | [`text`]   | The [size](/sql/create-source/#sizing-a-source) of the source.
 
-{{< comment >}}
 ### `mz_storage_usage`
 
-The `mz_storage_usage` table contains a row for each daily storage utilization
-snapshot collected by the system.
+The `mz_storage_usage` table describes the storage utilization of each
+table, source, and materialized view in the system. Storage utilization is
+assessed approximately every hour.
 
-| Field                  | Type                         | Meaning                                               |
-| ---------------------- | ---------------------------- | ----------------------------------------------------- |
-| `shard_id`            | [`text`]                     | Materialize's unique ID for the storage object.       |
-| `size_bytes`           | [`bigint`]                   | The size in bytes of the storage object.              |
-| `collection_timestamp` | [`timestamp with time zone`] | The time at which the storage snapshot was collected. |
-{{< /comment >}}
+Field                  | Type                         | Meaning
+---------------------- | ---------------------------- | -----------------------------------------------------------
+`object_id`            | [`text`]                     | The ID of the table, source, or materialized view.
+`size_bytes`           | [`bigint`]                   | The number of storage bytes used by the object.
+`collection_timestamp` | [`timestamp with time zone`] | The time at which storage usage of the object was assessed.
 
 ### `mz_tables`
 
