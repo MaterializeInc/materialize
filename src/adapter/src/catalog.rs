@@ -68,7 +68,7 @@ use mz_storage::types::sources::{SourceDesc, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinStorageCollection, BuiltinTable, BuiltinType, Fingerprint,
+    Builtin, BuiltinLog, BuiltinStorageManagedTable, BuiltinTable, BuiltinType, Fingerprint,
     BUILTINS, BUILTIN_ROLE_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
     MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
@@ -233,7 +233,7 @@ impl CatalogState {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::StorageCollection(_) => (),
+            | CatalogItem::StorageManagedTable(_) => (),
         }
     }
 
@@ -251,7 +251,7 @@ impl CatalogState {
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::StorageCollection(_) => false,
+            | CatalogItem::StorageManagedTable(_) => false,
         }
     }
 
@@ -900,9 +900,9 @@ impl CatalogState {
     /// Panics if the builtin storage collection doesn't exist in the catalog
     pub fn resolve_builtin_storage_collection(
         &self,
-        builtin: &'static BuiltinStorageCollection,
+        builtin: &'static BuiltinStorageManagedTable,
     ) -> GlobalId {
-        self.resolve_builtin_object(&Builtin::<IdReference>::StorageCollection(builtin))
+        self.resolve_builtin_object(&Builtin::<IdReference>::StorageManagedTable(builtin))
     }
 
     /// Optimized lookup for a builtin object
@@ -1334,7 +1334,7 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
-    StorageCollection(&'static BuiltinStorageCollection),
+    StorageManagedTable(&'static BuiltinStorageManagedTable),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1482,7 +1482,7 @@ impl CatalogItem {
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
             CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
-            CatalogItem::StorageCollection(_) => mz_sql::catalog::CatalogItemType::Source,
+            CatalogItem::StorageManagedTable(_) => mz_sql::catalog::CatalogItemType::Source,
         }
     }
 
@@ -1493,7 +1493,7 @@ impl CatalogItem {
             CatalogItem::Table(tbl) => Ok(Cow::Borrowed(&tbl.desc)),
             CatalogItem::View(view) => Ok(Cow::Borrowed(&view.desc)),
             CatalogItem::MaterializedView(mview) => Ok(Cow::Borrowed(&mview.desc)),
-            CatalogItem::StorageCollection(coll) => Ok(Cow::Borrowed(&coll.desc)),
+            CatalogItem::StorageManagedTable(coll) => Ok(Cow::Borrowed(&coll.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1550,7 +1550,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.depends_on,
             CatalogItem::Secret(_) => &[],
             CatalogItem::Connection(connection) => &connection.depends_on,
-            CatalogItem::StorageCollection(_) => &[],
+            CatalogItem::StorageManagedTable(_) => &[],
         }
     }
 
@@ -1568,7 +1568,7 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::StorageCollection(_) => false,
+            | CatalogItem::StorageManagedTable(_) => false,
             CatalogItem::Sink(s) => match s.connection {
                 StorageSinkConnectionState::Pending(_) => true,
                 StorageSinkConnectionState::Ready(_) => false,
@@ -1591,7 +1591,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::StorageCollection(_) => None,
+            | CatalogItem::StorageManagedTable(_) => None,
         }
     }
 
@@ -1664,7 +1664,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
-            CatalogItem::StorageCollection(i) => Ok(CatalogItem::StorageCollection(i)),
+            CatalogItem::StorageManagedTable(i) => Ok(CatalogItem::StorageManagedTable(i)),
         }
     }
 }
@@ -1752,7 +1752,7 @@ impl CatalogEntry {
 
     /// Reports whether this catalog entry is a storage collection.
     pub fn is_storage_collection(&self) -> bool {
-        matches!(self.item(), CatalogItem::StorageCollection(_))
+        matches!(self.item(), CatalogItem::StorageManagedTable(_))
     }
 
     /// Collects the identifiers of the dataflows that this dataflow depends
@@ -2112,13 +2112,13 @@ impl<S: Append> Catalog<S> {
                     );
                 }
 
-                Builtin::StorageCollection(coll) => {
+                Builtin::StorageManagedTable(coll) => {
                     let oid = catalog.allocate_oid()?;
                     catalog.state.insert_item(
                         id,
                         oid,
                         name.clone(),
-                        CatalogItem::StorageCollection(coll),
+                        CatalogItem::StorageManagedTable(coll),
                     );
                 }
             }
@@ -2573,7 +2573,7 @@ impl<S: Append> Catalog<S> {
                     panic!("Log migration is unimplemented")
                 }
                 // TODO(jkosh44) Implement storage collection migration
-                CatalogItem::StorageCollection(_) => {
+                CatalogItem::StorageManagedTable(_) => {
                     panic!("Storage collection migration is unimplemented")
                 }
                 CatalogItem::View(_) | CatalogItem::Index(_) => {
@@ -2958,10 +2958,10 @@ impl<S: Append> Catalog<S> {
         self.state.resolve_builtin_log(builtin)
     }
 
-    /// Resolves a `BuiltinStorageCollection`.
+    /// Resolves a `BuiltinStorageManagedTable`.
     pub fn resolve_builtin_storage_collection(
         &self,
-        builtin: &'static BuiltinStorageCollection,
+        builtin: &'static BuiltinStorageManagedTable,
     ) -> GlobalId {
         self.state.resolve_builtin_storage_collection(builtin)
     }
@@ -4373,7 +4373,7 @@ impl<S: Append> Catalog<S> {
                 create_sql: connection.create_sql.clone(),
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::StorageCollection(_) => {
+            CatalogItem::StorageManagedTable(_) => {
                 unreachable!("builtin storage collections cannot be serialized")
             }
         }
@@ -5216,7 +5216,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
-            CatalogItem::StorageCollection(_) => "<builtin>",
+            CatalogItem::StorageManagedTable(_) => "<builtin>",
         }
     }
 
@@ -5272,7 +5272,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::StorageCollection(_) => vec![],
+            | CatalogItem::StorageManagedTable(_) => vec![],
         }
     }
 }

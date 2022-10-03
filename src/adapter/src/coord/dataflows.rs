@@ -261,7 +261,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), false);
                     }
-                    CatalogItem::StorageCollection(coll) => {
+                    CatalogItem::StorageManagedTable(coll) => {
                         dataflow.import_source(*id, coll.desc.typ().clone(), false);
                     }
                     _ => unreachable!(),
@@ -497,7 +497,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 | CatalogItem::Index(_)
                 | CatalogItem::Sink(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::StorageCollection(_) => Ok(false),
+                | CatalogItem::StorageManagedTable(_) => Ok(false),
             }
         })
     }
