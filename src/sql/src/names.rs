@@ -1074,13 +1074,46 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 Secret(object_name)
             }
             Object(obj) => {
+                // If we are not in an error state, we can treat non-qualified
+                // identifiers that we fail to resolve as if they were entered
+                // as strings.
+                //
+                // This is acceptable because all with option values are more
+                // tightly type-checked in planning, i.e. they must be declared
+                // as either a string or an object. If we fail to find an object
+                // here, and treat it as a string here, the later type checking
+                // will still error.
+                //
+                // The one complex error case this introduces is users expecting
+                // to be able to use a value as a non-quoted "string" when its
+                // ident resolves to an object. In this case, the user will be
+                // forced to quote the string, even though they don't need to do
+                // this elsewhere.
+                let string_candidate = match &obj {
+                    RawObjectName::Name(name) if name.0.len() == 1 && self.status.is_ok() => {
+                        Some(name.0[0].clone().into_string())
+                    }
+                    _ => None,
+                };
+
                 let object_name = self.fold_object_name(obj);
                 match &object_name {
                     ResolvedObjectName::Object { .. } => {}
                     ResolvedObjectName::Cte { .. } => {
                         self.status = Err(PlanError::InvalidObject(object_name.clone()));
                     }
-                    ResolvedObjectName::Error => {}
+                    ResolvedObjectName::Error => {
+                        if let Some(string) = string_candidate {
+                            // We are no longer in an error state; we know that
+                            // we introduced the error during folding the object
+                            // name because we weren't in an error state prior
+                            // to calling it.
+                            self.status = Ok(());
+                            return Value(
+                                self.fold_value(mz_sql_parser::ast::Value::String(string)),
+                            );
+                        }
+                    }
                 }
                 Object(object_name)
             }
