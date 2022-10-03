@@ -48,13 +48,16 @@ $ kafka-ingest format=avro topic=data partition=2 schema=${schema}
 $ kafka-ingest format=avro topic=data partition=3 schema=${schema}
 {"a": 6}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE direct_source1
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   WITH (TIMESTAMP INTERVAL '90ms');
 
 > CREATE SOURCE direct_source2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   WITH (TIMESTAMP INTERVAL '100ms');
 
@@ -154,5 +157,5 @@ $ kafka-ingest format=avro topic=data partition=15 schema=${schema}
 $ skip-if
 SELECT ${arg.replicas} > 1
 
-> SELECT COUNT(*) FROM mz_records_per_dataflow_global WHERE name LIKE '%check_v%' AND records > 0;
+> SELECT COUNT(*) FROM mz_internal.mz_records_per_dataflow_global WHERE name LIKE '%check_v%' AND records > 0;
 0

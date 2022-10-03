@@ -29,6 +29,7 @@
 
 use std::fmt;
 
+use chrono::NaiveDateTime;
 use mz_expr::explain::{Indices, ViewExplanation};
 use mz_expr::MapFilterProject;
 use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
@@ -36,6 +37,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::str::{bracketed, separated};
 use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::GlobalId;
+use mz_storage::types::sources::Timeline;
 
 use crate::command::DataflowDescription;
 
@@ -235,14 +237,16 @@ impl<'a> ViewFormatter<OptimizedMirRelationExpr> for DataflowGraphFormatter<'a> 
 pub struct TimestampExplanation<T> {
     /// The chosen timestamp from `determine_timestamp`.
     pub timestamp: T,
-    /// Whether the query contains a table.
-    pub has_table: bool,
-    /// If the query contains a table, the global table read timestamp.
-    pub table_read_ts: Option<T>,
+    /// The timeline that the timestamp corresponds to.
+    pub timeline: Option<Timeline>,
     /// The read frontier of all involved sources.
     pub since: Vec<T>,
     /// The write frontier of all involved sources.
     pub upper: Vec<T>,
+    /// Whether the query can responded immediately or if it has to block.
+    pub respond_immediately: bool,
+    /// The current value of the global timestamp.
+    pub global_timestamp: T,
     /// Details about each source.
     pub sources: Vec<TimestampSource<T>>,
 }
@@ -253,20 +257,105 @@ pub struct TimestampSource<T> {
     pub write_frontier: Vec<T>,
 }
 
-impl<T: fmt::Display + fmt::Debug> fmt::Display for TimestampExplanation<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "     timestamp: {:13}", self.timestamp)?;
-        writeln!(f, "         since:{:13?}", self.since)?;
-        writeln!(f, "         upper:{:13?}", self.upper)?;
-        writeln!(f, "     has table: {}", self.has_table)?;
-        if let Some(ts) = &self.table_read_ts {
-            writeln!(f, " table read ts: {:13}", ts)?;
+pub trait DisplayableInTimeline {
+    fn fmt(&self, timeline: Option<&Timeline>, f: &mut fmt::Formatter) -> fmt::Result;
+    fn display<'a>(&'a self, timeline: Option<&'a Timeline>) -> DisplayInTimeline<'a, Self> {
+        DisplayInTimeline { t: self, timeline }
+    }
+}
+
+impl DisplayableInTimeline for mz_repr::Timestamp {
+    fn fmt(&self, timeline: Option<&Timeline>, f: &mut fmt::Formatter) -> fmt::Result {
+        match timeline {
+            Some(Timeline::EpochMilliseconds) => {
+                let ts_ms: u64 = self.into();
+                let ts = ts_ms / 1000;
+                let nanos = ((ts_ms % 1000) as u32) * 1000000;
+                let ndt = NaiveDateTime::from_timestamp(ts as i64, nanos);
+                write!(f, "{:13} ({})", self, ndt.format("%Y-%m-%d %H:%M:%S%.3f"))
+            }
+            None | Some(_) => {
+                write!(f, "{:13}", self)
+            }
         }
+    }
+}
+
+pub struct DisplayInTimeline<'a, T: ?Sized> {
+    t: &'a T,
+    timeline: Option<&'a Timeline>,
+}
+impl<'a, T> fmt::Display for DisplayInTimeline<'a, T>
+where
+    T: DisplayableInTimeline,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.t.fmt(self.timeline, f)
+    }
+}
+
+impl<'a, T> fmt::Debug for DisplayInTimeline<'a, T>
+where
+    T: DisplayableInTimeline,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self, f)
+    }
+}
+
+impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline> fmt::Display
+    for TimestampExplanation<T>
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let timeline = self.timeline.as_ref();
+        writeln!(
+            f,
+            "          query timestamp: {}",
+            self.timestamp.display(timeline)
+        )?;
+        writeln!(
+            f,
+            "                    since:{:?}",
+            self.since
+                .iter()
+                .map(|t| t.display(timeline))
+                .collect::<Vec<_>>()
+        )?;
+        writeln!(
+            f,
+            "                    upper:{:?}",
+            self.upper
+                .iter()
+                .map(|t| t.display(timeline))
+                .collect::<Vec<_>>()
+        )?;
+        writeln!(
+            f,
+            "         global timestamp: {}",
+            self.global_timestamp.display(timeline)
+        )?;
+        writeln!(f, "  can respond immediately: {}", self.respond_immediately)?;
         for source in &self.sources {
             writeln!(f, "")?;
             writeln!(f, "source {}:", source.name)?;
-            writeln!(f, " read frontier:{:13?}", source.read_frontier)?;
-            writeln!(f, "write frontier:{:13?}", source.write_frontier)?;
+            writeln!(
+                f,
+                " read frontier:{:?}",
+                source
+                    .read_frontier
+                    .iter()
+                    .map(|t| t.display(timeline))
+                    .collect::<Vec<_>>()
+            )?;
+            writeln!(
+                f,
+                "write frontier:{:?}",
+                source
+                    .write_frontier
+                    .iter()
+                    .map(|t| t.display(timeline))
+                    .collect::<Vec<_>>()
+            )?;
         }
         Ok(())
     }

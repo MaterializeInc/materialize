@@ -13,7 +13,7 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE alter_drop_column_not_null (f1 INTEGER, col_not_null INTEGER NOT NULL);
+CREATE TABLE alter_drop_column_not_null (f1 INTEGER PRIMARY KEY, col_not_null INTEGER NOT NULL);
 INSERT INTO alter_drop_column_not_null VALUES (123, 234);
 
 $ schema-registry-wait-schema schema=postgres.public.alter_drop_column_not_null-value
@@ -22,8 +22,11 @@ $ schema-registry-wait-schema schema=postgres.public.alter_drop_column_not_null-
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE alter_drop_column_not_null
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_drop_column_not_null'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_drop_column_not_null')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

@@ -38,7 +38,6 @@ def workflow_basic_ssh_features(c: Composition) -> None:
     c.run("testdrive", "ssh-connections.td")
 
 
-# This test should also be executed with SSL enabled when it stops being flaky
 def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
     c.start_and_wait_for_tcp(services=["materialized", "ssh-bastion-host", "postgres"])
     c.wait_for_materialized("materialized")
@@ -59,6 +58,28 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
     c.wait_for_postgres()
 
     c.run("testdrive", "--no-reset", "pg-source.td")
+
+
+def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=["materialized", "ssh-bastion-host", "postgres"])
+    c.wait_for_materialized("materialized")
+
+    c.run("testdrive", "setup.td")
+
+    public_key = c.sql_query("SELECT public_key_1 FROM mz_ssh_tunnel_connections;")[0][
+        0
+    ]
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+
+    c.wait_for_postgres()
+
+    c.run("testdrive", "--no-reset", "pg-source-ssl.td")
 
 
 def workflow_ssh_key_after_restart(c: Composition) -> None:
@@ -134,6 +155,7 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
 
 def workflow_default(c: Composition) -> None:
     workflow_basic_ssh_features(c)
-    workflow_pg_via_ssh_tunnel(c)
     workflow_ssh_key_after_restart(c)
     workflow_rotated_ssh_key_after_restart(c)
+    workflow_pg_via_ssh_tunnel(c)
+    workflow_pg_via_ssh_tunnel_with_ssl(c)

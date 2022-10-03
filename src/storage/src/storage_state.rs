@@ -161,7 +161,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
             StorageCommand::InitializationComplete => (),
-            StorageCommand::IngestSources(ingestions) => {
+            StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {
                     // Remember the ingestion description to facilitate possible
                     // reconciliation later.
@@ -178,7 +178,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     );
 
                     crate::render::build_ingestion_dataflow(
-                        &mut self.timely_worker,
+                        self.timely_worker,
                         &mut self.storage_state,
                         ingestion.id,
                         ingestion.description,
@@ -191,7 +191,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     );
                 }
             }
-            StorageCommand::ExportSinks(exports) => {
+            StorageCommand::CreateSinks(exports) => {
                 for export in exports {
                     self.storage_state
                         .exports
@@ -205,7 +205,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     );
 
                     crate::render::build_export_dataflow(
-                        &mut self.timely_worker,
+                        self.timely_worker,
                         &mut self.storage_state,
                         export.id,
                         export.description,
@@ -255,7 +255,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             let reported_frontier = self
                 .storage_state
                 .reported_frontiers
-                .get_mut(&id)
+                .get_mut(id)
                 .expect("Reported frontier missing!");
 
             let observed_frontier = frontier.borrow();
@@ -302,7 +302,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// are allowed to compact up to any new `as_of`.
     ///
     /// Some additional tidying happens, e.g. cleaning up reported frontiers.
-    /// tail response buffer. We will need to be vigilant with future
+    /// subscribe response buffer. We will need to be vigilant with future
     /// modifications to `StorageState` to line up changes there with clean
     /// resets here.
     fn reconcile(&mut self, command_rx: &CommandReceiver) {
@@ -323,7 +323,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut stale_exports = self.storage_state.exports.keys().collect::<HashSet<_>>();
         for command in &mut commands {
             match command {
-                StorageCommand::IngestSources(ingestions) => {
+                StorageCommand::CreateSources(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
                         if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
                             stale_ingestions.remove(&ingestion.id);
@@ -341,7 +341,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     })
                 }
-                StorageCommand::ExportSinks(exports) => {
+                StorageCommand::CreateSinks(exports) => {
                     exports.retain_mut(|export| {
                         if let Some(existing) = self.storage_state.exports.get(&export.id) {
                             stale_exports.remove(&export.id);

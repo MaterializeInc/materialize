@@ -139,9 +139,7 @@ impl StateVersions {
         })
         .await;
         match cas_res {
-            Ok(()) => {
-                return Ok(initial_state);
-            }
+            Ok(()) => Ok(initial_state),
             Err(live_diffs) => {
                 // We lost a CaS race and someone else initialized the shard,
                 // use the value included in the CaS expectation error.
@@ -166,7 +164,7 @@ impl StateVersions {
                     self.delete_rollup(&shard_id, rollup_key).await;
                 }
 
-                return state;
+                state
             }
         }
     }
@@ -231,8 +229,8 @@ impl StateVersions {
                 );
 
                 shard_metrics.set_since(new_state.since());
-                shard_metrics.set_upper(&new_state.upper());
-                shard_metrics.set_batch_count(new_state.batch_count());
+                shard_metrics.set_upper(new_state.upper());
+                shard_metrics.set_batch_part_count(new_state.batch_part_count());
                 shard_metrics.set_update_count(new_state.num_updates());
                 shard_metrics.set_encoded_batch_size(new_state.encoded_batch_size());
                 shard_metrics.set_seqnos_held(new_state.seqnos_held());
@@ -378,7 +376,7 @@ impl StateVersions {
             .retries
             .fetch_live_states
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
-        let mut all_live_diffs = self.fetch_live_diffs(&shard_id).await;
+        let mut all_live_diffs = self.fetch_live_diffs(shard_id).await;
         loop {
             let earliest_live_diff = match all_live_diffs.first() {
                 Some(x) => x,
@@ -614,7 +612,7 @@ impl StateVersions {
         D: Semigroup + Codec64,
     {
         retry_external(&self.metrics.retries.external.rollup_get, || async {
-            self.blob.get(&rollup_key.complete(&shard_id)).await
+            self.blob.get(&rollup_key.complete(shard_id)).await
         })
         .instrument(debug_span!("rollup::get"))
         .await

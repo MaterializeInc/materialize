@@ -13,8 +13,11 @@ $ kafka-ingest topic=envelope-none-bytes format=bytes repeat=5000
 ABC
 XYZ
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE envelope_none_bytes
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-envelope-none-bytes-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-bytes-${testdrive.seed}')
   FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
@@ -29,7 +32,7 @@ ABC
 XYZ
 
 > CREATE SOURCE envelope_none_text
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-envelope-none-text-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-text-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE

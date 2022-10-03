@@ -18,8 +18,10 @@ from materialize.cloudtest.k8s.environmentd import (
 )
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
+from materialize.cloudtest.k8s.postgres_source import POSTGRES_SOURCE_RESOURCES
 from materialize.cloudtest.k8s.redpanda import REDPANDA_RESOURCES
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
+from materialize.cloudtest.k8s.ssh import SSH_RESOURCES
 from materialize.cloudtest.k8s.testdrive import Testdrive
 from materialize.cloudtest.wait import wait
 
@@ -27,6 +29,7 @@ from materialize.cloudtest.wait import wait
 class Application:
     resources: List[K8sResource]
     images: List[str]
+    release_mode: bool
 
     def __init__(self) -> None:
         self.create()
@@ -37,7 +40,7 @@ class Application:
             resource.create()
 
     def acquire_images(self) -> None:
-        repo = mzbuild.Repository(ROOT)
+        repo = mzbuild.Repository(ROOT, release_mode=self.release_mode)
         for image in self.images:
             deps = repo.resolve_dependencies([repo.images[image]])
             deps.acquire()
@@ -61,21 +64,24 @@ class Application:
 
 
 class MaterializeApplication(Application):
-    def __init__(self) -> None:
+    def __init__(self, release_mode: bool) -> None:
         self.environmentd = EnvironmentdService()
-        self.testdrive = Testdrive()
+        self.testdrive = Testdrive(release_mode=release_mode)
+        self.release_mode = release_mode
 
         self.resources = [
             *POSTGRES_RESOURCES,
+            *POSTGRES_SOURCE_RESOURCES,
             *REDPANDA_RESOURCES,
+            *SSH_RESOURCES,
             Minio(),
             AdminRoleBinding(),
-            EnvironmentdStatefulSet(),
+            EnvironmentdStatefulSet(release_mode=release_mode),
             self.environmentd,
             self.testdrive,
         ]
 
-        self.images = ["environmentd", "computed", "storaged", "testdrive"]
+        self.images = ["environmentd", "computed", "storaged", "testdrive", "postgres"]
 
         # Label the minicube nodes in a way that mimics Materialize cloud
         for node in [

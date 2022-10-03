@@ -23,8 +23,11 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 {"a": 1, "b": 1}
 
 # Sources do not have indexes automatically created
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
 > SHOW INDEXES FROM data
@@ -173,8 +176,9 @@ foo_expr_idx1   foo <VARIABLE_OUTPUT>   "{pg_catalog.substr(z, 3)}"
 > SHOW INDEXES FROM foo WHERE name = 'noexist'
 > SHOW INDEXES FROM foo WHERE name = 'foo_expr_idx'
 foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
-# TODO(justin): not handled in parser yet:
-#   SHOW INDEXES FROM v LIKE '%v'
+
+> SHOW INDEXES FROM foo LIKE 'foo_primary%'
+foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}
 
 ! SHOW INDEXES FROM nonexistent
 contains:unknown catalog item 'nonexistent'

@@ -37,7 +37,6 @@ Asc
 At
 Auction
 Authority
-Auto
 Availability
 Avro
 Aws
@@ -67,7 +66,6 @@ Cluster
 Clusters
 Coalesce
 Collate
-Collection
 Columns
 Commit
 Committed
@@ -125,7 +123,6 @@ Factor
 False
 Fetch
 Fields
-File
 Filter
 First
 Float
@@ -313,6 +310,7 @@ Stdin
 Stdout
 Strategy
 String
+Subscribe
 Substring
 Superuser
 System

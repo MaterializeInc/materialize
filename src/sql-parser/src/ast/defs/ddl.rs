@@ -22,33 +22,20 @@
 //! (commonly referred to as Data Definition Language, or DDL)
 
 use std::fmt;
-use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Schema {
-    File(PathBuf),
-    Inline(String),
+pub struct Schema {
+    pub schema: String,
 }
 
 impl AstDisplay for Schema {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::File(path) => {
-                f.write_str("SCHEMA FILE '");
-                f.write_node(&display::escape_single_quote_string(
-                    &path.display().to_string(),
-                ));
-                f.write_str("'");
-            }
-            Self::Inline(inner) => {
-                f.write_str("SCHEMA '");
-                f.write_node(&display::escape_single_quote_string(inner));
-                f.write_str("'");
-            }
-        }
+        f.write_str("SCHEMA '");
+        f.write_node(&display::escape_single_quote_string(&self.schema));
+        f.write_str("'");
     }
 }
 impl_display!(Schema);
@@ -374,7 +361,7 @@ impl AstDisplay for CsvColumns {
                 f.write_str("HEADER");
                 if !names.is_empty() {
                     f.write_str(" (");
-                    f.write_node(&display::comma_separated(&names));
+                    f.write_node(&display::comma_separated(names));
                     f.write_str(")");
                 }
             }
@@ -424,28 +411,29 @@ impl AstDisplay for SourceIncludeMetadata {
 impl_display!(SourceIncludeMetadata);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Envelope<T: AstInfo> {
+pub enum Envelope {
     None,
-    Debezium(DbzMode<T>),
+    Debezium(DbzMode),
     Upsert,
     CdcV2,
 }
 
-impl<T: AstInfo> Envelope<T> {
+impl Envelope {
     /// `true` iff Materialize is expected to crash or exhibit UB
     /// when attempting to ingest data starting at an offset other than zero.
     pub fn requires_all_input(&self) -> bool {
         match self {
             Envelope::None => false,
-            Envelope::Debezium(DbzMode::Plain { .. }) => true,
-            Envelope::Debezium(DbzMode::Upsert) => false,
+            // TODO[btv] - Adjust this if we change Dbz semantics
+            // (why is this a parser-level concept, anyway? Should it be moved?)
+            Envelope::Debezium(DbzMode::Plain) => false,
             Envelope::Upsert => false,
             Envelope::CdcV2 => true,
         }
     }
 }
 
-impl<T: AstInfo> AstDisplay for Envelope<T> {
+impl AstDisplay for Envelope {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::None => {
@@ -465,7 +453,7 @@ impl<T: AstInfo> AstDisplay for Envelope<T> {
         }
     }
 }
-impl_display_t!(Envelope);
+impl_display!(Envelope);
 
 impl<T: AstInfo> AstDisplay for Format<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
@@ -518,30 +506,23 @@ impl AstDisplay for Compression {
 impl_display!(Compression);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DbzMode<T: AstInfo> {
-    /// `ENVELOPE DEBEZIUM [TRANSACTION METADATA (...)]`
-    Plain {
-        tx_metadata: Vec<DbzTxMetadataOption<T>>,
-    },
-    /// `ENVELOPE DEBEZIUM UPSERT`
-    Upsert,
+pub enum DbzMode {
+    /// There is now only one `DEBEZIUM` envelope,
+    /// which has upsert semantics in sources and classic
+    /// semantics in sinks.
+    Plain,
 }
 
-impl<T: AstInfo> AstDisplay for DbzMode<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+impl AstDisplay for DbzMode {
+    fn fmt<W: fmt::Write>(&self, _f: &mut AstFormatter<W>) {
         match self {
-            Self::Plain { tx_metadata } => {
-                if !tx_metadata.is_empty() {
-                    f.write_str(" (TRANSACTION METADATA (");
-                    f.write_node(&display::comma_separated(tx_metadata));
-                    f.write_str("))");
-                }
-            }
-            Self::Upsert => f.write_str(" UPSERT"),
+            // We interpret the bare keyword `DEBEZIUM` as debezium upsert, so don't
+            // display anything here.
+            Self::Plain => {}
         }
     }
 }
-impl_display_t!(DbzMode);
+impl_display!(DbzMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DbzTxMetadataOption<T: AstInfo> {
@@ -800,23 +781,23 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
         match self {
             Self::Kafka { with_options } => {
                 f.write_str("KAFKA ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Csr { with_options } => {
                 f.write_str("CONFLUENT SCHEMA REGISTRY ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Postgres { with_options } => {
                 f.write_str("POSTGRES ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Aws { with_options } => {
                 f.write_str("AWS ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Ssh { with_options } => {
                 f.write_str("SSH TUNNEL ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
         }
     }
@@ -827,7 +808,6 @@ impl_display_t!(CreateConnection);
 pub enum KafkaConfigOptionName {
     Acks,
     ClientId,
-    EnableAutoCommit,
     EnableIdempotence,
     FetchMessageMaxBytes,
     GroupIdPrefix,
@@ -849,7 +829,6 @@ impl AstDisplay for KafkaConfigOptionName {
         f.write_str(match self {
             KafkaConfigOptionName::Acks => "ACKS",
             KafkaConfigOptionName::ClientId => "CLIENT ID",
-            KafkaConfigOptionName::EnableAutoCommit => "ENABLE AUTO COMMIT",
             KafkaConfigOptionName::EnableIdempotence => "ENABLE IDEMPOTENCE",
             KafkaConfigOptionName::FetchMessageMaxBytes => "FETCH MESSAGE MAX BYTES",
             KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
@@ -890,36 +869,19 @@ impl<T: AstInfo> AstDisplay for KafkaConfigOption<T> {
 impl_display_t!(KafkaConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum KafkaConnection<T: AstInfo> {
-    Inline {
-        broker: String,
-    },
-    Reference {
-        connection: T::ObjectName,
-        options: Vec<KafkaConfigOption<T>>,
-    },
+pub struct KafkaConnection<T: AstInfo> {
+    pub connection: T::ObjectName,
+    pub options: Vec<KafkaConfigOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for KafkaConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            KafkaConnection::Inline { broker } => {
-                f.write_str("BROKER '");
-                f.write_node(&display::escape_single_quote_string(broker));
-                f.write_str("'");
-            }
-            KafkaConnection::Reference {
-                connection,
-                options,
-            } => {
-                f.write_str("CONNECTION ");
-                f.write_node(connection);
-                if !options.is_empty() {
-                    f.write_str(" (");
-                    f.write_node(&display::comma_separated(options));
-                    f.write_str(")");
-                }
-            }
+        f.write_str("CONNECTION ");
+        f.write_node(&self.connection);
+        if !self.options.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
         }
     }
 }
@@ -928,9 +890,44 @@ impl_display_t!(KafkaConnection);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaSourceConnection<T: AstInfo> {
     pub connection: KafkaConnection<T>,
-    pub topic: Option<String>,
     pub key: Option<Vec<Ident>>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PgConfigOptionName {
+    /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
+    Details,
+    /// The name of the publication to sync
+    Publication,
+}
+
+impl AstDisplay for PgConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            PgConfigOptionName::Details => "DETAILS",
+            PgConfigOptionName::Publication => "PUBLICATION",
+        })
+    }
+}
+impl_display!(PgConfigOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `{FROM|INTO} CONNECTION ...` statement.
+pub struct PgConfigOption<T: AstInfo> {
+    pub name: PgConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for PgConfigOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(PgConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceConnection<T: AstInfo> {
@@ -952,10 +949,7 @@ pub enum CreateSourceConnection<T: AstInfo> {
     Postgres {
         /// The postgres connection.
         connection: T::ObjectName,
-        /// The name of the publication to sync
-        publication: String,
-        /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
-        details: Option<String>,
+        options: Vec<PgConfigOption<T>>,
     },
     LoadGenerator {
         generator: LoadGenerator,
@@ -966,21 +960,12 @@ pub enum CreateSourceConnection<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceConnection::Kafka(KafkaSourceConnection {
-                connection,
-                topic,
-                key,
-            }) => {
+            CreateSourceConnection::Kafka(KafkaSourceConnection { connection, key }) => {
                 f.write_str("KAFKA ");
                 f.write_node(connection);
-                if let Some(topic) = topic {
-                    f.write_str(" TOPIC '");
-                    f.write_node(&display::escape_single_quote_string(topic));
-                    f.write_str("'");
-                }
                 if let Some(key) = key.as_ref() {
                     f.write_str(" KEY (");
-                    f.write_node(&display::comma_separated(&key));
+                    f.write_node(&display::comma_separated(key));
                     f.write_str(")");
                 }
             }
@@ -1012,25 +997,22 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
             }
             CreateSourceConnection::Postgres {
                 connection,
-                publication,
-                details,
+                options,
             } => {
                 f.write_str("POSTGRES CONNECTION ");
                 f.write_node(connection);
-                f.write_str(" PUBLICATION '");
-                f.write_str(&display::escape_single_quote_string(publication));
-                if let Some(details) = details {
-                    f.write_str("' DETAILS '");
-                    f.write_str(&display::escape_single_quote_string(details));
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
                 }
-                f.write_str("'");
             }
             CreateSourceConnection::LoadGenerator { generator, options } => {
                 f.write_str("LOAD GENERATOR ");
                 f.write_node(generator);
                 if !options.is_empty() {
                     f.write_str(" ");
-                    f.write_node(&display::comma_separated(&options));
+                    f.write_node(&display::comma_separated(options));
                 }
             }
         }

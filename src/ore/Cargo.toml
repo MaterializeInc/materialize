@@ -3,8 +3,8 @@ name = "mz-ore"
 description = "Internal utility libraries for Materialize."
 version = "0.0.0"
 license = "Apache-2.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -43,6 +43,7 @@ tokio-openssl = { version = "0.6.3", optional = true }
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
 tracing-subscriber = { version = "0.3.15", default-features = false, features = ["env-filter", "fmt", "tracing-log"], optional = true }
+zeroize = { version = "1.5.7", features = ["serde"], optional = true }
 
 # For the `tracing` feature
 ansi_term = { version = "0.12.1", optional = true }
@@ -88,4 +89,4 @@ cli = ["clap"]
 stack = ["stacker"]
 test = ["anyhow", "ctor", "tracing-subscriber"]
 metrics = ["prometheus"]
-ssh = ["openssl", "serde", "serde_json", "ssh-key"]
+ssh = ["openssl", "serde", "serde_json", "ssh-key", "zeroize"]

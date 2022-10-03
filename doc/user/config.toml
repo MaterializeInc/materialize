@@ -25,11 +25,6 @@ name = "Reference"
 weight= 15
 
 [[menu.main]]
-identifier = "ops"
-name = "Operating Materialize"
-weight= 20
-
-[[menu.main]]
 identifier = "integrations"
 name = "Tools and integrations"
 weight= 25
@@ -60,15 +55,21 @@ url = "/sql/create-materialized-view/"
 weight= 45
 
 [[menu.main]]
+name = "Sinks"
+parent = "reference"
+url = "/sql/create-sink/"
+weight= 60
+
+[[menu.main]]
 name = "Queries (`SELECT`)"
 parent = "reference"
 url = "/sql/select/"
 weight= 70
 
 [[menu.main]]
-name = "Subscriptions (`TAIL`)"
+name = "Subscriptions (`SUBSCRIBE`)"
 parent = "reference"
-url = "/sql/tail/"
+url = "/sql/subscribe/"
 weight= 80
 
 [[menu.main]]

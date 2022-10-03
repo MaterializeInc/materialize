@@ -23,12 +23,15 @@ message Message2 {}
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 ! CREATE SOURCE fail FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-too-few-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-too-few-${testdrive.seed}')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Protobuf schemas with no messages not yet supported
 
 ! CREATE SOURCE fail FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-too-many-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-too-many-${testdrive.seed}')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 contains:Protobuf schemas with multiple messages not yet supported

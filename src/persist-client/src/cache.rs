@@ -83,8 +83,7 @@ impl PersistClientCache {
                     x.key(),
                     self.cfg.consensus_connection_pool_max_size,
                     self.metrics.postgres_consensus.clone(),
-                )
-                .await?;
+                )?;
                 let consensus =
                     retry_external(&self.metrics.retries.external.consensus_open, || {
                         consensus.clone().open()
@@ -102,7 +101,6 @@ impl PersistClientCache {
             Arc::clone(&self.metrics),
             Arc::clone(&self.cpu_heavy_runtime),
         )
-        .await
     }
 
     pub(crate) async fn open_blob(

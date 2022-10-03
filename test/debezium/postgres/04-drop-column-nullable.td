@@ -12,7 +12,7 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE alter_drop_column (f1 INTEGER, col_null_no_default INTEGER, col_null_default INTEGER DEFAULT 999);
+CREATE TABLE alter_drop_column (f1 INTEGER PRIMARY KEy, col_null_no_default INTEGER, col_null_default INTEGER DEFAULT 999);
 INSERT INTO alter_drop_column VALUES (123, 234, 345);
 
 $ schema-registry-wait-schema schema=postgres.public.alter_drop_column-value
@@ -21,8 +21,11 @@ $ schema-registry-wait-schema schema=postgres.public.alter_drop_column-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE alter_drop_column
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_drop_column'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_drop_column')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -31,11 +34,11 @@ $ schema-registry-wait-schema schema=postgres.public.alter_drop_column-value
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_column DROP COLUMN col_null_default;
-INSERT INTO alter_drop_column VALUES (123);
+INSERT INTO alter_drop_column VALUES (1234);
 
 # Prior to Debezium 1.6, NULLs would be returned for col_null_default in new rows.
 # Starting with Debezium 1.6, the 999 DEFAULT value will be returned instead.
 
 > SELECT * FROM alter_drop_column;
 123 234 345
-123 <null> 999
+1234 <null> 999

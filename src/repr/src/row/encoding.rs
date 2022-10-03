@@ -189,7 +189,7 @@ impl RowPacker<'_> {
                 // one copy, but there's currently an additional one when the
                 // Vec is created. Perhaps the protobuf Bytes support will let
                 // us fix one of them.
-                let u = Uuid::from_slice(&x).map_err(|err| err.to_string())?;
+                let u = Uuid::from_slice(x).map_err(|err| err.to_string())?;
                 self.push(Datum::Uuid(u));
             }
             Some(DatumType::Date(x)) => self.push(Datum::Date(x.clone().into_rust()?)),

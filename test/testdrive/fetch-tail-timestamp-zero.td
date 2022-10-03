@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Make sure that sources for which the timestamp field is zero can be TAIL-ed
+# Make sure that sources for which the timestamp field is zero can be SUBSCRIBE-ed
 #
 
 > CREATE VIEW v1 AS SELECT 123;
@@ -23,7 +23,7 @@
 
 > BEGIN
 
-> DECLARE c1 CURSOR FOR TAIL v1 WITH (PROGRESS = TRUE);
+> DECLARE c1 CURSOR FOR SUBSCRIBE v1 WITH (PROGRESS = TRUE);
 
 > FETCH 2 FROM c1 WITH (timeout = '60s')
 18446744073709551615 false 1 123
@@ -32,7 +32,7 @@
 
 > BEGIN;
 
-> DECLARE c2 CURSOR FOR TAIL v2 WITH (PROGRESS = TRUE);
+> DECLARE c2 CURSOR FOR SUBSCRIBE v2 WITH (PROGRESS = TRUE);
 
 > FETCH 2 FROM c2 WITH (timeout = '60s')
 18446744073709551615 false 1 123
@@ -41,6 +41,6 @@
 
 > BEGIN;
 
-> DECLARE c1 CURSOR FOR TAIL v1 WITH (SNAPSHOT = FALSE);
+> DECLARE c1 CURSOR FOR SUBSCRIBE v1 WITH (SNAPSHOT = FALSE);
 
 > FETCH ALL FROM c1 WITH (timeout = '3s')

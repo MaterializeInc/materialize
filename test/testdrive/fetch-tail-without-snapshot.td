@@ -21,8 +21,11 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 {"f1": 234}
 {"f1": 345}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE tail_without_snapshot
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-tail-without-snapshot-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-tail-without-snapshot-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
 
@@ -33,7 +36,7 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL tail_without_snapshot WITH (SNAPSHOT = FALSE);
+> DECLARE c CURSOR FOR SUBSCRIBE tail_without_snapshot WITH (SNAPSHOT = FALSE);
 
 > FETCH 1 FROM c WITH (timeout = '2s')
 

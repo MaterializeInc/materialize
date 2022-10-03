@@ -21,15 +21,15 @@ To [connect](https://www.psycopg.org/docs/usage.html) to a local Materialize ins
 import psycopg2
 import sys
 
-dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 ```
 
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a Python application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Python application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```python
 #!/usr/bin/env python3
@@ -37,18 +37,18 @@ To read a stream of updates from an existing materialized view, open a long-live
 import psycopg2
 import sys
 
-dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 
 with conn.cursor() as cur:
-    cur.execute("DECLARE c CURSOR FOR TAIL my_view")
+    cur.execute("DECLARE c CURSOR FOR SUBSCRIBE my_view")
     while True:
         cur.execute("FETCH ALL c")
         for row in cur:
             print(row)
 ```
 
-The [TAIL output format](/sql/tail/#output) of `cur` is a data access object that can be used to iterate over the set of rows. When a row of a tailed view is **updated,** two objects will show up in the `rows` array:
+The [SUBSCRIBE output format](/sql/subscribe/#output) of `cur` is a data access object that can be used to iterate over the set of rows. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
 ```python
     ...
@@ -69,7 +69,7 @@ A `mz_diff` value of `-1` indicates Materialize is deleting one row with the inc
 {{< /warning >}}
 
 Although `psycopg3` can function identically as the `psycopg2` example above,
-it provides has a `stream` feature where rows are not buffered, which allows you to use `TAIL` directly:
+it provides has a `stream` feature where rows are not buffered, which allows you to use `SUBSCRIBE` directly:
 
 ```python
 #!/usr/bin/env python3
@@ -77,12 +77,12 @@ it provides has a `stream` feature where rows are not buffered, which allows you
 import psycopg3
 import sys
 
-dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg3.connect(dsn)
 
 conn = psycopg3.connect(dsn)
 with conn.cursor() as cur:
-    for row in cur.stream("TAIL t"):
+    for row in cur.stream("SUBSCRIBE t"):
         print(row)
 ```
 
@@ -90,7 +90,7 @@ with conn.cursor() as cur:
 
 Querying Materialize is identical to querying a PostgreSQL database: Python executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
-Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
 To query a view `my_view` with a `SELECT` statement:
 
@@ -100,7 +100,7 @@ To query a view `my_view` with a `SELECT` statement:
 import psycopg2
 import sys
 
-dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 
 with conn.cursor() as cur:
@@ -123,7 +123,7 @@ Most data in Materialize will stream in via an external system, but a [table](/s
 import psycopg2
 import sys
 
-dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 
 cur = conn.cursor()
@@ -153,7 +153,7 @@ Typically, you create sources, views, and indexes when deploying Materialize, al
 import psycopg2
 import sys
 
-dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 conn.autocommit = True
 
@@ -177,7 +177,7 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
 import psycopg2
 import sys
 
-dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 conn.autocommit = True
 

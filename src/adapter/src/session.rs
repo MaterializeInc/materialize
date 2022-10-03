@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::OwnedMutexGuard;
+use uuid::Uuid;
 
 use mz_pgrepr::Format;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType};
@@ -43,6 +44,30 @@ pub(crate) mod vars;
 
 const DUMMY_CONNECTION_ID: ConnectionId = 0;
 
+/// Identifies a user.
+#[derive(Debug, Clone)]
+pub struct User {
+    /// The name of the user within the system.
+    pub name: String,
+    /// Metadata about this user in an external system.
+    pub external_metadata: Option<ExternalUserMetadata>,
+}
+
+/// Metadata about a [`User`] in an external system.
+#[derive(Debug, Clone)]
+pub struct ExternalUserMetadata {
+    /// The ID of the user in the external system.
+    pub user_id: Uuid,
+    /// The ID of the user's active group in the external system.
+    pub group_id: Uuid,
+}
+
+impl PartialEq for User {
+    fn eq(&self, other: &User) -> bool {
+        self.name == other.name
+    }
+}
+
 /// A session holds per-connection state.
 #[derive(Debug)]
 pub struct Session<T = mz_repr::Timestamp> {
@@ -51,14 +76,14 @@ pub struct Session<T = mz_repr::Timestamp> {
     portals: HashMap<String, Portal>,
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
-    user: String,
+    user: User,
     vars: SessionVars,
     drop_sinks: Vec<ComputeSinkId>,
 }
 
 impl<T: CoordTimestamp> Session<T> {
     /// Creates a new session for the specified connection ID.
-    pub fn new(conn_id: ConnectionId, user: String) -> Session<T> {
+    pub fn new(conn_id: ConnectionId, user: User) -> Session<T> {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
         Self::new_internal(conn_id, user)
     }
@@ -68,10 +93,10 @@ impl<T: CoordTimestamp> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        Self::new_internal(DUMMY_CONNECTION_ID, SYSTEM_USER.into())
+        Self::new_internal(DUMMY_CONNECTION_ID, SYSTEM_USER.clone())
     }
 
-    fn new_internal(conn_id: ConnectionId, user: String) -> Session<T> {
+    fn new_internal(conn_id: ConnectionId, user: User) -> Session<T> {
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
@@ -109,7 +134,7 @@ impl<T: CoordTimestamp> Session<T> {
             // - Currently in `READ ONLY`
             // - Already performed a query
             let read_write_prohibited = match txn.ops {
-                TransactionOps::Peeks(_) | TransactionOps::Tail => {
+                TransactionOps::Peeks(_) | TransactionOps::Subscribe => {
                     txn.access == Some(TransactionAccessMode::ReadOnly)
                 }
                 TransactionOps::None | TransactionOps::Writes(_) => false,
@@ -238,7 +263,9 @@ impl<T: CoordTimestamp> Session<T> {
                         }
                         _ => return Err(AdapterError::ReadOnlyTransaction),
                     },
-                    TransactionOps::Tail => return Err(AdapterError::TailOnlyTransaction),
+                    TransactionOps::Subscribe => {
+                        return Err(AdapterError::SubscribeOnlyTransaction)
+                    }
                     TransactionOps::Writes(txn_writes) => match add_ops {
                         TransactionOps::Writes(mut add_writes) => {
                             // We should have already checked the access above, but make sure we don't miss
@@ -448,8 +475,8 @@ impl<T: CoordTimestamp> Session<T> {
         drop_sinks
     }
 
-    /// Returns the name of the user who owns this session.
-    pub fn user(&self) -> &str {
+    /// Returns the user who owns this session.
+    pub fn user(&self) -> &User {
         &self.user
     }
 
@@ -693,13 +720,13 @@ pub enum TransactionOps<T> {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
     None,
-    /// This transaction has had a peek (`SELECT`, `TAIL`). If the inner value
+    /// This transaction has had a peek (`SELECT`, `SUBSCRIBE`). If the inner value
     /// is Some, it must only do other peeks. However, if the value is None
     /// (i.e. the values are constants), the transaction can still perform
     /// writes.
     Peeks(Option<T>),
-    /// This transaction has done a TAIL and must do nothing else.
-    Tail,
+    /// This transaction has done a `SUBSCRIBE` and must do nothing else.
+    Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
     /// only do other writes, or reads whose timestamp is None (i.e. constants).
     Writes(Vec<WriteOp>),

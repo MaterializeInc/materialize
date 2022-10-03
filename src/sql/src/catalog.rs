@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_compute_client::controller::ComputeInstanceId;
@@ -220,6 +221,17 @@ pub struct CatalogConfig {
     pub now: NowFn,
 }
 
+impl CatalogConfig {
+    /// Returns the default progress topic name for a Kafka sink for a given
+    /// connection.
+    pub fn default_kafka_sink_progress_topic(&self, connection_id: GlobalId) -> String {
+        format!(
+            "_materialize-progress-{}-{connection_id}",
+            self.environment_id
+        )
+    }
+}
+
 /// A database in a [`SessionCatalog`].
 pub trait CatalogDatabase {
     /// Returns a fully-specified name of the database.
@@ -270,9 +282,6 @@ pub trait CatalogComputeInstance<'a> {
 
     /// Returns the set of replicas of this cluster.
     fn replica_names(&self) -> HashSet<&String>;
-
-    /// Returns the set of persisted logs of replica `name` of this cluster.
-    fn replica_logs_and_views(&self, name: &String) -> Option<(Vec<GlobalId>, Vec<GlobalId>)>;
 }
 
 /// An item in a [`SessionCatalog`].
@@ -340,7 +349,7 @@ pub trait CatalogItem {
 }
 
 /// The type of a [`CatalogItem`].
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Deserialize, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum CatalogItemType {
     /// A table.
     Table,

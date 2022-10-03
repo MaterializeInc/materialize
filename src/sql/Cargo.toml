@@ -2,8 +2,8 @@
 name = "mz-sql"
 description = "SQL–dataflow translation."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -27,7 +27,7 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr" }
+mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage = { path = "../storage" }

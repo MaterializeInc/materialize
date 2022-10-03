@@ -48,12 +48,20 @@ impl CheckedRecursion for JoinImplementation {
 }
 
 impl crate::Transform for JoinImplementation {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "join_implementation")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action_recursive(relation, &mut IndexMap::new(args.indexes))
+        let result = self.action_recursive(relation, &mut IndexMap::new(args.indexes));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 
@@ -401,7 +409,7 @@ mod differential {
 
             let (start, start_keys) = &order[0];
             let start = *start;
-            let start_keys = if available[start].contains(&start_keys) {
+            let start_keys = if available[start].contains(start_keys) {
                 Some(start_keys.clone())
             } else {
                 // if there is not already a pre-existing arrangement
@@ -771,7 +779,7 @@ impl<'a> Orderer<'a> {
                     self.equivalences_active[*equivalence] = true;
                     for expr in self.equivalences[*equivalence].iter() {
                         // find the relations that columns in the expression belong to
-                        let mut rels = self.input_mapper.lookup_inputs(&expr);
+                        let mut rels = self.input_mapper.lookup_inputs(expr);
                         // Skip the expression if
                         // * the expression is a literal -> this would translate
                         //   to `rels` being empty

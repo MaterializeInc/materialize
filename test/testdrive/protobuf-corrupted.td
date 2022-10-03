@@ -20,16 +20,19 @@ message OneString {
     string f = 1;
 }
 
-$ protobuf-compile-descriptors inputs=simple.proto output=simple.pb
+$ protobuf-compile-descriptors inputs=simple.proto output=simple.pb set-var=simple-schema
 
 $ kafka-create-topic topic=total-garbage
 
 $ kafka-ingest format=bytes topic=total-garbage
 garbage
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE total_garbage FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-total-garbage-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.OneInt' USING SCHEMA FILE '${testdrive.temp-dir}/simple.pb'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-total-garbage-${testdrive.seed}')
+  FORMAT PROTOBUF MESSAGE '.OneInt' USING SCHEMA '${simple-schema}'
 
 ! SELECT * FROM total_garbage
 contains:Decode error: Text: protobuf deserialization error: failed to decode Protobuf message: invalid wire type value: 7
@@ -40,8 +43,8 @@ $ kafka-ingest topic=wrong-message format=protobuf descriptor-file=simple.pb mes
 {"f": 1}
 
 > CREATE SOURCE wrong_message FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-wrong-message-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.OneString' USING SCHEMA FILE '${testdrive.temp-dir}/simple.pb'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-wrong-message-${testdrive.seed}')
+  FORMAT PROTOBUF MESSAGE '.OneString' USING SCHEMA '${simple-schema}'
 
 ! SELECT * FROM wrong_message
 contains:Decode error: Text: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: Varint (expected LengthDelimited)

@@ -157,11 +157,7 @@ impl<S: Append + 'static> Coordinator<S> {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
-        if let Err(e) = self
-            .catalog
-            .create_temporary_schema(session.conn_id())
-            .await
-        {
+        if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
             let _ = tx.send(Response {
                 result: Err(e.into()),
                 session,
@@ -172,18 +168,18 @@ impl<S: Append + 'static> Coordinator<S> {
         if self
             .catalog
             .for_session(&session)
-            .resolve_role(session.user())
+            .resolve_role(&session.user().name)
             .is_err()
         {
             if !create_user_if_not_exists {
                 let _ = tx.send(Response {
-                    result: Err(AdapterError::UnknownLoginRole(session.user().into())),
+                    result: Err(AdapterError::UnknownLoginRole(session.user().name.clone())),
                     session,
                 });
                 return;
             }
             let plan = CreateRolePlan {
-                name: session.user().to_string(),
+                name: session.user().name.to_string(),
             };
             if let Err(err) = self.sequence_create_role(&session, plan).await {
                 let _ = tx.send(Response {
@@ -323,7 +319,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::SetVariable(_)
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
-                    | Statement::Tail(_)
+                    | Statement::Subscribe(_)
                     | Statement::Raise(_) => {
                         // Always safe.
                     }
@@ -432,7 +428,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(&mut session, stmt, &params).await {
+            _ => match self.plan_statement(&mut session, stmt, &params) {
                 Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
                 Err(e) => tx.send(Err(e), session),
             },
@@ -519,7 +515,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn handle_terminate(&mut self, session: &mut Session) {
         self.clear_transaction(session).await;
 
-        self.drop_temp_items(&session).await;
+        self.drop_temp_items(session).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");

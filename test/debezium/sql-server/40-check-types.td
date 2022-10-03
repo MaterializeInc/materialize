@@ -10,18 +10,17 @@
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
 
-$ sql-server-execute name=sql-server
-USE test;
-INSERT INTO types_table SELECT * FROM types_table
-
 $ schema-registry-wait-schema schema=sql-server.dbo.types_table-value
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE types_table
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.types_table'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.types_table')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -31,10 +30,8 @@ $ schema-registry-wait-schema schema=sql-server.dbo.types_table-value
 # SMALLDATETIME does not store seconds or fractional seconds
 
 > SELECT * FROM types_table
-123.45 "2025-12-10T12:32:10+01:00" "1289567655123456700" "1900-01-01 11:12:00" true
-123.45 "2025-12-10T12:32:10+01:00" "1289567655123456700" "1900-01-01 11:12:00" true
+123.45 "2025-12-10T12:32:10+01:00" "1289567655123456700" "1900-01-01 11:12:00" true 0
 
 
 > SELECT pg_typeof(decimal_col), pg_typeof(datetimeoffset_col), pg_typeof(datetime2_col), pg_typeof(smalldatetime_col), pg_typeof(bit_col) FROM types_table;
-numeric text bigint timestamp boolean
 numeric text bigint timestamp boolean

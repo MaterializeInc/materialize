@@ -14,16 +14,17 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use itertools::{max, Itertools};
+use mz_ore::now::EpochMillis;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
-use mz_compute_client::controller::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
+use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceReplicaConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;
-use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType};
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
@@ -73,7 +74,7 @@ async fn migrate<S: Append>(
     let migrations: &[for<'a> fn(
         &mut Transaction<'a, S>,
         &'a BootstrapArgs,
-    ) -> Result<(), StashError>] = &[
+    ) -> Result<(), catalog::error::Error>] = &[
         |txn: &mut Transaction<'_, S>, bootstrap_args| {
             txn.id_allocator.insert(
                 IdAllocKey {
@@ -214,35 +215,77 @@ async fn migrate<S: Append>(
                     name: "materialize".into(),
                 },
             )?;
+            let default_instance = ComputeInstanceValue {
+                name: "default".into(),
+                config: Some(ComputeInstanceIntrospectionConfig {
+                    debugging: false,
+                    interval: Duration::from_secs(1),
+                }),
+            };
+            let default_replica = ComputeInstanceReplicaValue {
+                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                name: "default_replica".into(),
+                config: SerializedComputeInstanceReplicaConfig {
+                    persisted_logs: SerializedComputeInstanceReplicaLogging::Default,
+                    location: SerializedComputeInstanceReplicaLocation::Managed {
+                        size: bootstrap_args.default_cluster_replica_size.clone(),
+                        availability_zone: bootstrap_args.default_availability_zone.clone(),
+                        az_user_specified: false,
+                    },
+                },
+            };
             txn.compute_instances.insert(
                 ComputeInstanceKey {
                     id: DEFAULT_COMPUTE_INSTANCE_ID,
                 },
-                ComputeInstanceValue {
-                    name: "default".into(),
-                    config: Some(ComputeInstanceIntrospectionConfig {
-                        debugging: false,
-                        interval: Duration::from_secs(1),
-                    }),
-                },
+                default_instance.clone(),
             )?;
             txn.compute_instance_replicas.insert(
                 ComputeInstanceReplicaKey {
                     id: DEFAULT_REPLICA_ID,
                 },
-                ComputeInstanceReplicaValue {
-                    compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
-                    name: "default_replica".into(),
-                    config: SerializedComputeInstanceReplicaConfig {
-                        persisted_logs: SerializedComputeInstanceReplicaLogging::Default,
-                        location: SerializedComputeInstanceReplicaLocation::Managed {
-                            size: bootstrap_args.default_cluster_replica_size.clone(),
-                            availability_zone: bootstrap_args.default_availability_zone.clone(),
-                            az_user_specified: false,
-                        },
-                    },
-                },
+                default_replica.clone(),
             )?;
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::Cluster,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: DEFAULT_COMPUTE_INSTANCE_ID,
+                            name: default_instance.name.clone(),
+                        }),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
+            let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+            txn.audit_log_updates.push((
+                AuditLogKey {
+                    event: VersionedEvent::new(
+                        id,
+                        EventType::Create,
+                        ObjectType::ClusterReplica,
+                        EventDetails::CreateComputeInstanceReplicaV1(
+                            mz_audit_log::CreateComputeInstanceReplicaV1 {
+                                cluster_id: DEFAULT_COMPUTE_INSTANCE_ID,
+                                cluster_name: default_instance.name,
+                                replica_name: default_replica.name,
+                                logical_size: bootstrap_args.default_cluster_replica_size.clone(),
+                            },
+                        ),
+                        None,
+                        bootstrap_args.now,
+                    ),
+                },
+                (),
+                1,
+            ));
             txn.timestamps.insert(
                 TimestampKey {
                     id: Timeline::EpochMilliseconds.to_string(),
@@ -288,6 +331,7 @@ async fn migrate<S: Append>(
 }
 
 pub struct BootstrapArgs {
+    pub now: EpochMillis,
     pub default_cluster_replica_size: String,
     pub default_availability_zone: String,
 }
@@ -488,14 +532,14 @@ impl<S: Append> Connection<S> {
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
     pub async fn load_system_gids(
         &mut self,
-    ) -> Result<BTreeMap<(String, String), (GlobalId, u64)>, Error> {
+    ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, u64)>, Error> {
         Ok(COLLECTION_SYSTEM_GID_MAPPING
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(|(k, v)| {
                 (
-                    (k.schema_name, k.object_name),
+                    (k.schema_name, k.object_type, k.object_name),
                     (GlobalId::System(v.id), v.fingerprint),
                 )
             })
@@ -544,6 +588,7 @@ impl<S: Append> Connection<S> {
         let mappings = mappings.into_iter().map(
             |SystemObjectMapping {
                  schema_name,
+                 object_type,
                  object_name,
                  id,
                  fingerprint,
@@ -556,6 +601,7 @@ impl<S: Append> Connection<S> {
                 (
                     GidMappingKey {
                         schema_name,
+                        object_type,
                         object_name,
                     },
                     GidMappingValue { id, fingerprint },
@@ -604,7 +650,7 @@ impl<S: Append> Connection<S> {
         replica_id: ReplicaId,
         compute_instance_id: ComputeInstanceId,
         name: String,
-        config: &ConcreteComputeInstanceReplicaConfig,
+        config: &ComputeInstanceReplicaConfig,
     ) -> Result<(), Error> {
         let key = ComputeInstanceReplicaKey { id: replica_id };
         let val = ComputeInstanceReplicaValue {
@@ -704,7 +750,7 @@ impl<S: Append> Connection<S> {
     }
 
     pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), Error> {
-        Ok(self.stash.consolidate_batch(&collections).await?)
+        Ok(self.stash.consolidate_batch(collections).await?)
     }
 }
 
@@ -1158,7 +1204,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Upserts persisted system configuration `name` to `value`.
-    pub async fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
+    pub fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
@@ -1171,7 +1217,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Removes persisted system configuration `name`.
-    pub async fn remove_system_config(&mut self, name: &str) {
+    pub fn remove_system_config(&mut self, name: &str) {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
@@ -1179,7 +1225,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     /// Removes all persisted system configurations.
-    pub async fn clear_system_configs(&mut self) {
+    pub fn clear_system_configs(&mut self) {
         self.system_configurations.delete(|_k, _v| true);
     }
 
@@ -1422,6 +1468,7 @@ struct IdAllocValue {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct GidMappingKey {
     schema_name: String,
+    object_type: CatalogItemType,
     object_name: String,
 }
 

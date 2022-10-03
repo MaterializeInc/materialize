@@ -33,8 +33,26 @@ name   create_sql
 ---------------------------------
 materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER = '${testdrive.kafka-addr}'"
 
+> SELECT
+      brokers,
+      sink_progress_topic = '_materialize-progress-' || mz_environment_id() || '-' || id
+  FROM mz_kafka_connections
+  JOIN mz_connections USING (id)
+  WHERE name = 'testconn'
+{${testdrive.kafka-addr}}   true
 
 > DROP CONNECTION testconn
+
+> CREATE CONNECTION progress_override
+  FOR KAFKA BROKER '${testdrive.kafka-addr}',
+  PROGRESS TOPIC 'override_topic'
+
+> SELECT
+    brokers, sink_progress_topic
+  FROM mz_kafka_connections
+  JOIN mz_connections USING (id)
+  WHERE name = 'progress_override'
+{${testdrive.kafka-addr}}   override_topic
 
 ###
 # Test that connections work in creating a source
@@ -119,11 +137,14 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
   FOR CONFLUENT SCHEMA REGISTRY
     URL '${testdrive.schema-registry-url}'
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE csr_source
-    FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csr_test-${testdrive.seed}'
+    FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-    ENVELOPE DEBEZIUM UPSERT
+    ENVELOPE DEBEZIUM
 
 > SELECT * from csr_source
 id creature
@@ -136,7 +157,7 @@ id creature
 > CREATE SOURCE two_connection_source
   FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM UPSERT
+  ENVELOPE DEBEZIUM
 
 > SELECT * from two_connection_source
 id creature
@@ -154,10 +175,10 @@ contains:depended upon by catalog item 'materialize.public.csr_source'
 contains: unknown catalog item 'does_not_exist'
 
 ! CREATE SOURCE should_fail
-  FROM KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-csr_test-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn
+  (TOPIC 'testdrive-csr_test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION does_not_exist
-  ENVELOPE DEBEZIUM UPSERT
+  ENVELOPE DEBEZIUM
 contains: unknown catalog item 'does_not_exist'
 
 # Test protobuf CSR connection
@@ -199,7 +220,7 @@ $ file-append path=importee.proto
 $ file-append path=importer.proto
 \${importer-schema}
 
-$ protobuf-compile-descriptors inputs=empty.proto,importee.proto,importer.proto output=import.pb
+$ protobuf-compile-descriptors inputs=empty.proto,importee.proto,importer.proto output=import.pb set-var=import-schema
 
 $ kafka-create-topic topic=import-csr partitions=1
 
@@ -233,7 +254,7 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
     URL '${testdrive.schema-registry-url}'
 
 > CREATE SOURCE import_connection_csr FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
 
 > SELECT importee1::text, importee2::text FROM import_connection_csr

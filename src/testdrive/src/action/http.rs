@@ -8,58 +8,40 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::bail;
-use async_trait::async_trait;
 use reqwest::Method;
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 use reqwest::header::CONTENT_TYPE;
 
-pub struct RequestAction {
-    url: String,
-    method: Method,
-    content_type: Option<String>,
-    body: String,
-}
+pub async fn run_request(
+    mut cmd: BuiltinCommand,
+    _: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let url = cmd.args.string("url")?;
+    let method: Method = cmd.args.parse("method")?;
+    let content_type = cmd.args.opt_string("content-type");
+    let body = cmd.input.join("\n");
 
-pub fn build_request(mut cmd: BuiltinCommand) -> Result<RequestAction, anyhow::Error> {
-    Ok(RequestAction {
-        url: cmd.args.string("url")?,
-        method: cmd.args.parse("method")?,
-        content_type: cmd.args.opt_string("content-type"),
-        body: cmd.input.join("\n"),
-    })
-}
+    println!("$ http-request {} {}\n{}", method, url, body);
 
-#[async_trait]
-impl Action for RequestAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
+    let client = reqwest::Client::new();
+
+    let mut request = client.request(method, &url).body(body);
+
+    if let Some(value) = &content_type {
+        request = request.header(CONTENT_TYPE, value);
     }
 
-    async fn redo(&self, _: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        println!("$ http-request {} {}\n{}", self.method, self.url, self.body);
+    let response = request.send().await?;
+    let status = response.status();
 
-        let client = reqwest::Client::new();
+    println!("{}\n{}", status, response.text().await?);
 
-        let mut request = client
-            .request(self.method.clone(), &self.url)
-            .body(self.body.clone());
-
-        if let Some(value) = &self.content_type {
-            request = request.header(CONTENT_TYPE, value);
-        }
-
-        let response = request.send().await?;
-        let status = response.status();
-
-        println!("{}\n{}", status, response.text().await?);
-
-        if status.is_success() {
-            Ok(ControlFlow::Continue)
-        } else {
-            bail!("http request returned failing status: {}", status)
-        }
+    if status.is_success() {
+        Ok(ControlFlow::Continue)
+    } else {
+        bail!("http request returned failing status: {}", status)
     }
 }

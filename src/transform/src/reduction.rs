@@ -32,13 +32,19 @@ pub struct FoldConstants {
 }
 
 impl crate::Transform for FoldConstants {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "fold_constants")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
         let mut type_stack = Vec::new();
-        relation.try_visit_mut_post(&mut |e| -> Result<(), TransformError> {
+        let result = relation.try_visit_mut_post(&mut |e| -> Result<(), TransformError> {
             let num_inputs = e.num_inputs();
             let input_types = &type_stack[type_stack.len() - num_inputs..];
             let mut relation_type = e.typ_with_input_types(input_types);
@@ -50,7 +56,9 @@ impl crate::Transform for FoldConstants {
             type_stack.truncate(type_stack.len() - num_inputs);
             type_stack.push(relation_type);
             Ok(())
-        })
+        });
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 
@@ -227,7 +235,7 @@ impl FoldConstants {
             MirRelationExpr::Filter { input, predicates } => {
                 let input_typ = input_types.next().unwrap();
                 for predicate in predicates.iter_mut() {
-                    predicate.reduce(&input_typ);
+                    predicate.reduce(input_typ);
                 }
                 predicates.retain(|p| !p.is_literal_true());
 
@@ -334,7 +342,7 @@ impl FoldConstants {
                     // Now throw away anything that doesn't satisfy the requisite constraints.
                     let mut datum_vec = mz_repr::DatumVec::new();
                     old_rows.retain(|(row, _count)| {
-                        let datums = datum_vec.borrow_with(&row);
+                        let datums = datum_vec.borrow_with(row);
                         let temp_storage = RowArena::new();
                         equivalences.iter().all(|equivalence| {
                             let mut values =
@@ -533,7 +541,7 @@ impl FoldConstants {
         let mut cmp_order_key = |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
             let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
             let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
-            mz_expr::compare_columns(order_key, &lhs_datums, &rhs_datums, || lhs.cmp(&rhs))
+            mz_expr::compare_columns(order_key, lhs_datums, rhs_datums, || lhs.cmp(rhs))
         };
         let mut cmp_group_key = {
             let group_key = group_key
@@ -610,7 +618,7 @@ impl FoldConstants {
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
         for (input_row, diff) in rows {
-            let datums = datum_vec.borrow_with(&input_row);
+            let datums = datum_vec.borrow_with(input_row);
             let temp_storage = RowArena::new();
             let datums = exprs
                 .iter()
@@ -639,7 +647,7 @@ impl FoldConstants {
         let mut new_rows = Vec::new();
         let mut datum_vec = mz_repr::DatumVec::new();
         'outer: for (row, diff) in rows {
-            let datums = datum_vec.borrow_with(&row);
+            let datums = datum_vec.borrow_with(row);
             let temp_storage = RowArena::new();
             for p in &*predicates {
                 if p.eval(&datums, &temp_storage)? != Datum::True {

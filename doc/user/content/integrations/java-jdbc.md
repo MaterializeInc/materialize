@@ -13,7 +13,7 @@ Materialize is **wire-compatible** with PostgreSQL, which means that Java applic
 
 ## Connect
 
-To [connect](https://jdbc.postgresql.org/documentation/head/connect.html) to a local Materialize instance using the PostgreSQL JDBC Driver:
+To [connect](https://jdbc.postgresql.org/documentation/head/connect.html) to Materialize using the PostgreSQL JDBC Driver:
 
 ```java
 import java.sql.Connection;
@@ -23,9 +23,9 @@ import java.util.Properties;
 
 public class App {
 
-    private final String url = "jdbc:postgresql://localhost:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize
@@ -36,7 +36,7 @@ public class App {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
-        props.setProperty("ssl","false");
+        props.setProperty("ssl","true");
         Connection conn = null;
         try {
             conn = DriverManager.getConnection(url, props);
@@ -59,9 +59,9 @@ To establish the connection to Materialize, call the `getConnection()` method on
 
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a Java application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Java application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```java
 import java.sql.Connection;
@@ -73,9 +73,9 @@ import java.sql.Statement;
 
 public class App {
 
-    private final String url = "jdbc:postgresql://localhost:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize
@@ -86,18 +86,18 @@ public class App {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
-        props.setProperty("ssl","false");
+        props.setProperty("ssl","true");
 
         return DriverManager.getConnection(url, props);
 
     }
 
-    public void tail() {
+    public void subscribe() {
         try (Connection conn = connect()) {
 
             Statement stmt = conn.createStatement();
             stmt.execute("BEGIN");
-            stmt.execute("DECLARE c CURSOR FOR TAIL my_view");
+            stmt.execute("DECLARE c CURSOR FOR SUBSCRIBE my_view");
             while (true) {
                 ResultSet rs = stmt.executeQuery("FETCH ALL c");
                 if(rs.next()) {
@@ -111,12 +111,12 @@ public class App {
 
     public static void main(String[] args) {
         App app = new App();
-        app.tail();
+        app.subscribe();
     }
 }
 ```
 
-The [TAIL output format](/sql/tail/#output) of `rs` is a `ResultSet` of view updates. When a row of a tailed view is **updated,** two objects will show up in the `rows` array:
+The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `rs` is a `ResultSet` of view updates. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
 ```java
     ...
@@ -132,7 +132,7 @@ A `mz_diff` value of `-1` indicates that Materialize is deleting one row with th
 
 Querying Materialize is identical to querying a PostgreSQL database: Java executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
-Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
 To query a view `my_view` using a `SELECT` statement:
 
@@ -146,9 +146,9 @@ import java.sql.Statement;
 
 public class App {
 
-    private final String url = "jdbc:postgresql://localhost:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize
@@ -159,7 +159,7 @@ public class App {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
-        props.setProperty("ssl","false");
+        props.setProperty("ssl","true");
 
         return DriverManager.getConnection(url, props);
 
@@ -206,9 +206,9 @@ import java.sql.PreparedStatement;
 
 public class App {
 
-    private final String url = "jdbc:postgresql://localhost:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize
@@ -219,7 +219,7 @@ public class App {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
-        props.setProperty("ssl","false");
+        props.setProperty("ssl","true");
 
         return DriverManager.getConnection(url, props);
 
@@ -265,9 +265,9 @@ import java.sql.PreparedStatement;
 
 public class App {
 
-    private final String url = "jdbc:postgresql://localhost:6875/materialize";
-    private final String user = "materialize";
-    private final String password = "materialize";
+    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
+    private final String user = "MATERIALIZE_USERNAME";
+    private final String password = "MATERIALIZE_PASSWORD";
 
     /**
      * Connect to Materialize
@@ -278,7 +278,7 @@ public class App {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
-        props.setProperty("ssl","false");
+        props.setProperty("ssl","true");
 
         return DriverManager.getConnection(url, props);
 

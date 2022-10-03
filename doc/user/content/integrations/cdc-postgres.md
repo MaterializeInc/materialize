@@ -84,7 +84,7 @@ To create a source in Materialize:
 CREATE SOURCE mz_source
     FROM POSTGRES
       CONNECTION pg_connection
-      PUBLICATION 'mz_source';
+      (PUBLICATION 'mz_source');
 ```
 
 {{< note >}}
@@ -228,21 +228,10 @@ Debezium emits change events using an envelope that contains detailed informatio
 CREATE SOURCE kafka_repl
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-    ENVELOPE DEBEZIUM UPSERT;
-```
-
-Enabling `UPSERT` allows you to replicate tables with `REPLICA IDENTITY DEFAULT` or `INDEX`. Although this approach is less resource-intensive for the upstream database, it will require **more memory** in Materialize, as it needs to track state proportional to the number of unique primary keys in the changing data.
-
-If the original Postgres table uses `REPLICA IDENTITY FULL`:
-
-```sql
-CREATE SOURCE kafka_repl
-    FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
     ENVELOPE DEBEZIUM;
 ```
 
-When should you use what? `UPSERT` works best when there is a small number of quickly changing rows and is required if log compaction is enabled for your Debezium topic; setting `REPLICA IDENTITY FULL` in the original tables and using the regular Debezium envelope works best for pretty much everything else.
+This allows you to replicate tables with `REPLICA IDENTITY DEFAULT`, `INDEX`, or `FULL`.
 
 #### Transaction support
 

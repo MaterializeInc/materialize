@@ -13,17 +13,21 @@ $ schema-registry-wait-schema schema=sql-server.dbo.delete_table_pk-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE delete_table_pk
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.delete_table_pk'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.delete_table_pk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-$ schema-registry-wait-schema schema=sql-server.dbo.delete_table_nopk-value
+# [btv] uncomment if we bring back classic debezium mode
+# $ schema-registry-wait-schema schema=sql-server.dbo.delete_table_nopk-value
 
-> CREATE SOURCE delete_table_nopk
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sql-server.dbo.delete_table_nopk'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM;
+# > CREATE SOURCE delete_table_nopk
+#   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.delete_table_nopk')
+#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+#   ENVELOPE DEBEZIUM;
 
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
@@ -31,10 +35,10 @@ server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;U
 $ sql-server-execute name=sql-server
 USE test;
 DELETE FROM delete_table_pk WHERE key_col = 'key1';
-DELETE FROM delete_table_nopk WHERE key_col = 'key2';
+# DELETE FROM delete_table_nopk WHERE key_col = 'key2';
 
 > SELECT * FROM delete_table_pk;
 key2 value2
 
-> SELECT * FROM delete_table_nopk;
-key1 value1
+# > SELECT * FROM delete_table_nopk;
+# key1 value1

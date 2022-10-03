@@ -99,8 +99,11 @@ $ kafka-create-topic topic=data
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"id": "valid1", "a": 2, "b": 1}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > SELECT * FROM t CROSS JOIN data
@@ -115,7 +118,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 $ skip-if
 SELECT ${arg.replicas} > 1
 
-> SELECT * FROM t CROSS JOIN mz_dataflow_operators LIMIT 0
+> SELECT * FROM t CROSS JOIN mz_internal.mz_dataflow_operators LIMIT 0
 
 > DROP SOURCE data
 

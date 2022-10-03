@@ -254,6 +254,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(COMMIT) => Ok(self.parse_commit()?),
                 Token::Keyword(ROLLBACK) => Ok(self.parse_rollback()?),
                 Token::Keyword(TAIL) => Ok(self.parse_tail()?),
+                Token::Keyword(SUBSCRIBE) => Ok(self.parse_subscribe()?),
                 Token::Keyword(EXPLAIN) => Ok(self.parse_explain()?),
                 Token::Keyword(DECLARE) => Ok(self.parse_declare()?),
                 Token::Keyword(FETCH) => Ok(self.parse_fetch()?),
@@ -608,27 +609,6 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-
-        // TODO: This is a temporary hack to allow us to support the special
-        // `date(expr)` cast function without needing to write a migration. It
-        // will be removed during a wipe week.
-        if let (FunctionArgs::Args { args, order_by }, None, None, false) =
-            (&args, &filter, &over, distinct)
-        {
-            if order_by.is_empty()
-                && args.len() == 1
-                && name.0.len() == 1
-                && name.0[0].as_str().eq_ignore_ascii_case("date")
-            {
-                return Ok(Expr::Cast {
-                    expr: Box::new(args[0].clone()),
-                    data_type: RawDataType::Other {
-                        name: RawObjectName::Name(name),
-                        typ_mod: Vec::new(),
-                    },
-                });
-            }
-        }
 
         Ok(Expr::Function(Function {
             name,
@@ -1645,7 +1625,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE",
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW or VIEWS, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
                     self.peek_token(),
                 )
             }
@@ -1724,7 +1704,10 @@ impl<'a> Parser<'a> {
             AvroSchema::Csr { csr_connection }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
-            let schema = self.parse_schema()?;
+            self.expect_keyword(SCHEMA)?;
+            let schema = Schema {
+                schema: self.parse_literal_string()?,
+            };
             let with_options = if self.consume_token(&Token::LParen) {
                 let with_options = self.parse_comma_separated(Parser::parse_avro_schema_option)?;
                 self.expect_token(&Token::RParen)?;
@@ -1762,17 +1745,20 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(MESSAGE) {
             let message_name = self.parse_literal_string()?;
             self.expect_keyword(USING)?;
-            let schema = self.parse_schema()?;
+            self.expect_keyword(SCHEMA)?;
+            let schema = Schema {
+                schema: self.parse_literal_string()?,
+            };
             Ok(ProtobufSchema::InlineSchema {
                 message_name,
                 schema,
             })
         } else {
-            return self.expected(
+            self.expected(
                 self.peek_pos(),
                 "CONFLUENT SCHEMA REGISTRY or MESSAGE",
                 self.peek_token(),
-            );
+            )
         }
     }
 
@@ -1903,49 +1889,13 @@ impl<'a> Parser<'a> {
         Ok(CsrConnectionProtobuf { connection, seed })
     }
 
-    fn parse_schema(&mut self) -> Result<Schema, ParserError> {
-        self.expect_keyword(SCHEMA)?;
-        let schema = if self.parse_keyword(FILE) {
-            Schema::File(self.parse_literal_string()?.into())
-        } else {
-            Schema::Inline(self.parse_literal_string()?)
-        };
-        Ok(schema)
-    }
-
-    fn parse_envelope(&mut self) -> Result<Envelope<Raw>, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
-            let debezium_mode = if self.parse_keyword(UPSERT) {
-                DbzMode::Upsert
-            } else {
-                let tx_metadata = if self.consume_token(&Token::LParen) {
-                    self.expect_keywords(&[TRANSACTION, METADATA])?;
-                    self.expect_token(&Token::LParen)?;
-                    let options = self.parse_comma_separated(|parser| {
-                        match parser.expect_one_of_keywords(&[SOURCE, COLLECTION])? {
-                            SOURCE => {
-                                let _ = parser.consume_token(&Token::Eq);
-                                Ok(DbzTxMetadataOption::Source(parser.parse_raw_name()?))
-                            }
-                            COLLECTION => {
-                                let _ = parser.consume_token(&Token::Eq);
-                                Ok(DbzTxMetadataOption::Collection(
-                                    parser.parse_with_option_value()?,
-                                ))
-                            }
-                            _ => unreachable!(),
-                        }
-                    })?;
-                    self.expect_token(&Token::RParen)?;
-                    self.expect_token(&Token::RParen)?;
-                    options
-                } else {
-                    vec![]
-                };
-                DbzMode::Plain { tx_metadata }
-            };
+            // In Platform, `DEBEZIUM UPSERT` is the only available option.
+            // Revisit this if we ever change that.
+            let debezium_mode = DbzMode::Plain;
             Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
             Envelope::Upsert
@@ -2060,7 +2010,7 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        Ok(KafkaConnection::Reference {
+        Ok(KafkaConnection {
             connection,
             options,
         })
@@ -2088,14 +2038,10 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(ID)?;
                 KafkaConfigOptionName::ClientId
             }
-            ENABLE => match self.expect_one_of_keywords(&[AUTO, IDEMPOTENCE])? {
-                AUTO => {
-                    self.expect_keyword(COMMIT)?;
-                    KafkaConfigOptionName::EnableAutoCommit
-                }
-                IDEMPOTENCE => KafkaConfigOptionName::EnableIdempotence,
-                _ => unreachable!(),
-            },
+            ENABLE => {
+                self.expect_keyword(IDEMPOTENCE)?;
+                KafkaConfigOptionName::EnableIdempotence
+            }
             FETCH => {
                 self.expect_keywords(&[MESSAGE, crate::keywords::MAX, BYTES])?;
                 KafkaConfigOptionName::FetchMessageMaxBytes
@@ -2434,38 +2380,23 @@ impl<'a> Parser<'a> {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
-                self.expect_keyword(PUBLICATION)?;
-                let publication = self.parse_literal_string()?;
-                let details = if self.parse_keyword(DETAILS) {
-                    Some(self.parse_literal_string()?)
+
+                let options = if self.consume_token(&Token::LParen) {
+                    let options = self.parse_comma_separated(Parser::parse_pg_connection_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
                 } else {
-                    None
+                    vec![]
                 };
 
                 Ok(CreateSourceConnection::Postgres {
                     connection,
-                    publication,
-                    details,
+                    options,
                 })
             }
             KAFKA => {
-                let (connection, topic) =
-                    match self.expect_one_of_keywords(&[BROKER, CONNECTION])? {
-                        BROKER => {
-                            let conn = KafkaConnection::Inline {
-                                broker: self.parse_literal_string()?,
-                            };
-                            self.expect_keyword(TOPIC)?;
-                            let topic = self.parse_literal_string()?;
-                            (conn, Some(topic))
-                        }
-                        CONNECTION => {
-                            let conn = self.parse_kafka_connection_reference()?;
-                            // TOPIC defined in options on `conn`
-                            (conn, None)
-                        }
-                        _ => unreachable!(),
-                    };
+                self.expect_keyword(CONNECTION)?;
+                let connection = self.parse_kafka_connection_reference()?;
                 // one token of lookahead:
                 // * `KEY (` means we're parsing a list of columns for the key
                 // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
@@ -2479,7 +2410,6 @@ impl<'a> Parser<'a> {
                 };
                 Ok(CreateSourceConnection::Kafka(KafkaSourceConnection {
                     connection,
-                    topic,
                     key,
                 }))
             }
@@ -2556,6 +2486,20 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn parse_pg_connection_option(&mut self) -> Result<PgConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[DETAILS, PUBLICATION])? {
+            DETAILS => PgConfigOptionName::Details,
+            PUBLICATION => PgConfigOptionName::Publication,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(PgConfigOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
@@ -3116,11 +3060,11 @@ impl<'a> Parser<'a> {
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
             Some(CASCADE),
         );
-        return Ok(Statement::DropClusters(DropClustersStatement {
+        Ok(Statement::DropClusters(DropClustersStatement {
             if_exists,
             names,
             cascade,
-        }));
+        }))
     }
 
     fn parse_drop_cluster_replicas(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3132,16 +3076,8 @@ impl<'a> Parser<'a> {
             let replica = p.parse_identifier()?;
             Ok(QualifiedReplica { cluster, replica })
         })?;
-        let cascade = matches!(
-            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
-            Some(CASCADE),
-        );
         Ok(Statement::DropClusterReplicas(
-            DropClusterReplicasStatement {
-                if_exists,
-                names,
-                cascade,
-            },
+            DropClusterReplicasStatement { if_exists, names },
         ))
     }
 
@@ -3417,7 +3353,7 @@ impl<'a> Parser<'a> {
         } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
             Ok(WithOptionValue::Ident(ident))
         } else {
-            return self.expected(self.peek_pos(), "option value", self.peek_token());
+            self.expected(self.peek_pos(), "option value", self.peek_token())
         }
     }
 
@@ -3425,7 +3361,7 @@ impl<'a> Parser<'a> {
         if let Some(obj) = self.maybe_parse(Parser::parse_raw_name) {
             Ok(WithOptionValue::Object(obj))
         } else {
-            return self.expected(self.peek_pos(), "object", self.peek_token());
+            self.expected(self.peek_pos(), "object", self.peek_token())
         }
     }
 
@@ -3639,7 +3575,7 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RParen)?;
             match query {
                 Statement::Select(stmt) => CopyRelation::Select(stmt),
-                Statement::Tail(stmt) => CopyRelation::Tail(stmt),
+                Statement::Subscribe(stmt) => CopyRelation::Subscribe(stmt),
                 _ => return parser_err!(self, self.peek_prev_pos(), "unsupported query in COPY"),
             }
         } else {
@@ -3715,11 +3651,11 @@ impl<'a> Parser<'a> {
                 Token::Keyword(FALSE) => Ok(Value::Boolean(false)),
                 Token::Keyword(NULL) => Ok(Value::Null),
                 Token::Keyword(kw) => {
-                    return parser_err!(
+                    parser_err!(
                         self,
                         self.peek_prev_pos(),
                         format!("No value parser for keyword {}", kw)
-                    );
+                    )
                 }
                 Token::Op(ref op) if op == "-" => match self.next_token() {
                     Some(Token::Number(n)) => Ok(Value::Number(format!("-{}", n))),
@@ -4716,16 +4652,11 @@ impl<'a> Parser<'a> {
             }
             let in_cluster = self.parse_optional_in_cluster()?;
 
-            let filter = if self.parse_keyword(WHERE) {
-                Some(ShowStatementFilter::Where(self.parse_expr()?))
-            } else {
-                None
-            };
             Ok(ShowStatement::ShowIndexes(ShowIndexesStatement {
                 on_object,
                 from_schema,
                 in_cluster,
-                filter,
+                filter: self.parse_show_statement_filter()?,
             }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(ShowStatement::ShowCreateView(ShowCreateViewStatement {
@@ -4874,7 +4805,7 @@ impl<'a> Parser<'a> {
             if self.consume_token(&Token::LParen) {
                 return self.parse_derived_table_factor(Lateral);
             } else if self.parse_keywords(&[ROWS, FROM]) {
-                return Ok(self.parse_rows_from()?);
+                return self.parse_rows_from();
             } else {
                 let name = self.parse_object_name()?;
                 self.expect_token(&Token::LParen)?;
@@ -5244,32 +5175,41 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_tail(&mut self) -> Result<Statement<Raw>, ParserError> {
+        parser_err!(
+            self,
+            self.peek_prev_pos(),
+            "TAIL has been renamed to SUBSCRIBE"
+        )
+    }
+
+    fn parse_subscribe(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let _ = self.parse_keyword(TO);
         let relation = if self.consume_token(&Token::LParen) {
             let query = self.parse_query()?;
             self.expect_token(&Token::RParen)?;
-            TailRelation::Query(query)
+            SubscribeRelation::Query(query)
         } else {
-            TailRelation::Name(self.parse_raw_name()?)
+            SubscribeRelation::Name(self.parse_raw_name()?)
         };
-        let options = self.parse_kw_options(Parser::parse_tail_option)?;
+        let options = self.parse_kw_options(Parser::parse_subscribe_option)?;
         let as_of = self.parse_optional_as_of()?;
-        Ok(Statement::Tail(TailStatement {
+        Ok(Statement::Subscribe(SubscribeStatement {
             relation,
             options,
             as_of,
         }))
     }
 
-    fn parse_tail_option(&mut self) -> Result<TailOption<Raw>, ParserError> {
+    fn parse_subscribe_option(&mut self) -> Result<SubscribeOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[PROGRESS, SNAPSHOT])? {
-            PROGRESS => TailOptionName::Progress,
-            SNAPSHOT => TailOptionName::Snapshot,
+            PROGRESS => SubscribeOptionName::Progress,
+            SNAPSHOT => SubscribeOptionName::Snapshot,
             _ => unreachable!(),
         };
 
         let _ = self.consume_token(&Token::Eq);
 
-        Ok(TailOption {
+        Ok(SubscribeOption {
             name,
             value: self.parse_opt_with_option_value(false)?,
         })

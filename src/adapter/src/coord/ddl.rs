@@ -14,10 +14,12 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use itertools::Itertools;
+use serde_json::json;
 use timely::progress::Antichain;
 use tracing::Level;
 use tracing::{event, warn};
 
+use mz_audit_log::VersionedEvent;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -29,7 +31,8 @@ use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection, Timeline};
 
 use crate::catalog::{
-    CatalogItem, CatalogState, Op, Sink, StorageSinkConnectionState, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Op, Sink, StorageSinkConnectionState, TransactionResult,
+    SYSTEM_CONN_ID,
 };
 use crate::client::ConnectionId;
 use crate::coord::appends::BuiltinTableUpdateSource;
@@ -147,7 +150,7 @@ impl<S: Append + 'static> Coordinator<S> {
             } else if let catalog::Op::DropComputeInstanceReplica { name, compute_name } = op {
                 let compute_instance = self.catalog.resolve_compute_instance(compute_name)?;
                 let replica_id = &compute_instance.replica_id_by_name[name];
-                let replica = &compute_instance.replicas_by_id[&replica_id];
+                let replica = &compute_instance.replicas_by_id[replica_id];
 
                 // Drop the introspection sources
                 sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
@@ -179,7 +182,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap_or(SYSTEM_CONN_ID),
         )?;
 
-        let (builtin_table_updates, collections, result) = self
+        let TransactionResult {
+            builtin_table_updates,
+            audit_events,
+            collections,
+            result,
+        } = self
             .catalog
             .transact(session, ops, |catalog| {
                 f(CatalogTxn {
@@ -244,6 +252,31 @@ impl<S: Append + 'static> Coordinator<S> {
         self.consolidations_tx
             .send(collections)
             .expect("sending on consolidations_tx must succeed");
+
+        if let (Some(segment_client), Some(user_metadata)) = (
+            &self.segment_client,
+            session.and_then(|s| s.user().external_metadata.as_ref()),
+        ) {
+            for VersionedEvent::V1(event) in audit_events {
+                let event_type = format!(
+                    "{} {}",
+                    event.object_type.as_title_case(),
+                    event.event_type.as_title_case()
+                );
+                segment_client.track(
+                    user_metadata.user_id,
+                    event_type,
+                    json!({
+                        "event_source": "environmentd",
+                        "details": event.event_details.as_json(),
+                    }),
+                    Some(json!({
+                        "groupId": user_metadata.group_id,
+                    })),
+                );
+            }
+        }
+
         Ok(result)
     }
 

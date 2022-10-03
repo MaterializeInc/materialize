@@ -21,7 +21,7 @@ resources used for view maintenance from the resources used for query serving.
 
 Field | Use
 ------|-----
-**OR REPLACE** | If a materialized view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views depend on, nor can you replace a non-view object with a view.
+**OR REPLACE** | If a materialized view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a materialized view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
 _view&lowbar;name_ | A name for the materialized view.
 **(** _col_ident_... **)** | Rename the `SELECT` statement's columns to the list of identifiers, both of which must be the same length. Note that this is required for statements that return multiple columns with the same identifier.
@@ -39,7 +39,7 @@ view. It's a good idea to create a materialized view if:
 * The results need to be available across clusters;
 * View maintenance and query serving would benefit from being scaled
   independently;
-* The final consumer of the view is a sink or a [subscription](../tail).
+* The final consumer of the view is a sink or a [`SUBSCRIBE`](../subscribe) operation.
 
 On the other hand, if you only need to access a view from a single cluster, you
 should consider creating a [non-materialized view](../create-view) and building
@@ -79,7 +79,7 @@ SELECT auction_id,
        item,
        amount
 FROM highest_bid_per_auction
-WHERE extract(epoch FROM end_time) * 1000 < mz_logical_timestamp();
+WHERE end_time < mz_now();
 ```
 
 [//]: # "TODO(morsapaes) Add more elaborate examples with \timing that show

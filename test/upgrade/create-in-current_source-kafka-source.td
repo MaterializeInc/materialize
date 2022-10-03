@@ -22,8 +22,11 @@ $ kafka-ingest format=avro topic=upgrade-kafka-source-${arg.upgrade-from-version
 {"a": 1, "b": 2}
 {"a": 2, "b": 3}
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE kafka_source
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-upgrade-kafka-source-${arg.upgrade-from-version}-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upgrade-kafka-source-${arg.upgrade-from-version}-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE NONE
 

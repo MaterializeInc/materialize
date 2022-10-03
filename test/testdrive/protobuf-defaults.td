@@ -28,16 +28,19 @@ message Defaults {
     optional Enum enum = 8 [default = ENUM1];
 }
 
-$ protobuf-compile-descriptors inputs=defaults.proto output=defaults.pb
+$ protobuf-compile-descriptors inputs=defaults.proto output=defaults.pb set-var=defaults-schema
 
 $ kafka-create-topic topic=defaults partitions=1
 
 $ kafka-ingest topic=defaults format=protobuf descriptor-file=defaults.pb message=Defaults
 {}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE defaults FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-defaults-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Defaults' USING SCHEMA FILE '${testdrive.temp-dir}/defaults.pb'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-defaults-${testdrive.seed}')
+  FORMAT PROTOBUF MESSAGE '.Defaults' USING SCHEMA '${defaults-schema}'
 
 > SELECT * FROM defaults
 bool  int32  int64  float  double  bytes  string enum

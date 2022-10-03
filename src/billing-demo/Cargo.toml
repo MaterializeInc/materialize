@@ -2,8 +2,8 @@
 name = "mz-billing-demo"
 description = "Microservice demo using Materialize to power a real-time billing usecase"
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

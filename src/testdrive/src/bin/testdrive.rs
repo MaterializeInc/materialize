@@ -118,18 +118,24 @@ struct Args {
         value_name = "URL"
     )]
     materialize_url: tokio_postgres::Config,
-    /// materialize SQL internal connection string.
+    /// materialize internal SQL connection string.
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6877",
         value_name = "INTERNAL_URL"
     )]
-    materialize_url_internal: tokio_postgres::Config,
-    /// The port on which Materialize is listening for untrusted HTTP connections.
+    materialize_internal_url: tokio_postgres::Config,
+    /// The port on which Materialize is listening for untrusted HTTP
+    /// connections.
     ///
     /// The hostname is taken from `materialize_url`.
     #[clap(long, default_value = "6876", value_name = "PORT")]
     materialize_http_port: u16,
+    /// The port on which Materialize is listening for trusted HTTP connections.
+    ///
+    /// The hostname is taken from `materialize_internal_url`.
+    #[clap(long, default_value = "6878", value_name = "PORT")]
+    materialize_internal_http_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to
     /// Materialize.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
@@ -311,8 +317,9 @@ async fn main() {
 
         // === Materialize options. ===
         materialize_pgconfig: args.materialize_url,
-        materialize_pgconfig_internal: args.materialize_url_internal,
+        materialize_internal_pgconfig: args.materialize_internal_url,
         materialize_http_port: args.materialize_http_port,
+        materialize_internal_http_port: args.materialize_internal_http_port,
         materialize_params: args.materialize_param,
         materialize_catalog_postgres_stash: args.validate_postgres_stash,
 

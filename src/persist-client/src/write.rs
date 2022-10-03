@@ -22,6 +22,7 @@ use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, Indeterminate};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
+use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
@@ -31,13 +32,15 @@ use uuid::Uuid;
 use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder};
 use crate::error::InvalidUsage;
 use crate::internal::compact::Compactor;
+use crate::internal::encoding::SerdeWriterEnrichedHollowBatch;
 use crate::internal::machine::{Machine, INFO_MIN_ATTEMPTS};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HollowBatch, Upper};
-use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig};
+use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig, ShardId};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct WriterId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for WriterId {
@@ -60,10 +63,42 @@ impl std::str::FromStr for WriterId {
     }
 }
 
+impl From<WriterId> for String {
+    fn from(writer_id: WriterId) -> Self {
+        writer_id.to_string()
+    }
+}
+
+impl TryFrom<String> for WriterId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
 impl WriterId {
     pub(crate) fn new() -> Self {
         WriterId(*Uuid::new_v4().as_bytes())
     }
+}
+
+/// A token representing one written batch.
+///
+/// This may be exchanged (including over the network). It is tradeable via
+/// [`WriteHandle::batch_from_hollow_batch`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "T: Timestamp + Codec64",
+    deserialize = "T: Timestamp + Codec64"
+))]
+#[serde(
+    into = "SerdeWriterEnrichedHollowBatch",
+    from = "SerdeWriterEnrichedHollowBatch"
+)]
+pub struct WriterEnrichedHollowBatch<T> {
+    pub(crate) shard_id: ShardId,
+    pub(crate) batch: HollowBatch<T>,
 }
 
 /// A "capability" granting the ability to apply updates to some shard at times
@@ -94,7 +129,7 @@ where
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
-    pub(crate) compact: Option<Compactor>,
+    pub(crate) compact: Option<Compactor<T, D>>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) writer_id: WriterId,
@@ -127,7 +162,7 @@ where
         // TODO: Do we even need to track self.upper on WriteHandle or could
         // WriteHandle::upper just get the one out of machine?
         let fresh_upper = self.machine.fetch_upper().await;
-        self.upper.clone_from(&fresh_upper);
+        self.upper.clone_from(fresh_upper);
         fresh_upper
     }
 
@@ -245,7 +280,7 @@ where
             .await
         {
             ok @ Ok(Ok(Ok(()))) => ok,
-            err @ _ => {
+            err => {
                 // We cannot delete the batch in compare_and_append_batch()
                 // because the caller owns the batch and might want to retry
                 // with a different `expected_upper`. In this function, we
@@ -479,6 +514,27 @@ where
         Ok(Ok(Ok(())))
     }
 
+    /// Turns the given [`WriterEnrichedHollowBatch`] back into a [`Batch`]
+    /// which can be used to append it to this shard.
+    pub fn batch_from_hollow_batch(
+        &self,
+        hollow: WriterEnrichedHollowBatch<T>,
+    ) -> Batch<K, V, T, D> {
+        assert_eq!(
+            hollow.shard_id,
+            self.machine.shard_id(),
+            "hollow batch with shard id {} is not for this shard {}",
+            hollow.shard_id,
+            self.machine.shard_id()
+        );
+        Batch {
+            shard_id: self.machine.shard_id(),
+            batch: hollow.batch,
+            _blob: Arc::clone(&self.blob),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
     /// Returns a [BatchBuilder] that can be used to write a batch of updates to
     /// blob storage which can then be appended to this shard using
     /// [Self::compare_and_append_batch] or [Self::append_batch].
@@ -698,6 +754,8 @@ where
 #[cfg(test)]
 mod tests {
     use differential_dataflow::consolidation::consolidate_updates;
+    use serde_json::json;
+    use std::str::FromStr;
 
     use crate::tests::{all_ok, new_test_client};
     use crate::ShardId;
@@ -775,6 +833,75 @@ mod tests {
         let expected = vec![
             (("1".to_owned(), "one".to_owned()), 1, 2),
             (("2".to_owned(), "two".to_owned()), 2, 2),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+        let mut actual = read.expect_snapshot_and_fetch(3).await;
+        consolidate_updates(&mut actual);
+        assert_eq!(actual, all_ok(&expected, 3));
+    }
+
+    #[test]
+    fn writer_id_human_readable_serde() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct Container {
+            writer_id: WriterId,
+        }
+
+        // roundtrip through json
+        let id = WriterId::from_str("w00000000-1234-5678-0000-000000000000").expect("valid id");
+        assert_eq!(
+            id,
+            serde_json::from_value(serde_json::to_value(id.clone()).expect("serializable"))
+                .expect("deserializable")
+        );
+
+        // deserialize a serialized string directly
+        assert_eq!(
+            id,
+            serde_json::from_str("\"w00000000-1234-5678-0000-000000000000\"")
+                .expect("deserializable")
+        );
+
+        // roundtrip id through a container type
+        let json = json!({ "writer_id": id });
+        assert_eq!(
+            "{\"writer_id\":\"w00000000-1234-5678-0000-000000000000\"}",
+            &json.to_string()
+        );
+        let container: Container = serde_json::from_value(json).expect("deserializable");
+        assert_eq!(container.writer_id, id);
+    }
+
+    #[tokio::test]
+    async fn hollow_batch_roundtrip() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let (mut write, mut read) = new_test_client()
+            .await
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        // This test is a bit more complex than it should be. It would be easier
+        // if we could just compare the rehydrated batch to the original batch.
+        // But a) turning a batch into a hollow batch consumes it, and b) Batch
+        // doesn't have Eq/PartialEq.
+        let batch = write.expect_batch(&data, 0, 4).await;
+        let hollow_batch = batch.into_writer_hollow_batch();
+        let mut rehydrated_batch = write.batch_from_hollow_batch(hollow_batch);
+
+        write
+            .expect_compare_and_append_batch(&mut [&mut rehydrated_batch], 0, 4)
+            .await;
+
+        let expected = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
         let mut actual = read.expect_snapshot_and_fetch(3).await;

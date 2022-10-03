@@ -9,7 +9,6 @@
 
 use criterion::{black_box, Criterion, Throughput};
 use prost::Message;
-use tokio::runtime::Runtime;
 
 use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
 
@@ -20,8 +19,6 @@ mod gen {
 }
 
 pub fn bench_protobuf(c: &mut Criterion) {
-    let runtime = Runtime::new().unwrap();
-
     let value = Value {
         l_orderkey: 155_190,
         l_suppkey: 7706,
@@ -80,7 +77,7 @@ pub fn bench_protobuf(c: &mut Criterion) {
     let mut bg = c.benchmark_group("protobuf");
     bg.throughput(Throughput::Bytes(len));
     bg.bench_function("decode", move |b| {
-        b.iter(|| black_box(runtime.block_on(decoder.decode(&buf)).unwrap()))
+        b.iter(|| black_box(decoder.decode(&buf).unwrap()))
     });
     bg.finish();
 }

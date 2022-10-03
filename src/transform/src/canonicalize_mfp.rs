@@ -50,12 +50,20 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct CanonicalizeMfp;
 
 impl crate::Transform for CanonicalizeMfp {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "canonicalize_mfp")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation, args.indexes)
+        let result = self.action(relation, args.indexes);
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 
@@ -93,7 +101,7 @@ impl CanonicalizeMfp {
             ) -> Result<(), RecursionLimitError> {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
-                CanonicalizeMfp::canonicalize_predicates(mfp, &relation);
+                CanonicalizeMfp::canonicalize_predicates(mfp, relation);
                 // undo inline_literal_constraints
                 mfp.optimize();
                 // We can usually undo, but sometimes not (see comment on `distribute_and_over_or`),
@@ -435,21 +443,14 @@ impl CanonicalizeMfp {
     /// reconstruct literal constraints.
     fn inline_literal_constraints(mfp: &mut MapFilterProject) -> Result<(), RecursionLimitError> {
         let mut should_inline = vec![false; mfp.input_arity + mfp.expressions.len()];
-        // Mark those expressions for inlining that are of the form
+        // Mark those expressions for inlining that contain a subexpression of the form
         // `<xxx> = <lit>` or `<lit> = <xxx>`.
         for (i, e) in mfp.expressions.iter().enumerate() {
-            if let MirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
-                expr1,
-                expr2,
-            } = e
-            {
-                if matches!(**expr1, MirScalarExpr::Literal(..))
-                    || matches!(**expr2, MirScalarExpr::Literal(..))
-                {
+            e.visit_post(&mut |s| {
+                if s.any_expr_eq_literal().is_some() {
                     should_inline[i + mfp.input_arity] = true;
                 }
-            }
+            })?;
         }
         // Whenever
         // `<Column(i)> = <lit>` or `<lit> = <Column(i)>`

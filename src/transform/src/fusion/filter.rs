@@ -53,12 +53,20 @@ use mz_expr::MirRelationExpr;
 pub struct Filter;
 
 impl crate::Transform for Filter {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "filter_fusion")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)))
+        let result = relation.try_visit_mut_pre(&mut |e| Ok(self.action(e)));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

@@ -21,7 +21,7 @@
 > CREATE SOURCE mz_source
   FROM POSTGRES
   CONNECTION pg
-  PUBLICATION 'mz_source'
+  (PUBLICATION 'mz_source')
   WITH (
     REMOTE = 'storaged:2100'
   )

@@ -36,7 +36,7 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
 $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "b${kafka-ingest.iteration}"} {"f2": "b${kafka-ingest.iteration}"}
 
-> CREATE CONNECTION kafka_conn
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -54,6 +54,7 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-failpoint-sink-${testdrive.seed}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschema} schema=${schema} repeat=10000
 {"f1": "c${kafka-ingest.iteration}"} {"f2": "c${kafka-ingest.iteration}"}

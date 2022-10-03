@@ -11,6 +11,6 @@ mod connect;
 mod execute;
 mod verify_slot;
 
-pub use connect::build_connect;
-pub use execute::build_execute;
-pub use verify_slot::build_verify_slot;
+pub use connect::run_connect;
+pub use execute::run_execute;
+pub use verify_slot::run_verify_slot;

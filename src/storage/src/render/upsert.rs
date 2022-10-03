@@ -186,7 +186,7 @@ fn evaluate(
     let arena = RowArena::new();
     // Each predicate is tested in order.
     for predicate in predicates.iter() {
-        if predicate.eval(&datums[..], &arena)? != Datum::True {
+        if predicate.eval(datums, &arena)? != Datum::True {
             return Ok(None);
         }
     }
@@ -310,7 +310,11 @@ where
             // N.B. We make the expected type explicit here to make sure it
             // cannot change by accident.
             let key: &Option<Result<Row, DecodeError>> = key;
-            key.hashed()
+            // Another N.B. we use `as_ref()` here so that we're hashing a
+            // `Option<&Result<Row, DecodeError>`, like we do below. We don't
+            // stricly need it because the result is the same without but with
+            // this we are extra future safe.
+            key.as_ref().hashed()
         }),
         Exchange::new(|((key, _v), _t, _r)| {
             // N.B.  We make the expected type explicit here to make sure it
@@ -602,7 +606,7 @@ fn process_pending_values_batch(
                                 )
                                 .map_or(Ok(None), |mut datums| {
                                     datums.extend(data.metadata.iter());
-                                    evaluate(&datums, &predicates, &position_or, row_packer)
+                                    evaluate(&datums, predicates, position_or, row_packer)
                                         .map_err(Into::into)
                                 })
                             })
@@ -628,14 +632,14 @@ fn process_pending_values_batch(
                 // key columns, cloning when need-be
                 let thinned_value = new_value
                     .as_ref()
-                    .map(|full_row| thin(key_indices_sorted, &full_row, row_packer))
+                    .map(|full_row| thin(key_indices_sorted, full_row, row_packer))
                     .map_err(|e| e.clone());
                 current_values
                     .insert(decoded_key.clone(), thinned_value)
                     .map(|res| {
                         res.map(|v| {
                             rehydrate(
-                                &key_indices_map,
+                                key_indices_map,
                                 // The value is never `Ok`
                                 // unless the key is also
                                 decoded_key.as_ref().unwrap(),

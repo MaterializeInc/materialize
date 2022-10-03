@@ -94,14 +94,17 @@ name
 > CREATE SINK snk1 FROM src
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK snk2 FROM src_materialized
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > CREATE SINK snk3 FROM v3
   INTO KAFKA CONNECTION kafka_conn (RETENTION BYTES = 1000000000000, TOPIC 'testdrive-snk3-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > SHOW SINKS
 name
@@ -111,16 +114,26 @@ snk2
 snk3
 
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 1}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 0}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": [0, 0, 0, 0, 0, 0, 0, 0]}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk2 sort-messages=true
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 1}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 0}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": [0, 0, 0, 0, 0, 0, 0, 0]}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
 {"before": null, "after": {"row":{"c": "goofusgallant"}}}
 {"before": null, "after": {"row":{"c": "jackjill"}}}
+
+# Test Avro serialization of unsigned values.
+> CREATE MATERIALIZED VIEW unsigned (a, b, c, d, e, f) AS
+  VALUES ('1'::uint2, '2'::uint2, '3'::uint4, '4'::uint4, '5'::uint8, '6'::uint8)
+> CREATE SINK snk_unsigned FROM unsigned
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk2')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+$ kafka-verify format=avro sink=materialize.public.snk_unsigned sort-messages=true
+{"before": null, "after": {"row":{"a": [0, 1], "b": [0, 2], "c": [0, 0, 0, 3], "d": [0, 0, 0, 4], "e": [0, 0, 0, 0, 0, 0, 0, 5], "f": [0, 0, 0, 0, 0, 0, 0, 6]}}}
 
 # Test the case where we have non +/- 1 multiplicities
 
@@ -130,6 +143,7 @@ $ kafka-verify format=avro sink=materialize.public.snk3 sort-messages=true
 > CREATE SINK snk4 FROM v4
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk4-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.snk4
 {"before": null, "after": {"row":{"c": true}}}
@@ -145,23 +159,25 @@ $ kafka-verify format=avro sink=materialize.public.snk4
 > CREATE SINK snk5 FROM src_materialized
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk5-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
   WITH (SNAPSHOT = false)
 
 > CREATE SINK snk6 FROM src_materialized
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk6-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
   WITH (SNAPSHOT = true)
 
 $ kafka-ingest topic=test format=bytes
 extra,row
 
 $ kafka-verify format=avro sink=materialize.public.snk5
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 2}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": [0, 0, 0, 0, 0, 0, 0, 2]}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk6 sort-messages=true
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": 2}}}
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": 1}}}
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": 0}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "offset": [0, 0, 0, 0, 0, 0, 0, 2]}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "offset": [0, 0, 0, 0, 0, 0, 0, 0]}}}
 
 # Test that we are correctly handling SNAPSHOT on views with empty upper
 # frontier
@@ -170,11 +186,13 @@ $ kafka-verify format=avro sink=materialize.public.snk6 sort-messages=true
 > CREATE SINK snk7 FROM foo
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk7-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
   WITH (SNAPSHOT = false)
 
 > CREATE SINK snk8 FROM foo
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk8-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
   WITH (SNAPSHOT)
 
 $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
@@ -193,28 +211,34 @@ snk5
 snk6
 snk7
 snk8
+snk_unsigned
 
 # test explicit partition count
 > CREATE SINK snk9 FROM foo
   INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=1, TOPIC 'testdrive-snk9-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 # test explicit replication factor
 > CREATE SINK snk10 FROM foo
   INTO KAFKA CONNECTION kafka_conn (REPLICATION FACTOR=1, TOPIC 'testdrive-snk10-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 # test explicit partition count and replication factor
 > CREATE SINK snk11 FROM foo
   INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=1, REPLICATION FACTOR=1, TOPIC 'testdrive-snk11-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 # test broker defaulted partition count and replication factor
 > CREATE SINK snk12 FROM foo
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk12-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 # test explicit request for broker defaulted partition count and replication factor
 > CREATE SINK snk13 FROM foo
   INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=-1, REPLICATION FACTOR=-1, TOPIC 'testdrive-snk13-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM

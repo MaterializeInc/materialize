@@ -28,6 +28,8 @@ use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
+use crate::source::commit::LogCommitter;
+use crate::source::types::OffsetCommitter;
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -75,10 +77,18 @@ pub struct KafkaSourceReader {
     include_headers: bool,
 }
 
+pub struct KafkaOffsetCommiter {
+    source_id: GlobalId,
+    topic_name: String,
+    logger: LogCommitter,
+    consumer: Arc<BaseConsumer<GlueConsumerContext>>,
+}
+
 impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Diff = ();
+    type OffsetCommitter = KafkaOffsetCommiter;
     type Connection = KafkaSourceConnection;
 
     /// Create a new instance of a Kafka reader.
@@ -93,7 +103,7 @@ impl SourceReader for KafkaSourceReader {
         _: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let KafkaSourceConnection {
             connection,
             options,
@@ -179,22 +189,39 @@ impl SourceReader for KafkaSourceReader {
                 .unpark_on_drop()
         };
         let partition_ids = start_offsets.keys().copied().collect();
-        Ok(KafkaSourceReader {
-            topic_name: topic.clone(),
-            source_name,
-            id: source_id,
-            partition_consumers: VecDeque::new(),
-            consumer,
-            worker_id,
-            worker_count,
-            last_offsets: HashMap::new(),
-            start_offsets,
-            stats_rx,
-            partition_info,
-            include_headers: kc.include_headers.is_some(),
-            _metadata_thread_handle: metadata_thread_handle,
-            partition_metrics: KafkaPartitionMetrics::new(metrics, partition_ids, topic, source_id),
-        })
+        Ok((
+            KafkaSourceReader {
+                topic_name: topic.clone(),
+                source_name,
+                id: source_id,
+                partition_consumers: VecDeque::new(),
+                consumer: Arc::clone(&consumer),
+                worker_id,
+                worker_count,
+                last_offsets: HashMap::new(),
+                start_offsets,
+                stats_rx,
+                partition_info,
+                include_headers: kc.include_headers.is_some(),
+                _metadata_thread_handle: metadata_thread_handle,
+                partition_metrics: KafkaPartitionMetrics::new(
+                    metrics,
+                    partition_ids,
+                    topic.clone(),
+                    source_id,
+                ),
+            },
+            KafkaOffsetCommiter {
+                source_id,
+                topic_name: topic,
+                logger: LogCommitter {
+                    source_id,
+                    worker_id,
+                    worker_count,
+                },
+                consumer,
+            },
+        ))
     }
 
     /// This function polls from the next consumer for which a message is available. This function
@@ -273,6 +300,51 @@ impl SourceReader for KafkaSourceReader {
     }
 }
 
+#[async_trait::async_trait]
+impl OffsetCommitter for KafkaOffsetCommiter {
+    async fn commit_offsets(
+        &self,
+        offsets: HashMap<PartitionId, MzOffset>,
+    ) -> Result<(), anyhow::Error> {
+        use rdkafka::consumer::CommitMode;
+        use rdkafka::topic_partition_list::Offset;
+
+        let mut tpl = TopicPartitionList::new();
+        for (pid, offset) in offsets.clone() {
+            // Note that we expect the above layers to pre-filter
+            // by partition for us. This is part of the
+            // `OffsetCommitter` contract.
+            let pid = match pid {
+                PartitionId::Kafka(id) => id,
+                _ => panic!("unexpected partition id type"),
+            };
+
+            // This matches the behavior of auto-commit, where we commit a
+            // pseudo-_frontier_. Additionally, overflow will be caught
+            // in the converstion to i64;
+            let offset_to_commit = offset + MzOffset::from(1);
+            let offset_to_commit = Offset::Offset(
+                offset_to_commit
+                    .offset
+                    .try_into()
+                    .expect("offset to be vald i64"),
+            );
+            tpl.add_partition_offset(&self.topic_name, pid, offset_to_commit)
+                .expect("offset known to be valid");
+        }
+
+        let consumer = Arc::clone(&self.consumer);
+        mz_ore::task::spawn_blocking(
+            || format!("source({}) kafka offset commit", self.source_id),
+            move || consumer.commit(&tpl, CommitMode::Sync),
+        )
+        .await??;
+
+        self.logger.commit_offsets(offsets).await?;
+        Ok(())
+    }
+}
+
 impl KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
     fn ensure_partition(&mut self, pid: PartitionId) {
@@ -325,7 +397,7 @@ impl KafkaSourceReader {
 
         // Since librdkafka v1.6.0, we need to recreate all partition queues
         // after every call to `self.consumer.assign`.
-        let context = Arc::clone(&self.consumer.context());
+        let context = Arc::clone(self.consumer.context());
         for pc in &mut self.partition_consumers {
             pc.partition_queue = self
                 .consumer
@@ -528,15 +600,6 @@ async fn create_kafka_config(
 ) -> ClientConfig {
     let mut kafka_config = create_new_client_config(connection_context.librdkafka_log_level);
 
-    crate::types::connections::populate_client_config(
-        kafka_connection.clone(),
-        options,
-        std::collections::HashSet::new(),
-        &mut kafka_config,
-        &*connection_context.secrets_reader,
-    )
-    .await;
-
     // Default to disabling Kafka auto commit. This can be explicitly enabled
     // by the user if they want to use it for progress tracking.
     kafka_config.set("enable.auto.commit", "false");
@@ -559,6 +622,15 @@ async fn create_kafka_config(
 
     kafka_config.set("fetch.message.max.bytes", "134217728");
 
+    crate::types::connections::populate_client_config(
+        kafka_connection.clone(),
+        options,
+        std::collections::HashSet::new(),
+        &mut kafka_config,
+        &*connection_context.secrets_reader,
+    )
+    .await;
+
     // Consumer group ID. librdkafka requires this, and we use offset committing
     // to provide a way for users to monitor ingest progress (though we do not
     // rely on the committed offsets for any functionality)
@@ -569,6 +641,8 @@ async fn create_kafka_config(
     // unique consumer group ID is the most surefire way to ensure that
     // librdkafka does not try to perform its own consumer group balancing,
     // which would wreak havoc with our careful partition assignment strategy.
+    //
+    // TODO(guswynn): make this include the connection id as well
     kafka_config.set(
         "group.id",
         &format!(

@@ -19,25 +19,25 @@ parts=1 len=1
 
 register-writer writer_id=w11111111-1111-1111-1111-111111111111
 ----
-[0]
+v2 [0]
 
 compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
 ----
-ok
+v3 [1]
 
-consensus-scan from_seqno=0
+consensus-scan from_seqno=v0
 ----
 seqno=v1 batches=
 seqno=v2 batches=
 seqno=v3 batches=b0
 
 # Run gc up to our latest seqno
-gc to_seqno=3
+gc to_seqno=v3
 ----
-ok
+v4 ok
 
 # Now some slow gc req comes in that's behind. In the regression case, this
 # panics.
-gc to_seqno=1
+gc to_seqno=v1
 ----
-ok
+v4 ok

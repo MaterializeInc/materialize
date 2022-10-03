@@ -20,7 +20,7 @@
 //! definitions of existing builtins!
 //!
 //! More information about builtin system tables and types can be found in
-//! <https://materialize.com/docs/sql/system-tables/>.
+//! <https://materialize.com/docs/sql/system-catalog/>.
 
 use std::hash::Hash;
 
@@ -29,8 +29,10 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
-use mz_repr::{RelationDesc, ScalarType};
-use mz_sql::catalog::{CatalogType, CatalogTypeDetails, NameReference, TypeReference};
+use mz_repr::{RelationDesc, RelationType, ScalarType};
+use mz_sql::catalog::{
+    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
+};
 
 use crate::catalog::SYSTEM_USER;
 
@@ -69,6 +71,17 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
             Builtin::StorageCollection(coll) => coll.schema,
+        }
+    }
+
+    pub fn catalog_item_type(&self) -> CatalogItemType {
+        match self {
+            Builtin::Log(_) => CatalogItemType::Source,
+            Builtin::Table(_) => CatalogItemType::Table,
+            Builtin::View(_) => CatalogItemType::View,
+            Builtin::Type(_) => CatalogItemType::Type,
+            Builtin::Func(_) => CatalogItemType::Func,
+            Builtin::StorageCollection(_) => CatalogItemType::Source,
         }
     }
 }
@@ -116,6 +129,7 @@ pub struct BuiltinFunc {
 
 pub static BUILTIN_ROLE_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
 
+#[derive(Clone)]
 pub struct BuiltinRole {
     /// Name of the builtin role.
     ///
@@ -123,6 +137,7 @@ pub struct BuiltinRole {
     pub name: &'static str,
 }
 
+/// Uniquely identifies the definition of a builtin object.
 pub trait Fingerprint {
     fn fingerprint(&self) -> u64;
 }
@@ -148,13 +163,25 @@ impl Fingerprint for BuiltinFunc {
 impl<T: TypeReference> Fingerprint for &Builtin<T> {
     fn fingerprint(&self) -> u64 {
         match self {
-            Builtin::Log(log) => log.fingerprint(),
-            Builtin::Table(table) => table.fingerprint(),
-            Builtin::View(view) => view.fingerprint(),
+            Builtin::Log(log) => log.variant.desc().fingerprint(),
+            Builtin::Table(table) => table.desc.fingerprint(),
+            Builtin::View(view) => view.sql.hashed(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
-            Builtin::StorageCollection(coll) => coll.fingerprint(),
+            Builtin::StorageCollection(coll) => coll.desc.fingerprint(),
         }
+    }
+}
+
+impl Fingerprint for RelationDesc {
+    fn fingerprint(&self) -> u64 {
+        self.typ().fingerprint()
+    }
+}
+
+impl Fingerprint for RelationType {
+    fn fingerprint(&self) -> u64 {
+        self.hashed()
     }
 }
 
@@ -903,23 +930,23 @@ pub const TYPE_UINT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
-pub const TYPE_MZTIMESTAMP: BuiltinType<NameReference> = BuiltinType {
-    name: "mztimestamp",
+pub const TYPE_MZ_TIMESTAMP: BuiltinType<NameReference> = BuiltinType {
+    name: "mz_timestamp",
     schema: MZ_CATALOG_SCHEMA,
-    oid: mz_pgrepr::oid::TYPE_MZTIMESTAMP_OID,
+    oid: mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::MzTimestamp,
         array_id: None,
     },
 };
 
-pub const TYPE_MZTIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
-    name: "_mztimestamp",
+pub const TYPE_MZ_TIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_mz_timestamp",
     schema: MZ_CATALOG_SCHEMA,
-    oid: mz_pgrepr::oid::TYPE_MZTIMESTAMP_ARRAY_OID,
+    oid: mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_reference: TYPE_MZTIMESTAMP.name,
+            element_reference: TYPE_MZ_TIMESTAMP.name,
         },
         array_id: None,
     },
@@ -927,115 +954,115 @@ pub const TYPE_MZTIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
 
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Operates),
 };
 
 pub const MZ_DATAFLOW_OPERATORS_ADDRESSES: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_addresses",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Addresses),
 };
 
 pub const MZ_DATAFLOW_CHANNELS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_channels",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Channels),
 };
 
 pub const MZ_SCHEDULING_ELAPSED_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_elapsed_internal",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
 };
 
 pub const MZ_SCHEDULING_HISTOGRAM_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_histogram_internal",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
 };
 
 pub const MZ_SCHEDULING_PARKS_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_parks_internal",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
 };
 
 pub const MZ_ARRANGEMENT_BATCHES_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_batches_internal",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
 };
 
 pub const MZ_ARRANGEMENT_SHARING_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_sharing_internal",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
 };
 
-pub const MZ_MATERIALIZATIONS: BuiltinLog = BuiltinLog {
-    name: "mz_materializations",
-    schema: MZ_CATALOG_SCHEMA,
+pub const MZ_COMPUTE_EXPORTS: BuiltinLog = BuiltinLog {
+    name: "mz_compute_exports",
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
 };
 
-pub const MZ_WORKER_MATERIALIZATION_DEPENDENCIES: BuiltinLog = BuiltinLog {
-    name: "mz_worker_materialization_dependencies",
-    schema: MZ_CATALOG_SCHEMA,
+pub const MZ_WORKER_COMPUTE_DEPENDENCIES: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_dependencies",
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::DataflowDependency),
 };
 
-pub const MZ_WORKER_MATERIALIZATION_FRONTIERS: BuiltinLog = BuiltinLog {
-    name: "mz_worker_materialization_frontiers",
-    schema: MZ_CATALOG_SCHEMA,
+pub const MZ_WORKER_COMPUTE_FRONTIERS: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
 };
 
-pub const MZ_WORKER_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinLog = BuiltinLog {
-    name: "mz_worker_materialization_source_frontiers",
-    schema: MZ_CATALOG_SCHEMA,
+pub const MZ_WORKER_COMPUTE_IMPORT_FRONTIERS: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_import_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
 };
 
-pub const MZ_WORKER_MATERIALIZATION_DELAYS: BuiltinLog = BuiltinLog {
-    name: "mz_worker_materialization_delays",
-    schema: MZ_CATALOG_SCHEMA,
+pub const MZ_WORKER_COMPUTE_DELAYS: BuiltinLog = BuiltinLog {
+    name: "mz_worker_compute_delays",
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
 };
 
 pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
     name: "mz_peek_active",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
 };
 
 pub const MZ_PEEK_DURATIONS: BuiltinLog = BuiltinLog {
     name: "mz_peek_durations",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
 };
 
 pub const MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_received_internal",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
 };
 
 pub const MZ_MESSAGE_COUNTS_SENT_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_sent_internal",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
 };
 
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operator_reachability_internal",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Reachability),
 };
 
 pub const MZ_ARRANGEMENT_RECORDS_INTERNAL: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_records_internal",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
 };
 
@@ -1064,10 +1091,20 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sinks",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("sink_id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("topic", ScalarType::String.nullable(false))
-        .with_column("progress_topic", ScalarType::String.nullable(true))
         .with_key(vec![0]),
+});
+pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_kafka_connections",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column(
+            "brokers",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
@@ -1154,7 +1191,8 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false)),
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("connection_id", ScalarType::String.nullable(true)),
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
@@ -1164,7 +1202,8 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false)),
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("connection_id", ScalarType::String.nullable(true)),
 });
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_views",
@@ -1305,7 +1344,7 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("event_type", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
         .with_column("event_details", ScalarType::Jsonb.nullable(false))
-        .with_column("user", ScalarType::String.nullable(false))
+        .with_column("user", ScalarType::String.nullable(true))
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
 });
 
@@ -1371,15 +1410,15 @@ UNION ALL
 
 pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
     name: "mz_dataflows",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_dataflows AS SELECT
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflows AS SELECT
     mz_dataflow_addresses.id,
     mz_dataflow_addresses.worker_id,
     mz_dataflow_addresses.address[1] AS local_id,
     mz_dataflow_operators.name
 FROM
-    mz_catalog.mz_dataflow_addresses,
-    mz_catalog.mz_dataflow_operators
+    mz_internal.mz_dataflow_addresses,
+    mz_internal.mz_dataflow_operators
 WHERE
     mz_dataflow_addresses.id = mz_dataflow_operators.id AND
     mz_dataflow_addresses.worker_id = mz_dataflow_operators.worker_id AND
@@ -1388,17 +1427,17 @@ WHERE
 
 pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_dataflows",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_dataflow_operator_dataflows AS SELECT
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_operator_dataflows AS SELECT
     mz_dataflow_operators.id,
     mz_dataflow_operators.name,
     mz_dataflow_operators.worker_id,
     mz_dataflows.id as dataflow_id,
     mz_dataflows.name as dataflow_name
 FROM
-    mz_catalog.mz_dataflow_operators,
-    mz_catalog.mz_dataflow_addresses,
-    mz_catalog.mz_dataflows
+    mz_internal.mz_dataflow_operators,
+    mz_internal.mz_dataflow_addresses,
+    mz_internal.mz_dataflows
 WHERE
     mz_dataflow_operators.id = mz_dataflow_addresses.id AND
     mz_dataflow_operators.worker_id = mz_dataflow_addresses.worker_id AND
@@ -1433,35 +1472,35 @@ LEFT OUTER JOIN counts
     ON mz_cluster_replicas_base.id = counts.replica_id",
 };
 
-pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
-    name: "mz_materialization_frontiers",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_materialization_frontiers AS SELECT
-    object_id, pg_catalog.min(time) AS time
-FROM mz_catalog.mz_worker_materialization_frontiers
-GROUP BY object_id",
+pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
+    name: "mz_compute_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_frontiers AS SELECT
+    export_id, pg_catalog.min(time) AS time
+FROM mz_internal.mz_worker_compute_frontiers
+GROUP BY export_id",
 };
 
-pub const MZ_MATERIALIZATION_SOURCE_FRONTIERS: BuiltinView = BuiltinView {
-    name: "mz_materialization_source_frontiers",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_materialization_source_frontiers AS SELECT
-    object_id, source_id, pg_catalog.min(time) AS time
-FROM mz_catalog.mz_worker_materialization_source_frontiers
-GROUP BY object_id, source_id",
+pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
+    name: "mz_compute_import_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_import_frontiers AS SELECT
+    export_id, import_id, pg_catalog.min(time) AS time
+FROM mz_internal.mz_worker_compute_import_frontiers
+GROUP BY export_id, import_id",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_operator",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_records_per_dataflow_operator AS
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_operator AS
 WITH records_cte AS (
     SELECT
         operator_id,
         worker_id,
         pg_catalog.count(*) AS records
     FROM
-        mz_catalog.mz_arrangement_records_internal
+        mz_internal.mz_arrangement_records_internal
     GROUP BY
         operator_id, worker_id
 )
@@ -1473,7 +1512,7 @@ SELECT
     records_cte.records
 FROM
     records_cte,
-    mz_catalog.mz_dataflow_operator_dataflows
+    mz_internal.mz_dataflow_operator_dataflows
 WHERE
     mz_dataflow_operator_dataflows.id = records_cte.operator_id AND
     mz_dataflow_operator_dataflows.worker_id = records_cte.worker_id",
@@ -1481,15 +1520,15 @@ WHERE
 
 pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_records_per_dataflow AS SELECT
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow AS SELECT
     mz_records_per_dataflow_operator.dataflow_id as id,
     mz_dataflows.name,
     mz_records_per_dataflow_operator.worker_id,
     pg_catalog.SUM(mz_records_per_dataflow_operator.records) as records
 FROM
-    mz_catalog.mz_records_per_dataflow_operator,
-    mz_catalog.mz_dataflows
+    mz_internal.mz_records_per_dataflow_operator,
+    mz_internal.mz_dataflows
 WHERE
     mz_records_per_dataflow_operator.dataflow_id = mz_dataflows.id AND
     mz_records_per_dataflow_operator.worker_id = mz_dataflows.worker_id
@@ -1501,13 +1540,13 @@ GROUP BY
 
 pub const MZ_RECORDS_PER_DATAFLOW_GLOBAL: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_global",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_records_per_dataflow_global AS SELECT
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_global AS SELECT
     mz_records_per_dataflow.id,
     mz_records_per_dataflow.name,
     pg_catalog.SUM(mz_records_per_dataflow.records) as records
 FROM
-    mz_catalog.mz_records_per_dataflow
+    mz_internal.mz_records_per_dataflow
 GROUP BY
     mz_records_per_dataflow.id,
     mz_records_per_dataflow.name",
@@ -1808,41 +1847,41 @@ FROM (VALUES
 
 pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
     name: "mz_scheduling_elapsed",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_scheduling_elapsed AS SELECT
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_scheduling_elapsed AS SELECT
     id, worker_id, pg_catalog.count(*) AS elapsed_ns
 FROM
-    mz_catalog.mz_scheduling_elapsed_internal
+    mz_internal.mz_scheduling_elapsed_internal
 GROUP BY
     id, worker_id",
 };
 
 pub const MZ_SCHEDULING_HISTOGRAM: BuiltinView = BuiltinView {
     name: "mz_scheduling_histogram",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_scheduling_histogram AS SELECT
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_scheduling_histogram AS SELECT
     id, worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
-    mz_catalog.mz_scheduling_histogram_internal
+    mz_internal.mz_scheduling_histogram_internal
 GROUP BY
     id, worker_id, duration_ns",
 };
 
 pub const MZ_SCHEDULING_PARKS: BuiltinView = BuiltinView {
     name: "mz_scheduling_parks",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_scheduling_parks AS SELECT
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_scheduling_parks AS SELECT
     worker_id, slept_for, requested, pg_catalog.count(*) AS count
 FROM
-    mz_catalog.mz_scheduling_parks_internal
+    mz_internal.mz_scheduling_parks_internal
 GROUP BY
     worker_id, slept_for, requested",
 };
 
 pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
     name: "mz_message_counts",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_message_counts AS
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_message_counts AS
 WITH sent_cte AS (
     SELECT
         channel_id,
@@ -1850,7 +1889,7 @@ WITH sent_cte AS (
         to_worker_id,
         pg_catalog.count(*) AS sent
     FROM
-        mz_catalog.mz_message_counts_sent_internal
+        mz_internal.mz_message_counts_sent_internal
     GROUP BY
         channel_id, from_worker_id, to_worker_id
 ),
@@ -1861,7 +1900,7 @@ received_cte AS (
         to_worker_id,
         pg_catalog.count(*) AS received
     FROM
-        mz_catalog.mz_message_counts_received_internal
+        mz_internal.mz_message_counts_received_internal
     GROUP BY
         channel_id, from_worker_id, to_worker_id
 )
@@ -1876,8 +1915,8 @@ FROM sent_cte JOIN received_cte USING (channel_id, from_worker_id, to_worker_id)
 
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_reachability",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_dataflow_operator_reachability AS SELECT
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_dataflow_operator_reachability AS SELECT
     address,
     port,
     worker_id,
@@ -1885,21 +1924,21 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
     timestamp,
     pg_catalog.count(*) as count
 FROM
-    mz_catalog.mz_dataflow_operator_reachability_internal
+    mz_internal.mz_dataflow_operator_reachability_internal
 GROUP BY address, port, worker_id, update_type, timestamp",
 };
 
 pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
     name: "mz_arrangement_sizes",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_arrangement_sizes AS
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_arrangement_sizes AS
 WITH batches_cte AS (
     SELECT
         operator_id,
         worker_id,
         pg_catalog.count(*) AS batches
     FROM
-        mz_catalog.mz_arrangement_batches_internal
+        mz_internal.mz_arrangement_batches_internal
     GROUP BY
         operator_id, worker_id
 ),
@@ -1909,7 +1948,7 @@ records_cte AS (
         worker_id,
         pg_catalog.count(*) AS records
     FROM
-        mz_catalog.mz_arrangement_records_internal
+        mz_internal.mz_arrangement_records_internal
     GROUP BY
         operator_id, worker_id
 )
@@ -1923,13 +1962,13 @@ FROM batches_cte JOIN records_cte USING (operator_id, worker_id)",
 
 pub const MZ_ARRANGEMENT_SHARING: BuiltinView = BuiltinView {
     name: "mz_arrangement_sharing",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_arrangement_sharing AS
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_arrangement_sharing AS
 SELECT
     operator_id,
     worker_id,
     pg_catalog.count(*) AS count
-FROM mz_catalog.mz_arrangement_sharing_internal
+FROM mz_internal.mz_arrangement_sharing_internal
 GROUP BY operator_id, worker_id",
 };
 
@@ -2157,8 +2196,11 @@ FROM mz_catalog.mz_roles r
 JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())",
 };
 
-pub const MZ_SYSTEM: BuiltinRole = BuiltinRole { name: SYSTEM_USER };
+pub static MZ_SYSTEM: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
+    name: &*SYSTEM_USER.name,
+});
 
+/// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     let mut builtins = vec![
         Builtin::Type(&TYPE_ANY),
@@ -2228,8 +2270,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_UINT4_ARRAY),
         Builtin::Type(&TYPE_UINT8),
         Builtin::Type(&TYPE_UINT8_ARRAY),
-        Builtin::Type(&TYPE_MZTIMESTAMP),
-        Builtin::Type(&TYPE_MZTIMESTAMP_ARRAY),
+        Builtin::Type(&TYPE_MZ_TIMESTAMP),
+        Builtin::Type(&TYPE_MZ_TIMESTAMP_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -2256,8 +2298,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_DATAFLOW_OPERATORS),
         Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_INTERNAL),
-        Builtin::Log(&MZ_MATERIALIZATIONS),
-        Builtin::Log(&MZ_WORKER_MATERIALIZATION_DEPENDENCIES),
+        Builtin::Log(&MZ_COMPUTE_EXPORTS),
+        Builtin::Log(&MZ_WORKER_COMPUTE_DEPENDENCIES),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
         Builtin::Log(&MZ_PEEK_ACTIVE),
@@ -2265,12 +2307,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_PARKS_INTERNAL),
-        Builtin::Log(&MZ_WORKER_MATERIALIZATION_FRONTIERS),
-        Builtin::Log(&MZ_WORKER_MATERIALIZATION_SOURCE_FRONTIERS),
-        Builtin::Log(&MZ_WORKER_MATERIALIZATION_DELAYS),
+        Builtin::Log(&MZ_WORKER_COMPUTE_FRONTIERS),
+        Builtin::Log(&MZ_WORKER_COMPUTE_IMPORT_FRONTIERS),
+        Builtin::Log(&MZ_WORKER_COMPUTE_DELAYS),
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),
+        Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
@@ -2306,8 +2349,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICAS),
-        Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
-        Builtin::View(&MZ_MATERIALIZATION_SOURCE_FRONTIERS),
+        Builtin::View(&MZ_COMPUTE_FRONTIERS),
+        Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW_OPERATOR),
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
@@ -2347,7 +2390,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 
     builtins
 });
-pub static BUILTIN_ROLES: Lazy<Vec<BuiltinRole>> = Lazy::new(|| vec![MZ_SYSTEM]);
+pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> = Lazy::new(|| vec![&*MZ_SYSTEM]);
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {
@@ -2367,7 +2410,7 @@ pub mod BUILTINS {
                 return Some(x);
             }
         }
-        return None;
+        None
     }
 
     pub fn types() -> impl Iterator<Item = &'static BuiltinType<NameReference>> {

@@ -2,35 +2,35 @@
 members = [
     "src/adapter",
     "src/audit-log",
-    "src/avro-derive",
     "src/avro",
+    "src/avro-derive",
     "src/billing-demo",
     "src/build-info",
     "src/ccsr",
     "src/compute",
     "src/compute-client",
     "src/controller",
-    "src/frontegg-auth",
-    "src/expr-test-util",
+    "src/environmentd",
     "src/expr",
+    "src/expr-test-util",
+    "src/frontegg-auth",
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
     "src/kinesis-util",
-    "src/lowertest-derive",
-    "src/environmentd",
     "src/lowertest",
-    "src/mz",
+    "src/lowertest-derive",
     "src/metabase",
+    "src/mz",
     "src/npm",
-    "src/ore",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
     "src/orchestrator-process",
     "src/orchestrator-tracing",
+    "src/ore",
+    "src/persist",
     "src/persist-client",
     "src/persist-types",
-    "src/persist",
     "src/pgcopy",
     "src/pgrepr",
     "src/pgtest",
@@ -39,13 +39,14 @@ members = [
     "src/postgres-util",
     "src/prof",
     "src/proto",
-    "src/repr-test-util",
     "src/repr",
+    "src/repr-test-util",
     "src/s3-datagen",
     "src/secrets",
+    "src/segment",
     "src/service",
-    "src/sql-parser",
     "src/sql",
+    "src/sql-parser",
     "src/sqllogictest",
     "src/stash",
     "src/storage",
@@ -63,6 +64,10 @@ members = [
 # virtual workspace.
 # See: https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#cargos-new-feature-resolver
 resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.64.0"
 
 [profile.dev]
 # TODO(gusywnn|benesch): remove this when incremental ice's are improved
@@ -105,5 +110,4 @@ mysql_common = { git = "https://github.com/blackbeam/rust_mysql_common.git" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tungstenite = { git = "https://github.com/snapview/tungstenite-rs.git" }
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
-ssh2 = { git = "https://github.com/MaterializeInc/ssh2-rs" }
 vte = { git = "https://github.com/alacritty/vte" }

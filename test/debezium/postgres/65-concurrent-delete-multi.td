@@ -11,9 +11,9 @@
 # Concurrent deletes over different tables
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE concurrent_delete1 (f1 INTEGER);
+CREATE TABLE concurrent_delete1 (f1 INTEGER PRIMARY KEY);
 ALTER TABLE concurrent_delete1 REPLICA IDENTITY FULL;
-CREATE TABLE concurrent_delete2 (f1 INTEGER);
+CREATE TABLE concurrent_delete2 (f1 INTEGER PRIMARY KEY);
 ALTER TABLE concurrent_delete2 REPLICA IDENTITY FULL;
 
 INSERT INTO concurrent_delete1 VALUES (1);
@@ -36,13 +36,16 @@ $ schema-registry-wait-schema schema=postgres.public.concurrent_delete2-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE concurrent_delete1
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.concurrent_delete1'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_delete1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > CREATE SOURCE concurrent_delete2
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.concurrent_delete2'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_delete2')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

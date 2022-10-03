@@ -2,8 +2,8 @@
 name = "mz-repr"
 description = "The core data types for Materialize."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [[bench]]
@@ -48,10 +48,17 @@ proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-fea
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 thiserror = "1.0.32"
 
+# for the tracing_ feature
+tracing = { version = "0.1.36", optional = true }
+tracing-subscriber = { version = "0.3.15", default-features = false, optional = true }
+
 [dev-dependencies]
-criterion = { git = "https://github.com/bheisler/criterion.rs.git", branch = "version-0.4" }
+criterion = { version = "0.4.0" }
 rand = "0.8.5"
 
 [build-dependencies]
 prost-build = "0.11.1"
 protobuf-src = "1.1.0"
+
+[features]
+tracing_ = ["tracing", "tracing-subscriber"]

@@ -167,7 +167,7 @@ where
             }
         };
         for (seqno, key) in remove_rollups {
-            let removed_key = self.rollups.remove(&seqno);
+            let removed_key = self.rollups.remove(seqno);
             debug_assert!(
                 removed_key.as_ref().map_or(true, |x| x == key),
                 "{} vs {:?}",
@@ -370,7 +370,12 @@ where
             // (1) is a gross mis-use and (2) may happen if a reader did not
             // get to heartbeat for a long time. Readers are expected to
             // heartbeat/downgrade their since regularly.
-            .unwrap_or_else(|| panic!("ReaderId({}) was expired due to inactivity", id))
+            .unwrap_or_else(|| {
+                panic!(
+                    "ReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
+                    id
+                )
+            })
     }
 
     fn writer(&mut self, id: &WriterId) -> &mut WriterState {
@@ -382,7 +387,12 @@ where
             // not get to heartbeat for a long time. Writers are expected to
             // append updates regularly, even empty batches to maintain their
             // lease.
-            .unwrap_or_else(|| panic!("WriterId({}) was expired due to inactivity", id))
+            .unwrap_or_else(|| {
+                panic!(
+                    "WriterId({}) was expired due to inactivity. Did the machine go to sleep?",
+                    id
+                )
+            })
     }
 
     fn update_since(&mut self) {
@@ -480,8 +490,8 @@ where
         self.collections.trace.upper()
     }
 
-    pub fn batch_count(&self) -> usize {
-        self.collections.trace.num_hollow_batches()
+    pub fn batch_part_count(&self) -> usize {
+        self.collections.trace.num_batch_parts()
     }
 
     pub fn num_updates(&self) -> usize {

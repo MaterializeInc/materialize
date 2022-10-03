@@ -474,11 +474,13 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `"stdrive.aws-endpoint`
 
+#### `testdrive.materialize-internal-http-addr`
+
 #### `testdrive.materialize-http-addr`
 
 #### `testdrive.materialize-sql-addr`
 
-#### `testdrive.materialize-sql-addr-internal`
+#### `testdrive.materialize-internal-sql-addr`
 
 #### `testdrive.materialize-user`
 
@@ -710,6 +712,12 @@ Send the data to the specified partition.
 Obtains the data from the specified `sink` or `topic` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test.
 
 If `partial-search=usize` is specified, up to `partial-search` records will be read from the given topic and compared to the provided records. The records do not have to match starting at the beginning of the sink but once one record matches, the following must all match.  There are permitted to be records remaining in the topic after the matching is complete.  Note that if the topic is not required to have `partial-search` elements in it but there will be an attempt to read up to this number with a blocking read.
+
+#### `kafka-verify-commit source=... topic=... partition=...
+
+Verifies that the provided offset (the input data) matches the committed offset for
+_the sources consumer id_
+
 
 #### `headers=<list or object>`
 

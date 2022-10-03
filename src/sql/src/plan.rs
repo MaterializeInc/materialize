@@ -117,7 +117,7 @@ pub enum Plan {
     CommitTransaction,
     AbortTransaction,
     Peek(PeekPlan),
-    Tail(TailPlan),
+    Subscribe(SubscribePlan),
     SendRows(SendRowsPlan),
     CopyFrom(CopyFromPlan),
     Explain(ExplainPlan),
@@ -172,7 +172,7 @@ impl Plan {
                 PlanKind::CopyFrom,
                 PlanKind::Peek,
                 PlanKind::SendDiffs,
-                PlanKind::Tail,
+                PlanKind::Subscribe,
             ],
             StatementKind::CreateCluster => vec![PlanKind::CreateComputeInstance],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateComputeInstanceReplica],
@@ -217,7 +217,7 @@ impl Plan {
                 PlanKind::ShowAllVariables,
             ],
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
-            StatementKind::Tail => vec![PlanKind::Tail],
+            StatementKind::Subscribe => vec![PlanKind::Subscribe],
             StatementKind::Update => vec![PlanKind::ReadThenWrite, PlanKind::SendRows],
         }
     }
@@ -453,8 +453,8 @@ pub struct PeekPlan {
 }
 
 #[derive(Debug)]
-pub struct TailPlan {
-    pub from: TailFrom,
+pub struct SubscribePlan {
+    pub from: SubscribeFrom,
     pub with_snapshot: bool,
     pub when: QueryWhen,
     pub copy_to: Option<CopyFormat>,
@@ -462,7 +462,7 @@ pub struct TailPlan {
 }
 
 #[derive(Debug)]
-pub enum TailFrom {
+pub enum SubscribeFrom {
     Id(GlobalId),
     Query {
         expr: MirRelationExpr,
@@ -649,6 +649,7 @@ pub struct Table {
 #[derive(Clone, Debug)]
 pub struct Source {
     pub create_sql: String,
+    pub connection_id: Option<GlobalId>,
     pub source_desc: SourceDesc,
     pub desc: RelationDesc,
 }
@@ -669,6 +670,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
+    pub connection_id: Option<GlobalId>,
     pub connection_builder: StorageSinkConnectionBuilder,
     pub envelope: SinkEnvelope,
 }
@@ -703,7 +705,7 @@ pub struct Type {
     pub inner: CatalogType<IdReference>,
 }
 
-/// Specifies when a `Peek` or `Tail` should occur.
+/// Specifies when a `Peek` or `Subscribe` should occur.
 #[derive(Debug, PartialEq)]
 pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the

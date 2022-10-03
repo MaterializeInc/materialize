@@ -148,7 +148,7 @@ impl Ca {
             let mut builder = X509::builder()?;
             builder.set_version(2)?;
             builder.set_pubkey(&pkey)?;
-            builder.set_issuer_name(&self.cert.subject_name())?;
+            builder.set_issuer_name(self.cert.subject_name())?;
             builder.set_subject_name(&subject_name)?;
             builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
             builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;
@@ -439,6 +439,8 @@ fn start_mzcloud(
             &Claims {
                 exp: context.now.as_secs() + context.expires_in_secs,
                 email,
+                sub: Uuid::new_v4(),
+                user_id: None,
                 tenant_id: context.tenant_id,
                 roles: Vec::new(),
                 permissions: Vec::new(),
@@ -606,7 +608,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     let (client_cert, client_key) = ca.request_client_cert("materialize")?;
     let (client_cert_other, client_key_other) = ca.request_client_cert("other")?;
     let (client_cert_cloud, client_key_cloud) = ca.request_client_cert("user@_.com")?;
-    let (client_cert_system, client_key_system) = ca.request_client_cert(SYSTEM_USER)?;
+    let (client_cert_system, client_key_system) = ca.request_client_cert(&SYSTEM_USER.name)?;
 
     let bad_ca = Ca::new_root("test ca")?;
     let (bad_client_cert, bad_client_key) = bad_ca.request_client_cert("materialize")?;
@@ -623,7 +625,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
         ),
         (
             (system_client_id.to_string(), system_secret.to_string()),
-            SYSTEM_USER.to_string(),
+            SYSTEM_USER.name.to_string(),
         ),
     ]);
     let encoding_key = EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap())?;
@@ -635,6 +637,8 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     let claims = Claims {
         exp: 1000,
         email: "user@_.com".to_string(),
+        sub: Uuid::new_v4(),
+        user_id: None,
         tenant_id,
         roles: Vec::new(),
         permissions: Vec::new(),
@@ -682,7 +686,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
     let frontegg_header_basic = make_header(frontegg_basic);
 
     let frontegg_system_password = &format!("mzauth_{system_client_id}{system_secret}");
-    let frontegg_system_basic = Authorization::basic(SYSTEM_USER, frontegg_system_password);
+    let frontegg_system_basic = Authorization::basic(&SYSTEM_USER.name, frontegg_system_password);
     let frontegg_system_header_basic = make_header(frontegg_system_basic);
 
     let no_headers = HeaderMap::new();
@@ -756,7 +760,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user: SYSTEM_USER,
+                user: &*SYSTEM_USER.name,
                 password: Some(frontegg_system_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
@@ -769,7 +773,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: SYSTEM_USER,
+                user: &*SYSTEM_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_system_header_basic,
                 configure: Box::new(|b| {
@@ -1014,7 +1018,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user: SYSTEM_USER,
+                user: &*SYSTEM_USER.name,
                 password: Some(frontegg_system_password),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1023,7 +1027,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: SYSTEM_USER,
+                user: &*SYSTEM_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_system_header_basic,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1050,7 +1054,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1078,7 +1082,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1092,7 +1096,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user: SYSTEM_USER,
+                user: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
@@ -1125,7 +1129,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             // Test that specifying an mzcloud header does nothing and uses the default
             // user.
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_header_basic,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1147,7 +1151,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1170,7 +1174,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1178,7 +1182,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user: SYSTEM_USER,
+                user: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1225,7 +1229,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1246,7 +1250,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1270,7 +1274,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
@@ -1298,7 +1302,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             TestCase::Http {
                 // In verify-ca mode, the HTTP interface ignores the
                 // certificate's user.
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
@@ -1324,7 +1328,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user: SYSTEM_USER,
+                user: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
@@ -1376,7 +1380,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
@@ -1397,7 +1401,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1421,7 +1425,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
@@ -1504,7 +1508,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user: SYSTEM_USER,
+                user: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| {
@@ -1517,7 +1521,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: SYSTEM_USER,
+                user: &*SYSTEM_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
                 configure: Box::new(|b| {
@@ -1574,7 +1578,7 @@ fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
                 })),
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &HeaderMap::new(),
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
@@ -1604,7 +1608,7 @@ fn test_auth_intermediate_ca() -> Result<(), Box<dyn Error>> {
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user: HTTP_DEFAULT_USER,
+                user: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &HeaderMap::new(),
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),

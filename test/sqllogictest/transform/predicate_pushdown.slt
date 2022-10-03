@@ -311,3 +311,160 @@ Query:
 | | implementation = Differential %1 %0.((#0 + 1))
 
 EOF
+
+# Join-Dependent Predicate Duplication (JoinInputMapper::consequence_for_input)
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND ((t1.f2 = 3 AND t2.f2 = 4) OR (t1.f2 = 5 AND t2.f2 = 6));
+----
+Source materialize.public.t1 (u3):
+| Filter (#0) IS NOT NULL, ((#1 = 3) OR (#1 = 5))
+| Project (#0, #1)
+
+Source materialize.public.t2 (u4):
+| Filter (#0) IS NOT NULL, ((#1 = 4) OR (#1 = 6))
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.t1 (u3)
+| Filter (#0) IS NOT NULL, ((#1 = 3) OR (#1 = 5))
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t2 (u4)
+| Filter (#0) IS NOT NULL, ((#1 = 4) OR (#1 = 6))
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Differential %1 %0.(#0)
+| Filter (((#1 = 3) AND (#3 = 4)) OR ((#1 = 5) AND (#3 = 6)))
+| Project (#0, #1, #0, #3)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND ((t1.f2 = 3 AND t2.f2 = 4) OR t1.f2 = 5);
+----
+Source materialize.public.t1 (u3):
+| Filter (#0) IS NOT NULL, ((#1 = 3) OR (#1 = 5))
+| Project (#0, #1)
+
+Source materialize.public.t2 (u4):
+| Filter (#0) IS NOT NULL
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.t1 (u3)
+| Filter (#0) IS NOT NULL, ((#1 = 3) OR (#1 = 5))
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t2 (u4)
+| Filter (#0) IS NOT NULL
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Differential %1 %0.(#0)
+| Filter ((#1 = 5) OR ((#1 = 3) AND (#3 = 4)))
+| Project (#0, #1, #0, #3)
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM t1, t2
+WHERE t1.f2 = 27 OR (t1.f2 <= 1995 AND t1.f1 = t2.f1);
+----
+Source materialize.public.t1 (u3):
+| Filter ((#1 = 27) OR (#1 <= 1995))
+| Project (#0, #1)
+
+Source materialize.public.t2 (u4):
+| Project (#0, #1)
+
+Query:
+%0 =
+| Get materialize.public.t1 (u3)
+| Filter ((#1 = 27) OR (#1 <= 1995))
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u4)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| Filter ((#1 = 27) OR ((#0 = #2) AND (#1 <= 1995)))
+
+EOF
+
+# Delta join -- In this case, `JoinImplementation` lifts the newly created predicates to after the join at the end of
+# MIR. However, MIR -> LIR lowering will push these predicates to their correct place. We can check this in the physical
+# plan, i.e., that they are in the `initial_closure`.
+
+statement ok
+CREATE INDEX t1_f1_ind on t1(f1)
+
+statement ok
+CREATE INDEX t2_f1_ind on t2(f1)
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND ((t1.f2 = 3 AND t2.f2 = 4) OR (t1.f2 = 5 AND t2.f2 = 6));
+----
+Explained Query:
+  Join::Delta
+    plan_path[0]
+      final_closure
+        project=(#0, #1, #0, #2)
+      delta_stage[0]
+        closure
+          project=(#0, #1, #4)
+          filter=((#5 OR #6) AND ((#2 AND #5) OR (#3 AND #6)))
+          map=((#4 = 4), (#4 = 6))
+        lookup={ relation=1, key=[#0] }
+        stream={ key=[#0], thinning=(#1..=#3) }
+      initial_closure
+        project=(#0..=#3)
+        filter=((#0) IS NOT NULL AND (#2 OR #3))
+        map=((#1 = 3), (#1 = 5))
+      source={ relation=0, key=[#0] }
+    plan_path[1]
+      final_closure
+        project=(#0, #1, #0, #2)
+      delta_stage[0]
+        closure
+          project=(#0, #4, #1)
+          filter=((#0) IS NOT NULL AND (#5 OR #6) AND ((#5 AND #2) OR (#6 AND #3)))
+          map=((#4 = 3), (#4 = 5))
+        lookup={ relation=0, key=[#0] }
+        stream={ key=[#0], thinning=(#1..=#3) }
+      initial_closure
+        project=(#0..=#3)
+        filter=((#2 OR #3))
+        map=((#1 = 4), (#1 = 6))
+      source={ relation=1, key=[#0] }
+    ArrangeBy
+      input_key=[#0]
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      Get::PassArrangements materialize.public.t1
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    ArrangeBy
+      input_key=[#0]
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      Get::PassArrangements materialize.public.t2
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+
+Used Indexes:
+  - materialize.public.t1_f1_ind
+  - materialize.public.t2_f1_ind
+
+EOF

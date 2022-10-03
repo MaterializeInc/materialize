@@ -2,8 +2,8 @@
 name = "mz-http-util"
 description = "Utilities for running HTTP servers in Materialize."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -11,6 +11,7 @@ askama = { version = "0.11.1", default-features = false, features = ["config", "
 axum = { version = "0.5.16", features = ["headers"] }
 headers = "0.3.7"
 serde = "1.0.144"
+tracing-subscriber = "0.3.15"
 include_dir = "0.7.2"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing_"] }
 prometheus = { version = "0.13.2", default-features = false, features = ["process"] }

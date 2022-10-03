@@ -209,7 +209,6 @@ impl<'a> QueryIdentAgg<'a> {
                     f.as_str().quoted(),
                     self.name.as_str().quoted()
                 ));
-                return;
             }
         }
     }

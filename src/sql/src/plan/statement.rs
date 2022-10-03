@@ -41,6 +41,8 @@ mod scl;
 pub(crate) mod show;
 mod tcl;
 
+pub(crate) use ddl::PgConfigOptionExtracted;
+
 /// Describes the output of a SQL statement.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct StatementDesc {
@@ -196,7 +198,7 @@ pub fn describe(
         Statement::Explain(stmt) => dml::describe_explain(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
         Statement::Select(stmt) => dml::describe_select(&scx, stmt)?,
-        Statement::Tail(stmt) => dml::describe_tail(&scx, stmt)?,
+        Statement::Subscribe(stmt) => dml::describe_subscribe(&scx, stmt)?,
         Statement::Update(stmt) => dml::describe_update(&scx, stmt)?,
 
         // TCL statements.
@@ -284,7 +286,7 @@ pub fn plan(
         Statement::Explain(stmt) => dml::plan_explain(scx, stmt, params),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
-        Statement::Tail(stmt) => dml::plan_tail(scx, stmt, None),
+        Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, None),
         Statement::Update(stmt) => dml::plan_update(scx, stmt, params),
 
         // `SHOW` statements.
@@ -358,7 +360,7 @@ pub fn plan_copy_from(
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<super::HirRelationExpr, PlanError> {
-    Ok(query::plan_copy_from_rows(pcx, catalog, id, columns, rows)?)
+    query::plan_copy_from_rows(pcx, catalog, id, columns, rows)
 }
 
 /// Whether a SQL object type can be interpreted as matching the type of the given catalog item.

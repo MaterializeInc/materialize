@@ -12,9 +12,9 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE alter_change_date_timestamp (f1 DATE);
+CREATE TABLE alter_change_date_timestamp (f1 DATE, f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_change_date_timestamp REPLICA IDENTITY FULL;
-INSERT INTO alter_change_date_timestamp VALUES ('2011-11-11'),('2012-12-12');
+INSERT INTO alter_change_date_timestamp VALUES ('2011-11-11', 0),('2012-12-12', 1);
 
 $ schema-registry-wait-schema schema=postgres.public.alter_change_date_timestamp-value
 
@@ -22,18 +22,21 @@ $ schema-registry-wait-schema schema=postgres.public.alter_change_date_timestamp
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE alter_change_date_timestamp
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_change_date_timestamp'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_change_date_timestamp')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_change_date_timestamp;
+> SELECT f1 FROM alter_change_date_timestamp;
 2011-11-11
 2012-12-12
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_change_date_timestamp ALTER COLUMN f1 TYPE TIMESTAMP;
-INSERT INTO alter_change_date_timestamp VALUES ('2011-11-11 11:11:11');
+INSERT INTO alter_change_date_timestamp VALUES ('2011-11-11 11:11:11', 2);
 UPDATE alter_change_date_timestamp SET f1 = '2012-12-12 12:12:12' WHERE f1 = '2012-12-12';
 DELETE FROM alter_change_date_timestamp WHERE f1 = '2011-11-11';
 

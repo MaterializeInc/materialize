@@ -153,14 +153,14 @@ pub fn construct<A: Allocate>(
                         let update_type = if *update_type { "source" } else { "target" };
                         row_buf.packer().push_list(
                             addr.iter()
-                                .chain_one(&source)
+                                .chain_one(source)
                                 .map(|id| Datum::UInt64(u64::cast_from(*id))),
                         );
                         let datums = &[
                             row_arena.push_unary_row(row_buf.clone()),
                             Datum::UInt64(u64::cast_from(*port)),
                             Datum::UInt64(u64::cast_from(*worker)),
-                            Datum::String(&update_type),
+                            Datum::String(update_type),
                             Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
                         ];
                         row_buf.packer().extend(datums);
@@ -189,14 +189,14 @@ pub fn construct<A: Allocate>(
                             let update_type = if *update_type { "source" } else { "target" };
                             row_buf.packer().push_list(
                                 addr.iter()
-                                    .chain_one(&source)
+                                    .chain_one(source)
                                     .map(|id| Datum::UInt64(u64::cast_from(*id))),
                             );
                             let datums = &[
                                 row_arena.push_unary_row(row_buf.clone()),
                                 Datum::UInt64(u64::cast_from(*port)),
                                 Datum::UInt64(u64::cast_from(*worker)),
-                                Datum::String(&update_type),
+                                Datum::String(update_type),
                                 Datum::from(ts.and_then(|ts| i64::try_from(ts).ok())),
                             ];
                             row_buf.packer().extend(key.iter().map(|k| datums[*k]));

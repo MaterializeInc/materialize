@@ -131,14 +131,14 @@ where
     Datum::from(x)
 }
 
-fn max_mztimestamp<'a, I>(datums: I) -> Datum<'a>
+fn max_mz_timestamp<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<mz_repr::Timestamp> = datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_mztimestamp())
+        .map(|d| d.unwrap_mz_timestamp())
         .max();
     Datum::from(x)
 }
@@ -186,7 +186,7 @@ where
     match datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .max_by(|a, b| a.unwrap_str().cmp(&b.unwrap_str()))
+        .max_by(|a, b| a.unwrap_str().cmp(b.unwrap_str()))
     {
         Some(datum) => datum,
         None => Datum::Null,
@@ -313,14 +313,14 @@ where
     Datum::from(x)
 }
 
-fn min_mztimestamp<'a, I>(datums: I) -> Datum<'a>
+fn min_mz_timestamp<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<mz_repr::Timestamp> = datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_mztimestamp())
+        .map(|d| d.unwrap_mz_timestamp())
         .min();
     Datum::from(x)
 }
@@ -368,7 +368,7 @@ where
     match datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .min_by(|a, b| a.unwrap_str().cmp(&b.unwrap_str()))
+        .min_by(|a, b| a.unwrap_str().cmp(b.unwrap_str()))
     {
         Some(datum) => datum,
         None => Datum::Null,
@@ -571,7 +571,7 @@ fn string_agg<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOr
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    const EMPTY_SEP: &'static str = "";
+    const EMPTY_SEP: &str = "";
 
     let datums = order_aggregate_datums(datums, order_by);
     let mut sep_value_pairs = datums.into_iter().filter_map(|d| {
@@ -692,7 +692,7 @@ where
         let right = &right.1;
         let left_datums = left_datum_vec.borrow_with(left);
         let right_datums = right_datum_vec.borrow_with(right);
-        compare_columns(&order_by, &left_datums, &right_datums, || left.cmp(&right))
+        compare_columns(order_by, &left_datums, &right_datums, || left.cmp(right))
     };
     rows.sort_by(&mut sort_by);
     rows.into_iter()
@@ -1497,7 +1497,7 @@ impl AggregateFunc {
             AggregateFunc::MaxUInt16 => max_uint16(datums),
             AggregateFunc::MaxUInt32 => max_uint32(datums),
             AggregateFunc::MaxUInt64 => max_uint64(datums),
-            AggregateFunc::MaxMzTimestamp => max_mztimestamp(datums),
+            AggregateFunc::MaxMzTimestamp => max_mz_timestamp(datums),
             AggregateFunc::MaxFloat32 => max_float32(datums),
             AggregateFunc::MaxFloat64 => max_float64(datums),
             AggregateFunc::MaxBool => max_bool(datums),
@@ -1512,7 +1512,7 @@ impl AggregateFunc {
             AggregateFunc::MinUInt16 => min_uint16(datums),
             AggregateFunc::MinUInt32 => min_uint32(datums),
             AggregateFunc::MinUInt64 => min_uint64(datums),
-            AggregateFunc::MinMzTimestamp => min_mztimestamp(datums),
+            AggregateFunc::MinMzTimestamp => min_mz_timestamp(datums),
             AggregateFunc::MinFloat32 => min_float32(datums),
             AggregateFunc::MinFloat64 => min_float64(datums),
             AggregateFunc::MinBool => min_bool(datums),
@@ -2323,7 +2323,7 @@ impl TableFunc {
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
-            TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(&datums, *width))),
+            TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(datums, *width))),
         }
     }
 

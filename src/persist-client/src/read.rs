@@ -35,10 +35,11 @@ use crate::fetch::{
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HollowBatch, Since};
-use crate::{GarbageCollector, PersistConfig};
+use crate::{parse_id, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct ReaderId(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for ReaderId {
@@ -50,6 +51,28 @@ impl std::fmt::Display for ReaderId {
 impl std::fmt::Debug for ReaderId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ReaderId({})", Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::str::FromStr for ReaderId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_id('r', "ReaderId", s).map(ReaderId)
+    }
+}
+
+impl From<ReaderId> for String {
+    fn from(reader_id: ReaderId) -> Self {
+        reader_id.to_string()
+    }
+}
+
+impl TryFrom<String> for ReaderId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -307,6 +330,7 @@ where
                 part,
                 self.handle.blob.as_ref(),
                 Arc::clone(&self.handle.metrics),
+                &self.handle.metrics.read.listen,
                 Some(&self.handle.reader_id),
             )
             .await;
@@ -462,7 +486,7 @@ where
     /// `as_of` that would have been accepted.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
-        let () = self.machine.verify_listen(&as_of).await?;
+        let () = self.machine.verify_listen(&as_of)?;
         Ok(Listen::new(self, as_of).await)
     }
 
@@ -521,6 +545,7 @@ where
                 part,
                 self.blob.as_ref(),
                 Arc::clone(&self.metrics),
+                &self.metrics.read.snapshot,
                 Some(&self.reader_id),
             )
             .await;
@@ -638,7 +663,7 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            self.downgrade_since(&new_since).await;
+            self.downgrade_since(new_since).await;
         }
     }
 
@@ -752,6 +777,10 @@ where
 #[cfg(test)]
 mod tests {
     use crate::tests::new_test_client;
+    use crate::ReaderId;
+    use serde::{Deserialize, Serialize};
+    use serde_json::json;
+    use std::str::FromStr;
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
     #[tokio::test]
@@ -917,6 +946,38 @@ mod tests {
         }
 
         drop(subscribe);
+    }
+
+    #[test]
+    fn reader_id_human_readable_serde() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct Container {
+            reader_id: ReaderId,
+        }
+
+        // roundtrip through json
+        let id = ReaderId::from_str("r00000000-1234-5678-0000-000000000000").expect("valid id");
+        assert_eq!(
+            id,
+            serde_json::from_value(serde_json::to_value(id.clone()).expect("serializable"))
+                .expect("deserializable")
+        );
+
+        // deserialize a serialized string directly
+        assert_eq!(
+            id,
+            serde_json::from_str("\"r00000000-1234-5678-0000-000000000000\"")
+                .expect("deserializable")
+        );
+
+        // roundtrip id through a container type
+        let json = json!({ "reader_id": id });
+        assert_eq!(
+            "{\"reader_id\":\"r00000000-1234-5678-0000-000000000000\"}",
+            &json.to_string()
+        );
+        let container: Container = serde_json::from_value(json).expect("deserializable");
+        assert_eq!(container.reader_id, id);
     }
 }
 

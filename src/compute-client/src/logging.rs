@@ -293,6 +293,7 @@ pub enum LogView {
     MzDataflowOperatorDataflows,
     MzDataflowOperatorReachability,
     MzMaterializationFrontiers,
+    MzMaterializationSourceFrontiers,
     MzMessageCounts,
     MzRecordsPerDataflowOperator,
     MzRecordsPerDataflow,
@@ -311,6 +312,7 @@ pub static DEFAULT_LOG_VIEWS: Lazy<Vec<LogView>> = Lazy::new(|| {
         LogView::MzDataflowOperatorDataflows,
         LogView::MzDataflowOperatorReachability,
         LogView::MzMaterializationFrontiers,
+        LogView::MzMaterializationSourceFrontiers,
         LogView::MzMessageCounts,
         LogView::MzRecordsPerDataflowOperator,
         LogView::MzRecordsPerDataflow,
@@ -329,7 +331,7 @@ impl LogView {
                     operator_id,
                     worker_id,
                     pg_catalog.count(*) AS count
-                FROM mz_catalog.mz_arrangement_sharing_internal_{}
+                FROM mz_internal.mz_arrangement_sharing_internal_{}
                 GROUP BY operator_id, worker_id",
                 "mz_arrangement_sharing_{}",
             ),
@@ -341,7 +343,7 @@ impl LogView {
                         worker_id,
                         pg_catalog.count(*) AS batches
                     FROM
-                        mz_catalog.mz_arrangement_batches_internal_{}
+                        mz_internal.mz_arrangement_batches_internal_{}
                     GROUP BY
                         operator_id, worker_id
                 ),
@@ -351,7 +353,7 @@ impl LogView {
                         worker_id,
                         pg_catalog.count(*) AS records
                     FROM
-                        mz_catalog.mz_arrangement_records_internal_{}
+                        mz_internal.mz_arrangement_records_internal_{}
                     GROUP BY
                         operator_id, worker_id
                 )
@@ -370,8 +372,8 @@ impl LogView {
                         mz_dataflow_addresses_{}.address[1] AS local_id,
                         mz_dataflow_operators_{}.name
                  FROM
-                        mz_catalog.mz_dataflow_addresses_{},
-                        mz_catalog.mz_dataflow_operators_{}
+                        mz_internal.mz_dataflow_addresses_{},
+                        mz_internal.mz_dataflow_operators_{}
                  WHERE
                         mz_dataflow_addresses_{}.id = mz_dataflow_operators_{}.id AND
                         mz_dataflow_addresses_{}.worker_id = mz_dataflow_operators_{}.worker_id AND
@@ -387,9 +389,9 @@ impl LogView {
                     mz_dataflows_{}.id as dataflow_id,
                     mz_dataflows_{}.name as dataflow_name
                 FROM
-                    mz_catalog.mz_dataflow_operators_{},
-                    mz_catalog.mz_dataflow_addresses_{},
-                    mz_catalog.mz_dataflows_{}
+                    mz_internal.mz_dataflow_operators_{},
+                    mz_internal.mz_dataflow_addresses_{},
+                    mz_internal.mz_dataflows_{}
                 WHERE
                     mz_dataflow_operators_{}.id = mz_dataflow_addresses_{}.id AND
                     mz_dataflow_operators_{}.worker_id = mz_dataflow_addresses_{}.worker_id AND
@@ -407,17 +409,25 @@ impl LogView {
                     timestamp,
                     pg_catalog.count(*) as count
                  FROM
-                    mz_catalog.mz_dataflow_operator_reachability_internal_{}
+                    mz_internal.mz_dataflow_operator_reachability_internal_{}
                  GROUP BY address, port, worker_id, update_type, timestamp",
                 "mz_dataflow_operator_reachability_{}",
             ),
 
             LogView::MzMaterializationFrontiers => (
                 "SELECT
-                    object_id, pg_catalog.min(time) AS time
-                FROM mz_catalog.mz_worker_materialization_frontiers_{}
-                GROUP BY object_id",
-                "mz_materialization_frontiers_{}",
+                    export_id, pg_catalog.min(time) AS time
+                FROM mz_internal.mz_worker_compute_frontiers_{}
+                GROUP BY export_id",
+                "mz_compute_frontiers_{}",
+            ),
+
+            LogView::MzMaterializationSourceFrontiers => (
+                "SELECT
+                    export_id, import_id, pg_catalog.min(time) AS time
+                FROM mz_internal.mz_worker_compute_import_frontiers_{}
+                GROUP BY export_id, import_id",
+                "mz_compute_import_frontiers_{}",
             ),
 
             LogView::MzMessageCounts => (
@@ -428,7 +438,7 @@ impl LogView {
                         to_worker_id,
                         pg_catalog.count(*) AS sent
                     FROM
-                        mz_catalog.mz_message_counts_sent_internal_{}
+                        mz_internal.mz_message_counts_sent_internal_{}
                     GROUP BY
                         channel_id, from_worker_id, to_worker_id
                 ),
@@ -439,7 +449,7 @@ impl LogView {
                         to_worker_id,
                         pg_catalog.count(*) AS received
                     FROM
-                        mz_catalog.mz_message_counts_received_internal_{}
+                        mz_internal.mz_message_counts_received_internal_{}
                     GROUP BY
                         channel_id, from_worker_id, to_worker_id
                 )
@@ -460,7 +470,7 @@ impl LogView {
                         worker_id,
                         pg_catalog.count(*) AS records
                     FROM
-                        mz_catalog.mz_arrangement_records_internal_{}
+                        mz_internal.mz_arrangement_records_internal_{}
                     GROUP BY
                         operator_id, worker_id
                 )
@@ -472,7 +482,7 @@ impl LogView {
                     records_cte.records
                 FROM
                     records_cte,
-                    mz_catalog.mz_dataflow_operator_dataflows_{}
+                    mz_internal.mz_dataflow_operator_dataflows_{}
                 WHERE
                     mz_dataflow_operator_dataflows_{}.id = records_cte.operator_id AND
                     mz_dataflow_operator_dataflows_{}.worker_id = records_cte.worker_id",
@@ -486,8 +496,8 @@ impl LogView {
                     mz_records_per_dataflow_operator_{}.worker_id,
                     pg_catalog.SUM(mz_records_per_dataflow_operator_{}.records) as records
                 FROM
-                    mz_catalog.mz_records_per_dataflow_operator_{},
-                    mz_catalog.mz_dataflows_{}
+                    mz_internal.mz_records_per_dataflow_operator_{},
+                    mz_internal.mz_dataflows_{}
                 WHERE
                     mz_records_per_dataflow_operator_{}.dataflow_id = mz_dataflows_{}.id AND
                     mz_records_per_dataflow_operator_{}.worker_id = mz_dataflows_{}.worker_id
@@ -504,7 +514,7 @@ impl LogView {
                     mz_records_per_dataflow_{}.name,
                     pg_catalog.SUM(mz_records_per_dataflow_{}.records) as records
                 FROM
-                    mz_catalog.mz_records_per_dataflow_{}
+                    mz_internal.mz_records_per_dataflow_{}
                 GROUP BY
                     mz_records_per_dataflow_{}.id,
                     mz_records_per_dataflow_{}.name",
@@ -515,7 +525,7 @@ impl LogView {
                 "SELECT
                     id, worker_id, pg_catalog.count(*) AS elapsed_ns
                 FROM
-                    mz_catalog.mz_scheduling_elapsed_internal_{}
+                    mz_internal.mz_scheduling_elapsed_internal_{}
                 GROUP BY
                     id, worker_id",
                 "mz_scheduling_elapsed_{}",
@@ -525,7 +535,7 @@ impl LogView {
                 "SELECT
                     id, worker_id, duration_ns, pg_catalog.count(*) AS count
                 FROM
-                    mz_catalog.mz_scheduling_histogram_internal_{}
+                    mz_internal.mz_scheduling_histogram_internal_{}
                 GROUP BY
                     id, worker_id, duration_ns",
                 "mz_scheduling_histogram_{}",
@@ -535,7 +545,7 @@ impl LogView {
                 "SELECT
                     worker_id, slept_for, requested, pg_catalog.count(*) AS count
                 FROM
-                    mz_catalog.mz_scheduling_parks_internal_{}
+                    mz_internal.mz_scheduling_parks_internal_{}
                 GROUP BY
                     worker_id, slept_for, requested",
                 "mz_scheduling_parks_{}",
@@ -635,7 +645,7 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::empty()
-                .with_column("object_id", ScalarType::String.nullable(false))
+                .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1]),
 
@@ -645,19 +655,19 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
-                .with_column("object_id", ScalarType::String.nullable(false))
+                .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false)),
 
             LogVariant::Compute(ComputeLog::SourceFrontierCurrent) => RelationDesc::empty()
-                .with_column("object_id", ScalarType::String.nullable(false))
-                .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("export_id", ScalarType::String.nullable(false))
+                .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false)),
 
             LogVariant::Compute(ComputeLog::FrontierDelay) => RelationDesc::empty()
-                .with_column("object_id", ScalarType::String.nullable(false))
-                .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("export_id", ScalarType::String.nullable(false))
+                .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("delay_ns", ScalarType::UInt64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))

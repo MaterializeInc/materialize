@@ -42,7 +42,7 @@ impl VersionedEvent {
         event_type: EventType,
         object_type: ObjectType,
         event_details: EventDetails,
-        user: String,
+        user: Option<String>,
         occurred_at: EpochMillis,
     ) -> Self {
         Self::V1(EventV1::new(
@@ -82,6 +82,16 @@ pub enum EventType {
     Alter,
 }
 
+impl EventType {
+    pub fn as_title_case(&self) -> &'static str {
+        match self {
+            EventType::Create => "Created",
+            EventType::Drop => "Dropped",
+            EventType::Alter => "Altered",
+        }
+    }
+}
+
 serde_plain::derive_display_from_serialize!(EventType);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -89,11 +99,35 @@ serde_plain::derive_display_from_serialize!(EventType);
 pub enum ObjectType {
     Cluster,
     ClusterReplica,
+    Connection,
+    Func,
     Index,
+    MaterializedView,
+    Secret,
     Sink,
     Source,
+    Table,
+    Type,
     View,
-    MaterializedView,
+}
+
+impl ObjectType {
+    pub fn as_title_case(&self) -> &'static str {
+        match self {
+            ObjectType::Cluster => "Cluster",
+            ObjectType::ClusterReplica => "Cluster Replica",
+            ObjectType::Connection => "Connection",
+            ObjectType::Func => "Function",
+            ObjectType::Index => "Index",
+            ObjectType::MaterializedView => "Materialized View",
+            ObjectType::Secret => "Secret",
+            ObjectType::Sink => "Sink",
+            ObjectType::Source => "Source",
+            ObjectType::Table => "Table",
+            ObjectType::Type => "Type",
+            ObjectType::View => "View",
+        }
+    }
 }
 
 serde_plain::derive_display_from_serialize!(ObjectType);
@@ -170,7 +204,7 @@ pub struct EventV1 {
     pub event_type: EventType,
     pub object_type: ObjectType,
     pub event_details: EventDetails,
-    pub user: String,
+    pub user: Option<String>,
     pub occurred_at: EpochMillis,
 }
 
@@ -180,7 +214,7 @@ impl EventV1 {
         event_type: EventType,
         object_type: ObjectType,
         event_details: EventDetails,
-        user: String,
+        user: Option<String>,
         occurred_at: EpochMillis,
     ) -> EventV1 {
         EventV1 {
@@ -199,19 +233,35 @@ impl EventV1 {
 // failing. Instead of changing data structures, add new variants.
 #[test]
 fn test_audit_log() -> Result<(), anyhow::Error> {
-    let cases: Vec<(VersionedEvent, &'static str)> = vec![(
-        VersionedEvent::V1(EventV1::new(
-            1,
-            EventType::Create,
-            ObjectType::View,
-            EventDetails::NameV1(NameV1 {
-                name: "name".into(),
-            }),
-            "user".into(),
-            1,
-        )),
-        r#"{"V1":{"id":1,"event_type":"create","object_type":"view","event_details":{"NameV1":{"name":"name"}},"user":"user","occurred_at":1}}"#,
-    )];
+    let cases: Vec<(VersionedEvent, &'static str)> = vec![
+        (
+            VersionedEvent::V1(EventV1::new(
+                1,
+                EventType::Create,
+                ObjectType::View,
+                EventDetails::NameV1(NameV1 {
+                    name: "name".into(),
+                }),
+                Some("user".into()),
+                1,
+            )),
+            r#"{"V1":{"id":1,"event_type":"create","object_type":"view","event_details":{"NameV1":{"name":"name"}},"user":"user","occurred_at":1}}"#,
+        ),
+        (
+            VersionedEvent::V1(EventV1::new(
+                2,
+                EventType::Drop,
+                ObjectType::ClusterReplica,
+                EventDetails::IdNameV1(IdNameV1 {
+                    id: 0,
+                    name: "name".into(),
+                }),
+                None,
+                2,
+            )),
+            r#"{"V1":{"id":2,"event_type":"drop","object_type":"cluster-replica","event_details":{"IdNameV1":{"id":0,"name":"name"}},"user":null,"occurred_at":2}}"#,
+        ),
+    ];
 
     for (event, expected_bytes) in cases {
         let event_bytes = serde_json::to_vec(&event).unwrap();

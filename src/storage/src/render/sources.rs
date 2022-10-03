@@ -111,13 +111,13 @@ where
         name: source_name,
         upstream_name: connection.upstream_name().map(ToOwned::to_owned),
         id,
-        scope,
         timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
         encoding: encoding.clone(),
         now: storage_state.now.clone(),
-        base_metrics: &storage_state.source_metrics,
+        // TODO(guswynn): avoid extra clones here
+        base_metrics: storage_state.source_metrics.clone(),
         resume_upper: resume_upper.clone(),
         storage_metadata: description.storage_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
@@ -133,6 +133,7 @@ where
     let ((ok_source, err_source), capability) = match connection {
         SourceConnection::Kafka(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
+                scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
@@ -143,6 +144,7 @@ where
         SourceConnection::Kinesis(connection) => {
             let ((ok, err), cap) =
                 source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
+                    scope,
                     base_source_config,
                     connection,
                     storage_state.connection_context.clone(),
@@ -152,6 +154,7 @@ where
         }
         SourceConnection::S3(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
+                scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
@@ -161,6 +164,7 @@ where
         }
         SourceConnection::Postgres(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
+                scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
@@ -170,6 +174,7 @@ where
         }
         SourceConnection::LoadGenerator(connection) => {
             let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
+                scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
@@ -284,7 +289,7 @@ where
                                     id,
                                     persist_clients,
                                     tx_storage_metadata,
-                                    as_of,
+                                    Some(as_of),
                                     Antichain::new(),
                                     None,
                                     // Copy the logic in DeltaJoin/Get/Join to start.
@@ -335,7 +340,7 @@ where
                                 id,
                                 persist_clients,
                                 description.storage_metadata.clone(),
-                                Antichain::from_elem(previous_as_of),
+                                Some(Antichain::from_elem(previous_as_of)),
                                 Antichain::new(),
                                 None,
                                 // Copy the logic in DeltaJoin/Get/Join to start.

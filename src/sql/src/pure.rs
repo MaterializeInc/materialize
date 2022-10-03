@@ -20,8 +20,9 @@ use anyhow::{anyhow, bail, Context};
 use aws_arn::ResourceName as AmazonResourceName;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{
-    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, KafkaConfigOption,
-    KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, ReaderSchemaSelectionStrategy,
+    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, Envelope,
+    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -39,8 +40,8 @@ use mz_storage::types::sources::PostgresSourceDetails;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, DbzMode, Envelope, Format,
-    ProtobufSchema, Value, WithOptionValue,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsvColumns, Format, ProtobufSchema, Value,
+    WithOptionValue,
 };
 use crate::catalog::SessionCatalog;
 use crate::kafka_util;
@@ -78,83 +79,83 @@ pub async fn purify_create_source(
     let mut with_options_map = normalize::options(with_options)?;
 
     match connection {
-        CreateSourceConnection::Kafka(KafkaSourceConnection { connection, .. }) => {
-            match connection {
-                KafkaConnection::Reference {
+        CreateSourceConnection::Kafka(KafkaSourceConnection {
+            connection:
+                KafkaConnection {
                     connection,
                     options: base_with_options,
-                } => {
-                    let scx = StatementContext::new(None, &*catalog);
-                    let connection = {
-                        let item = scx.get_item_by_resolved_name(&connection)?;
-                        // Get Kafka connection
-                        match item.connection()? {
-                            Connection::Kafka(connection) => connection.clone(),
-                            _ => bail!("{} is not a kafka connection", item.name()),
-                        }
-                    };
-
-                    let extracted_options: KafkaConfigOptionExtracted =
-                        base_with_options.clone().try_into()?;
-
-                    let offset_type =
-                        Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
-                    let config_options =
-                        kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
-
-                    let topic = extracted_options.topic.expect("validated topic exists");
-
-                    let consumer = kafka_util::create_consumer(
-                        &topic,
-                        &connection,
-                        &config_options,
-                        connection_context.librdkafka_log_level,
-                        &*connection_context.secrets_reader,
-                    )
-                    .await
-                    .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
-
-                    if let Some(offset_type) = offset_type {
-                        // Translate `START TIMESTAMP` to a start offset
-                        match kafka_util::lookup_start_offsets(
-                            Arc::clone(&consumer),
-                            &topic,
-                            offset_type,
-                            now,
-                        )
-                        .await?
-                        {
-                            Some(start_offsets) => {
-                                // Drop the value we are purifying
-                                base_with_options.retain(|val| match val {
-                                    KafkaConfigOption {
-                                        name: KafkaConfigOptionName::StartTimestamp,
-                                        ..
-                                    } => false,
-                                    _ => true,
-                                });
-                                info!("add start_offset {:?}", start_offsets);
-                                base_with_options.push(KafkaConfigOption {
-                                    name: KafkaConfigOptionName::StartOffset,
-                                    value: Some(WithOptionValue::Value(Value::Array(
-                                        start_offsets
-                                            .iter()
-                                            .map(|offset| Value::Number(offset.to_string()))
-                                            .collect(),
-                                    ))),
-                                });
-                            }
-                            None => {}
-                        }
-                    }
+                },
+            ..
+        }) => {
+            let scx = StatementContext::new(None, &*catalog);
+            let connection = {
+                let item = scx.get_item_by_resolved_name(connection)?;
+                // Get Kafka connection
+                match item.connection()? {
+                    Connection::Kafka(connection) => connection.clone(),
+                    _ => bail!("{} is not a kafka connection", item.name()),
                 }
-                _ => {}
+            };
+
+            let extracted_options: KafkaConfigOptionExtracted =
+                base_with_options.clone().try_into()?;
+
+            let offset_type =
+                Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
+            let config_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
+
+            let topic = extracted_options
+                .topic
+                .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
+
+            let consumer = kafka_util::create_consumer(
+                &topic,
+                &connection,
+                &config_options,
+                connection_context.librdkafka_log_level,
+                &*connection_context.secrets_reader,
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+
+            if let Some(offset_type) = offset_type {
+                // Translate `START TIMESTAMP` to a start offset
+                match kafka_util::lookup_start_offsets(
+                    Arc::clone(&consumer),
+                    &topic,
+                    offset_type,
+                    now,
+                )
+                .await?
+                {
+                    Some(start_offsets) => {
+                        // Drop the value we are purifying
+                        base_with_options.retain(|val| match val {
+                            KafkaConfigOption {
+                                name: KafkaConfigOptionName::StartTimestamp,
+                                ..
+                            } => false,
+                            _ => true,
+                        });
+                        info!("add start_offset {:?}", start_offsets);
+                        base_with_options.push(KafkaConfigOption {
+                            name: KafkaConfigOptionName::StartOffset,
+                            value: Some(WithOptionValue::Value(Value::Array(
+                                start_offsets
+                                    .iter()
+                                    .map(|offset| Value::Number(offset.to_string()))
+                                    .collect(),
+                            ))),
+                        });
+                    }
+                    None => {}
+                }
             }
         }
         CreateSourceConnection::S3 { connection, .. } => {
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+                let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Aws(connection) => connection.clone(),
                     _ => bail!("{} is not an AWS connection", item.name()),
@@ -178,7 +179,7 @@ pub async fn purify_create_source(
 
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+                let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Aws(connection) => connection.clone(),
                     _ => bail!("{} is not an AWS connection", item.name()),
@@ -196,23 +197,29 @@ pub async fn purify_create_source(
         }
         CreateSourceConnection::Postgres {
             connection,
-            publication,
-            details: details_ast,
+            options,
         } => {
             let scx = StatementContext::new(None, &*catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(&connection)?;
+                let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
                     Connection::Postgres(connection) => connection.clone(),
                     _ => bail!("{} is not a postgres connection", item.name()),
                 }
             };
+            let crate::plan::statement::PgConfigOptionExtracted { publication, .. } =
+                options.clone().try_into()?;
+            let publication = publication
+                .ok_or_else(|| sql_err!("POSTGRES CONNECTION must specify PUBLICATION"))?;
+
             // verify that we can connect upstream and snapshot publication metadata
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
             let tables = mz_postgres_util::publication_info(&config, &publication).await?;
 
+            // Remove any old detail references
+            options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
             let details = PostgresSourceDetails {
                 tables,
                 slot: format!(
@@ -220,19 +227,17 @@ pub async fn purify_create_source(
                     Uuid::new_v4().to_string().replace('-', "")
                 ),
             };
-            *details_ast = Some(hex::encode(details.into_proto().encode_to_vec()));
+            options.push(PgConfigOption {
+                name: PgConfigOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            })
         }
         CreateSourceConnection::LoadGenerator { .. } => (),
     }
 
-    purify_source_format(
-        &*catalog,
-        format,
-        connection,
-        &envelope,
-        &connection_context,
-    )
-    .await?;
+    purify_source_format(&*catalog, format, connection, envelope, &connection_context).await?;
 
     Ok(stmt)
 }
@@ -241,7 +246,7 @@ async fn purify_source_format(
     catalog: &dyn SessionCatalog,
     format: &mut CreateSourceFormat<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
@@ -271,7 +276,7 @@ async fn purify_source_format_single(
     catalog: &dyn SessionCatalog,
     format: &mut Format<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     match format {
@@ -286,13 +291,7 @@ async fn purify_source_format_single(
                 )
                 .await?
             }
-            AvroSchema::InlineSchema { schema, .. } => {
-                if let mz_sql_parser::ast::Schema::File(_) = schema {
-                    // See comment below about this branch for the protobuf
-                    // format.
-                    bail_unsupported!("FORMAT AVRO USING SCHEMA FILE");
-                }
-            }
+            AvroSchema::InlineSchema { .. } => {}
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connection } => {
@@ -305,22 +304,7 @@ async fn purify_source_format_single(
                 )
                 .await?;
             }
-            ProtobufSchema::InlineSchema {
-                message_name: _,
-                schema,
-            } => {
-                if let mz_sql_parser::ast::Schema::File(path) = schema {
-                    // We want to remove this feature, as it doesn't work in
-                    // cloud, but there are many tests that rely on this
-                    // feature that need to be updated first.
-                    let scx = StatementContext::new(None, &*catalog);
-                    scx.require_unsafe_mode("FORMAT PROTOBUF USING SCHEMA FILE")?;
-                    let descriptors = tokio::fs::read(path).await?;
-                    let mut buf = String::new();
-                    strconv::format_bytes(&mut buf, &descriptors);
-                    *schema = mz_sql_parser::ast::Schema::Inline(buf);
-                }
-            }
+            ProtobufSchema::InlineSchema { .. } => {}
         },
         Format::Csv {
             delimiter: _,
@@ -346,27 +330,22 @@ async fn purify_csr_connection_proto(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
-    let topic =
-        if let CreateSourceConnection::Kafka(KafkaSourceConnection {
-            connection, topic, ..
-        }) = connection
-        {
-            match connection {
-                KafkaConnection::Inline { .. } => topic.clone().unwrap(),
-                KafkaConnection::Reference { options, .. } => {
-                    let KafkaConfigOptionExtracted { topic, .. } = options
-                        .clone()
-                        .try_into()
-                        .expect("already verified options valid provided");
-                    topic.expect("already validated topic provided")
-                }
-            }
-        } else {
-            bail!("Confluent Schema Registry is only supported with Kafka sources")
-        };
+    let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
+        connection: KafkaConnection { options, .. },
+        ..
+    }) = connection
+    {
+        let KafkaConfigOptionExtracted { topic, .. } = options
+            .clone()
+            .try_into()
+            .expect("already verified options valid provided");
+        topic.expect("already validated topic provided")
+    } else {
+        bail!("Confluent Schema Registry is only supported with Kafka sources")
+    };
 
     let CsrConnectionProtobuf {
         seed,
@@ -379,7 +358,7 @@ async fn purify_csr_connection_proto(
         None => {
             let scx = StatementContext::new(None, &*catalog);
 
-            let ccsr_connection = match scx.get_item_by_resolved_name(&connection)?.connection()? {
+            let ccsr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
                 Connection::Csr(connection) => connection.clone(),
                 _ => bail!("{} is not a schema registry connection", connection),
             };
@@ -393,8 +372,8 @@ async fn purify_csr_connection_proto(
                 .await
                 .ok();
 
-            if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key.is_none() {
-                bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+            if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key.is_none() {
+                bail!("Key schema is required for ENVELOPE DEBEZIUM");
             }
 
             *seed = Some(CsrSeedProtobuf { value, key });
@@ -409,27 +388,22 @@ async fn purify_csr_connection_avro(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionAvro<Aug>,
-    envelope: &Option<Envelope<Aug>>,
+    envelope: &Option<Envelope>,
     connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
-    let topic =
-        if let CreateSourceConnection::Kafka(KafkaSourceConnection {
-            connection, topic, ..
-        }) = connection
-        {
-            match connection {
-                KafkaConnection::Inline { .. } => topic.clone().unwrap(),
-                KafkaConnection::Reference { options, .. } => {
-                    let KafkaConfigOptionExtracted { topic, .. } = options
-                        .clone()
-                        .try_into()
-                        .expect("already verified options valid provided");
-                    topic.expect("already validated topic provided")
-                }
-            }
-        } else {
-            bail!("Confluent Schema Registry is only supported with Kafka sources")
-        };
+    let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
+        connection: KafkaConnection { options, .. },
+        ..
+    }) = connection
+    {
+        let KafkaConfigOptionExtracted { topic, .. } = options
+            .clone()
+            .try_into()
+            .expect("already verified options valid provided");
+        topic.expect("already validated topic provided")
+    } else {
+        bail!("Confluent Schema Registry is only supported with Kafka sources")
+    };
 
     let CsrConnectionAvro {
         connection: CsrConnection { connection, .. },
@@ -439,7 +413,7 @@ async fn purify_csr_connection_avro(
     } = csr_connection;
     if seed.is_none() {
         let scx = StatementContext::new(None, &*catalog);
-        let csr_connection = match scx.get_item_by_resolved_name(&connection)?.connection()? {
+        let csr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
             Connection::Csr(connection) => connection.clone(),
             _ => bail!("{} is not a schema registry connection", connection),
         };
@@ -457,8 +431,8 @@ async fn purify_csr_connection_avro(
             topic,
         )
         .await?;
-        if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key_schema.is_none() {
-            bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+        if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key_schema.is_none() {
+            bail!("Key schema is required for ENVELOPE DEBEZIUM");
         }
 
         *seed = Some(CsrSeedAvro {
@@ -541,7 +515,7 @@ async fn get_remote_csr_schema(
     topic: String,
 ) -> Result<Schema, anyhow::Error> {
     let value_schema_name = format!("{}-value", topic);
-    let value_schema = get_schema_with_strategy(&ccsr_client, value_strategy, &value_schema_name)
+    let value_schema = get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name)
         .await
         .with_context(|| {
             format!(
@@ -551,7 +525,7 @@ async fn get_remote_csr_schema(
         })?;
     let value_schema = value_schema.ok_or_else(|| anyhow!("No value schema found"))?;
     let subject = format!("{}-key", topic);
-    let key_schema = get_schema_with_strategy(&ccsr_client, key_strategy, &subject).await?;
+    let key_schema = get_schema_with_strategy(ccsr_client, key_strategy, &subject).await?;
     Ok(Schema {
         key_schema,
         value_schema,

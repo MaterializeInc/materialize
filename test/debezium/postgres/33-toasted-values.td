@@ -16,9 +16,9 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE toasted_full (f1 text);
+CREATE TABLE toasted_full (f1 text, f2 INTEGER PRIMARY KEY);
 ALTER TABLE toasted_full REPLICA IDENTITY FULL;
-INSERT INTO toasted_full VALUES (NULL), (REPEAT('a', 32 * 1024) || 'b');
+INSERT INTO toasted_full VALUES (NULL, 0), (REPEAT('a', 32 * 1024) || 'b', 1);
 
 $ schema-registry-wait-schema schema=postgres.public.toasted_full-value
 
@@ -26,8 +26,11 @@ $ schema-registry-wait-schema schema=postgres.public.toasted_full-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE toasted_full
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.toasted_full'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.toasted_full')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

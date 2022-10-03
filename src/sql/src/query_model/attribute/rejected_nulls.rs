@@ -315,10 +315,10 @@ mod tests {
 
         assert_derived_attribute(&mut model, b_id, |r#box| {
             HashSet::from([
-                cref(input(&r#box, 0), 0),
-                cref(input(&r#box, 0), 1),
-                cref(input(&r#box, 0), 2),
-                cref(input(&r#box, 0), 3),
+                cref(input(r#box, 0), 0),
+                cref(input(r#box, 0), 1),
+                cref(input(r#box, 0), 2),
+                cref(input(r#box, 0), 3),
             ]) // {#0, #1, #2, #3}
         });
     }
@@ -339,10 +339,10 @@ mod tests {
 
         assert_derived_attribute(&mut model, b_id, |r#box| {
             HashSet::from([
-                cref(input(&r#box, 0), 0),
-                cref(input(&r#box, 0), 1),
-                cref(input(&r#box, 0), 2),
-                cref(input(&r#box, 0), 3),
+                cref(input(r#box, 0), 0),
+                cref(input(r#box, 0), 1),
+                cref(input(r#box, 0), 2),
+                cref(input(r#box, 0), 3),
             ]) // {#0, #1, #2, #3}
         });
     }
@@ -374,10 +374,10 @@ mod tests {
 
         assert_derived_attribute(&mut model, b_id, |r#box| {
             HashSet::from([
-                cref(input(&r#box, 0), 0),
-                cref(input(&r#box, 0), 1),
-                cref(input(&r#box, 0), 2),
-                cref(input(&r#box, 0), 3),
+                cref(input(r#box, 0), 0),
+                cref(input(r#box, 0), 1),
+                cref(input(r#box, 0), 2),
+                cref(input(r#box, 0), 3),
             ]) // {#0, #1, #2, #3}
         });
     }
@@ -409,9 +409,9 @@ mod tests {
 
         assert_derived_attribute(&mut model, b_id, |r#box| {
             HashSet::from([
-                cref(input(&r#box, 0), 1),
-                cref(input(&r#box, 0), 2),
-                cref(input(&r#box, 0), 3),
+                cref(input(r#box, 0), 1),
+                cref(input(r#box, 0), 2),
+                cref(input(r#box, 0), 3),
             ]) // {#0, #2, #3}
         });
     }

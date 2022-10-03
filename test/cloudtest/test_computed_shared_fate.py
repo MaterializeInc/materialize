@@ -21,8 +21,8 @@ CLUSTER_SIZE = 4
 
 
 def populate(mz: MaterializeApplication, seed: int) -> None:
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             f"""
             > CREATE CLUSTER shared_fate REPLICAS (shared_fate_replica (SIZE '{CLUSTER_SIZE}-1'));
             > SET cluster = shared_fate;
@@ -63,8 +63,8 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
 
 def validate(mz: MaterializeApplication, seed: int) -> None:
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
             > SET cluster = shared_fate;
 

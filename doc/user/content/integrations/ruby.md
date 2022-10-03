@@ -13,12 +13,12 @@ Materialize is **wire-compatible** with PostgreSQL, which means that Ruby applic
 
 ## Connect
 
-To connect to a local instance of Materialize using `pg`:
+To connect to Materialize using `pg`:
 
 ```ruby
 require 'pg'
 
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 ```
 
 If you don't have a `pg` gem, you can install it with:
@@ -29,17 +29,17 @@ gem install pg
 
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a Ruby application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a Ruby application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```ruby
 require 'pg'
 
 # Locally running instance:
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 conn.exec('BEGIN')
-conn.exec('DECLARE c CURSOR FOR TAIL my_view')
+conn.exec('DECLARE c CURSOR FOR SUBSCRIBE my_view')
 
 while true
   conn.exec('FETCH c') do |result|
@@ -50,7 +50,7 @@ while true
 end
 ```
 
-Each `result` of the [TAIL output format](/sql/tail/#output) has exactly object. When a row of a tailed view is **updated,** two objects will show up:
+Each `result` of the [SUBSCRIBE output format](/sql/subscribe/#output) has exactly object. When a row of a subscribed view is **updated,** two objects will show up:
 
 ```json
 ...
@@ -68,14 +68,14 @@ An `mz_diff` value of `-1` indicates Materialize is deleting one row with the in
 
 Querying Materialize is identical to querying a PostgreSQL database: Ruby executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
-Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
 To query a view `my_view` using a `SELECT` statement:
 
 ```ruby
 require 'pg'
 
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 
 res  = conn.exec('SELECT * FROM my_view')
 
@@ -95,7 +95,7 @@ Most data in Materialize will stream in via an external system, but a [table](/s
 ```ruby
 require 'pg'
 
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 
 conn.exec("INSERT INTO my_table (my_column) VALUES ('some_value')")
 
@@ -115,7 +115,7 @@ Typically, you create sources, views, and indexes when deploying Materialize, bu
 ```ruby
 require 'pg'
 
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 
 # Create a source
 src = conn.exec(
@@ -138,7 +138,7 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
 ```ruby
 require 'pg'
 
-conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
+conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 
 # Create a view
 view = conn.exec(

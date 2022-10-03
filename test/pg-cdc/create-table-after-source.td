@@ -26,8 +26,7 @@ CREATE SCHEMA public;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > SELECT COUNT(*) FROM mz_source;
 0
@@ -43,8 +42,7 @@ contains:table t1 not found
 > DROP SOURCE mz_source;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg
-  PUBLICATION 'mz_source';
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE VIEWS FROM SOURCE mz_source (t1);
 

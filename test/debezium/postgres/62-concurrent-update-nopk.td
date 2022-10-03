@@ -12,10 +12,10 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE concurrent_update (f1 INTEGER, f2 TEXT);
+CREATE TABLE concurrent_update (f1 INTEGER, f2 TEXT, f3 INTEGER PRIMARY KEY);
 ALTER TABLE concurrent_update REPLICA IDENTITY FULL;
-INSERT INTO concurrent_update VALUES (1, 'r1');
-INSERT INTO concurrent_update VALUES (11, 'r2');
+INSERT INTO concurrent_update VALUES (1, 'r1', 0);
+INSERT INTO concurrent_update VALUES (11, 'r2', 1);
 
 $ schema-registry-wait-schema schema=postgres.public.concurrent_update-value
 
@@ -23,8 +23,11 @@ $ schema-registry-wait-schema schema=postgres.public.concurrent_update-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE concurrent_update
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.concurrent_update'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_update')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -48,6 +51,6 @@ $ postgres-execute connection=conn2
 UPDATE concurrent_update SET f1 = f1 * 10 WHERE f1 = 31;
 COMMIT;
 
-> SELECT * FROM concurrent_update;
+> SELECT f1, f2 FROM concurrent_update;
 42 r1
 310 r2

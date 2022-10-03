@@ -302,7 +302,7 @@ where
         let mut applied_ever_true = false;
         let (_seqno, _applied, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
-                let ret = state.apply_merge_res(&res);
+                let ret = state.apply_merge_res(res);
                 if let Continue(applied) = ret {
                     applied_ever_true = applied_ever_true || applied;
                 }
@@ -431,7 +431,7 @@ where
     }
 
     // NB: Unlike the other methods here, this one is read-only.
-    pub async fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
+    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
         match self.state.verify_listen(as_of) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(Upper(_))) => {
@@ -442,7 +442,7 @@ where
                 // they are available.
                 Ok(())
             }
-            Err(Since(since)) => return Err(Since(since)),
+            Err(Since(since)) => Err(Since(since)),
         }
     }
 
@@ -776,6 +776,8 @@ pub mod datadriven {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use anyhow::anyhow;
+    use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
     use mz_build_info::DUMMY_BUILD_INFO;
 
@@ -784,6 +786,7 @@ pub mod datadriven {
     use crate::internal::compact::{CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::gc::GcReq;
+    use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
     use crate::read::{Listen, ListenEvent};
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistClient};
@@ -797,8 +800,10 @@ pub mod datadriven {
         pub shard_id: ShardId,
         pub state_versions: Arc<StateVersions>,
         pub machine: Machine<String, (), u64, i64>,
+        pub gc: GarbageCollector<String, (), u64, i64>,
         pub batches: HashMap<String, HollowBatch<u64>>,
         pub listens: HashMap<String, Listen<String, (), u64, i64>>,
+        pub routine: Vec<RoutineMaintenance>,
     }
 
     impl MachineState {
@@ -823,13 +828,16 @@ pub mod datadriven {
             )
             .await
             .expect("codecs should match");
+            let gc = GarbageCollector::new(machine.clone());
             MachineState {
                 shard_id,
                 client,
                 state_versions,
                 machine,
+                gc,
                 batches: HashMap::default(),
                 listens: HashMap::default(),
+                routine: Vec::new(),
             }
         }
     }
@@ -840,7 +848,7 @@ pub mod datadriven {
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
-        let from = SeqNo(args.expect("from_seqno"));
+        let from = args.expect("from_seqno");
 
         let mut states = datadriven
             .state_versions
@@ -866,13 +874,51 @@ pub mod datadriven {
         Ok(s)
     }
 
+    pub async fn blob_scan_batches(
+        datadriven: &mut MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let key_prefix = BlobKeyPrefix::Shard(&datadriven.shard_id).to_string();
+
+        let mut s = String::new();
+        let () = datadriven
+            .state_versions
+            .blob
+            .list_keys_and_metadata(&key_prefix, &mut |x| {
+                let (_, key) = BlobKey::parse_ids(x.key).expect("key should be valid");
+                if let PartialBlobKey::Batch(_, _) = key {
+                    write!(s, "{}: {}b\n", x.key, x.size_in_bytes);
+                }
+            })
+            .await?;
+        Ok(s)
+    }
+
+    pub async fn downgrade_since(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let since = args.expect_antichain("since");
+        let reader_id = args.expect("reader_id");
+        let (_, since, routine) = datadriven
+            .machine
+            .downgrade_since(&reader_id, None, &since, (datadriven.machine.cfg.now)())
+            .await;
+        datadriven.routine.push(routine);
+        Ok(format!(
+            "{} {:?}\n",
+            datadriven.machine.seqno(),
+            since.0.elements()
+        ))
+    }
+
     pub async fn write_batch(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let output = args.expect_str("output");
-        let lower = args.expect("lower");
-        let upper = args.expect("upper");
+        let lower = args.expect_antichain("lower");
+        let upper = args.expect_antichain("upper");
         let target_size = args.optional("target_size");
         let parts_size_override = args.optional("parts_size_override");
         let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
@@ -885,7 +931,7 @@ pub mod datadriven {
             cfg,
             Arc::clone(&datadriven.client.metrics),
             0,
-            Antichain::from_elem(lower),
+            lower,
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             datadriven.shard_id.clone(),
@@ -895,7 +941,7 @@ pub mod datadriven {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
         }
         let batch = builder
-            .finish(Antichain::from_elem(upper))
+            .finish(upper)
             .await
             .expect("invalid batch")
             .into_hollow_batch();
@@ -940,6 +986,7 @@ pub mod datadriven {
                 &datadriven.shard_id,
                 datadriven.client.blob.as_ref(),
                 datadriven.client.metrics.as_ref(),
+                &datadriven.client.metrics.read.batch_fetcher,
                 &part.key,
                 &batch.desc,
             )
@@ -973,19 +1020,15 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
         let output = args.expect_str("output");
-        let lower = args.expect("lower");
-        let upper = args.expect("upper");
+        let lower = args.expect_antichain("lower");
+        let upper = args.expect_antichain("upper");
 
         let mut batch = datadriven
             .batches
             .get(input)
             .expect("unknown batch")
             .clone();
-        let truncated_desc = Description::new(
-            Antichain::from_elem(lower),
-            Antichain::from_elem(upper),
-            batch.desc.since().clone(),
-        );
+        let truncated_desc = Description::new(lower, upper, batch.desc.since().clone());
         let () = validate_truncate_batch(&batch.desc, &truncated_desc)?;
         batch.desc = truncated_desc;
         datadriven.batches.insert(output.to_owned(), batch.clone());
@@ -1003,7 +1046,7 @@ pub mod datadriven {
         for part in batch.parts.iter_mut() {
             part.encoded_size_bytes = size;
         }
-        Ok(format!("ok\n"))
+        Ok("ok\n".to_string())
     }
 
     pub async fn compact(
@@ -1011,9 +1054,9 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let output = args.expect_str("output");
-        let lower = args.expect("lower");
-        let upper = args.expect("upper");
-        let since = args.expect("since");
+        let lower = args.expect_antichain("lower");
+        let upper = args.expect_antichain("upper");
+        let since = args.expect_antichain("since");
         let target_size = args.optional("target_size");
         let memory_bound = args.optional("memory_bound");
 
@@ -1037,14 +1080,10 @@ pub mod datadriven {
         }
         let req = CompactReq {
             shard_id: datadriven.shard_id,
-            desc: Description::new(
-                Antichain::from_elem(lower),
-                Antichain::from_elem(upper),
-                Antichain::from_elem(since),
-            ),
+            desc: Description::new(lower, upper, since),
             inputs,
         };
-        let res = Compactor::compact::<u64, i64>(
+        let res = Compactor::<u64, i64>::compact(
             cfg,
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
@@ -1068,7 +1107,7 @@ pub mod datadriven {
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
-        let new_seqno_since = SeqNo(args.expect("to_seqno"));
+        let new_seqno_since = args.expect("to_seqno");
 
         let req = GcReq {
             shard_id: datadriven.shard_id,
@@ -1076,7 +1115,46 @@ pub mod datadriven {
         };
         GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
 
-        Ok("ok\n".into())
+        Ok(format!("{} ok\n", datadriven.machine.seqno()))
+    }
+
+    pub async fn snapshot(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let as_of = args.expect_antichain("as_of");
+        let snapshot = datadriven
+            .machine
+            .snapshot(&as_of)
+            .await
+            .map_err(|err| anyhow!("{:?}", err))?;
+
+        let mut updates = Vec::new();
+        for batch in snapshot {
+            for part in batch.parts {
+                let mut part = fetch_batch_part(
+                    &datadriven.shard_id,
+                    datadriven.client.blob.as_ref(),
+                    datadriven.client.metrics.as_ref(),
+                    &datadriven.client.metrics.read.batch_fetcher,
+                    &part.key,
+                    &batch.desc,
+                )
+                .await
+                .expect("invalid batch part");
+                while let Some((k, _v, mut t, d)) = part.next() {
+                    t.advance_by(as_of.borrow());
+                    updates.push((String::decode(k).unwrap(), t, i64::decode(d)));
+                }
+            }
+        }
+        consolidate_updates(&mut updates);
+
+        let mut s = String::new();
+        for (k, t, d) in updates {
+            write!(s, "{k} {t} {d}\n");
+        }
+        Ok(s)
     }
 
     pub async fn register_listen(
@@ -1084,13 +1162,16 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let output = args.expect_str("output");
-        let as_of = args.expect("as-of");
+        let as_of = args.expect_antichain("as_of");
         let read = datadriven
             .client
             .open_reader::<String, (), u64, i64>(datadriven.shard_id)
             .await
             .expect("invalid shard types");
-        let listen = read.expect_listen(as_of).await;
+        let listen = read
+            .listen(as_of)
+            .await
+            .map_err(|err| anyhow!("{:?}", err))?;
         datadriven.listens.insert(output.to_owned(), listen);
         Ok("ok\n".into())
     }
@@ -1100,6 +1181,8 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
+        // It's not possible to listen _through_ the empty antichain, so this is
+        // intentionally `expect` instead of `expect_antichain`.
         let frontier = args.expect("frontier");
         let listen = datadriven.listens.get_mut(input).expect("unknown listener");
         let mut s = String::new();
@@ -1121,6 +1204,26 @@ pub mod datadriven {
         }
     }
 
+    pub async fn register_reader(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let reader_id = args.expect("reader_id");
+        let _state = datadriven
+            .machine
+            .register_reader(
+                &reader_id,
+                datadriven.client.cfg.reader_lease_duration,
+                (datadriven.client.cfg.now)(),
+            )
+            .await;
+        Ok(format!(
+            "{} {:?}\n",
+            datadriven.machine.seqno(),
+            datadriven.machine.state.since().elements(),
+        ))
+    }
+
     pub async fn register_writer(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -1134,7 +1237,53 @@ pub mod datadriven {
                 (datadriven.client.cfg.now)(),
             )
             .await;
-        Ok(format!("{:?}\n", upper.0.elements()))
+        Ok(format!(
+            "{} {:?}\n",
+            datadriven.machine.seqno(),
+            upper.0.elements()
+        ))
+    }
+
+    pub async fn heartbeat_reader(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let reader_id = args.expect("reader_id");
+        let _ = datadriven
+            .machine
+            .heartbeat_reader(&reader_id, (datadriven.client.cfg.now)())
+            .await;
+        Ok(format!("{} ok\n", datadriven.machine.seqno()))
+    }
+
+    pub async fn heartbeat_writer(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let writer_id = args.expect("writer_id");
+        let _ = datadriven
+            .machine
+            .heartbeat_writer(&writer_id, (datadriven.client.cfg.now)())
+            .await;
+        Ok(format!("{} ok\n", datadriven.machine.seqno()))
+    }
+
+    pub async fn expire_reader(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let reader_id = args.expect("reader_id");
+        let _ = datadriven.machine.expire_reader(&reader_id).await;
+        Ok(format!("{} ok\n", datadriven.machine.seqno()))
+    }
+
+    pub async fn expire_writer(
+        datadriven: &mut MachineState,
+        args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let writer_id = args.expect("writer_id");
+        let _ = datadriven.machine.expire_writer(&writer_id).await;
+        Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
     pub async fn compare_and_append(
@@ -1149,14 +1298,21 @@ pub mod datadriven {
             .expect("unknown batch")
             .clone();
         let now = (datadriven.client.cfg.now)();
-        let (_, _) = datadriven
+        let (_, maintenance) = datadriven
             .machine
             .compare_and_append(&batch, &writer_id, now)
             .await
             .expect("indeterminate")
             .expect("invalid usage")
-            .expect("upper mismatch");
-        Ok(format!("ok\n"))
+            .map_err(|err| anyhow!("{:?}", err))?;
+        // TODO: Don't throw away writer maintenance. It's slightly tricky
+        // because we need a WriterId for Compactor.
+        datadriven.routine.push(maintenance.routine);
+        Ok(format!(
+            "{} {:?}\n",
+            datadriven.machine.seqno(),
+            datadriven.machine.upper().elements(),
+        ))
     }
 
     pub async fn apply_merge_res(
@@ -1173,7 +1329,22 @@ pub mod datadriven {
             .machine
             .merge_res(&FueledMergeRes { output: batch })
             .await;
-        Ok(format!("{}\n", applied))
+        Ok(format!("{} {}\n", datadriven.machine.seqno(), applied))
+    }
+
+    pub async fn perform_maintenance(
+        datadriven: &mut MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let mut s = String::new();
+        for maintenance in datadriven.routine.drain(..) {
+            let () = maintenance
+                .perform(&datadriven.machine, &datadriven.gc)
+                .await;
+            let () = datadriven.machine.fetch_and_update_state().await;
+            write!(s, "{} ok\n", datadriven.machine.seqno());
+        }
+        Ok(s)
     }
 }
 

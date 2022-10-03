@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -46,7 +47,7 @@ pub struct Config {
 }
 
 /// Configures a server's TLS encryption and authentication.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TlsConfig {
     /// The SSL context used to manage incoming TLS negotiations.
     pub context: SslContext,
@@ -84,75 +85,84 @@ impl Server {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn handle_connection<A>(&self, conn: A) -> Result<(), anyhow::Error>
+    pub fn handle_connection<A>(
+        &self,
+        conn: A,
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + 'static
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
-        let mut adapter_client = self.adapter_client.new_conn()?;
-        let conn_id = adapter_client.conn_id();
-        let mut conn = Conn::Unencrypted(conn);
-        loop {
-            let message = codec::decode_startup(&mut conn).await?;
+        let adapter_client = self.adapter_client.new_conn();
+        let frontegg = self.frontegg.clone();
+        let tls = self.tls.clone();
+        let internal = self.internal;
+        async {
+            let mut adapter_client = adapter_client?;
+            let conn_id = adapter_client.conn_id();
+            let mut conn = Conn::Unencrypted(conn);
+            loop {
+                let message = codec::decode_startup(&mut conn).await?;
 
-            match &message {
-                Some(message) => trace!("cid={} recv={:?}", conn_id, message),
-                None => trace!("cid={} recv=<eof>", conn_id),
-            }
-
-            conn = match message {
-                // Clients sometimes hang up during the startup sequence, e.g.
-                // because they receive an unacceptable response to an
-                // `SslRequest`. This is considered a graceful termination.
-                None => return Ok(()),
-
-                Some(FrontendStartupMessage::Startup { version, params }) => {
-                    let mut conn = FramedConn::new(conn_id, conn);
-                    protocol::run(protocol::RunParams {
-                        tls_mode: self.tls.as_ref().map(|tls| tls.mode),
-                        adapter_client,
-                        conn: &mut conn,
-                        version,
-                        params,
-                        frontegg: self.frontegg.as_ref(),
-                        internal: self.internal,
-                    })
-                    .await?;
-                    conn.flush().await?;
-                    return Ok(());
+                match &message {
+                    Some(message) => trace!("cid={} recv={:?}", conn_id, message),
+                    None => trace!("cid={} recv=<eof>", conn_id),
                 }
 
-                Some(FrontendStartupMessage::CancelRequest {
-                    conn_id,
-                    secret_key,
-                }) => {
-                    adapter_client.cancel_request(conn_id, secret_key).await;
-                    // For security, the client is not told whether the cancel
-                    // request succeeds or fails.
-                    return Ok(());
-                }
+                conn = match message {
+                    // Clients sometimes hang up during the startup sequence, e.g.
+                    // because they receive an unacceptable response to an
+                    // `SslRequest`. This is considered a graceful termination.
+                    None => return Ok(()),
 
-                Some(FrontendStartupMessage::SslRequest) => match (conn, &self.tls) {
-                    (Conn::Unencrypted(mut conn), Some(tls)) => {
-                        trace!("cid={} send=AcceptSsl", conn_id);
-                        conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                        let mut ssl_stream = SslStream::new(Ssl::new(&tls.context)?, conn)?;
-                        if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                            let _ = ssl_stream.get_mut().shutdown().await;
-                            return Err(e.into());
-                        }
-                        Conn::Ssl(ssl_stream)
+                    Some(FrontendStartupMessage::Startup { version, params }) => {
+                        let mut conn = FramedConn::new(conn_id, conn);
+                        protocol::run(protocol::RunParams {
+                            tls_mode: tls.as_ref().map(|tls| tls.mode),
+                            adapter_client,
+                            conn: &mut conn,
+                            version,
+                            params,
+                            frontegg: frontegg.as_ref(),
+                            internal,
+                        })
+                        .await?;
+                        conn.flush().await?;
+                        return Ok(());
                     }
-                    (mut conn, _) => {
-                        trace!("cid={} send=RejectSsl", conn_id);
+
+                    Some(FrontendStartupMessage::CancelRequest {
+                        conn_id,
+                        secret_key,
+                    }) => {
+                        adapter_client.cancel_request(conn_id, secret_key);
+                        // For security, the client is not told whether the cancel
+                        // request succeeds or fails.
+                        return Ok(());
+                    }
+
+                    Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
+                        (Conn::Unencrypted(mut conn), Some(tls)) => {
+                            trace!("cid={} send=AcceptSsl", conn_id);
+                            conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
+                            let mut ssl_stream = SslStream::new(Ssl::new(&tls.context)?, conn)?;
+                            if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                                let _ = ssl_stream.get_mut().shutdown().await;
+                                return Err(e.into());
+                            }
+                            Conn::Ssl(ssl_stream)
+                        }
+                        (mut conn, _) => {
+                            trace!("cid={} send=RejectSsl", conn_id);
+                            conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                            conn
+                        }
+                    },
+
+                    Some(FrontendStartupMessage::GssEncRequest) => {
+                        trace!("cid={} send=RejectGssEnc", conn_id);
                         conn.write_all(&[REJECT_ENCRYPTION]).await?;
                         conn
                     }
-                },
-
-                Some(FrontendStartupMessage::GssEncRequest) => {
-                    trace!("cid={} send=RejectGssEnc", conn_id);
-                    conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                    conn
                 }
             }
         }

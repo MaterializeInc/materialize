@@ -13,9 +13,12 @@ $ set schema={}
 
 $ kafka-create-topic topic=headers_src
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 ! CREATE SOURCE headers_src
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-headers_src-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-headers_src-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
@@ -23,17 +26,17 @@ $ kafka-create-topic topic=headers_src
 contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
 ! CREATE SOURCE headers_src
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-headers_src-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-headers_src-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
-  ENVELOPE DEBEZIUM UPSERT
+  ENVELOPE DEBEZIUM
 contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
 ! CREATE SOURCE headers_src
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-headers_src-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-headers_src-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
@@ -41,8 +44,8 @@ contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
 ! CREATE SOURCE headers_src
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-headers_src-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-headers_src-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS

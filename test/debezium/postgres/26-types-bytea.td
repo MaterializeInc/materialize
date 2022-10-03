@@ -12,9 +12,9 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE bytea_type (f1 BYTEA);
+CREATE TABLE bytea_type (f1 BYTEA, f2 INTEGER PRIMARY KEY);
 ALTER TABLE bytea_type REPLICA IDENTITY FULL;
-INSERT INTO bytea_type VALUES (NULL), (''), (E'\\x00'), (E'\\xABCDEF1234');
+INSERT INTO bytea_type VALUES (NULL, 0), ('', 1), (E'\\x00', 2), (E'\\xABCDEF1234', 3);
 
 $ schema-registry-wait-schema schema=postgres.public.bytea_type-value
 
@@ -22,8 +22,11 @@ $ schema-registry-wait-schema schema=postgres.public.bytea_type-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE bytea_type
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.bytea_type'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.bytea_type')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

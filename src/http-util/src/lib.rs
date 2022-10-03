@@ -18,6 +18,7 @@ use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
+use tracing_subscriber::filter::Targets;
 
 /// Renders a template into an HTTP response.
 pub fn template_response<T>(template: T) -> Html<String>
@@ -94,7 +95,7 @@ macro_rules! make_handle_static {
 /// Serves a basic liveness check response
 #[allow(clippy::unused_async)]
 pub async fn handle_liveness_check() -> impl IntoResponse {
-    return (StatusCode::OK, "Liveness check successful!");
+    (StatusCode::OK, "Liveness check successful!")
 }
 
 /// Serves metrics from the selected metrics registry variant.
@@ -109,24 +110,21 @@ pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse 
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct DynamicOtelConfig {
-    enabled: bool,
+pub struct DynamicFilterTarget {
+    targets: String,
 }
 
-/// Allows dynamic control of the OpenTelemetry `tracing` subscriber.
+/// Allows dynamic control of the stderr log filter
 #[allow(clippy::unused_async)]
-pub async fn handle_enable_otel(
-    callback: mz_ore::tracing::OpenTelemetryEnableCallback,
-    Json(cfg): Json<DynamicOtelConfig>,
+pub async fn handle_modify_filter_target(
+    callback: mz_ore::tracing::DynamicTargetsCallback,
+    Json(cfg): Json<DynamicFilterTarget>,
 ) -> impl IntoResponse {
-    match callback.call(cfg.enabled) {
-        Ok(()) => (
-            StatusCode::OK,
-            format!(
-                "Otel collector successfully {}",
-                if cfg.enabled { "enabled" } else { "disabled" }
-            ),
-        ),
+    match cfg.targets.parse::<Targets>() {
+        Ok(targets) => match callback.call(targets) {
+            Ok(()) => (StatusCode::OK, cfg.targets.to_string()),
+            Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+        },
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
     }
 }

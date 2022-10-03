@@ -1,11 +1,11 @@
 [package]
 name = "mz-environmentd"
 description = "Manages a single Materialize environment."
-version = "0.27.0-dev"
+version = "0.27.0-alpha.23.post"
 authors = ["Materialize, Inc."]
 license = "proprietary"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

@@ -21,6 +21,27 @@
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+# Test interval type.
+
+> CREATE MATERIALIZED VIEW interval_data (interval) AS VALUES
+  (INTERVAL '0s'),
+  (INTERVAL '1month 1day 1us'),
+  (INTERVAL '-1month -1day -1us'),
+  (INTERVAL '-178000000 years'),
+  (INTERVAL '178000000 years')
+
+> CREATE SINK interval_data_sink FROM interval_data
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-interval-data-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+$ kafka-verify format=avro sink=materialize.public.interval_data_sink sort-messages=true
+{"before": null, "after": {"row": {"interval": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}}}
+{"before": null, "after": {"row": {"interval": [0, 198, 80, 127, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}}}
+{"before": null, "after": {"row": {"interval": [0, 58, 175, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}}}
+{"before": null, "after": {"row": {"interval": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]}}}
+{"before": null, "after": {"row": {"interval": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]}}}
+
 # See #9723
 #> CREATE MATERIALIZED VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
 #
@@ -54,20 +75,24 @@
 > CREATE SINK datetime_data_sink FROM datetime_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-datetime-data-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.datetime_data_sink sort-messages=true
 {"before": null, "after": {"row": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
 {"before": null, "after": {"row": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}
 
-> CREATE MATERIALIZED VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04')
+> CREATE MATERIALIZED VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04'), (TIME '00:00:00'), (TIME '23:59:59')
 
 > CREATE SINK time_data_sink FROM time_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-time-data-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=true
+{"before": null, "after": {"row": {"time": 0}}}
 {"before": null, "after": {"row": {"time": 3723000000}}}
 {"before": null, "after": {"row": {"time": 3724000000}}}
+{"before": null, "after": {"row": {"time": 86399000000}}}
 
 # Test jsonb
 
@@ -78,6 +103,7 @@ $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-json-data-sink-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 # Test map
 
@@ -86,6 +112,7 @@ $ kafka-verify format=avro sink=materialize.public.time_data_sink sort-messages=
 > CREATE SINK map_sink FROM map_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-map-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.map_sink sort-messages=true
 {"before": null, "after": {"row": {"map": {"a": {"int": 1}, "b": {"int": 2}}}}}
@@ -95,6 +122,7 @@ $ kafka-verify format=avro sink=materialize.public.map_sink sort-messages=true
 > CREATE SINK list_sink FROM list_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-list-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
 {"before": null, "after": {"row": {"list": [{"int": 1}, {"int": 2}]}}}
@@ -106,6 +134,7 @@ $ kafka-verify format=avro sink=materialize.public.list_sink sort-messages=true
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-namespace-value-sink-${testdrive.seed}')
   FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'abc.def.ghi')
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify-schema format=avro sink=materialize.public.namespace_value_sink
 {"type":"record","name":"ghi","namespace":"abc.def","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"namespace","type":"int"}]}]},{"name":"after","type":["null","row"]}]}
@@ -120,6 +149,7 @@ $ kafka-verify format=avro sink=materialize.public.namespace_value_sink sort-mes
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-namespace-key-value-sink-${testdrive.seed}')
   KEY (b)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.foo', AVRO VALUE FULLNAME = 'some.neat.class.bar')
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify-schema format=avro sink=materialize.public.namespace_key_value_sink
 {"type":"record","name":"foo","namespace":"some.neat.class","fields":[{"name":"b","type":"int"}]}
@@ -136,24 +166,29 @@ $ kafka-verify format=avro sink=materialize.public.namespace_key_value_sink sort
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-sink-${testdrive.seed}') KEY (a, a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 contains:Repeated column name in sink key: a
 
 ! CREATE SINK bad_sink FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'some.neat.class.foo', AVRO KEY FULLNAME = 'some.neat.class.bar')
+  ENVELOPE DEBEZIUM
 contains:Cannot specify AVRO KEY FULLNAME without a corresponding KEY field
 
 ! CREATE SINK bad_sink FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.bar')
+  ENVELOPE DEBEZIUM
 contains:Cannot specify AVRO KEY FULLNAME without a corresponding KEY field
 
 ! CREATE SINK bad_sink FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.bar')
+  ENVELOPE DEBEZIUM
 contains:Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names
 
 ! CREATE SINK bad_sink FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO VALUE FULLNAME = 'some.neat.class.bar')
+  ENVELOPE DEBEZIUM
 contains:Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names

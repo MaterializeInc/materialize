@@ -1,84 +1,100 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="537" height="255">
-   <polygon points="9 17 1 13 1 21"/>
-   <polygon points="17 17 9 13 9 21"/>
-   <rect x="31" y="3" width="64" height="32" rx="10"/>
-   <rect x="29"
+<svg xmlns="http://www.w3.org/2000/svg" width="559" height="267">
+   <polygon points="11 17 3 13 3 21"/>
+   <polygon points="19 17 11 13 11 21"/>
+   <rect x="33" y="3" width="64" height="32" rx="10"/>
+   <rect x="31"
          y="1"
          width="64"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="39" y="21">SHOW</text>
-   <rect x="115" y="3" width="80" height="32" rx="10"/>
-   <rect x="113"
+   <text class="terminal" x="41" y="21">SHOW</text>
+   <rect x="117" y="3" width="80" height="32" rx="10"/>
+   <rect x="115"
          y="1"
          width="80"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="123" y="21">INDEXES</text>
-   <rect x="255" y="35" width="60" height="32" rx="10"/>
-   <rect x="253"
+   <text class="terminal" x="125" y="21">INDEXES</text>
+   <rect x="257" y="35" width="60" height="32" rx="10"/>
+   <rect x="255"
          y="33"
          width="60"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="263" y="53">FROM</text>
-   <rect x="255" y="79" width="40" height="32" rx="10"/>
-   <rect x="253"
+   <text class="terminal" x="265" y="53">FROM</text>
+   <rect x="257" y="79" width="40" height="32" rx="10"/>
+   <rect x="255"
          y="77"
          width="40"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="263" y="97">ON</text>
-   <rect x="355" y="35" width="78" height="32"/>
-   <rect x="353" y="33" width="78" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="363" y="53">on_name</text>
-   <rect x="235" y="123" width="126" height="32" rx="10"/>
-   <rect x="233"
+   <text class="terminal" x="265" y="97">ON</text>
+   <rect x="357" y="35" width="78" height="32"/>
+   <rect x="355" y="33" width="78" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="365" y="53">on_name</text>
+   <rect x="237" y="123" width="126" height="32" rx="10"/>
+   <rect x="235"
          y="121"
          width="126"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="243" y="141">FROM SCHEMA</text>
-   <rect x="381" y="123" width="114" height="32"/>
-   <rect x="379" y="121" width="114" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="389" y="141">schema_name</text>
-   <rect x="65" y="221" width="34" height="32" rx="10"/>
-   <rect x="63"
+   <text class="terminal" x="245" y="141">FROM SCHEMA</text>
+   <rect x="383" y="123" width="114" height="32"/>
+   <rect x="381" y="121" width="114" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="391" y="141">schema_name</text>
+   <rect x="45" y="221" width="34" height="32" rx="10"/>
+   <rect x="43"
          y="219"
          width="34"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="73" y="239">IN</text>
-   <rect x="119" y="221" width="84" height="32" rx="10"/>
-   <rect x="117"
+   <text class="terminal" x="53" y="239">IN</text>
+   <rect x="99" y="221" width="84" height="32" rx="10"/>
+   <rect x="97"
          y="219"
          width="84"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="127" y="239">CLUSTER</text>
-   <rect x="223" y="221" width="108" height="32"/>
-   <rect x="221" y="219" width="108" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="231" y="239">cluster_name</text>
-   <rect x="371" y="189" width="70" height="32" rx="10"/>
+   <text class="terminal" x="107" y="239">CLUSTER</text>
+   <rect x="203" y="221" width="108" height="32"/>
+   <rect x="201" y="219" width="108" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="211" y="239">cluster_name</text>
+   <rect x="371" y="189" width="50" height="32" rx="10"/>
    <rect x="369"
+         y="187"
+         width="50"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="379" y="207">LIKE</text>
+   <rect x="441" y="189" width="70" height="32" rx="10"/>
+   <rect x="439"
          y="187"
          width="70"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="379" y="207">WHERE</text>
-   <rect x="461" y="189" width="48" height="32"/>
-   <rect x="459" y="187" width="48" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="469" y="207">expr</text>
+   <text class="terminal" x="449" y="207">pattern</text>
+   <rect x="371" y="233" width="70" height="32" rx="10"/>
+   <rect x="369"
+         y="231"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="379" y="251">WHERE</text>
+   <rect x="461" y="233" width="48" height="32"/>
+   <rect x="459" y="231" width="48" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="469" y="251">expr</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m64 0 h10 m0 0 h10 m80 0 h10 m20 0 h10 m0 0 h270 m-300 0 h20 m280 0 h20 m-320 0 q10 0 10 10 m300 0 q0 -10 10 -10 m-310 10 v12 m300 0 v-12 m-300 12 q0 10 10 10 m280 0 q10 0 10 -10 m-270 10 h10 m60 0 h10 m-100 0 h20 m80 0 h20 m-120 0 q10 0 10 10 m100 0 q0 -10 10 -10 m-110 10 v24 m100 0 v-24 m-100 24 q0 10 10 10 m80 0 q10 0 10 -10 m-90 10 h10 m40 0 h10 m0 0 h20 m20 -44 h10 m78 0 h10 m0 0 h62 m-290 -10 v20 m300 0 v-20 m-300 20 v68 m300 0 v-68 m-300 68 q0 10 10 10 m280 0 q10 0 10 -10 m-290 10 h10 m126 0 h10 m0 0 h10 m114 0 h10 m22 -120 l2 0 m2 0 l2 0 m2 0 l2 0 m-514 186 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h276 m-306 0 h20 m286 0 h20 m-326 0 q10 0 10 10 m306 0 q0 -10 10 -10 m-316 10 v12 m306 0 v-12 m-306 12 q0 10 10 10 m286 0 q10 0 10 -10 m-296 10 h10 m34 0 h10 m0 0 h10 m84 0 h10 m0 0 h10 m108 0 h10 m20 -32 h10 m70 0 h10 m0 0 h10 m48 0 h10 m3 0 h-3"/>
-   <polygon points="527 203 535 199 535 207"/>
-   <polygon points="527 203 519 199 519 207"/>
+         d="m19 17 h2 m0 0 h10 m64 0 h10 m0 0 h10 m80 0 h10 m20 0 h10 m0 0 h270 m-300 0 h20 m280 0 h20 m-320 0 q10 0 10 10 m300 0 q0 -10 10 -10 m-310 10 v12 m300 0 v-12 m-300 12 q0 10 10 10 m280 0 q10 0 10 -10 m-270 10 h10 m60 0 h10 m-100 0 h20 m80 0 h20 m-120 0 q10 0 10 10 m100 0 q0 -10 10 -10 m-110 10 v24 m100 0 v-24 m-100 24 q0 10 10 10 m80 0 q10 0 10 -10 m-90 10 h10 m40 0 h10 m0 0 h20 m20 -44 h10 m78 0 h10 m0 0 h62 m-290 -10 v20 m300 0 v-20 m-300 20 v68 m300 0 v-68 m-300 68 q0 10 10 10 m280 0 q10 0 10 -10 m-290 10 h10 m126 0 h10 m0 0 h10 m114 0 h10 m22 -120 l2 0 m2 0 l2 0 m2 0 l2 0 m-536 186 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h276 m-306 0 h20 m286 0 h20 m-326 0 q10 0 10 10 m306 0 q0 -10 10 -10 m-316 10 v12 m306 0 v-12 m-306 12 q0 10 10 10 m286 0 q10 0 10 -10 m-296 10 h10 m34 0 h10 m0 0 h10 m84 0 h10 m0 0 h10 m108 0 h10 m40 -32 h10 m50 0 h10 m0 0 h10 m70 0 h10 m-180 0 h20 m160 0 h20 m-200 0 q10 0 10 10 m180 0 q0 -10 10 -10 m-190 10 v24 m180 0 v-24 m-180 24 q0 10 10 10 m160 0 q10 0 10 -10 m-170 10 h10 m70 0 h10 m0 0 h10 m48 0 h10 m0 0 h2 m23 -44 h-3"/>
+   <polygon points="549 203 557 199 557 207"/>
+   <polygon points="549 203 541 199 541 207"/>
 </svg>

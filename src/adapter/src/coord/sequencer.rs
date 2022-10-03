@@ -23,13 +23,13 @@ use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
 use mz_compute_client::controller::{
-    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging,
+    ComputeInstanceId, ComputeInstanceReplicaConfig, ComputeInstanceReplicaLogging,
 };
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
 };
 use mz_compute_client::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, TailSinkConnection,
+    ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
@@ -38,7 +38,7 @@ use mz_expr::{
 use mz_ore::ssh_key::SshKeyset;
 use mz_ore::task;
 use mz_repr::adt::interval::Interval;
-use mz_repr::explain_new::{Explain, Explainee};
+use mz_repr::explain_new::Explainee;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, ScalarType, Timestamp};
 use mz_sql::ast::{ExplainStageNew, ExplainStageOld, IndexOptionName, ObjectType};
 use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
@@ -46,16 +46,15 @@ use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
-    FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailFrom,
-    TailPlan, View,
+    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr,
+    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
+    PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
@@ -74,13 +73,13 @@ use crate::coord::{
     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
 };
 use crate::error::AdapterError;
-use crate::explain_new::{ExplainContext, Explainable, UsedIndexes};
+use crate::explain_new::optimizer_trace::OptimizerTrace;
 use crate::session::vars::IsolationLevel;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
     WriteOp,
 };
-use crate::tail::PendingTail;
+use crate::subscribe::PendingSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
 use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
 
@@ -237,9 +236,10 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::Peek(plan) => {
                 tx.send(self.sequence_peek(&mut session, plan).await, session);
             }
-            Plan::Tail(plan) => {
+            Plan::Subscribe(plan) => {
                 tx.send(
-                    self.sequence_tail(&mut session, plan, depends_on).await,
+                    self.sequence_subscribe(&mut session, plan, depends_on)
+                        .await,
                     session,
                 );
             }
@@ -421,10 +421,11 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id().await?;
-        let source_oid = self.catalog.allocate_oid().await?;
+        let source_oid = self.catalog.allocate_oid()?;
         let host_config = self.catalog.resolve_storage_host_config(plan.host_config)?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
+            connection_id: plan.source.connection_id,
             source_desc: plan.source.source_desc,
             desc: plan.source.desc,
             timeline: plan.timeline,
@@ -506,7 +507,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: CreateConnectionPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let connection_oid = self.catalog.allocate_oid().await?;
+        let connection_oid = self.catalog.allocate_oid()?;
         let connection_gid = self.catalog.allocate_user_id().await?;
         let mut connection = plan.connection.connection.clone();
 
@@ -569,8 +570,8 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let db_oid = self.catalog.allocate_oid().await?;
-        let schema_oid = self.catalog.allocate_oid().await?;
+        let db_oid = self.catalog.allocate_oid()?;
+        let schema_oid = self.catalog.allocate_oid()?;
         let ops = vec![catalog::Op::CreateDatabase {
             name: plan.name.clone(),
             oid: db_oid,
@@ -591,7 +592,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateSchema {
             database_id: plan.database_spec,
             schema_name: plan.schema_name,
@@ -615,7 +616,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateRole {
             name: plan.name,
             oid,
@@ -640,7 +641,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("Must have at least one availability zone");
         let first_argmin = n_replicas_per_az
             .iter()
-            .find_map(|(k, v)| (*v == min).then(|| k))
+            .find_map(|(k, v)| (*v == min).then_some(k))
             .expect("Must have at least one availability zone");
         first_argmin.clone()
     }
@@ -694,7 +695,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
             let location = match replica_config {
-                ComputeInstanceReplicaConfig::Remote {
+                mz_sql::plan::ComputeInstanceReplicaConfig::Remote {
                     addrs,
                     compute_addrs,
                     workers,
@@ -703,7 +704,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     compute_addrs,
                     workers,
                 },
-                ComputeInstanceReplicaConfig::Managed {
+                mz_sql::plan::ComputeInstanceReplicaConfig::Managed {
                     size,
                     availability_zone,
                 } => {
@@ -724,7 +725,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let persisted_logs = if compute_instance_config.is_some() {
                 self.catalog.allocate_persisted_introspection_items().await
             } else {
-                ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
+                ComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
             };
 
             persisted_introspection_sources.extend(
@@ -734,7 +735,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .map(|(variant, id)| (*id, variant.desc().into())),
             );
 
-            let config = ConcreteComputeInstanceReplicaConfig {
+            let config = ComputeInstanceReplicaConfig {
                 location: self.catalog.concretize_replica_location(location)?,
                 persisted_logs,
             };
@@ -811,7 +812,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let persisted_logs = if instance.logging.is_some() {
             self.catalog.allocate_persisted_introspection_items().await
         } else {
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
+            ComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
         };
 
         let persisted_source_ids = persisted_logs.get_source_ids().collect();
@@ -823,7 +824,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Choose default AZ if necessary
         let location = match config {
-            ComputeInstanceReplicaConfig::Remote {
+            mz_sql::plan::ComputeInstanceReplicaConfig::Remote {
                 addrs,
                 compute_addrs,
                 workers,
@@ -832,7 +833,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 compute_addrs,
                 workers,
             },
-            ComputeInstanceReplicaConfig::Managed {
+            mz_sql::plan::ComputeInstanceReplicaConfig::Managed {
                 size,
                 availability_zone,
             } => {
@@ -875,7 +876,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
-        let config = ConcreteComputeInstanceReplicaConfig {
+        let config = ComputeInstanceReplicaConfig {
             location: self.catalog.concretize_replica_location(location)?,
             persisted_logs,
         };
@@ -946,7 +947,7 @@ impl<S: Append + 'static> Coordinator<S> {
             conn_id,
             depends_on,
         };
-        let table_oid = self.catalog.allocate_oid().await?;
+        let table_oid = self.catalog.allocate_oid()?;
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
             oid: table_oid,
@@ -1014,7 +1015,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let payload = self.extract_secret(session, &mut secret.secret_as)?;
 
         let id = self.catalog.allocate_user_id().await?;
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let secret = catalog::Secret {
             create_sql: format!("CREATE SECRET {} AS '********'", full_name),
         };
@@ -1068,7 +1069,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 return;
             }
         };
-        let oid = match self.catalog.allocate_oid().await {
+        let oid = match self.catalog.allocate_oid() {
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
@@ -1090,6 +1091,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let catalog_sink = catalog::Sink {
             create_sql: sink.create_sql,
             from: sink.from,
+            connection_id: sink.connection_id,
             connection: StorageSinkConnectionState::Pending(StorageSinkConnectionBuilder::Kafka(
                 connection_builder,
             )),
@@ -1227,7 +1229,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ops.extend(self.catalog.drop_items_ops(&[id]));
         }
         let view_id = self.catalog.allocate_user_id().await?;
-        let view_oid = self.catalog.allocate_oid().await?;
+        let view_oid = self.catalog.allocate_oid()?;
         let optimized_expr = self.view_optimizer.optimize(view.expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
@@ -1290,7 +1292,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Allocate IDs for the materialized view in the catalog.
         let id = self.catalog.allocate_user_id().await?;
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         // Allocate a unique ID that can be used by the dataflow builder to
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
@@ -1394,7 +1396,7 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
             compute_instance,
         };
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -1439,7 +1441,7 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
         };
         let id = self.catalog.allocate_user_id().await?;
-        let oid = self.catalog.allocate_oid().await?;
+        let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -1623,7 +1625,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        replica_config: ConcreteComputeInstanceReplicaConfig,
+        replica_config: ComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
             let retraction = self
@@ -1807,7 +1809,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 if let TransactionOps::Writes(writes) = &mut ops {
                     for WriteOp { id, .. } in &mut writes.iter() {
                         // Re-verify this id exists.
-                        let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
+                        let _ = self.catalog.try_get_entry(id).ok_or_else(|| {
                             AdapterError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
                         })?;
                     }
@@ -2117,13 +2119,13 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    async fn sequence_tail(
+    async fn sequence_subscribe(
         &mut self,
         session: &mut Session,
-        plan: TailPlan,
+        plan: SubscribePlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let TailPlan {
+        let SubscribePlan {
             from,
             with_snapshot,
             when,
@@ -2136,16 +2138,16 @@ impl<S: Append + 'static> Coordinator<S> {
             .resolve_compute_instance(session.vars().cluster())?
             .id;
 
-        // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
+        // SUBSCRIBE AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
         if when == QueryWhen::Immediately {
-            // If this isn't a TAIL AS OF, the TAIL can be in a transaction if it's the
+            // If this isn't a SUBSCRIBE AS OF, the SUBSCRIBE can be in a transaction if it's the
             // only operation.
-            session.add_transaction_ops(TransactionOps::Tail)?;
+            session.add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
         let make_sink_desc = |coord: &mut Coordinator<S>, from, from_desc, uses| {
-            // Determine the frontier of updates to tail *from*.
+            // Determine the frontier of updates to subscribe *from*.
             // Updates greater or equal to this frontier will be produced.
             let id_bundle = coord
                 .index_oracle(compute_instance)
@@ -2157,7 +2159,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
-                connection: ComputeSinkConnection::Tail(TailSinkConnection::default()),
+                connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
                 as_of: SinkAsOf {
                     frontier: Antichain::from_elem(timestamp),
                     strict: !with_snapshot,
@@ -2166,7 +2168,7 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let dataflow = match from {
-            TailFrom::Id(from_id) => {
+            SubscribeFrom::Id(from_id) => {
                 let from = self.catalog.get_entry(&from_id);
                 let from_desc = from
                     .desc(
@@ -2178,16 +2180,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     .into_owned();
                 let sink_id = self.catalog.allocate_user_id().await?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
-                let sink_name = format!("tail-{}", sink_id);
+                let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(compute_instance)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
             }
-            TailFrom::Query { expr, desc } => {
+            SubscribeFrom::Query { expr, desc } => {
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
-                let mut dataflow = DataflowDesc::new(format!("tail-{}", id));
+                let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(compute_instance);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
                 dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
@@ -2202,11 +2204,11 @@ impl<S: Append + 'static> Coordinator<S> {
         });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
-        self.pending_tails
-            .insert(*sink_id, PendingTail::new(tx, emit_progress, arity));
+        self.pending_subscribes
+            .insert(*sink_id, PendingSubscribe::new(tx, emit_progress, arity));
         self.ship_dataflow(dataflow, compute_instance).await;
 
-        let resp = ExecuteResponse::Tailing { rx };
+        let resp = ExecuteResponse::Subscribing { rx };
         match copy_to {
             None => Ok(resp),
             Some(format) => Ok(ExecuteResponse::CopyTo {
@@ -2232,13 +2234,17 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: ExplainPlanNew,
     ) -> Result<ExecuteResponse, AdapterError> {
+        use mz_compute_client::plan::Plan;
+        use mz_repr::explain_new::trace_plan;
+        use ExplainStageNew::*;
+
         let compute_instance = self
             .catalog
             .resolve_compute_instance(session.vars().cluster())?
             .id;
 
         let ExplainPlanNew {
-            mut raw_plan,
+            raw_plan,
             row_set_finishing,
             stage,
             format,
@@ -2246,155 +2252,152 @@ impl<S: Append + 'static> Coordinator<S> {
             explainee,
         } = plan;
 
-        let decorrelate = |raw_plan: HirRelationExpr| -> Result<MirRelationExpr, AdapterError> {
-            let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
-                qgm_optimizations: session.vars().qgm_optimizations(),
-            })?;
-            Ok(decorrelated_plan)
+        let optimizer_trace = match stage {
+            Trace => OptimizerTrace::new(), // collect all trace entries
+            QueryGraph | OptimizedQueryGraph => OptimizerTrace::find(""), // don't collect anything
+            stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
-        let optimize =
-            |coord: &mut Self,
-             decorrelated_plan: MirRelationExpr|
-             -> Result<DataflowDescription<OptimizedMirRelationExpr>, AdapterError> {
-                let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"));
-                coord
-                    .dataflow_builder(compute_instance)
-                    .import_view_into_dataflow(
-                        // TODO: If explaining a view, pipe the actual id of the view.
-                        &GlobalId::Explain,
-                        &optimized_plan,
-                        &mut dataflow,
-                    )?;
+        let (used_indexes, fast_path_plan) =
+            optimizer_trace.collect_trace(|| -> Result<_, AdapterError> {
+                let raw_plan = raw_plan.clone(); // FIXME: remove `.clone()` once the QGM Model implements Clone.
+                let _span = tracing::span!(Level::INFO, "optimize").entered();
+
+                tracing::span!(Level::INFO, "raw").in_scope(|| {
+                    trace_plan(&raw_plan);
+                });
+
+                // run optimization pipeline
+                let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
+                    qgm_optimizations: session.vars().qgm_optimizations(),
+                })?;
+
+                self.validate_timeline(decorrelated_plan.depends_on())?;
+
+                let mut dataflow = tracing::span!(Level::INFO, "local").in_scope(
+                    || -> Result<_, AdapterError> {
+                        let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
+                        let mut dataflow = DataflowDesc::new("explanation".to_string());
+                        self.dataflow_builder(compute_instance)
+                            .import_view_into_dataflow(
+                                // TODO: If explaining a view, pipe the actual id of the view.
+                                &GlobalId::Explain,
+                                &optimized_plan,
+                                &mut dataflow,
+                            )?;
+                        mz_repr::explain_new::trace_plan(&dataflow);
+                        Ok(dataflow)
+                    },
+                )?;
+
                 mz_transform::optimize_dataflow(
                     &mut dataflow,
-                    &coord.index_oracle(compute_instance),
+                    &self.index_oracle(compute_instance),
                 )?;
-                Ok(dataflow)
-            };
 
-        let explanation_string = match stage {
-            ExplainStageNew::RawPlan => {
-                // construct explanation context
-                let catalog = self.catalog.for_session(session);
-                let context = ExplainContext {
-                    config: &config,
-                    humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
-                    finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
+                let used_indexes = dataflow
+                    .index_imports
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<GlobalId>>();
+
+                let fast_path_plan = match explainee {
+                    Explainee::Query => {
+                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                    }
+                    _ => None,
                 };
-                // explain plan
-                Explainable::new(&mut raw_plan).explain(&format, &config, &context)?
-            }
-            ExplainStageNew::QueryGraph => {
+
+                let dataflow_plan = Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
+                    .expect("Finalized dataflow");
+
+                trace_plan(&dataflow_plan);
+
+                Ok((used_indexes, fast_path_plan))
+            })?;
+
+        let trace = if matches!(stage, QueryGraph | OptimizedQueryGraph) {
+            vec![] // FIXME: remove this case once the QGM Model implements Clone
+        } else {
+            optimizer_trace.drain_all(
+                format.clone(), // FIXME: remove `.clone()` once the QGM Model implements Clone
+                config.clone(), // FIXME: remove `.clone()` once the QGM Model implements Clone
+                self.catalog.for_session(session),
+                row_set_finishing.clone(), // FIXME: remove `.clone()` once the QGM Model implements Clone
+                used_indexes,
+                fast_path_plan,
+            )?
+        };
+
+        let rows = match stage {
+            // QGM graphs are not collected in the trace at the moment as they
+            // do not implement Clone (see the TODOs in try_qgm_path.
+            // Once this is done the next two cases will be handled by the catch-all
+            // case at the end of this method.
+            QueryGraph => {
+                use mz_repr::explain_new::Explain;
                 // run partial pipeline
                 let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
-                let context = ExplainContext {
+                let context = crate::explain_new::ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: crate::explain_new::UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
                     fast_path_plan: Default::default(),
                 };
                 // explain plan
-                Explainable::new(&mut model).explain(&format, &config, &context)?
+                let mut explainable = crate::explain_new::Explainable::new(&mut model);
+                let explanation_string = explainable.explain(&format, &config, &context)?;
+                // pack rows in result vector
+                vec![Row::pack_slice(&[Datum::from(&*explanation_string)])]
             }
-            ExplainStageNew::OptimizedQueryGraph => {
+            OptimizedQueryGraph => {
+                use mz_repr::explain_new::Explain;
                 // run partial pipeline
                 let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
                 model.optimize();
                 // construct explanation context
                 let catalog = self.catalog.for_session(session);
-                let context = ExplainContext {
+                let context = crate::explain_new::ExplainContext {
                     config: &config,
                     humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
+                    used_indexes: crate::explain_new::UsedIndexes::new(Default::default()),
                     finishing: row_set_finishing,
                     fast_path_plan: Default::default(),
                 };
                 // explain plan
-                Explainable::new(&mut model).explain(&format, &config, &context)?
+                let mut explainable = crate::explain_new::Explainable::new(&mut model);
+                let explanation_string = explainable.explain(&format, &config, &context)?;
+                // pack rows in result vector
+                vec![Row::pack_slice(&[Datum::from(&*explanation_string)])]
             }
-            ExplainStageNew::DecorrelatedPlan => {
-                // run partial pipeline
-                let mut decorrelated_plan = decorrelate(raw_plan)?;
-                self.validate_timeline(decorrelated_plan.depends_on())?;
-                // construct explanation context
-                let catalog = self.catalog.for_session(session);
-                let context = ExplainContext {
-                    config: &config,
-                    humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(Default::default()),
-                    finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
-                };
-                // explain plan
-                Explainable::new(&mut decorrelated_plan).explain(&format, &config, &context)?
+            // For the `Trace` stage, return the entire trace as (time, path, plan) triples.
+            Trace => {
+                let rows = trace
+                    .into_iter()
+                    .map(|entry| {
+                        Row::pack_slice(&[
+                            Datum::from(entry.duration.as_nanos() as u64),
+                            Datum::from(entry.path.as_str()),
+                            Datum::from(entry.plan.as_str()),
+                        ])
+                    })
+                    .collect();
+                rows
             }
-            ExplainStageNew::OptimizedPlan => {
-                // run partial pipeline
-                let decorrelated_plan = decorrelate(raw_plan)?;
-                self.validate_timeline(decorrelated_plan.depends_on())?;
-                let mut dataflow = optimize(self, decorrelated_plan)?;
-                // construct explanation context
-                let catalog = self.catalog.for_session(session);
-                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
-                let fast_path_plan = match explainee {
-                    Explainee::Query => {
-                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
-                    }
-                    _ => None,
-                };
-                let context = ExplainContext {
-                    config: &config,
-                    humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(used_indexes),
-                    finishing: row_set_finishing,
-                    fast_path_plan,
-                };
-                // explain plan
-                Explainable::new(&mut dataflow).explain(&format, &config, &context)?
-            }
-            ExplainStageNew::PhysicalPlan => {
-                // run partial pipeline
-                let decorrelated_plan = decorrelate(raw_plan)?;
-                self.validate_timeline(decorrelated_plan.depends_on())?;
-                let mut dataflow = optimize(self, decorrelated_plan)?;
-                let used_indexes: Vec<GlobalId> = dataflow.index_imports.keys().cloned().collect();
-                let fast_path_plan = match explainee {
-                    Explainee::Query => {
-                        peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
-                    }
-                    _ => None,
-                };
-                let mut dataflow_plan =
-                    mz_compute_client::plan::Plan::<mz_repr::Timestamp>::finalize_dataflow(
-                        dataflow,
-                    )
-                    .expect("Dataflow planning failed; unrecoverable error");
-                // construct explanation context
-                let catalog = self.catalog.for_session(session);
-                let context = ExplainContext {
-                    config: &config,
-                    humanizer: &catalog,
-                    used_indexes: UsedIndexes::new(used_indexes),
-                    finishing: row_set_finishing,
-                    fast_path_plan,
-                };
-                // explain plan
-                Explainable::new(&mut dataflow_plan).explain(&format, &config, &context)?
-            }
-            ExplainStageNew::Trace => {
-                let feature = "ExplainStageNew::Trace";
-                Err(AdapterError::Unsupported(feature))?
+            // For everything else, return the plan for the stage identified by the corresponding path.
+            stage => {
+                let row = trace
+                    .into_iter()
+                    .find(|entry| entry.path == stage.path())
+                    .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
+                    .unwrap_or_else(|| panic!("plan at {}", stage.path()));
+                vec![row]
             }
         };
 
-        let rows = vec![Row::pack_slice(&[Datum::from(&*explanation_string)])];
         Ok(send_immediate_rows(rows))
     }
 
@@ -2444,7 +2447,7 @@ impl<S: Append + 'static> Coordinator<S> {
              -> Result<DataflowDescription<OptimizedMirRelationExpr>, AdapterError> {
                 let start = Instant::now();
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"));
+                let mut dataflow = DataflowDesc::new("explanation".to_string());
                 coord
                     .dataflow_builder(compute_instance)
                     .import_view_into_dataflow(&view_id, &optimized_plan, &mut dataflow)?;
@@ -2555,19 +2558,15 @@ impl<S: Append + 'static> Coordinator<S> {
                 // so explaining a plan involving tables has side effects. Removing those side
                 // effects would be good.
                 let timestamp = self.determine_timestamp(
-                    &session,
+                    session,
                     &id_bundle,
                     &QueryWhen::Immediately,
                     compute_instance,
                 )?;
                 let since = self.least_valid_read(&id_bundle).elements().to_vec();
-                let upper = self.least_valid_write(&id_bundle).elements().to_vec();
-                let has_table = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-                let table_read_ts = if has_table {
-                    Some(self.get_local_read_ts())
-                } else {
-                    None
-                };
+                let upper = self.least_valid_write(&id_bundle);
+                let respond_immediately = !upper.less_equal(&timestamp);
+                let upper = upper.elements().to_vec();
                 let mut sources = Vec::new();
                 {
                     for id in id_bundle.storage_ids.iter() {
@@ -2619,9 +2618,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     timestamp,
                     since,
                     upper,
-                    has_table,
-                    table_read_ts,
+                    global_timestamp: self.get_local_read_ts(),
+                    respond_immediately,
                     sources,
+                    timeline,
                 };
                 explanation.to_string()
             }
@@ -2862,7 +2862,7 @@ impl<S: Append + 'static> Coordinator<S> {
         rows: Vec<Row>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog.for_session(session);
-        let values = mz_sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
+        let values = mz_sql::plan::plan_copy_from(session.pcx(), &catalog, id, columns, rows)?;
         let values = self.view_optimizer.optimize(values.lower())?;
         // Copied rows must always be constants.
         self.sequence_insert_constant(session, id, values.into_inner())
@@ -3228,12 +3228,12 @@ impl<S: Append + 'static> Coordinator<S> {
     fn extract_secret(
         &mut self,
         session: &Session,
-        mut secret_as: &mut MirScalarExpr,
+        secret_as: &mut MirScalarExpr,
     ) -> Result<Vec<u8>, AdapterError> {
         let temp_storage = RowArena::new();
         prep_scalar_expr(
             self.catalog.state(),
-            &mut secret_as,
+            secret_as,
             ExprPrepStyle::OneShot {
                 logical_time: None,
                 session,
@@ -3264,7 +3264,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // If you want to remove this line, verify that no caller of
         // `SecretsReader::read_string` will panic if the secret contains
         // invalid UTF-8.
-        if std::str::from_utf8(&payload).is_err() {
+        if std::str::from_utf8(payload).is_err() {
             // Intentionally produce a vague error message (rather than
             // including the invalid bytes, for example), to avoid including
             // secret material in the error message, which might end up in a log
@@ -3272,7 +3272,7 @@ impl<S: Append + 'static> Coordinator<S> {
             coord_bail!("secret value must be valid UTF-8");
         }
 
-        return Ok(Vec::from(payload));
+        Ok(Vec::from(payload))
     }
 
     async fn sequence_alter_system_set(
@@ -3300,7 +3300,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
         if update_max_result_size {
-            self.update_max_result_size().await;
+            self.update_max_result_size();
         }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
@@ -3316,7 +3316,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
         if update_max_result_size {
-            self.update_max_result_size().await;
+            self.update_max_result_size();
         }
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
@@ -3330,21 +3330,22 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
-        self.update_max_result_size().await;
+        self.update_max_result_size();
         Ok(ExecuteResponse::AlteredSystemConfiguraion)
     }
 
     fn is_user_allowed_to_alter_system(&self, session: &Session) -> Result<(), AdapterError> {
-        if session.user() == SYSTEM_USER {
+        if session.user() == &*SYSTEM_USER {
             Ok(())
         } else {
             Err(AdapterError::Unauthorized(format!(
-                "only user '{SYSTEM_USER}' is allowed to execute 'ALTER SYSTEM ...'"
+                "only user '{}' is allowed to execute 'ALTER SYSTEM ...'",
+                SYSTEM_USER.name,
             )))
         }
     }
 
-    async fn update_max_result_size(&mut self) {
+    fn update_max_result_size(&mut self) {
         let mut compute = self.controller.active_compute();
         for compute_instance in self.catalog.compute_instances() {
             compute

@@ -125,7 +125,7 @@ impl Blob for FileBlob {
                     }
 
                     f(BlobMetadata {
-                        key: &FileBlob::restore_forward_slashes(&name),
+                        key: &FileBlob::restore_forward_slashes(name),
                         size_in_bytes: entry.metadata().await?.len(),
                     });
                 }

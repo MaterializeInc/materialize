@@ -1,5 +1,5 @@
 ---
-title: "How to use Redpanda with Materialize"
+title: "Redpanda"
 description: "Get details about using Materialize with Redpanda"
 aliases:
   /third-party/redpanda/
@@ -26,3 +26,4 @@ For more information on general Redpanda configuration, see the [Redpanda docume
 ## Related pages
 
 - [`CREATE SOURCE`](/sql/create-source/kafka/)
+- [`CREATE SINK`](/sql/create-sink/#kafka-sinks)

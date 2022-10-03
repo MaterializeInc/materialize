@@ -49,16 +49,19 @@ $ file-append path=importee.proto
 $ file-append path=importer.proto
 \${importer-schema}
 
-$ protobuf-compile-descriptors inputs=empty.proto,importee.proto,importer.proto output=import.pb
+$ protobuf-compile-descriptors inputs=empty.proto,importee.proto,importer.proto output=import.pb set-var=import-schema
 
 $ kafka-create-topic topic=import partitions=1
 
 $ kafka-ingest topic=import format=protobuf descriptor-file=import.pb message=Importer
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE import FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Importer' USING SCHEMA FILE '${testdrive.temp-dir}/import.pb'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-${testdrive.seed}')
+  FORMAT PROTOBUF MESSAGE '.Importer' USING SCHEMA '${import-schema}'
 
 > SELECT importee1::text, importee2::text FROM import
 importee1  importee2
@@ -104,7 +107,7 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE import_csr FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 > SELECT importee1::text, importee2::text FROM import_csr

@@ -67,7 +67,7 @@ where
     C: ClientContext,
 {
     let res = client
-        .create_topics(iter::once(new_topic), &admin_opts)
+        .create_topics(iter::once(new_topic), admin_opts)
         .await?;
     if res.len() != 1 {
         return Err(CreateTopicError::TopicCountMismatch(res.len()));

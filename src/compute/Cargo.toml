@@ -1,9 +1,9 @@
 [package]
 name = "mz-compute"
 description = "Materialize's compute layer."
-version = "0.27.0-dev"
-edition = "2021"
-rust-version = "1.63.0"
+version = "0.27.0-alpha.23.post"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

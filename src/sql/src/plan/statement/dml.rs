@@ -10,7 +10,7 @@
 //! Data manipulation language (DML).
 //!
 //! This module houses the handlers for statements that manipulate data, like
-//! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
+//! `INSERT`, `SELECT`, `SUBSCRIBE`, and `COPY`.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -27,8 +27,8 @@ use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
     CreateMaterializedViewStatement, CreateViewStatement, DeleteStatement, ExplainStageNew,
     ExplainStageOld, ExplainStatement, ExplainStatementNew, ExplainStatementOld, Explainee, Ident,
-    InsertStatement, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
-    TailStatement, UpdateStatement, ViewDefinition,
+    InsertStatement, Query, SelectStatement, Statement, SubscribeOption, SubscribeOptionName,
+    SubscribeRelation, SubscribeStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedObjectName};
@@ -37,8 +37,8 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld, InsertPlan,
-    MutationKind, Params, PeekPlan, Plan, PlanError, QueryContext, ReadThenWritePlan, TailFrom,
-    TailPlan,
+    MutationKind, Params, PeekPlan, Plan, PlanError, QueryContext, ReadThenWritePlan,
+    SubscribeFrom, SubscribePlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -77,7 +77,7 @@ pub fn plan_insert(
 ) -> Result<Plan, PlanError> {
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
-    expr.bind_parameters(&params)?;
+    expr.bind_parameters(params)?;
     let expr = expr.optimize_and_lower(&scx.into())?;
     let returning = returning
         .expr
@@ -137,11 +137,11 @@ pub fn plan_read_then_write(
         assignments,
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
-    selection.bind_parameters(&params)?;
+    selection.bind_parameters(params)?;
     let selection = selection.optimize_and_lower(&scx.into())?;
     let mut assignments_outer = HashMap::new();
     for (idx, mut set) in assignments {
-        set.bind_parameters(&params)?;
+        set.bind_parameters(params)?;
         let set = set.lower_uncorrelated()?;
         assignments_outer.insert(idx, set);
     }
@@ -199,31 +199,56 @@ pub fn describe_explain_new(
         stage, explainee, ..
     }: ExplainStatementNew<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
-        match stage {
-            ExplainStageNew::RawPlan => "Raw Plan",
-            ExplainStageNew::QueryGraph => "Query Graph",
-            ExplainStageNew::OptimizedQueryGraph => "Optimized Query Graph",
-            ExplainStageNew::DecorrelatedPlan => "Decorrelated Plan",
-            ExplainStageNew::OptimizedPlan { .. } => "Optimized Plan",
-            ExplainStageNew::PhysicalPlan => "Physical Plan",
-            ExplainStageNew::Trace => "Plan", // TODO: add more columns as part of #13139
-        },
-        ScalarType::String.nullable(false),
-    )))
-    .with_params(match explainee {
-        Explainee::Query(q) => {
-            describe_select(
-                scx,
-                SelectStatement {
-                    query: q,
-                    as_of: None,
-                },
-            )?
-            .param_types
+    let mut relation_desc = RelationDesc::empty();
+
+    match stage {
+        ExplainStageNew::RawPlan => {
+            relation_desc =
+                relation_desc.with_column("Raw Plan", ScalarType::String.nullable(false));
         }
-        _ => vec![],
-    }))
+        ExplainStageNew::QueryGraph => {
+            relation_desc =
+                relation_desc.with_column("Query Graph", ScalarType::String.nullable(false));
+        }
+        ExplainStageNew::OptimizedQueryGraph => {
+            relation_desc = relation_desc
+                .with_column("Optimized Query Graph", ScalarType::String.nullable(false));
+        }
+        ExplainStageNew::DecorrelatedPlan => {
+            relation_desc =
+                relation_desc.with_column("Decorrelated Plan", ScalarType::String.nullable(false));
+        }
+        ExplainStageNew::OptimizedPlan => {
+            relation_desc =
+                relation_desc.with_column("Optimized Plan", ScalarType::String.nullable(false));
+        }
+        ExplainStageNew::PhysicalPlan => {
+            relation_desc =
+                relation_desc.with_column("Physical Plan", ScalarType::String.nullable(false));
+        }
+        ExplainStageNew::Trace => {
+            relation_desc = relation_desc
+                .with_column("Time", ScalarType::UInt64.nullable(false))
+                .with_column("Path", ScalarType::String.nullable(false))
+                .with_column("Plan", ScalarType::String.nullable(false));
+        }
+    };
+
+    Ok(
+        StatementDesc::new(Some(relation_desc)).with_params(match explainee {
+            Explainee::Query(q) => {
+                describe_select(
+                    scx,
+                    SelectStatement {
+                        query: q,
+                        as_of: None,
+                    },
+                )?
+                .param_types
+            }
+            _ => vec![],
+        }),
+    )
 }
 
 pub fn describe_explain_old(
@@ -305,7 +330,7 @@ pub fn plan_explain_old(
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (view.id(), names::resolve(qcx.scx.catalog, query)?.0)
         }
         Explainee::MaterializedView(name) => {
@@ -329,7 +354,7 @@ pub fn plan_explain_old(
                     panic!("Sql for existing materialized view should parse as a materialized view")
                 }
             };
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (mview.id(), names::resolve(qcx.scx.catalog, query)?.0)
         }
         Explainee::Query(query) => (mz_repr::GlobalId::Explain, query),
@@ -340,7 +365,7 @@ pub fn plan_explain_old(
         mut expr,
         desc,
         finishing,
-    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+    } = query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     let finishing = if is_view {
         // views don't use a separate finishing
         expr.finish(finishing);
@@ -350,7 +375,7 @@ pub fn plan_explain_old(
     } else {
         Some(finishing)
     };
-    expr.bind_parameters(&params)?;
+    expr.bind_parameters(params)?;
     Ok(Plan::Explain(ExplainPlan::Old(ExplainPlanOld {
         raw_plan: expr,
         row_set_finishing: finishing,
@@ -396,7 +421,7 @@ pub fn plan_explain_new(
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (
                 mz_repr::explain_new::Explainee::Dataflow(view.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
@@ -423,7 +448,7 @@ pub fn plan_explain_new(
                     panic!("Sql for existing materialized view should parse as a materialized view")
                 }
             };
-            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (
                 mz_repr::explain_new::Explainee::Dataflow(mview.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
@@ -437,7 +462,7 @@ pub fn plan_explain_new(
         mut expr,
         desc,
         finishing,
-    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+    } = query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     let finishing = if is_view {
         // views don't use a separate finishing
         expr.finish(finishing);
@@ -447,7 +472,7 @@ pub fn plan_explain_new(
     } else {
         Some(finishing)
     };
-    expr.bind_parameters(&params)?;
+    expr.bind_parameters(params)?;
 
     let config_flags = config_flags
         .iter()
@@ -484,7 +509,7 @@ pub fn plan_query(
         desc,
         finishing,
     } = query::plan_root_query(scx, query, lifetime)?;
-    expr.bind_parameters(&params)?;
+    expr.bind_parameters(params)?;
     Ok(query::PlannedQuery {
         expr: expr.optimize_and_lower(&scx.into())?,
         desc,
@@ -492,25 +517,25 @@ pub fn plan_query(
     })
 }
 
-generate_extracted_config!(TailOption, (Snapshot, bool), (Progress, bool));
+generate_extracted_config!(SubscribeOption, (Snapshot, bool), (Progress, bool));
 
-pub fn describe_tail(
+pub fn describe_subscribe(
     scx: &StatementContext,
-    stmt: TailStatement<Aug>,
+    stmt: SubscribeStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let relation_desc = match stmt.relation {
-        TailRelation::Name(name) => {
+        SubscribeRelation::Name(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
             item.desc(&scx.catalog.resolve_full_name(item.name()))?
                 .into_owned()
         }
-        TailRelation::Query(query) => {
+        SubscribeRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
                 query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
             desc
         }
     };
-    let TailOptionExtracted { progress, .. } = stmt.options.try_into()?;
+    let SubscribeOptionExtracted { progress, .. } = stmt.options.try_into()?;
     let progress = progress.unwrap_or(false);
     let mut desc = RelationDesc::empty().with_column(
         "mz_timestamp",
@@ -529,40 +554,40 @@ pub fn describe_tail(
         }
         desc = desc.with_column(name, ty);
     }
-    return Ok(StatementDesc::new(Some(desc)));
+    Ok(StatementDesc::new(Some(desc)))
 }
 
-pub fn plan_tail(
+pub fn plan_subscribe(
     scx: &StatementContext,
-    TailStatement {
+    SubscribeStatement {
         relation,
         options,
         as_of,
-    }: TailStatement<Aug>,
+    }: SubscribeStatement<Aug>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
     let from = match relation {
-        TailRelation::Name(name) => {
+        SubscribeRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
             match entry.item_type() {
                 CatalogItemType::Table
                 | CatalogItemType::Source
                 | CatalogItemType::View
-                | CatalogItemType::MaterializedView => TailFrom::Id(entry.id()),
+                | CatalogItemType::MaterializedView => SubscribeFrom::Id(entry.id()),
                 CatalogItemType::Func
                 | CatalogItemType::Index
                 | CatalogItemType::Sink
                 | CatalogItemType::Type
                 | CatalogItemType::Secret
                 | CatalogItemType::Connection => sql_bail!(
-                    "'{}' cannot be tailed because it is a {}",
+                    "'{}' cannot be subscribed to because it is a {}",
                     name.full_name_str(),
                     entry.item_type(),
                 ),
             }
         }
-        TailRelation::Query(query) => {
-            // There's no way to apply finishing operations to a `TAIL`
+        SubscribeRelation::Query(query) => {
+            // There's no way to apply finishing operations to a `SUBSCRIBE`
             // directly. So we wrap the query in another query so that the
             // user-supplied query is planned as a subquery whose `ORDER
             // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
@@ -574,7 +599,7 @@ pub fn plan_tail(
                 QueryLifetime::OneShot(scx.pcx()?),
             )?;
             assert!(query.finishing.is_trivial(query.desc.arity()));
-            TailFrom::Query {
+            SubscribeFrom::Query {
                 expr: query.expr,
                 desc: query.desc,
             }
@@ -582,10 +607,10 @@ pub fn plan_tail(
     };
 
     let when = query::plan_as_of(scx, as_of)?;
-    let TailOptionExtracted {
+    let SubscribeOptionExtracted {
         progress, snapshot, ..
     } = options.try_into()?;
-    Ok(Plan::Tail(TailPlan {
+    Ok(Plan::Subscribe(SubscribePlan {
         from,
         when,
         with_snapshot: snapshot.unwrap_or(true),
@@ -610,7 +635,7 @@ pub fn describe_copy(
     Ok(match relation {
         CopyRelation::Table { name, columns } => describe_table(scx, name, columns)?,
         CopyRelation::Select(stmt) => describe_select(scx, stmt)?,
-        CopyRelation::Tail(stmt) => describe_tail(scx, stmt)?,
+        CopyRelation::Subscribe(stmt) => describe_subscribe(scx, stmt)?,
     }
     .with_is_copy())
 }
@@ -730,7 +755,7 @@ pub fn plan_copy(
             CopyRelation::Select(stmt) => {
                 Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
             }
-            CopyRelation::Tail(stmt) => Ok(plan_tail(scx, stmt, Some(format))?),
+            CopyRelation::Subscribe(stmt) => Ok(plan_subscribe(scx, stmt, Some(format))?),
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
             CopyRelation::Table { name, columns } => {

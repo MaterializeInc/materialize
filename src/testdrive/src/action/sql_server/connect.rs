@@ -8,20 +8,17 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::Context;
-use async_trait::async_trait;
 use tiberius::{Client, Config};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
-pub struct ConnectAction {
-    name: String,
-    config: tiberius::Config,
-}
-
-pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, anyhow::Error> {
+pub async fn run_connect(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
     let name = cmd.args.string("name")?;
     cmd.args.done()?;
 
@@ -29,31 +26,20 @@ pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, anyhow::E
 
     let config = Config::from_ado_string(&ado_string).context("parsing ADO string: {}")?;
 
-    Ok(ConnectAction { name, config })
-}
+    let tcp = TcpStream::connect(config.get_addr())
+        .await
+        .context("connecting to SQL Server: {}")?;
 
-#[async_trait]
-impl Action for ConnectAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
+    tcp.set_nodelay(true)
+        .context("setting nodelay socket option")?;
 
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let tcp = TcpStream::connect(self.config.get_addr())
-            .await
-            .context("connecting to SQL Server: {}")?;
+    // To be able to use Tokio's tcp, we're using the `compat_write` from
+    // the `TokioAsyncWriteCompatExt` to get a stream compatible with the
+    // traits from the `futures` crate.
+    let client = Client::connect(config.clone(), tcp.compat_write())
+        .await
+        .context("connecting to SQL Server")?;
 
-        tcp.set_nodelay(true)
-            .context("setting nodelay socket option")?;
-
-        // To be able to use Tokio's tcp, we're using the `compat_write` from
-        // the `TokioAsyncWriteCompatExt` to get a stream compatible with the
-        // traits from the `futures` crate.
-        let client = Client::connect(self.config.clone(), tcp.compat_write())
-            .await
-            .context("connecting to SQL Server")?;
-
-        state.sql_server_clients.insert(self.name.clone(), client);
-        Ok(ControlFlow::Continue)
-    }
+    state.sql_server_clients.insert(name.clone(), client);
+    Ok(ControlFlow::Continue)
 }

@@ -1288,7 +1288,7 @@ impl SourceConnection {
             }) => {
                 let mut items = BTreeMap::new();
                 for (include, ty) in [
-                    (offset, ScalarType::Int64),
+                    (offset, ScalarType::UInt64),
                     (part, ScalarType::Int32),
                     (time, ScalarType::Timestamp),
                     (topic, ScalarType::String),
@@ -1495,7 +1495,7 @@ pub struct LoadGeneratorSourceConnection {
 
 impl crate::source::types::SourceConnection for LoadGeneratorSourceConnection {
     fn name(&self) -> &'static str {
-        "loadgen"
+        "load-generator"
     }
 }
 

@@ -125,12 +125,20 @@ fn test_no_block() -> Result<(), anyhow::Error> {
                 let _ = result?;
 
                 let result = client
-                    .batch_execute(&format!("
-                        CREATE SOURCE foo \
-                        FROM KAFKA BROKER '{}' TOPIC 'foo' \
-                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                    .batch_execute(&format!(
+                        "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
                         &*KAFKA_ADDRS,
                     ))
+                    .await;
+                info!("test_no_block: in thread; create Kafka conn done");
+                let _ = result?;
+
+                let result = client
+                    .batch_execute(
+                        "CREATE SOURCE foo \
+                        FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
+                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
+                    )
                     .await;
                 info!("test_no_block: in thread; create source done");
                 result
@@ -188,15 +196,20 @@ fn test_drop_connection_race() -> Result<(), anyhow::Error> {
                 schema_registry_server.addr,
             ))
             .await?;
+        client
+            .batch_execute(&format!(
+                "CREATE CONNECTION kafka_conn FOR KAFKA BROKER '{}'",
+                &*KAFKA_ADDRS,
+            ))
+            .await?;
         let source_task = task::spawn(|| "source_client", async move {
             info!("test_drop_connection_race: in task; creating connection and source");
             let result = client
-                .batch_execute(&format!(
+                .batch_execute(
                     "CREATE SOURCE foo \
-                     FROM KAFKA BROKER '{}' TOPIC 'foo' \
+                     FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn",
-                    &*KAFKA_ADDRS,
-                ))
+                )
                 .await;
             info!(
                 "test_drop_connection_race: in task; create source done: {:?}",
@@ -284,7 +297,7 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
+fn test_subscribe_consolidation() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
@@ -295,7 +308,7 @@ fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
     client_reads.batch_execute(
         "BEGIN;
-         DECLARE c CURSOR FOR TAIL t;",
+         DECLARE c CURSOR FOR SUBSCRIBE t;",
     )?;
 
     let data = format!("line {}", 42);
@@ -312,7 +325,7 @@ fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
+fn test_subscribe_negative_diffs() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
@@ -326,7 +339,7 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
     )?;
     client_reads.batch_execute(
         "BEGIN;
-         DECLARE c CURSOR FOR TAIL counts;",
+         DECLARE c CURSOR FOR SUBSCRIBE counts;",
     )?;
 
     let data = format!("line {}", 42);
@@ -360,7 +373,7 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_tail_basic() -> Result<(), Box<dyn Error>> {
+fn test_subscribe_basic() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     // Set the timestamp to zero for deterministic initial timestamps.
@@ -388,9 +401,9 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     client_writes.batch_execute("SELECT * FROM t")?;
     client_reads.batch_execute(
         "BEGIN;
-         DECLARE c CURSOR FOR TAIL t;",
+         DECLARE c CURSOR FOR SUBSCRIBE t;",
     )?;
-    // Locks the timestamp of the TAIL to before any of the following INSERTs, which is required
+    // Locks the timestamp of the SUBSCRIBE to before any of the following INSERTs, which is required
     // for mz_timestamp column to be accurate
     let _ = client_reads.query_one("FETCH 0 c", &[]);
 
@@ -410,12 +423,12 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Now tail without a snapshot as of each timestamp, verifying that when we do
+    // Now subscribe without a snapshot as of each timestamp, verifying that when we do
     // so we only see events that occur as of or later than that timestamp.
     for (ts, _) in &events {
         client_reads.batch_execute(&*format!(
             "COMMIT; BEGIN;
-            DECLARE c CURSOR FOR TAIL t WITH (SNAPSHOT = false) AS OF {}",
+            DECLARE c CURSOR FOR SUBSCRIBE t WITH (SNAPSHOT = false) AS OF {}",
             ts - 1
         ))?;
 
@@ -426,12 +439,12 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Now tail with a snapshot as of each timestamp. We should see a batch of
-    // updates all at the tailed timestamp, and then updates afterward.
+    // Now subscribe with a snapshot as of each timestamp. We should see a batch of
+    // updates all at the subscribed timestamp, and then updates afterward.
     for (ts, _) in &events {
         client_reads.batch_execute(&*format!(
             "COMMIT; BEGIN;
-            DECLARE c CURSOR FOR TAIL t AS OF {}",
+            DECLARE c CURSOR FOR SUBSCRIBE t AS OF {}",
             ts - 1
         ))?;
 
@@ -448,7 +461,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Aggressively compact the data in the index, then tail an unmaterialized
+    // Aggressively compact the data in the index, then subscribe an unmaterialized
     // view derived from the index. This previously selected an invalid
     // `AS OF` timestamp (#5391).
     client_writes
@@ -456,7 +469,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     client_writes.batch_execute("CREATE VIEW v AS SELECT * FROM t")?;
     client_reads.batch_execute(
         "COMMIT; BEGIN;
-         DECLARE c CURSOR FOR TAIL v;",
+         DECLARE c CURSOR FOR SUBSCRIBE v;",
     )?;
     let rows = client_reads.query("FETCH ALL c", &[])?;
     assert_eq!(rows.len(), 3);
@@ -467,7 +480,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 
     // Wait until compaction kicks in and we get an error on trying to read from the cursor.
     let err = loop {
-        client_reads.batch_execute("COMMIT; BEGIN; DECLARE c CURSOR FOR TAIL v AS OF 1")?;
+        client_reads.batch_execute("COMMIT; BEGIN; DECLARE c CURSOR FOR SUBSCRIBE v AS OF 1")?;
 
         if let Err(err) = client_reads.query("FETCH ALL c", &[]) {
             break err;
@@ -483,11 +496,11 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 }
 
 /// Test the done messages by sending inserting a single row and waiting to
-/// observe it. Since TAIL always sends a progressed message at the end of its
+/// observe it. Since SUBSCRIBE always sends a progressed message at the end of its
 /// batches and we won't yet insert a second row, we know that if we've seen a
 /// data row we will also see one progressed message.
 #[test]
-fn test_tail_progress() -> Result<(), Box<dyn Error>> {
+fn test_subscribe_progress() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
@@ -498,7 +511,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     client_writes.batch_execute("CREATE TABLE t1 (data text)")?;
     client_reads.batch_execute(
         "COMMIT; BEGIN;
-         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
+         DECLARE c1 CURSOR FOR SUBSCRIBE t1 WITH (PROGRESS);",
     )?;
 
     #[derive(PartialEq)]
@@ -566,10 +579,10 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// Verifies that tailing non-nullable columns with progress information
+// Verifies that subscribing to non-nullable columns with progress information
 // turns them into nullable columns. See #6304.
 #[test]
-fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
+fn test_subscribe_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
@@ -581,7 +594,7 @@ fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
     client_writes.batch_execute("INSERT INTO t2 VALUES ('data')")?;
     client_reads.batch_execute(
         "COMMIT; BEGIN;
-            DECLARE c2 CURSOR FOR TAIL t2 WITH (PROGRESS);",
+            DECLARE c2 CURSOR FOR SUBSCRIBE t2 WITH (PROGRESS);",
     )?;
 
     #[derive(PartialEq)]
@@ -618,7 +631,7 @@ fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
 /// Verifies that we get continuous progress messages, regardless of if we
 /// receive data or not.
 #[test]
-fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
+fn test_subcribe_continuous_progress() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
@@ -629,7 +642,7 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
     client_writes.batch_execute("CREATE TABLE t1 (data text)")?;
     client_reads.batch_execute(
         "COMMIT; BEGIN;
-         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
+         DECLARE c1 CURSOR FOR SUBSCRIBE t1 WITH (PROGRESS);",
     )?;
 
     let mut last_ts = MzTimestamp(u64::MIN);
@@ -701,7 +714,7 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
+fn test_subscribe_fetch_timeout() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
@@ -712,7 +725,7 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     client.batch_execute("INSERT INTO t VALUES (1), (2), (3);")?;
     client.batch_execute(
         "BEGIN;
-         DECLARE c CURSOR FOR TAIL t;",
+         DECLARE c CURSOR FOR SUBSCRIBE t;",
     )?;
 
     let expected: Vec<i64> = vec![1, 2, 3];
@@ -746,7 +759,7 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     // duration. Cursor may take a moment to be ready, so do it in a loop.
     client.batch_execute(
         "COMMIT; BEGIN;
-        DECLARE c CURSOR FOR TAIL t",
+        DECLARE c CURSOR FOR SUBSCRIBE t",
     )?;
     loop {
         let before = Instant::now();
@@ -773,7 +786,7 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     // Regression test for #6307
     client.batch_execute(
         "COMMIT; BEGIN;
-        DECLARE c CURSOR FOR TAIL t",
+        DECLARE c CURSOR FOR SUBSCRIBE t",
     )?;
     let before = Instant::now();
     // NB: This timeout is chosen such that the test will timeout if the bad
@@ -790,7 +803,7 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
+fn test_subscribe_fetch_wait() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
@@ -801,7 +814,7 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
     client.batch_execute("INSERT INTO t VALUES (1), (2), (3)")?;
     client.batch_execute(
         "BEGIN;
-         DECLARE c CURSOR FOR TAIL t;",
+         DECLARE c CURSOR FOR SUBSCRIBE t;",
     )?;
 
     let expected: Vec<i64> = vec![1, 2, 3];
@@ -822,7 +835,7 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
     // how many rows will come back otherwise.
     client.batch_execute(
         "COMMIT; BEGIN;
-        DECLARE c CURSOR FOR TAIL t;",
+        DECLARE c CURSOR FOR SUBSCRIBE t;",
     )?;
     let mut expected_iter = expected.iter().peekable();
     while expected_iter.peek().is_some() {
@@ -834,7 +847,7 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Verify that the wait only happens for TAIL. A SELECT with 0 rows should not
+    // Verify that the wait only happens for SUBSCRIBE. A SELECT with 0 rows should not
     // block.
     client.batch_execute("COMMIT")?;
     client.batch_execute("CREATE TABLE empty ()")?;
@@ -849,7 +862,7 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
+fn test_subscribe_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default();
@@ -858,19 +871,19 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
 
     client.batch_execute("CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);")?;
 
-    let tail = client.query("TAIL foo WITH (SNAPSHOT = false)", &[])?;
-    assert_eq!(0, tail.len());
+    let subscribe = client.query("SUBSCRIBE foo WITH (SNAPSHOT = false)", &[])?;
+    assert_eq!(0, subscribe.len());
 
-    let tail = client.query("TAIL foo WITH (SNAPSHOT)", &[])?;
-    assert_eq!(3, tail.len());
+    let subscribe = client.query("SUBSCRIBE foo WITH (SNAPSHOT)", &[])?;
+    assert_eq!(3, subscribe.len());
 
     Ok(())
 }
 
-// Tests that a client that launches a non-terminating TAIL and disconnects
+// Tests that a client that launches a non-terminating SUBSCRIBE and disconnects
 // does not keep the server alive forever.
 #[test]
-fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
+fn test_subscribe_shutdown() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let server = util::start_server(util::Config::default())?;
@@ -881,12 +894,12 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     server.runtime.block_on(async {
         let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await?;
 
-        // Create a table with no data that we can TAIL. This is the simplest
-        // way to cause a TAIL to never terminate.
+        // Create a table with no data that we can SUBSCRIBE. This is the simplest
+        // way to cause a SUBSCRIBE to never terminate.
         client.batch_execute("CREATE TABLE t ()").await?;
 
-        // Launch the ill-fated tail.
-        client.copy_out("COPY (TAIL t) TO STDOUT").await?;
+        // Launch the ill-fated subscribe.
+        client.copy_out("COPY (SUBSCRIBE t) TO STDOUT").await?;
 
         // Un-gracefully abort the connection.
         conn_task.abort();
@@ -899,28 +912,28 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     })?;
 
     // Dropping the server will initiate a graceful shutdown. We previously had
-    // a bug where the server would fail to notice that the client running `TAIL
-    // v` had disconnected, and would hang forever waiting for data to be
-    // written to `path`, which in this test never comes. So if this function
-    // exits, things are working correctly.
+    // a bug where the server would fail to notice that the client running
+    // `SUBSCRIBE v` had disconnected, and would hang forever waiting for data
+    // to be written to `path`, which in this test never comes. So if this
+    // function exits, things are working correctly.
 
     Ok(())
 }
 
 #[test]
-fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
+fn test_subscribe_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let config = util::Config::default().workers(3);
     let server = util::start_server(config)?;
     let mut client_interactive = server.connect(postgres::NoTls)?;
-    let mut client_tail = server.connect(postgres::NoTls)?;
+    let mut client_subscribe = server.connect(postgres::NoTls)?;
 
     client_interactive.batch_execute("CREATE TABLE t1 (data text)")?;
 
-    client_tail.batch_execute(
+    client_subscribe.batch_execute(
         "COMMIT; BEGIN;
-         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
+         DECLARE c1 CURSOR FOR SUBSCRIBE t1 WITH (PROGRESS);",
     )?;
 
     client_interactive.execute("BEGIN", &[]).unwrap();
@@ -945,7 +958,7 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     // is available. This means that we could still get only one row per
     // request, and we won't know how many rows will come back otherwise.
     while !seen_second {
-        let rows = client_tail.query("FETCH ALL c1", &[])?;
+        let rows = client_subscribe.query("FETCH ALL c1", &[])?;
         for row in rows.iter() {
             let mz_timestamp = row.get::<_, MzTimestamp>("mz_timestamp");
             let mz_progressed = row.get::<_, Option<bool>>("mz_progressed").unwrap();
@@ -970,7 +983,7 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    client_tail.batch_execute("COMMIT;")?;
+    client_subscribe.batch_execute("COMMIT;")?;
 
     assert!(seen_first);
     assert!(seen_second);
@@ -1027,35 +1040,28 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().with_now(now);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
-    let timestamp_re = Regex::new(r"\d{4}").unwrap();
+    let timestamp_re = Regex::new(r"\s*(\d{4}|0) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
+    let bool_re = Regex::new(r"true|false").unwrap();
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
 
-    let expect = "     timestamp:          <TIMESTAMP>
-         since:[         <TIMESTAMP>]
-         upper:[         <TIMESTAMP>]
-     has table: true
- table read ts:          <TIMESTAMP>
+    let expect = "          query timestamp:<TIMESTAMP>
+                    since:[<TIMESTAMP>]
+                    upper:[<TIMESTAMP>]
+         global timestamp:<TIMESTAMP>
+  can respond immediately: <BOOL>
 
 source materialize.public.t1 (u1, storage):
- read frontier:[         <TIMESTAMP>]
-write frontier:[         <TIMESTAMP>]\n";
+ read frontier:[<TIMESTAMP>]
+write frontier:[<TIMESTAMP>]\n";
 
-    // Upper starts at 0, which the regex doesn't cover. Wait until it moves ahead.
-    Retry::default()
-        .retry(|_| {
-            let row = client
-                .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
-                .unwrap();
-            let explain: String = row.get(0);
-            let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
-            if explain != expect {
-                Err(format!("expected {expect}, got {explain}"))
-            } else {
-                Ok(())
-            }
-        })
+    let row = client
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
         .unwrap();
+    let explain: String = row.get(0);
+    let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+    let explain = bool_re.replace_all(&explain, "<BOOL>");
+    assert_eq!(explain, expect);
 
     Ok(())
 }
@@ -1117,7 +1123,7 @@ fn test_github_12951() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
-    // Verify sinks (TAIL) are correctly handled for a dropped cluster.
+    // Verify sinks (SUBSCRIBE) are correctly handled for a dropped cluster.
     {
         let mut client1 = server.connect(postgres::NoTls).unwrap();
         let mut client2 = server.connect(postgres::NoTls).unwrap();
@@ -1129,7 +1135,9 @@ fn test_github_12951() {
         client1.batch_execute("CREATE TABLE t1(f1 int)").unwrap();
         client2.batch_execute("SET CLUSTER = foo").unwrap();
         client2
-            .batch_execute("BEGIN; DECLARE c CURSOR FOR TAIL (SELECT count(*) FROM t1); FETCH 1 c")
+            .batch_execute(
+                "BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT count(*) FROM t1); FETCH 1 c",
+            )
             .unwrap();
         client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
         client2_cancel.cancel_query(postgres::NoTls).unwrap();
@@ -1171,12 +1179,12 @@ fn test_github_12951() {
 
 #[test]
 // Tests github issue #13100
-fn test_tail_outlive_cluster() {
+fn test_subscribe_outlive_cluster() {
     mz_ore::test::init_logging();
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
-    // Verify sinks (TAIL) are correctly handled for a dropped cluster, when a new cluster is created.
+    // Verify sinks (SUBSCRIBE) are correctly handled for a dropped cluster, when a new cluster is created.
     let mut client1 = server.connect(postgres::NoTls).unwrap();
     let mut client2 = server.connect(postgres::NoTls).unwrap();
     let client2_cancel = client2.cancel_token();
@@ -1187,7 +1195,7 @@ fn test_tail_outlive_cluster() {
     client1.batch_execute("CREATE TABLE t1(f1 int)").unwrap();
     client2.batch_execute("SET CLUSTER = foo").unwrap();
     client2
-        .batch_execute("BEGIN; DECLARE c CURSOR FOR TAIL (SELECT count(*) FROM t1); FETCH 1 c")
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT count(*) FROM t1); FETCH 1 c")
         .unwrap();
     client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
     client1
@@ -1318,8 +1326,8 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
     )?;
 
     // Create user table in Materialize.
-    mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
-    mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
+    mz_client.batch_execute("DROP TABLE IF EXISTS t;")?;
+    mz_client.batch_execute("CREATE TABLE t (a INT);")?;
     insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now))?;
 
     // Insert data into source.
@@ -1383,16 +1391,16 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     // than queries that involve the user table. However, we prevent this when in strict
     // serializable mode.
 
-    mz_client.batch_execute(&"SET transaction_isolation = serializable")?;
+    mz_client.batch_execute("SET transaction_isolation = serializable")?;
     let view_ts = get_explain_timestamp(view_name, &mut mz_client);
     // Create user table in Materialize.
-    mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
-    mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
+    mz_client.batch_execute("DROP TABLE IF EXISTS t;")?;
+    mz_client.batch_execute("CREATE TABLE t (a INT);")?;
     let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // In serializable transaction isolation, read timestamps can go backwards.
     assert!(join_ts < view_ts);
 
-    mz_client.batch_execute(&"SET transaction_isolation = 'strict serializable'")?;
+    mz_client.batch_execute("SET transaction_isolation = 'strict serializable'")?;
     let view_ts = get_explain_timestamp(view_name, &mut mz_client);
     let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // Since the query on the join was done after the query on the view, it should have a higher or
@@ -1413,14 +1421,19 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
 
     assert!(server
         .pg_config()
-        .user(SYSTEM_USER)
+        .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)
         .is_err());
     assert!(server
         .pg_config_internal()
-        .user(SYSTEM_USER)
+        .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)
         .is_ok());
+    assert!(server
+        .pg_config_internal()
+        .user("mz_something_else")
+        .connect(postgres::NoTls)
+        .is_err());
 
     Ok(())
 }
@@ -1438,7 +1451,7 @@ fn test_internal_ports() -> Result<(), Box<dyn Error>> {
         let mut external_client = server.connect(postgres::NoTls)?;
         let mut internal_client = server
             .pg_config_internal()
-            .user(SYSTEM_USER)
+            .user(&SYSTEM_USER.name)
             .connect(postgres::NoTls)?;
 
         assert_eq!(
@@ -1459,7 +1472,7 @@ fn test_internal_ports() -> Result<(), Box<dyn Error>> {
         let mut external_client = server.connect(postgres::NoTls)?;
         let mut internal_client = server
             .pg_config_internal()
-            .user(SYSTEM_USER)
+            .user(&SYSTEM_USER.name)
             .connect(postgres::NoTls)?;
 
         assert_eq!(
@@ -1492,18 +1505,18 @@ fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
 
     let mut mz_client = server
         .pg_config_internal()
-        .user(SYSTEM_USER)
+        .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)?;
 
-    mz_client.batch_execute(&"ALTER SYSTEM SET max_tables TO 2")?;
+    mz_client.batch_execute("ALTER SYSTEM SET max_tables TO 2")?;
     let res = mz_client
-        .batch_execute(&"ALTER SYSTEM SET invalid_param TO 42")
+        .batch_execute("ALTER SYSTEM SET invalid_param TO 42")
         .unwrap_err();
     assert!(res
         .to_string()
         .contains("unrecognized configuration parameter \"invalid_param\""));
     let res = mz_client
-        .batch_execute(&"ALTER SYSTEM RESET invalid_param")
+        .batch_execute("ALTER SYSTEM RESET invalid_param")
         .unwrap_err();
     assert!(res
         .to_string()
@@ -1605,7 +1618,9 @@ fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMil
         .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
         .unwrap();
     let explain: String = row.get(0);
-    let timestamp_re = Regex::new(r"^\s+timestamp:\s+(\d+)\n").unwrap();
+    let timestamp_re =
+        Regex::new(r"^\s+query timestamp:\s+(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d\.\d\d\d\)\n")
+            .unwrap();
     let timestamp_caps = timestamp_re.captures(&explain).unwrap();
     timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
 }
@@ -1690,7 +1705,7 @@ fn create_postgres_source_with_table(
         "CREATE SOURCE {source_name}
             FROM POSTGRES
             CONNECTION pgconn
-            PUBLICATION '{source_name}';"
+            (PUBLICATION '{source_name}');"
     ))?;
     mz_client.batch_execute(&format!(
         "CREATE VIEWS FROM SOURCE {source_name} ({table_name});"
@@ -1703,7 +1718,7 @@ fn create_postgres_source_with_table(
         move |mz_client: &mut postgres::Client, pg_client: &mut Client, runtime: &Arc<Runtime>| {
             mz_client.batch_execute(&format!("DROP VIEW {table_name};"))?;
             mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
-            mz_client.batch_execute(&"DROP CONNECTION pgconn;")?;
+            mz_client.batch_execute("DROP CONNECTION pgconn;")?;
 
             let _ = runtime
                 .block_on(pg_client.execute(&format!("DROP PUBLICATION {source_name};"), &[]))?;

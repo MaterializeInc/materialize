@@ -16,6 +16,6 @@ server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;U
 
 $ sql-server-execute name=sql-server
 USE test;
-CREATE TABLE types_table (decimal_col DECIMAL(5,2), datetimeoffset_col DATETIMEOFFSET(4), datetime2_col DATETIME2(7), smalldatetime_col SMALLDATETIME, bit_col BIT);
+CREATE TABLE types_table (decimal_col DECIMAL(5,2), datetimeoffset_col DATETIMEOFFSET(4), datetime2_col DATETIME2(7), smalldatetime_col SMALLDATETIME, bit_col BIT, pk INTEGER PRIMARY KEY);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'types_table', @role_name = 'SA', @supports_net_changes = 0;
-INSERT INTO types_table VALUES (123.45, '12-10-25 12:32:10 +01:00', '2010-11-12 13:14:15.1234567', '11:12:13', 1);
+INSERT INTO types_table VALUES (123.45, '12-10-25 12:32:10 +01:00', '2010-11-12 13:14:15.1234567', '11:12:13', 1, 0);

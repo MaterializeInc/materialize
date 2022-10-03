@@ -201,7 +201,7 @@ impl<R: AvroRead> Reader<R> {
         let resolved_schema = if reader_schema.fingerprint::<Sha256>().bytes
             != writer_schema.fingerprint::<Sha256>().bytes
         {
-            Some(resolve_schemas(&writer_schema, reader_schema)?)
+            Some(resolve_schemas(writer_schema, reader_schema)?)
         } else {
             None
         };
@@ -899,8 +899,8 @@ impl<'a> SchemaResolver<'a> {
             (ws, rs) => {
                 return Err(SchemaResolutionError::new(format!(
                     "Schemas don't match: {:?}, {:?} for field `{}`",
-                    ws.get_piece_and_name(&writer.root).0,
-                    rs.get_piece_and_name(&reader.root).0,
+                    ws.get_piece_and_name(writer.root).0,
+                    rs.get_piece_and_name(reader.root).0,
                     self.get_current_human_readable_path(),
                 ))
                 .into())
@@ -914,7 +914,7 @@ impl<'a> SchemaResolver<'a> {
     }
 
     fn get_current_human_readable_path(&self) -> String {
-        return self.human_readable_field_path[self.current_human_readable_path_start..].join(".");
+        self.human_readable_field_path[self.current_human_readable_path_start..].join(".")
     }
 }
 

@@ -85,7 +85,7 @@ impl Decoder {
     }
 
     /// Decodes the encoded Protobuf message into a [`Row`].
-    pub async fn decode(&mut self, mut bytes: &[u8]) -> Result<Option<Row>, anyhow::Error> {
+    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<Option<Row>, anyhow::Error> {
         if self.confluent_wire_format {
             // We support Protobuf schema evolution by ignoring the schema that
             // the message was written with and attempting to decode into the
@@ -143,9 +143,8 @@ fn derive_inner_type(
         Kind::Bool => Ok(ScalarType::Bool.nullable(false)),
         Kind::Int32 | Kind::Sint32 | Kind::Sfixed32 => Ok(ScalarType::Int32.nullable(false)),
         Kind::Int64 | Kind::Sint64 | Kind::Sfixed64 => Ok(ScalarType::Int64.nullable(false)),
-        Kind::Uint32 | Kind::Fixed32 | Kind::Uint64 | Kind::Fixed64 => {
-            bail!("Protobuf unsigned integer types are not supported")
-        }
+        Kind::Uint32 | Kind::Fixed32 => Ok(ScalarType::UInt32.nullable(false)),
+        Kind::Uint64 | Kind::Fixed64 => Ok(ScalarType::UInt64.nullable(false)),
         Kind::Float => Ok(ScalarType::Float32.nullable(false)),
         Kind::Double => Ok(ScalarType::Float64.nullable(false)),
         Kind::String => Ok(ScalarType::String.nullable(false)),
@@ -202,6 +201,8 @@ fn pack_value(
         Value::Bool(true) => packer.push(Datum::True),
         Value::I32(i) => packer.push(Datum::Int32(*i)),
         Value::I64(i) => packer.push(Datum::Int64(*i)),
+        Value::U32(i) => packer.push(Datum::UInt32(*i)),
+        Value::U64(i) => packer.push(Datum::UInt64(*i)),
         Value::F32(f) => packer.push(Datum::Float32((*f).into())),
         Value::F64(f) => packer.push(Datum::Float64((*f).into())),
         Value::String(s) => packer.push(Datum::String(s)),
@@ -232,7 +233,7 @@ fn pack_value(
                 Ok::<_, anyhow::Error>(())
             })?;
         }
-        Value::U32(_) | Value::U64(_) | Value::Map(_) => bail!(
+        Value::Map(_) => bail!(
             "internal error: unexpected value while decoding protobuf message: {:?}",
             value
         ),

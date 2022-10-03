@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Make sure that the AS OF is observed for TAIL
+# Make sure that the AS OF is observed for SUBSCRIBE
 #
 
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
@@ -20,7 +20,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL t1 AS OF -1;
+> DECLARE c CURSOR FOR SUBSCRIBE t1 AS OF -1;
 
 ! FETCH 1 c;
 contains:out of range integral type conversion attempted
@@ -36,7 +36,7 @@ contains:Timestamp (0) is not valid for all inputs
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL t1 AS OF 0;
+> DECLARE c CURSOR FOR SUBSCRIBE t1 AS OF 0;
 
 ! FETCH 1 c;
 contains:Timestamp (0) is not valid for all inputs
@@ -45,7 +45,7 @@ contains:Timestamp (0) is not valid for all inputs
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL t1 AS OF AT LEAST 0;
+> DECLARE c CURSOR FOR SUBSCRIBE t1 AS OF AT LEAST 0;
 
 > FETCH 1 c;
 <TIMESTAMP> 1 123
@@ -54,7 +54,7 @@ contains:Timestamp (0) is not valid for all inputs
 
 > BEGIN
 
-> DECLARE c CURSOR FOR TAIL t1 AS OF 18446744073709551615;
+> DECLARE c CURSOR FOR SUBSCRIBE t1 AS OF 18446744073709551615;
 
 # No rows expected
 > FETCH 1 c WITH (timeout = '1s');

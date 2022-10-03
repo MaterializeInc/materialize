@@ -13,8 +13,11 @@
 
 $ kafka-create-topic topic=load-test partitions=4
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE load_test
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-load-test-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-load-test-${testdrive.seed}')
   FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE

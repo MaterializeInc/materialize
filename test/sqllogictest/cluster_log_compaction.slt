@@ -22,7 +22,7 @@ BEGIN
 
 # Transaction will force a read hold on this index.
 query T rowsort
-SELECT * FROM mz_arrangement_batches_internal_2;
+SELECT * FROM mz_internal.mz_arrangement_batches_internal_2;
 ----
 
 statement ok

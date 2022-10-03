@@ -74,7 +74,7 @@ pub static SCHEMA_ARROW_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
     ]))
 });
 
-const INLINE_METADATA_KEY: &'static str = "MZ:inline";
+const INLINE_METADATA_KEY: &str = "MZ:inline";
 
 /// Encodes an BlobTraceBatchPart into the Arrow file format.
 ///
@@ -93,7 +93,7 @@ pub fn encode_trace_arrow<W: Write, T: Timestamp + Codec64>(
     let options = WriteOptions { compression: None };
     let mut writer = FileWriter::try_new(w, &schema, None, options)?;
     for records in batch.updates.iter() {
-        writer.write(&encode_arrow_batch_kvtd(&records), None)?;
+        writer.write(&encode_arrow_batch_kvtd(records), None)?;
     }
     writer.finish()?;
     Ok(())
@@ -203,27 +203,27 @@ pub fn decode_arrow_batch_kvtd(x: &Chunk<Box<dyn Array>>) -> Result<ColumnarReco
     let key_array = key_col
         .as_any()
         .downcast_ref::<BinaryArray<i32>>()
-        .ok_or(format!("column 0 doesn't match schema"))?
+        .ok_or_else(|| "column 0 doesn't match schema".to_string())?
         .clone();
     let key_offsets = key_array.offsets().clone();
     let key_data = key_array.values().clone();
     let val_array = val_col
         .as_any()
         .downcast_ref::<BinaryArray<i32>>()
-        .ok_or(format!("column 1 doesn't match schema"))?
+        .ok_or_else(|| "column 1 doesn't match schema".to_string())?
         .clone();
     let val_offsets = val_array.offsets().clone();
     let val_data = val_array.values().clone();
     let timestamps = ts_col
         .as_any()
         .downcast_ref::<PrimitiveArray<i64>>()
-        .ok_or(format!("column 2 doesn't match schema"))?
+        .ok_or_else(|| "column 2 doesn't match schema".to_string())?
         .values()
         .clone();
     let diffs = diff_col
         .as_any()
         .downcast_ref::<PrimitiveArray<i64>>()
-        .ok_or(format!("column 3 doesn't match schema"))?
+        .ok_or_else(|| "column 3 doesn't match schema".to_string())?
         .values()
         .clone();
 

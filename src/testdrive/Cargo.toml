@@ -2,8 +2,8 @@
 name = "mz-testdrive"
 description = "Integration test driver for Materialize."
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -25,6 +25,7 @@ clap = { version = "3.2.20", features = ["derive"] }
 flate2 = "1.0.24"
 futures = "0.3.24"
 globset = "0.4.9"
+hex = "0.4.3"
 http = "0.2.8"
 itertools = "0.10.4"
 junit-report = "0.7.1"

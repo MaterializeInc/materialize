@@ -16,8 +16,8 @@ from materialize.cloudtest.wait import wait
 
 
 def populate(mz: MaterializeApplication, seed: int) -> None:
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
             > CREATE TABLE t1 (f1 INTEGER);
 
@@ -27,9 +27,11 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > INSERT INTO t1 VALUES (234);
 
+            > CREATE CONNECTION kafka FOR KAFKA BROKER '${testdrive.kafka-addr}'
+
             > CREATE SOURCE s1
-              FROM KAFKA BROKER '${testdrive.kafka-addr}'
-              TOPIC 'testdrive-crash-${testdrive.seed}'
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-crash-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
 
@@ -54,8 +56,8 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
 
 def validate(mz: MaterializeApplication, seed: int) -> None:
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
             > INSERT INTO t1 VALUES (345);
 
@@ -111,8 +113,8 @@ def test_crash_computed(mz: MaterializeApplication) -> None:
     )
     mz.environmentd.sql("INSERT INTO crash_table VALUES ('forced panic')")
 
-    mz.testdrive.run_string(
-        dedent(
+    mz.testdrive.run(
+        input=dedent(
             """
             > DROP MATERIALIZED VIEW crash_view
             """

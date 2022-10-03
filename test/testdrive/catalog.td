@@ -277,19 +277,22 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE TABLE tbl (a int, b text);
 > CREATE SECRET pass_secret AS 'pass';
 
-> CREATE CONNECTION kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
 > CREATE MATERIALIZED VIEW mv AS SELECT (1);
+
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE source_data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 > CREATE SINK snk FROM source_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-catalog-sink-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM;
 
 > SHOW OBJECTS
 name        type
@@ -445,51 +448,9 @@ d2
 
 # Check default sources, tables, and views in mz_catalog.
 
-# The sources in the catalog depend on the number of replicas and computeds
-$ skip-if
-SELECT ${arg.replicas} > 1 OR ${arg.replica-size} > 1;
-
 > SHOW SOURCES FROM mz_catalog
 name                                          type
 --------------------------------------------------
-mz_arrangement_batches_internal               log
-mz_arrangement_batches_internal_1             log
-mz_arrangement_records_internal               log
-mz_arrangement_records_internal_1             log
-mz_arrangement_sharing_internal               log
-mz_arrangement_sharing_internal_1             log
-mz_dataflow_channels                          log
-mz_dataflow_channels_1                        log
-mz_dataflow_addresses                         log
-mz_dataflow_addresses_1                       log
-mz_dataflow_operator_reachability_internal    log
-mz_dataflow_operator_reachability_internal_1  log
-mz_dataflow_operators                         log
-mz_dataflow_operators_1                       log
-mz_worker_materialization_dependencies        log
-mz_worker_materialization_dependencies_1      log
-mz_materializations                           log
-mz_materializations_1                         log
-mz_message_counts_received_internal           log
-mz_message_counts_received_internal_1         log
-mz_message_counts_sent_internal               log
-mz_message_counts_sent_internal_1             log
-mz_peek_active                                log
-mz_peek_active_1                              log
-mz_peek_durations                             log
-mz_peek_durations_1                           log
-mz_scheduling_elapsed_internal                log
-mz_scheduling_elapsed_internal_1              log
-mz_scheduling_histogram_internal              log
-mz_scheduling_histogram_internal_1            log
-mz_scheduling_parks_internal                  log
-mz_scheduling_parks_internal_1                log
-mz_worker_materialization_delays              log
-mz_worker_materialization_delays_1            log
-mz_worker_materialization_frontiers           log
-mz_worker_materialization_frontiers_1         log
-mz_worker_materialization_source_frontiers    log
-mz_worker_materialization_source_frontiers_1  log
 
 > SHOW TABLES FROM mz_catalog
 name
@@ -507,6 +468,7 @@ mz_databases
 mz_functions
 mz_index_columns
 mz_indexes
+mz_kafka_connections
 mz_kafka_sinks
 mz_list_types
 mz_map_types
@@ -525,6 +487,97 @@ mz_view_foreign_keys
 mz_view_keys
 mz_views
 
+> SHOW VIEWS FROM mz_catalog
+name
+-----------------------------------
+mz_cluster_replicas
+mz_objects
+mz_relations
+
+# Check default sources, tables, and views in mz_internal.
+
+# The sources in the catalog depend on the number of replicas and computeds
+$ skip-if
+SELECT ${arg.replicas} > 1 OR ${arg.replica-size} > 1;
+
+> SHOW SOURCES FROM mz_internal
+name                                           type
+---------------------------------------------------
+mz_arrangement_batches_internal                 log
+mz_arrangement_batches_internal_1               log
+mz_arrangement_records_internal                 log
+mz_arrangement_records_internal_1               log
+mz_arrangement_sharing_internal                 log
+mz_arrangement_sharing_internal_1               log
+mz_dataflow_channels                            log
+mz_dataflow_channels_1                          log
+mz_dataflow_addresses                           log
+mz_dataflow_addresses_1                         log
+mz_dataflow_operator_reachability_internal      log
+mz_dataflow_operator_reachability_internal_1    log
+mz_dataflow_operators                           log
+mz_dataflow_operators_1                         log
+mz_worker_compute_dependencies                  log
+mz_worker_compute_dependencies_1                log
+mz_compute_exports                              log
+mz_compute_exports_1                            log
+mz_message_counts_received_internal             log
+mz_message_counts_received_internal_1           log
+mz_message_counts_sent_internal                 log
+mz_message_counts_sent_internal_1               log
+mz_peek_active                                  log
+mz_peek_active_1                                log
+mz_peek_durations                               log
+mz_peek_durations_1                             log
+mz_scheduling_elapsed_internal                  log
+mz_scheduling_elapsed_internal_1                log
+mz_scheduling_histogram_internal                log
+mz_scheduling_histogram_internal_1              log
+mz_scheduling_parks_internal                    log
+mz_scheduling_parks_internal_1                  log
+mz_worker_compute_delays                        log
+mz_worker_compute_delays_1                      log
+mz_worker_compute_frontiers                     log
+mz_worker_compute_frontiers_1                   log
+mz_worker_compute_import_frontiers              log
+mz_worker_compute_import_frontiers_1            log
+
+> SHOW TABLES FROM mz_internal
+name
+----
+
+> SHOW VIEWS FROM mz_internal
+name
+-------------------------------------
+mz_arrangement_sharing
+mz_arrangement_sharing_1
+mz_arrangement_sizes
+mz_arrangement_sizes_1
+mz_dataflows
+mz_dataflows_1
+mz_dataflow_operator_dataflows
+mz_dataflow_operator_dataflows_1
+mz_dataflow_operator_reachability
+mz_dataflow_operator_reachability_1
+mz_compute_frontiers
+mz_compute_frontiers_1
+mz_compute_import_frontiers
+mz_compute_import_frontiers_1
+mz_message_counts
+mz_message_counts_1
+mz_records_per_dataflow
+mz_records_per_dataflow_1
+mz_records_per_dataflow_global
+mz_records_per_dataflow_global_1
+mz_records_per_dataflow_operator
+mz_records_per_dataflow_operator_1
+mz_scheduling_elapsed
+mz_scheduling_elapsed_1
+mz_scheduling_histogram
+mz_scheduling_histogram_1
+mz_scheduling_parks
+mz_scheduling_parks_1
+
 > CREATE SCHEMA tester
 
 > SHOW TABLES FROM tester
@@ -536,51 +589,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-30
+31
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
 19
-
-> SHOW VIEWS FROM mz_catalog
-name
------------------------------------
-mz_arrangement_sharing
-mz_arrangement_sharing_1
-mz_arrangement_sizes
-mz_arrangement_sizes_1
-mz_cluster_replicas
-mz_dataflows
-mz_dataflows_1
-mz_dataflow_operator_dataflows
-mz_dataflow_operator_dataflows_1
-mz_dataflow_operator_reachability
-mz_dataflow_operator_reachability_1
-mz_materialization_frontiers
-mz_materialization_frontiers_1
-mz_materialization_source_frontiers
-mz_message_counts
-mz_message_counts_1
-mz_objects
-mz_records_per_dataflow
-mz_records_per_dataflow_1
-mz_records_per_dataflow_global
-mz_records_per_dataflow_global_1
-mz_records_per_dataflow_operator
-mz_records_per_dataflow_operator_1
-mz_relations
-mz_scheduling_elapsed
-mz_scheduling_elapsed_1
-mz_scheduling_histogram
-mz_scheduling_histogram_1
-mz_scheduling_parks
-mz_scheduling_parks_1
-
-> SHOW SOURCES FROM mz_catalog LIKE '%peek%';
-mz_peek_active      log
-mz_peek_active_1    log
-mz_peek_durations   log
-mz_peek_durations_1 log
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

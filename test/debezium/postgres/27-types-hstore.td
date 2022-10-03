@@ -13,9 +13,9 @@
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE EXTENSION IF NOT EXISTS hstore;
-CREATE TABLE hstore_type (f1 hstore);
+CREATE TABLE hstore_type (f1 hstore, f2 INTEGER PRIMARY KEY);
 ALTER TABLE hstore_type REPLICA IDENTITY FULL;
-INSERT INTO hstore_type VALUES (NULL), ('a=>1'::hstore);
+INSERT INTO hstore_type VALUES (NULL, 0), ('a=>1'::hstore, 1);
 
 $ schema-registry-wait-schema schema=postgres.public.hstore_type-value
 
@@ -23,8 +23,11 @@ $ schema-registry-wait-schema schema=postgres.public.hstore_type-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE hstore_type
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.hstore_type'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.hstore_type')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

@@ -33,8 +33,10 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
+use crate::source::commit::LogCommitter;
 use crate::source::{
-    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
+    types::OffsetCommitter, NextMessage, SourceMessage, SourceMessageType, SourceReader,
+    SourceReaderError,
 };
 use crate::types::connections::ConnectionContext;
 use crate::types::errors::SourceErrorDetails;
@@ -157,6 +159,14 @@ pub struct PostgresSourceReader {
     reported_unconsumed_partitions: bool,
 }
 
+/// An OffsetCommitter for postgres, that sends
+/// the offsets (lsns) to the replication stream
+/// through a channel
+pub struct PgOffsetCommitter {
+    logger: LogCommitter,
+    tx: Sender<HashMap<PartitionId, MzOffset>>,
+}
+
 /// An internal struct held by the spawned tokio task
 struct PostgresTaskInfo {
     source_id: GlobalId,
@@ -169,6 +179,9 @@ struct PostgresTaskInfo {
     source_tables: HashMap<u32, PostgresTableDesc>,
     row_sender: RowSender,
     sender: Sender<InternalMessage>,
+    /// Channel to receive lsn's from the PgOffsetCommitter
+    /// that are safe to send status updates for.
+    offset_rx: Receiver<HashMap<PartitionId, MzOffset>>,
 }
 
 impl SourceReader for PostgresSourceReader {
@@ -176,6 +189,7 @@ impl SourceReader for PostgresSourceReader {
     type Value = Row;
     // Postgres can produce deletes that cause retractions
     type Diff = Diff;
+    type OffsetCommitter = PgOffsetCommitter;
     type Connection = PostgresSourceConnection;
 
     fn new(
@@ -189,13 +203,15 @@ impl SourceReader for PostgresSourceReader {
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
             crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
 
         // TODO: figure out the best default here; currently this is optimized
         // for the speed to pass pg-cdc-resumption tests on a local machine.
         let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(50_000);
+
+        let (offset_tx, offset_rx) = tokio::sync::mpsc::channel(10);
 
         // Pick out the partition we care about
         // TODO(petrosagg): add an associated type to SourceReader so that each source can define
@@ -233,6 +249,7 @@ impl SourceReader for PostgresSourceReader {
                 ),
                 row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
                 sender: dataflow_tx,
+                offset_rx,
             };
 
             task::spawn(
@@ -241,11 +258,21 @@ impl SourceReader for PostgresSourceReader {
             );
         }
 
-        Ok(Self {
-            receiver_stream: dataflow_rx,
-            active_read_worker,
-            reported_unconsumed_partitions: false,
-        })
+        Ok((
+            Self {
+                receiver_stream: dataflow_rx,
+                active_read_worker,
+                reported_unconsumed_partitions: false,
+            },
+            PgOffsetCommitter {
+                logger: LogCommitter {
+                    source_id,
+                    worker_id,
+                    worker_count,
+                },
+                tx: offset_tx,
+            },
+        ))
     }
 
     // TODO(guswynn): use `next` instead of using a channel
@@ -302,6 +329,19 @@ impl SourceReader for PostgresSourceReader {
         };
 
         ret
+    }
+}
+
+#[async_trait::async_trait]
+impl OffsetCommitter for PgOffsetCommitter {
+    async fn commit_offsets(
+        &self,
+        offsets: HashMap<PartitionId, MzOffset>,
+    ) -> Result<(), anyhow::Error> {
+        self.tx.send(offsets.clone()).await?;
+        self.logger.commit_offsets(offsets).await?;
+
+        Ok(())
     }
 }
 
@@ -627,7 +667,7 @@ impl PostgresTaskInfo {
                         Did you forget to set REPLICA IDENTITY to FULL for your table?",
                         rel_id
                     ),
-                    TupleData::Text(b) => std::str::from_utf8(&b)?.into(),
+                    TupleData::Text(b) => std::str::from_utf8(b)?.into(),
                 };
                 packer.push(datum);
             }
@@ -709,19 +749,45 @@ impl PostgresTaskInfo {
         tokio::pin!(stream);
 
         let mut last_data_message = Instant::now();
-        let mut last_feedback = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
 
-        while let Some(item) = stream.next().await {
+        let mut last_feedback = Instant::now();
+        let mut committed_lsn: Option<PgLsn> = None;
+
+        loop {
+            let data_next = stream.next();
+            tokio::pin!(data_next);
+            let offset_recv = self.offset_rx.recv();
+            tokio::pin!(offset_recv);
+
+            use futures::future::Either;
+            let item = match futures::future::select(offset_recv, data_next).await {
+                Either::Left((Some(to_commit), _)) => {
+                    // We assume there is only a single partition here.
+                    let lsn: PgLsn = to_commit[&PartitionId::None].offset.into();
+                    // Set the committed lsn so we can send a correct status update
+                    // next time we are required.
+                    committed_lsn = Some(lsn);
+                    continue;
+                }
+                Either::Right((Some(item), _)) => item,
+                Either::Left((None, _)) | Either::Right((None, _)) => {
+                    break;
+                }
+            };
+
             let item = item?;
             use ReplicationMessage::*;
 
             // The upstream will periodically request status updates by setting the keepalive's
             // reply field to 1. However, we cannot rely on these messages arriving on time. For
             // example, when the upstream is sending a big transaction its keepalive messages are
-            // queued and can be delayed arbitrarily. Therefore, we also make sure to send a
-            // proactive status update every 30 seconds.
+            // queued and can be delayed arbitrarily. Therefore, we also make sure to
+            // send a proactive status update every 30 seconds, but only after we receive
+            // resumption_frontier advancement. There is an implicit requirement that
+            // a new resumption frontier is converted into an lsn relatively soon
+            // after startup.
             //
             // See: https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com
             let mut needs_status_update = last_feedback.elapsed() > FEEDBACK_INTERVAL;
@@ -876,7 +942,7 @@ impl PostgresTaskInfo {
                             .rel_ids()
                             .iter()
                             // Filter here makes option handling in map "safe"
-                            .filter_map(|id| self.source_tables.get(&id))
+                            .filter_map(|id| self.source_tables.get(id))
                             .map(|table| format!("name: {} id: {}", table.name, table.oid))
                             .collect::<Vec<String>>();
                         return Err(Fatal(anyhow!(
@@ -890,7 +956,6 @@ impl PostgresTaskInfo {
                 },
                 PrimaryKeepAlive(keepalive) => {
                     needs_status_update = needs_status_update || keepalive.reply() == 1;
-
                     if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD
                         && keepalive.wal_end().saturating_sub(self.lsn.into()) > MAX_WAL_LAG
                     {
@@ -900,23 +965,31 @@ impl PostgresTaskInfo {
                 // The enum is marked non_exhaustive, better be conservative
                 _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
             }
+            // TODO(guswynn): consider committing the initial lsn
+            if let Some(committed_lsn) = committed_lsn {
+                if needs_status_update {
+                    let ts: i64 = PG_EPOCH
+                        .elapsed()
+                        .expect("system clock set earlier than year 2000!")
+                        .as_micros()
+                        .try_into()
+                        .expect("software more than 200k years old, consider updating");
 
-            if needs_status_update {
-                let ts: i64 = PG_EPOCH
-                    .elapsed()
-                    .expect("system clock set earlier than year 2000!")
-                    .as_micros()
-                    .try_into()
-                    .expect("software more than 200k years old, consider updating");
-
-                try_recoverable!(
-                    stream
-                        .as_mut()
-                        .get_pin_mut()
-                        .standby_status_update(self.lsn, self.lsn, self.lsn, ts, 0)
-                        .await
-                );
-                last_feedback = Instant::now();
+                    try_recoverable!(
+                        stream
+                            .as_mut()
+                            .get_pin_mut()
+                            .standby_status_update(
+                                committed_lsn,
+                                committed_lsn,
+                                committed_lsn,
+                                ts,
+                                0
+                            )
+                            .await
+                    );
+                    last_feedback = Instant::now();
+                }
             }
         }
         if !stream.is_stopped() {

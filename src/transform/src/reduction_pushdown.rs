@@ -59,6 +59,12 @@ use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 pub struct ReductionPushdown;
 
 impl crate::Transform for ReductionPushdown {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "reduction_pushdown")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -66,7 +72,9 @@ impl crate::Transform for ReductionPushdown {
     ) -> Result<(), crate::TransformError> {
         // `try_visit_mut_pre` is used here because after pushing down a reduction,
         // we want to see if we can push the same reduction further down.
-        relation.try_visit_mut_pre(&mut |e| self.action(e))
+        let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 
@@ -329,9 +337,7 @@ fn try_push_reduce_through_join(
         .map(|(idx, col)| new_join_mapper.map_column_to_global(col, idx))
         .collect::<Vec<_>>();
 
-    return Some(
-        MirRelationExpr::join_scalars(new_inputs, new_equivalences).project(new_projection),
-    );
+    Some(MirRelationExpr::join_scalars(new_inputs, new_equivalences).project(new_projection))
 }
 
 /// Returns None if `expr` does not belong to exactly one component.

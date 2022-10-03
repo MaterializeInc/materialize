@@ -31,7 +31,7 @@ use mz_compute_client::command::{
 };
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
-use mz_compute_client::response::{ComputeResponse, PeekResponse, TailResponse};
+use mz_compute_client::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
@@ -58,11 +58,11 @@ pub struct ComputeState {
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub sink_tokens: HashMap<GlobalId, SinkToken>,
-    /// Shared buffer with TAIL operator instances by which they can respond.
+    /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
     ///
-    /// The entries are pairs of sink identifier (to identify the tail instance)
+    /// The entries are pairs of sink identifier (to identify the subscribe instance)
     /// and the response itself.
-    pub tail_response_buffer: Rc<RefCell<Vec<(GlobalId, TailResponse)>>>,
+    pub subscribe_response_buffer: Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
@@ -95,8 +95,8 @@ pub struct ActiveComputeState<'a, A: Allocate> {
 pub struct SinkToken {
     /// The underlying token.
     pub token: Box<dyn Any>,
-    /// Whether the sink token is keeping a tail alive.
-    pub is_tail: bool,
+    /// Whether the sink token is keeping a subscribe alive.
+    pub is_subscribe: bool,
 }
 
 impl<'a, A: Allocate> ActiveComputeState<'a, A> {
@@ -170,15 +170,16 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 }
             }
 
-            crate::render::build_compute_dataflow(
-                self.timely_worker,
-                &mut self.compute_state,
-                dataflow,
-            );
+            crate::render::build_compute_dataflow(self.timely_worker, self.compute_state, dataflow);
         }
     }
 
     fn handle_allow_compaction(&mut self, list: Vec<(GlobalId, Antichain<Timestamp>)>) {
+        // Report the final uppers for collections we allow to compact to the empty frontier, to
+        // give clients that don't observe all commands the opportunity to clean up their state for
+        // these collections.
+        let mut final_uppers = Vec::new();
+
         for (id, frontier) in list {
             if frontier.is_empty() {
                 // Indicates that we may drop `id`, as there are no more valid times to read.
@@ -201,11 +202,18 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                         logger.log(ComputeEvent::Frontier(id, *time, -1));
                     }
                 }
+                if !frontier.is_empty() {
+                    final_uppers.push((id, Antichain::new()));
+                }
             } else {
                 self.compute_state
                     .traces
                     .allow_compaction(id, frontier.borrow());
             }
+        }
+
+        if !final_uppers.is_empty() {
+            self.send_compute_response(ComputeResponse::FrontierUppers(final_uppers));
         }
     }
 
@@ -316,28 +324,28 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         if !logging.log_logging {
             // Construct logging dataflows and endpoints before registering any.
             t_traces.extend(logging::timely::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&t_linked),
                 t_activator.clone(),
             ));
             r_traces.extend(logging::reachability::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&r_linked),
                 r_activator.clone(),
             ));
             d_traces.extend(logging::differential::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&d_linked),
                 d_activator.clone(),
             ));
             c_traces.extend(logging::compute::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 Rc::clone(&c_linked),
@@ -457,28 +465,28 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             // Create log processing dataflows after registering logging so we can log the
             // logging.
             t_traces.extend(logging::timely::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 t_linked,
                 t_activator,
             ));
             r_traces.extend(logging::reachability::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 r_linked,
                 r_activator,
             ));
             d_traces.extend(logging::differential::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 d_linked,
                 d_activator,
             ));
             c_traces.extend(logging::compute::construct(
-                &mut self.timely_worker,
+                self.timely_worker,
                 logging,
                 self.compute_state,
                 c_linked,
@@ -571,7 +579,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             }
 
             new_uppers.push((id, new_frontier.clone()));
-            prev_frontier.clone_from(&new_frontier);
+            prev_frontier.clone_from(new_frontier);
         };
 
         let mut new_frontier = Antichain::new();
@@ -629,11 +637,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
     }
 
-    /// Scan the shared tail response buffer, and forward results along.
-    pub fn process_tails(&mut self) {
-        let mut tail_responses = self.compute_state.tail_response_buffer.borrow_mut();
-        for (sink_id, response) in tail_responses.drain(..) {
-            self.send_compute_response(ComputeResponse::TailResponse(sink_id, response));
+    /// Scan the shared subscribe response buffer, and forward results along.
+    pub fn process_subscribes(&mut self) {
+        let mut subscribe_responses = self.compute_state.subscribe_response_buffer.borrow_mut();
+        for (sink_id, response) in subscribe_responses.drain(..) {
+            self.send_compute_response(ComputeResponse::SubscribeResponse(sink_id, response));
         }
     }
 

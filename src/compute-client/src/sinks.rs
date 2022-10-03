@@ -76,7 +76,7 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum ComputeSinkConnection<S = ()> {
-    Tail(TailSinkConnection),
+    Subscribe(SubscribeSinkConnection),
     Persist(PersistSinkConnection<S>),
 }
 
@@ -84,7 +84,7 @@ impl<S> ComputeSinkConnection<S> {
     /// Returns the name of the sink connection.
     pub fn name(&self) -> &'static str {
         match self {
-            ComputeSinkConnection::Tail(_) => "tail",
+            ComputeSinkConnection::Subscribe(_) => "subscribe",
             ComputeSinkConnection::Persist(_) => "persist",
         }
     }
@@ -95,7 +95,7 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
         use proto_compute_sink_connection::Kind;
         ProtoComputeSinkConnection {
             kind: Some(match self {
-                ComputeSinkConnection::Tail(_tail) => Kind::Tail(()),
+                ComputeSinkConnection::Subscribe(_) => Kind::Subscribe(()),
                 ComputeSinkConnection::Persist(persist) => Kind::Persist(persist.into_proto()),
             }),
         }
@@ -107,14 +107,14 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoComputeSinkConnection::kind"))?;
         Ok(match kind {
-            Kind::Tail(_tail) => ComputeSinkConnection::Tail(TailSinkConnection {}),
+            Kind::Subscribe(_) => ComputeSinkConnection::Subscribe(SubscribeSinkConnection {}),
             Kind::Persist(persist) => ComputeSinkConnection::Persist(persist.into_rust()?),
         })
     }
 }
 
 #[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct TailSinkConnection {}
+pub struct SubscribeSinkConnection {}
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PersistSinkConnection<S> {

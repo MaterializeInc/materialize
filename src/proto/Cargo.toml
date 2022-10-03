@@ -3,8 +3,8 @@ name = "mz-proto"
 description = "Protocol buffer libraries for Materialize."
 version = "0.0.0"
 license = "Apache-2.0"
-edition = "2021"
-rust-version = "1.63.0"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

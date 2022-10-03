@@ -33,6 +33,7 @@ where
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
     type Diff = D;
+    type OffsetCommitter = S::OffsetCommitter;
     type Connection = S::Connection;
 
     fn new(
@@ -46,7 +47,7 @@ where
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<(Self, Self::OffsetCommitter), anyhow::Error> {
         S::new(
             source_name,
             source_id,
@@ -59,7 +60,7 @@ where
             metrics,
             connection_context,
         )
-        .map(Self)
+        .map(|(s, sc)| (Self(s), sc))
     }
 
     fn get_next_message(

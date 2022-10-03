@@ -237,10 +237,10 @@ where
     }
 
     fn from_proto(proto: Vec<T>) -> Result<Self, TryFromProtoError> {
-        Ok(proto
+        proto
             .into_iter()
             .map(T::into_rust)
-            .collect::<Result<HashMap<_, _>, _>>()?)
+            .collect::<Result<HashMap<_, _>, _>>()
     }
 }
 
@@ -277,10 +277,10 @@ where
     }
 
     fn from_proto(proto: Vec<T>) -> Result<Self, TryFromProtoError> {
-        Ok(proto
+        proto
             .into_iter()
             .map(T::into_rust)
-            .collect::<Result<BTreeMap<_, _>, _>>()?)
+            .collect::<Result<BTreeMap<_, _>, _>>()
     }
 }
 
@@ -522,7 +522,7 @@ pub fn protobuf_roundtrip<R, P>(val: &R) -> anyhow::Result<R>
 where
     P: ProtoType<R> + ::prost::Message + Default,
 {
-    let vec = P::from_rust(&val).encode_to_vec();
+    let vec = P::from_rust(val).encode_to_vec();
     let val = P::decode(&*vec)?.into_rust()?;
     Ok(val)
 }

@@ -39,7 +39,7 @@ use mz_repr::{Diff, GlobalId};
 use mz_service::client::GenericClient;
 
 use crate::protocol::client::{
-    ExportSinkCommand, IngestSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
+    CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
 use crate::types::sources::SourceData;
@@ -73,8 +73,8 @@ where
             build_info,
             command_rx,
             response_tx,
-            ingestions: BTreeMap::new(),
-            exports: BTreeMap::new(),
+            sources: BTreeMap::new(),
+            sinks: BTreeMap::new(),
             uppers: HashMap::new(),
             initialized: false,
             persist,
@@ -110,10 +110,10 @@ struct RehydrationTask<T> {
     command_rx: UnboundedReceiver<StorageCommand<T>>,
     /// A channel upon which responses from the storage host are delivered.
     response_tx: UnboundedSender<StorageResponse<T>>,
-    /// The ingestions that have been observed.
-    ingestions: BTreeMap<GlobalId, IngestSourceCommand<T>>,
+    /// The sources that have been observed.
+    sources: BTreeMap<GlobalId, CreateSourceCommand<T>>,
     /// The exports that have been observed.
-    exports: BTreeMap<GlobalId, ExportSinkCommand<T>>,
+    sinks: BTreeMap<GlobalId, CreateSinkCommand<T>>,
     /// The upper frontier information received.
     uppers: HashMap<GlobalId, Antichain<T>>,
     /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
@@ -170,7 +170,7 @@ where
             .await
             .expect("retry retries forever");
 
-        for ingest in self.ingestions.values_mut() {
+        for ingest in self.sources.values_mut() {
             let mut persist_clients = self.persist.lock().await;
             let persist_client = persist_clients
                 .open(ingest.description.storage_metadata.persist_location.clone())
@@ -184,7 +184,7 @@ where
                 .await;
         }
 
-        for export in self.exports.values_mut() {
+        for export in self.sinks.values_mut() {
             let mut persist_clients = self.persist.lock().await;
             let persist_client = persist_clients
                 .open(
@@ -213,8 +213,8 @@ where
 
         // Rehydrate all commands.
         let mut commands = vec![
-            StorageCommand::IngestSources(self.ingestions.values().cloned().collect()),
-            StorageCommand::ExportSinks(self.exports.values().cloned().collect()),
+            StorageCommand::CreateSources(self.sources.values().cloned().collect()),
+            StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
         ];
         if self.initialized {
             commands.push(StorageCommand::InitializationComplete)
@@ -245,7 +245,7 @@ where
                     Some(response) => response,
                 };
 
-                self.send_response(client, response).await
+                self.send_response(client, response)
             }
         }
     }
@@ -257,13 +257,13 @@ where
     ) -> RehydrationTaskState {
         for command in commands {
             if let Err(e) = client.send(command).await {
-                return self.send_response(client, Err(e)).await;
+                return self.send_response(client, Err(e));
             }
         }
         RehydrationTaskState::Pump { client }
     }
 
-    async fn send_response(
+    fn send_response(
         &mut self,
         client: StorageGrpcClient,
         response: Result<StorageResponse<T>, anyhow::Error>,
@@ -290,17 +290,17 @@ where
     fn absorb_command(&mut self, command: &StorageCommand<T>) {
         match command {
             StorageCommand::InitializationComplete => self.initialized = true,
-            StorageCommand::IngestSources(ingestions) => {
+            StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {
-                    self.ingestions.insert(ingestion.id, ingestion.clone());
+                    self.sources.insert(ingestion.id, ingestion.clone());
                     // Initialize the uppers we are tracking
                     self.uppers
                         .insert(ingestion.id, Antichain::from_elem(T::minimum()));
                 }
             }
-            StorageCommand::ExportSinks(exports) => {
+            StorageCommand::CreateSinks(exports) => {
                 for export in exports {
-                    self.exports.insert(export.id, export.clone());
+                    self.sinks.insert(export.id, export.clone());
                     // Initialize the uppers we are tracking
                     self.uppers
                         .insert(export.id, Antichain::from_elem(T::minimum()));
@@ -309,7 +309,7 @@ where
             StorageCommand::AllowCompaction(frontiers) => {
                 for (id, frontier) in frontiers {
                     if frontier.is_empty() {
-                        self.ingestions.remove(id);
+                        self.sources.remove(id);
                         self.uppers.remove(id);
                     }
                 }

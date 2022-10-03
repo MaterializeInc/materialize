@@ -38,8 +38,11 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"d": 18135, "ts": 1566865029000000}
 {"d": 0, "ts": 65000000}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE data FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW data_view as SELECT * from data

@@ -775,7 +775,7 @@ impl RustType<proto_plan::ProtoRowDiffVec> for Vec<(Row, mz_repr::Timestamp, i64
     }
 
     fn from_proto(proto: proto_plan::ProtoRowDiffVec) -> Result<Self, TryFromProtoError> {
-        Ok(proto.rows.into_rust()?)
+        proto.rows.into_rust()
     }
 }
 
@@ -908,16 +908,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
     /// An empty list of arrangement keys indicates that only a `Collection` stream can
     /// be assumed to exist.
-    #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
-        name = "mir_to_lir",
-        skip_all,
-        fields(
-            dataflow.name = debug_info.debug_name,
-            dataflow.id = %debug_info.id,
-        )
-    )]
     pub fn from_mir(
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
@@ -1482,6 +1472,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
     }
 
     /// Convert the dataflow description into one that uses render plans.
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "debug",
+        skip_all,
+        fields(path.segment = "mir_to_lir")
+    )]
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
     ) -> Result<DataflowDescription<Self>, ()> {
@@ -1583,6 +1579,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 source.arguments.operators = Some(mfp);
             }
         }
+
+        mz_repr::explain_new::trace_plan(&dataflow);
 
         Ok(dataflow)
     }

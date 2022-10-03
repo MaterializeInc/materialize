@@ -43,10 +43,10 @@ impl MemMultiRegistry {
     ///
     /// TODO: Replace this with PersistClientCache once they're in the same
     /// crate.
-    pub async fn blob(&mut self, path: &str) -> MemBlob {
+    pub fn blob(&mut self, path: &str) -> MemBlob {
         if let Some(blob) = self.blob_by_path.get(path) {
             MemBlob::open(MemBlobConfig {
-                core: Arc::clone(&blob),
+                core: Arc::clone(blob),
             })
         } else {
             let blob = Arc::new(tokio::sync::Mutex::new(MemBlobCore::default()));
@@ -83,7 +83,7 @@ impl MemBlobCore {
             }
 
             f(BlobMetadata {
-                key: &key,
+                key,
                 size_in_bytes: u64::cast_from(value.len()),
             });
         }
@@ -262,7 +262,7 @@ mod tests {
         blob_impl_test(move |path| {
             let path = path.to_owned();
             let registry = Arc::clone(&registry);
-            async move { Ok(registry.lock().await.blob(&path).await) }
+            async move { Ok(registry.lock().await.blob(&path)) }
         })
         .await
     }

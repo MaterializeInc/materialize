@@ -371,7 +371,7 @@ impl CsrConnection {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
             let root_cert = root_cert.get_string(secrets_reader).await?;
-            let root_cert = Certificate::from_pem(&root_cert.as_bytes())?;
+            let root_cert = Certificate::from_pem(root_cert.as_bytes())?;
             client_config = client_config.add_root_certificate(root_cert);
         }
 
@@ -614,14 +614,12 @@ impl PostgresConnection {
         {
             let secret = secrets_reader.read(ssh_secret_id).await?;
             let keyset = mz_ore::ssh_key::SshKeyset::from_bytes(&secret)?;
-            let public_key = std::str::from_utf8(keyset.primary().ssh_public_key())?.to_string();
-            let private_key = std::str::from_utf8(keyset.primary().ssh_private_key())?.to_string();
+            let keypair = keyset.primary().clone();
             mz_postgres_util::SshTunnelConfig::Tunnel {
                 host: ssh_tunnel.host.clone(),
                 port: ssh_tunnel.port,
                 user: ssh_tunnel.user.clone(),
-                public_key,
-                private_key,
+                keypair,
             }
         } else {
             mz_postgres_util::SshTunnelConfig::Direct

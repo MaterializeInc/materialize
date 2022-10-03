@@ -57,7 +57,7 @@ use mz_stash::{self, StashError, TypedCollection};
 
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::protocol::client::{
-    ExportSinkCommand, IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
+    CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
     StorageCommand, StorageResponse, Update,
 };
 use crate::types::errors::DataflowError;
@@ -477,9 +477,11 @@ impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalcu
         remap_write.fetch_recent_upper().await;
         data_write.fetch_recent_upper().await;
 
-        self.collection_metadata
-            .get_resume_upper_from_handles(remap_write, data_write, &self.source_envelope)
-            .await
+        self.collection_metadata.get_resume_upper_from_handles(
+            remap_write,
+            data_write,
+            &self.source_envelope,
+        )
     }
 }
 
@@ -487,7 +489,7 @@ impl CollectionMetadata {
     /// Calculate the point at which we can resume ingestion computing the greatest
     /// antichain that is less or equal to all state and output shard uppers,
     /// using pre-existing `WriteHandle`s
-    pub async fn get_resume_upper_from_handles<T>(
+    pub fn get_resume_upper_from_handles<T>(
         &self,
         remap_write: &mut WriteHandle<(), PartitionId, T, MzOffset>,
         data_write: &mut WriteHandle<SourceData, (), T, Diff>,
@@ -563,7 +565,6 @@ impl CollectionMetadata {
     {
         let (mut remap_write, mut data_write) = self.get_write_handles(persist).await;
         self.get_resume_upper_from_handles(&mut remap_write, &mut data_write, source_envelope)
-            .await
     }
 }
 
@@ -943,7 +944,7 @@ where
 
             // Advance the collection's `since` as requested.
             if let Some(since) = &description.since {
-                read.downgrade_since(&since).await;
+                read.downgrade_since(since).await;
             }
 
             let collection_state =
@@ -973,7 +974,7 @@ where
                     .storage_metadata
                     .get_resume_upper(&persist_client, &desc.desc.envelope)
                     .await;
-                let augmented_ingestion = IngestSourceCommand {
+                let augmented_ingestion = CreateSourceCommand {
                     id,
                     description: desc,
                     resume_upper,
@@ -989,7 +990,7 @@ where
                         ),
                     )
                     .await?;
-                client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
+                client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
             }
         }
 
@@ -1071,7 +1072,7 @@ where
                 .initial_as_of
                 .maybe_fast_forward(&from_since);
 
-            let cmd = ExportSinkCommand {
+            let cmd = CreateSinkCommand {
                 id,
                 description: StorageSinkDesc {
                     from,
@@ -1094,7 +1095,7 @@ where
             // Provision a storage host for the ingestion.
             let client = self.hosts.provision(id, host_config).await?;
 
-            client.send(StorageCommand::ExportSinks(vec![cmd]));
+            client.send(StorageCommand::CreateSinks(vec![cmd]));
         }
         Ok(())
     }
@@ -1161,7 +1162,7 @@ where
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates, batch_upper) in commands.iter() {
             for update in updates.iter() {
-                if !update.timestamp.less_than(&batch_upper) {
+                if !update.timestamp.less_than(batch_upper) {
                     return Err(StorageError::UpdateBeyondUpper(*id));
                 }
             }

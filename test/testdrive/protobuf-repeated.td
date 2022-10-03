@@ -34,7 +34,7 @@ message Repeated {
     repeated Message message = 9;
 }
 
-$ protobuf-compile-descriptors inputs=repeated.proto output=repeated.pb
+$ protobuf-compile-descriptors inputs=repeated.proto output=repeated.pb set-var=repeated-schema
 
 $ kafka-create-topic topic=repeated partitions=1
 
@@ -42,9 +42,12 @@ $ kafka-ingest topic=repeated format=protobuf descriptor-file=repeated.pb messag
 {"bool": [true, false], "int32": [2, 1], "int64": [2, 1], "float": [3.2, 1.0], "double": [3.2, 1.0], "bytes": ["YmJi", "YWFh"], "string": ["bbb", "aaa"], "enum": ["ENUM1", "ENUM0"], "message": [{"m1": 4, "m2": 2}, {"m1": 2, "m2": 4}]}
 {}
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE repeated FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-repeated-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Repeated' USING SCHEMA FILE '${testdrive.temp-dir}/repeated.pb'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-repeated-${testdrive.seed}')
+  FORMAT PROTOBUF MESSAGE '.Repeated' USING SCHEMA '${repeated-schema}'
 
 > SHOW COLUMNS FROM repeated
 name       nullable  type

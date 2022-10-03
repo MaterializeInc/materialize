@@ -19,9 +19,12 @@ message Maps {
   map<string, google.protobuf.Int64Value> message_map = 2;
 }
 
-$ protobuf-compile-descriptors inputs=maps.proto output=maps.pb
+$ protobuf-compile-descriptors inputs=maps.proto output=maps.pb set-var=maps-schema
+
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 ! CREATE SOURCE maps FROM
-  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-maps-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Maps' USING SCHEMA FILE '${testdrive.temp-dir}/maps.pb'
+  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-maps-${testdrive.seed}')
+  FORMAT PROTOBUF MESSAGE '.Maps' USING SCHEMA '${maps-schema}'
 contains:Protobuf map fields are not supported

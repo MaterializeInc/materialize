@@ -369,7 +369,7 @@ fn sql_impl_func(expr: &'static str) -> Operation<HirScalarExpr> {
     let invoke = sql_impl(expr);
     Operation::variadic(move |ecx, args| {
         let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
-        let mut out = invoke(&ecx.qcx, types)?;
+        let mut out = invoke(ecx.qcx, types)?;
         out.splice_parameters(&args, 0);
         Ok(out)
     })
@@ -423,7 +423,7 @@ fn sql_impl_table_func_inner(
             ecx.require_unsafe_mode(feature_name)?;
         }
         let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
-        let (mut expr, scope) = invoke(&ecx.qcx, types)?;
+        let (mut expr, scope) = invoke(ecx.qcx, types)?;
         expr.splice_parameters(&args, 0);
         Ok(TableFuncPlan {
             expr,
@@ -564,7 +564,7 @@ impl ParamList {
 
         // Ensure a polymorphic solution exists (non-polymorphic functions have
         // trivial polymorphic solutions that evaluate to `None`).
-        PolymorphicSolution::new(ecx, typs, &self).is_some()
+        PolymorphicSolution::new(ecx, typs, self).is_some()
     }
 
     /// Validates that the number of input elements are viable for `self`.
@@ -642,7 +642,7 @@ impl std::ops::Index<usize> for ParamList {
     fn index(&self, i: usize) -> &Self::Output {
         match self {
             Self::Exact(p) => &p[i],
-            Self::Variadic(p) => &p,
+            Self::Variadic(p) => p,
         }
     }
 }
@@ -915,7 +915,7 @@ impl GetReturnType for HirScalarExpr {
             .contrive_coercible_exprs()
             .into_iter()
             .map(|c| {
-                let expr = c.type_as_any(&ecx).expect("c is typed NULL");
+                let expr = c.type_as_any(ecx).expect("c is typed NULL");
                 ecx.column_type(&expr)
             })
             .collect();
@@ -1113,7 +1113,7 @@ fn find_match<'a, R: std::fmt::Debug>(
             .collect();
 
         if matching_impls.len() == 1 {
-            return Ok(&matching_impls[0]);
+            return Ok(matching_impls[0]);
         }
     }
 
@@ -1873,6 +1873,11 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         "chr" => Scalar {
             params!(Int32) => UnaryFunc::Chr(func::Chr), 1621;
         },
+        "date" => Scalar {
+            params!(String) => UnaryFunc::CastStringToDate(func::CastStringToDate), oid::FUNC_DATE_FROM_TEXT;
+            params!(Timestamp) => UnaryFunc::CastTimestampToDate(func::CastTimestampToDate), 2029;
+            params!(TimestampTz) => UnaryFunc::CastTimestampTzToDate(func::CastTimestampTzToDate), 1178;
+        },
         "date_bin" => Scalar {
             params!(Interval, Timestamp) => Operation::binary(|ecx, stride, source| {
                 ecx.require_unsafe_mode("binary date_bin")?;
@@ -2442,7 +2447,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(UInt16) => AggregateFunc::MaxUInt16, oid::FUNC_MAX_UINT16_OID;
             params!(UInt32) => AggregateFunc::MaxUInt32, oid::FUNC_MAX_UINT32_OID;
             params!(UInt64) => AggregateFunc::MaxUInt64, oid::FUNC_MAX_UINT64_OID;
-            params!(MzTimestamp) => AggregateFunc::MaxMzTimestamp, oid::FUNC_MAX_MZTIMESTAMP_OID;
+            params!(MzTimestamp) => AggregateFunc::MaxMzTimestamp, oid::FUNC_MAX_MZ_TIMESTAMP_OID;
             params!(Float32) => AggregateFunc::MaxFloat32, 2119;
             params!(Float64) => AggregateFunc::MaxFloat64, 2120;
             params!(String) => AggregateFunc::MaxString, 2129;
@@ -2461,7 +2466,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(UInt16) => AggregateFunc::MinUInt16, oid::FUNC_MIN_UINT16_OID;
             params!(UInt32) => AggregateFunc::MinUInt32, oid::FUNC_MIN_UINT32_OID;
             params!(UInt64) => AggregateFunc::MinUInt64, oid::FUNC_MIN_UINT64_OID;
-            params!(MzTimestamp) => AggregateFunc::MinMzTimestamp, oid::FUNC_MIN_MZTIMESTAMP_OID;
+            params!(MzTimestamp) => AggregateFunc::MinMzTimestamp, oid::FUNC_MIN_MZ_TIMESTAMP_OID;
             params!(Float32) => AggregateFunc::MinFloat32, 2135;
             params!(Float64) => AggregateFunc::MinFloat64, 2136;
             params!(String) => AggregateFunc::MinString, 2145;
@@ -3464,7 +3469,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Lt, 3242;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lt => Bool, 1072;
             params!(RecordAny, RecordAny) => BinaryFunc::Lt => Bool, 2990;
-            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lt =>Bool, oid::FUNC_MZTIMESTAMP_LT_MZTIMESTAMP_OID;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lt =>Bool, oid::FUNC_MZ_TIMESTAMP_LT_MZ_TIMESTAMP_OID;
         },
         "<=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Lte, 1755;
@@ -3491,7 +3496,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Lte, 3244;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lte => Bool, 1074;
             params!(RecordAny, RecordAny) => BinaryFunc::Lte => Bool, 2992;
-            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lte =>Bool, oid::FUNC_MZTIMESTAMP_LTE_MZTIMESTAMP_OID;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lte =>Bool, oid::FUNC_MZ_TIMESTAMP_LTE_MZ_TIMESTAMP_OID;
         },
         ">" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gt, 1756;
@@ -3518,7 +3523,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Gt, 3243;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gt => Bool, 1073;
             params!(RecordAny, RecordAny) => BinaryFunc::Gt => Bool, 2991;
-            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gt =>Bool, oid::FUNC_MZTIMESTAMP_GT_MZTIMESTAMP_OID;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gt =>Bool, oid::FUNC_MZ_TIMESTAMP_GT_MZ_TIMESTAMP_OID;
         },
         ">=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gte, 1757;
@@ -3545,7 +3550,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::Gte, 3245;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gte => Bool, 1075;
             params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
-            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gte =>Bool, oid::FUNC_MZTIMESTAMP_GTE_MZTIMESTAMP_OID;
+            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gte =>Bool, oid::FUNC_MZ_TIMESTAMP_GTE_MZ_TIMESTAMP_OID;
         },
         // Warning! If you are writing functions here that do not simply use
         // `BinaryFunc::Eq`, you will break row equality (used e.g. DISTINCT
@@ -3576,7 +3581,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ListAny, ListAny) => BinaryFunc::Eq => Bool, oid::FUNC_LIST_EQ_OID;
             params!(ArrayAny, ArrayAny) => BinaryFunc::Eq => Bool, 1070;
             params!(RecordAny, RecordAny) => BinaryFunc::Eq => Bool, 2988;
-            params!(MzTimestamp, MzTimestamp) => BinaryFunc::Eq => Bool, oid::FUNC_MZTIMESTAMP_EQ_MZTIMESTAMP_OID;
+            params!(MzTimestamp, MzTimestamp) => BinaryFunc::Eq => Bool, oid::FUNC_MZ_TIMESTAMP_EQ_MZ_TIMESTAMP_OID;
         },
         "<>" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::NotEq, 1753;
@@ -3603,7 +3608,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
             params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq => Bool, 1071;
             params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;
-            params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq=>Bool, oid::FUNC_MZTIMESTAMP_NOT_EQ_MZTIMESTAMP_OID;
+            params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq=>Bool, oid::FUNC_MZ_TIMESTAMP_NOT_EQ_MZ_TIMESTAMP_OID;
         }
     }
 });
@@ -3611,7 +3616,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
 /// Resolves the operator to a set of function implementations.
 pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], PlanError> {
     match OP_IMPLS.get(op) {
-        Some(Func::Scalar(impls)) => Ok(&impls),
+        Some(Func::Scalar(impls)) => Ok(impls),
         Some(_) => unreachable!("all operators must be scalar functions"),
         // TODO: these require sql arrays
         // JsonContainsAnyFields

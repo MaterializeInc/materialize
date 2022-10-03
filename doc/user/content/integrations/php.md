@@ -13,7 +13,7 @@ Materialize is **wire-compatible** with PostgreSQL, which means that PHP applica
 
 ## Connect
 
-To [connect](https://www.php.net/manual/en/ref.pdo-pgsql.connection.php) to a local Materialize instance using `PDO_PGSQL`:
+To [connect](https://www.php.net/manual/en/ref.pdo-pgsql.connection.php) to Materialize using `PDO_PGSQL`:
 
 ```php
 <?php
@@ -35,16 +35,16 @@ function connect(string $host, int $port, string $db, string $user, string $pass
     }
 }
 
-$connection = connect('localhost', 6875, 'materialize', 'materialize', 'materialize');
+$connection = connect('MATERIALIZE_HOST', 6875, 'materialize', 'MATERIALIZE_USERNAME', 'MATERIALIZE_PASSWORD');
 ```
 
 You can add the above code to a `config.php` file and then include it in your application with `require 'connect.php';`.
 
 ## Stream
 
-To take full advantage of incrementally updated materialized views from a PHP application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
+To take full advantage of incrementally updated materialized views from a PHP application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`TAIL` with `FETCH`](/sql/tail/#tailing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
 
 ```php
 <?php
@@ -54,21 +54,21 @@ require 'connect.php';
 // Begin a transaction
 $connection->beginTransaction();
 // Declare a cursor
-$statement = $connection->prepare('DECLARE c CURSOR FOR TAIL demo');
+$statement = $connection->prepare('DECLARE c CURSOR FOR SUBSCRIBE demo');
 // Execute the statement
 $statement->execute();
 
 /* Fetch all of the remaining rows in the result set */
 while (true) {
     //$result = $statement->fetchAll();
-    $tail = $connection->prepare('FETCH ALL c');
-    $tail->execute();
-    $result = $tail->fetchAll(PDO::FETCH_ASSOC);
+    $subscribe = $connection->prepare('FETCH ALL c');
+    $subscribe->execute();
+    $result = $subscribe->fetchAll(PDO::FETCH_ASSOC);
     print_r($result);
 }
 ```
 
-The [TAIL output format](/sql/tail/#output) of `result` is an array of view updates objects. When a row of a tailed view is **updated,** two objects will show up in the `result` array:
+The [SUBSCRIBE output format](/sql/subscribe/#output) of `result` is an array of view updates objects. When a row of a subscribed view is **updated,** two objects will show up in the `result` array:
 
 ```php
     ...
@@ -101,7 +101,7 @@ An `mz_diff` value of `-1` indicates Materialize is deleting one row with the in
 
 Querying Materialize is identical to querying a PostgreSQL database: PHP executes the query, and Materialize returns the state of the view, source, or table at that point in time.
 
-Because Materialize maintains materialized views in memory, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
 
 To query a view `my_view` using a `SELECT` statement:
 

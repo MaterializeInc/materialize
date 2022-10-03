@@ -27,7 +27,7 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
 name       nullable  type
 --------------------------
 data       false     bytea
-offset     false     bigint
+offset     false     uint8
 
 > SELECT * FROM data
 data           offset

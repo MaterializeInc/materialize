@@ -12,8 +12,8 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE array_type (f1 text[]);
-INSERT INTO array_type VALUES ('{foo, null}');
+CREATE TABLE array_type (f1 text[], f2 INTEGER PRIMARY KEY);
+INSERT INTO array_type VALUES ('{foo, null}', 0);
 
 $ schema-registry-wait-schema schema=postgres.public.array_type-value
 
@@ -21,8 +21,11 @@ $ schema-registry-wait-schema schema=postgres.public.array_type-value
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
+> CREATE CONNECTION IF NOT EXISTS kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE array_type
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.array_type'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.array_type')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 

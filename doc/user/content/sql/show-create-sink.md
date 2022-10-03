@@ -1,10 +1,9 @@
 ---
 title: "SHOW CREATE SINK"
 description: "`SHOW CREATE SINK` returns the statement used to create the sink."
-draft: true
-#menu:
-  #main:
-    #parent: commands
+menu:
+  main:
+    parent: commands
 ---
 
 `SHOW CREATE SINK` returns the DDL statement used to create the sink.
@@ -36,7 +35,7 @@ SHOW CREATE SINK my_view_sink;
 ```nofmt
                name              |                                                                                                        create_sql
 ---------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- materialize.public.my_view_sink | CREATE SINK "materialize"."public"."my_view_sink" FROM "materialize"."public"."my_view" INTO KAFKA CONNECTION "materialize"."public"."kafka_conn" (TOPIC 'my_view_sink') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
+ materialize.public.my_view_sink | CREATE SINK "materialize"."public"."my_view_sink" FROM "materialize"."public"."my_view" INTO KAFKA CONNECTION "materialize"."public"."kafka_conn" (TOPIC 'my_view_sink') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection ENVELOPE DEBEZIUM
 ```
 
 ## Related pages

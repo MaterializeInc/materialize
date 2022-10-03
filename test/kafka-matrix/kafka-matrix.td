@@ -13,8 +13,11 @@
 
 $ kafka-create-topic topic=input_csv
 
+> CREATE CONNECTION kafka_conn
+  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
 > CREATE SOURCE input_csv (first, second)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_csv-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_csv-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS;
 
 $ kafka-ingest format=bytes topic=input_csv
@@ -34,13 +37,13 @@ message Input {
     string field = 1;
 }
 
-$ protobuf-compile-descriptors inputs=input.proto output=input.pb
+$ protobuf-compile-descriptors inputs=input.proto output=input.pb set-var=input-schema
 
 $ kafka-create-topic topic=input_proto
 
 > CREATE SOURCE input_proto
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_proto-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Input' USING SCHEMA FILE '${testdrive.temp-dir}/input.pb'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_proto-${testdrive.seed}')
+  FORMAT PROTOBUF MESSAGE '.Input' USING SCHEMA '${input-schema}'
 
 $ kafka-ingest format=protobuf topic=input_proto message=Input descriptor-file=input.pb timestamp=1
 {"field": "a"}
@@ -97,7 +100,7 @@ $ kafka-ingest format=avro topic=input_avro schema=${schema} timestamp=1
   URL '${testdrive.schema-registry-url}';
 
 > CREATE SOURCE input_avro
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input_avro-${testdrive.seed}'
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_avro-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 

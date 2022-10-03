@@ -96,7 +96,7 @@ pub struct AwsConfig {
 impl RustType<ProtoAwsConfig> for AwsConfig {
     fn into_proto(&self) -> ProtoAwsConfig {
         ProtoAwsConfig {
-            credentials: Some((&self.credentials).into_proto()),
+            credentials: Some(self.credentials.into_proto()),
             region: self.region.clone(),
             role: self.role.into_proto(),
             endpoint: self.endpoint.into_proto(),

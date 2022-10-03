@@ -689,13 +689,7 @@ fn to_metadata_row(
             for item in metadata_items.iter() {
                 match item {
                     IncludedColumnSource::Partition => packer.push(Datum::from(partition)),
-                    IncludedColumnSource::Offset => {
-                        // note this is bitwise cast, so offsets > i64::MAX will be
-                        // rendered as negative
-                        // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
-                        // is resolved.
-                        packer.push(Datum::from(position as i64))
-                    }
+                    IncludedColumnSource::Offset => packer.push(Datum::UInt64(position)),
                     IncludedColumnSource::Timestamp => {
                         let ts =
                             upstream_time_millis.expect("kafka sources always have upstream_time");
@@ -721,11 +715,11 @@ fn to_metadata_row(
                                 for (k, v) in headers {
                                     match v {
                                         Some(v) => r.push_list_with(|record_row| {
-                                            record_row.push(Datum::String(&k));
-                                            record_row.push(Datum::Bytes(&v));
+                                            record_row.push(Datum::String(k));
+                                            record_row.push(Datum::Bytes(v));
                                         }),
                                         None => r.push_list_with(|record_row| {
-                                            record_row.push(Datum::String(&k));
+                                            record_row.push(Datum::String(k));
                                             record_row.push(Datum::Null);
                                         }),
                                     }
