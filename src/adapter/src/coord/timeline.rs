@@ -434,7 +434,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         CatalogItem::Table(_)
                         | CatalogItem::Source(_)
                         | CatalogItem::MaterializedView(_)
-                        | CatalogItem::StorageCollection(_) => {
+                        | CatalogItem::StorageManagedTable(_) => {
                             id_bundle.storage_ids.insert(entry.id());
                         }
                         CatalogItem::Index(index) => {
@@ -538,7 +538,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     CatalogItem::Log(_) => {
                         timelines.insert(id, Timeline::EpochMilliseconds);
                     }
-                    CatalogItem::StorageCollection(_) => {
+                    CatalogItem::StorageManagedTable(_) => {
                         timelines.insert(id, Timeline::EpochMilliseconds);
                     }
                     CatalogItem::Sink(_)

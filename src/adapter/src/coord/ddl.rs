@@ -561,7 +561,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::StorageCollection(_) => {}
+                        | CatalogItem::StorageManagedTable(_) => {}
                     }
                 }
                 Op::DropDatabase { .. } => {
@@ -607,7 +607,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::StorageCollection(_) => {}
+                        | CatalogItem::StorageManagedTable(_) => {}
                     }
                 }
                 Op::AlterSource { .. }

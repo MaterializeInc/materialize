@@ -615,7 +615,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await?;
                     builtin_table_updates.extend(self.catalog.pack_item_update(entry.id(), 1));
                 }
-                CatalogItem::StorageCollection(coll) => {
+                CatalogItem::StorageManagedTable(coll) => {
                     let collection_desc = CollectionDescription {
                         desc: coll.desc.clone(),
                         data_source: coll.data_source.clone().map(DataSource::Introspection),

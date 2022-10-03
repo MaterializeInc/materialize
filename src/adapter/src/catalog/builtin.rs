@@ -48,7 +48,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     View(&'static BuiltinView),
     Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
-    StorageCollection(&'static BuiltinStorageCollection),
+    StorageManagedTable(&'static BuiltinStorageManagedTable),
 }
 
 impl<T: TypeReference> Builtin<T> {
@@ -59,7 +59,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(view) => view.name,
             Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
-            Builtin::StorageCollection(coll) => coll.name,
+            Builtin::StorageManagedTable(coll) => coll.name,
         }
     }
 
@@ -70,7 +70,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(view) => view.schema,
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
-            Builtin::StorageCollection(coll) => coll.schema,
+            Builtin::StorageManagedTable(coll) => coll.schema,
         }
     }
 
@@ -81,7 +81,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(_) => CatalogItemType::View,
             Builtin::Type(_) => CatalogItemType::Type,
             Builtin::Func(_) => CatalogItemType::Func,
-            Builtin::StorageCollection(_) => CatalogItemType::Source,
+            Builtin::StorageManagedTable(_) => CatalogItemType::Source,
         }
     }
 }
@@ -101,7 +101,7 @@ pub struct BuiltinTable {
 }
 
 #[derive(Clone, Debug, Hash, Serialize)]
-pub struct BuiltinStorageCollection {
+pub struct BuiltinStorageManagedTable {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
@@ -151,7 +151,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::View(view) => view.fingerprint(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
-            Builtin::StorageCollection(coll) => coll.fingerprint(),
+            Builtin::StorageManagedTable(coll) => coll.fingerprint(),
         }
     }
 }
@@ -186,7 +186,7 @@ impl Fingerprint for &BuiltinView {
     }
 }
 
-impl Fingerprint for &BuiltinStorageCollection {
+impl Fingerprint for &BuiltinStorageManagedTable {
     fn fingerprint(&self) -> String {
         self.desc.fingerprint()
     }
@@ -1368,8 +1368,8 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
 });
 
-pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageCollection> =
-    Lazy::new(|| BuiltinStorageCollection {
+pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageManagedTable> =
+    Lazy::new(|| BuiltinStorageManagedTable {
         name: "mz_source_status_history",
         schema: MZ_CATALOG_SCHEMA,
         data_source: None,
@@ -1399,8 +1399,8 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
         ),
 });
 
-pub static MZ_STORAGE_SHARDS: Lazy<BuiltinStorageCollection> =
-    Lazy::new(|| BuiltinStorageCollection {
+pub static MZ_STORAGE_SHARDS: Lazy<BuiltinStorageManagedTable> =
+    Lazy::new(|| BuiltinStorageManagedTable {
         name: "mz_storage_shards",
         schema: MZ_INTERNAL_SCHEMA,
         data_source: Some(IntrospectionType::ShardMapping),
@@ -2453,8 +2453,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        // Builtin::StorageCollection(&MZ_SOURCE_STATUS_HISTORY),
-        Builtin::StorageCollection(&MZ_STORAGE_SHARDS),
+        // Builtin::StorageManagedTable(&MZ_SOURCE_STATUS_HISTORY),
+        Builtin::StorageManagedTable(&MZ_STORAGE_SHARDS),
     ]);
 
     builtins

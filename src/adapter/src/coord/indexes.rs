@@ -83,7 +83,7 @@ impl<T: TimestampManipulation> ComputeInstanceIndexOracle<'_, T> {
                     | CatalogItem::Table(_)
                     | CatalogItem::Log(_)
                     | CatalogItem::MaterializedView(_)
-                    | CatalogItem::StorageCollection(_) => {
+                    | CatalogItem::StorageManagedTable(_) => {
                         // Record that we are missing at least one index.
                         id_bundle.storage_ids.insert(id);
                     }

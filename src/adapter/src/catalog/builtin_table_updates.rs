@@ -232,7 +232,7 @@ impl CatalogState {
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
-            CatalogItem::StorageCollection(_) => {
+            CatalogItem::StorageManagedTable(_) => {
                 self.pack_source_update(id, oid, schema_id, name, "source", None, None, diff)
             }
         };
