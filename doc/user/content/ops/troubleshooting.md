@@ -14,20 +14,42 @@ helpful to monitor their output by `SUBSCRIBE`ing to their change stream, e.g.,
 by issuing a command `COPY (SUBSCRIBE (<query>) TO stdout`.
 Note that this additional monitoring may, however, itself affect performance.
 
+### Limitations on Introspection Sources and Views for Troubleshooting
+
+Importantly, the introspection sources and views used in the queries below
+should be considered subject to changes in the future without further notice.
+This is why these sources and views are all created in the `mz_internal`
+schema, and it is not possible to create higher-level views depending on them.
+
+Introspection sources are maintained by independently collecting internal logging
+information within each of the replicas of a cluster. Thus, in a multi-replica
+cluster, the queries below need to be directed to a specific replica by issuing
+the command `SET cluster_replica = <replica_name>`. Materialize also directly 
+exposes replica-specific introspection sources by suffixing the respective catalog
+relation names with a replica number. For example, `mz_internal.mz_compute_frontiers_1`
+corresponds to the introspection source `mz_internal.mz_compute_frontiers` in the
+first replica of the cluster.
+
+As a consequence of the above, you should expect the answers to the queries below
+to vary dependending on which cluster you are working in. In particular, indexes
+and dataflows are local to a cluster, so their introspection information will
+vary across clusters.
+
 ### How fast are my sources loading data?
 
-You can count the number of records accepted in a source or materialized view.
-Note that this makes less sense for a non-materialized, non-indexed view,
-as invoking it will create a new dataflow and run it to the point that
-it is caught up with its sources; that elapsed time may be informative,
-but it tells you something other than how fast a collection is populated.
+You can count the number of records accepted in a source, materialized view,
+or indexed view. Note that this makes less sense for a non-materialized,
+non-indexed view, as invoking it will create a new dataflow and run it to
+the point that it is caught up with its sources; that elapsed time may be
+informative, but it tells you something other than how fast a collection
+is populated.
 
 ```sql
 -- Report the number of records available from the materialization.
-SELECT count(*) FROM my_source_or_materialized_view;
+SELECT count(*) FROM my_source_or_materialized_or_indexed_view;
 ```
 
-This logging source indicates the upper frontier of materializations.
+The following introspection source indicates the upper frontier of materializations.
 
 This source provides timestamp-based progress, which reveals not the
 volume of data, but how closely the contents track source timestamps.
@@ -64,10 +86,21 @@ FROM (
 ORDER BY export_id, import_id;
 ```
 
+The above query shows the currently known frontiers, but not the wall-clock
+delays of propagating information within Materialize's compute layer once it
+it read out from storage. For the latter, the following introspection source
+is useful:
+```sql
+-- Histogram of wall-clock delays in propagating data obtained from 
+-- storage through materializations
+SELECT * FROM mz_internal.mz_worker_compute_delays;
+```
+
 ### Why is Materialize running so slowly?
 
 Materialize spends time in various dataflow operators maintaining
-materialized views. If Materialize is taking more time to update results than you expect, you can identify which operators
+materialized views or indexes. If Materialize is taking more time to update
+results than you expect, you can identify which operators
 take the largest total amount of time.
 
 ```sql
