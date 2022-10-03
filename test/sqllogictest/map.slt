@@ -24,7 +24,7 @@ CREATE TYPE custom AS MAP (KEY TYPE = text)
 query error KEY TYPE parameter required
 CREATE TYPE custom AS MAP (VALUE TYPE = bool)
 
-query error unknown catalog item 'customthing'
+query error Expected one of KEY or VALUE, found identifier "extra_type"
 CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool, extra_type=customthing)
 
 query error KEY TYPE must be of class type, but received pg_catalog.pg_enum which is of class view
