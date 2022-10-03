@@ -468,32 +468,54 @@ where
 
         let mut timings = Timings::default();
 
-        // populate our heap with the updates from the first part of each run
-        for (index, (part_desc, parts)) in runs.iter_mut().enumerate() {
+        // populate our heap with the updates from the first part of each run.
+        // we have the memory to fetch each part in parallel, so we spawn a
+        // task to fetch each one.
+        let mut initial_batch_parts = vec![];
+        for (part_desc, parts) in &mut runs {
             if let Some(part) = parts.next() {
-                let start = Instant::now();
-                let mut part = fetch_batch_part(
-                    shard_id,
-                    blob.as_ref(),
-                    &metrics,
-                    &metrics.read.compaction,
-                    &part.key,
-                    part_desc,
-                )
-                .await?;
-                timings.part_fetching += start.elapsed();
-                let start = Instant::now();
-                while let Some((k, v, mut t, d)) = part.next() {
-                    t.advance_by(desc.since().borrow());
-                    let d = D::decode(d);
-                    let k = k.to_vec();
-                    let v = v.to_vec();
-                    // default heap ordering is descending
-                    sorted_updates.push(Reverse((((k, v), t, d), index)));
-                    remaining_updates_by_run[index] += 1;
-                }
-                timings.heap_population += start.elapsed();
+                let shard_id = shard_id.clone();
+                let blob = Arc::clone(&blob);
+                let metrics = Arc::clone(&metrics);
+                let compaction_metrics = metrics.read.compaction.clone();
+                let key = part.key.clone();
+                let part_desc = (**part_desc).clone();
+
+                initial_batch_parts.push(mz_ore::task::spawn(
+                    || "compaction::initial_fetch_batch_part",
+                    async move {
+                        fetch_batch_part(
+                            &shard_id,
+                            blob.as_ref(),
+                            &metrics,
+                            &compaction_metrics,
+                            &key,
+                            &part_desc,
+                        )
+                        .await
+                    },
+                ));
             }
+        }
+
+        // serially add each fetched part into our heap. this will momentarily 2x
+        // the memory required to store a given part, so this is done one at a time.
+        for (index, part) in initial_batch_parts.into_iter().enumerate() {
+            let start = Instant::now();
+            let mut part = part.await??;
+            timings.part_fetching += start.elapsed();
+
+            let start = Instant::now();
+            while let Some((k, v, mut t, d)) = part.next() {
+                t.advance_by(desc.since().borrow());
+                let d = D::decode(d);
+                let k = k.to_vec();
+                let v = v.to_vec();
+                // default heap ordering is descending
+                sorted_updates.push(Reverse((((k, v), t, d), index)));
+                remaining_updates_by_run[index] += 1;
+            }
+            timings.heap_population += start.elapsed();
         }
 
         // repeatedly pull off the least element from our heap, refilling from the originating run
