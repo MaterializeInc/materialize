@@ -9,6 +9,7 @@
 
 //! CLI introspection tools for persist
 
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
@@ -17,13 +18,16 @@ use differential_dataflow::difference::Semigroup;
 use prost::Message;
 
 use mz_build_info::BuildInfo;
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 
-use crate::internal::paths::PartialRollupKey;
+use crate::internal::paths::{
+    BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
+};
 use crate::internal::state::{ProtoStateDiff, ProtoStateRollup};
 use crate::{Metrics, PersistConfig, ShardId, StateVersions};
 
@@ -138,6 +142,129 @@ pub async fn fetch_state_diffs(
     }
 
     Ok(live_states)
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+struct BlobCounts {
+    batch_part_count: usize,
+    batch_part_bytes: usize,
+    rollup_count: usize,
+    rollup_bytes: usize,
+}
+
+/// Fetches the blob count for given path
+pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow::Error> {
+    let blob = BlobConfig::try_from(blob_uri).await?;
+    let blob = blob.clone().open().await?;
+
+    let mut blob_counts = BTreeMap::new();
+    let () = blob
+        .list_keys_and_metadata(&BlobKeyPrefix::All.to_string(), &mut |metadata| {
+            match BlobKey::parse_ids(metadata.key) {
+                Ok((shard, PartialBlobKey::Batch(_, _))) => {
+                    let blob_count = blob_counts.entry(shard).or_insert_with(BlobCounts::default);
+                    blob_count.batch_part_count += 1;
+                    blob_count.batch_part_bytes += usize::cast_from(metadata.size_in_bytes);
+                }
+                Ok((shard, PartialBlobKey::Rollup(_, _))) => {
+                    let blob_count = blob_counts.entry(shard).or_insert_with(BlobCounts::default);
+                    blob_count.rollup_count += 1;
+                    blob_count.rollup_bytes += usize::cast_from(metadata.size_in_bytes);
+                }
+                Err(err) => {
+                    eprintln!("error parsing blob: {}", err);
+                }
+            }
+        })
+        .await?;
+
+    Ok(blob_counts)
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+struct UnreferencedBlobs {
+    batch_parts: BTreeSet<PartialBatchKey>,
+    rollups: BTreeSet<PartialRollupKey>,
+}
+
+/// Fetches the unreferenced blobs for given environment
+pub async fn unreferenced_blobs(
+    shard_id: &ShardId,
+    consensus_uri: &str,
+    blob_uri: &str,
+) -> Result<impl serde::Serialize, anyhow::Error> {
+    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+    let consensus =
+        ConsensusConfig::try_from(consensus_uri, 1, metrics.postgres_consensus.clone())?;
+    let consensus = consensus.clone().open().await?;
+    let blob = BlobConfig::try_from(blob_uri).await?;
+    let blob = blob.clone().open().await?;
+
+    let mut all_parts = vec![];
+    let mut all_rollups = vec![];
+    let () = blob
+        .list_keys_and_metadata(
+            &BlobKeyPrefix::Shard(shard_id).to_string(),
+            &mut |metadata| match BlobKey::parse_ids(metadata.key) {
+                Ok((_, PartialBlobKey::Batch(writer, part))) => {
+                    all_parts.push((PartialBatchKey::new(&writer, &part), writer.clone()));
+                }
+                Ok((_, PartialBlobKey::Rollup(seqno, rollup))) => {
+                    all_rollups.push(PartialRollupKey::new(seqno, &rollup));
+                }
+                Err(_) => {}
+            },
+        )
+        .await?;
+
+    let state_versions = StateVersions::new(cfg, consensus, blob, Arc::clone(&metrics));
+    let mut state_iter = match state_versions
+        .fetch_live_states::<K, V, u64, D>(&shard_id)
+        .await
+    {
+        Ok(state_iter) => state_iter,
+        Err(codec) => {
+            {
+                let mut kvtd = KVTD_CODECS.lock().expect("lockable");
+                *kvtd = codec.actual;
+            }
+            state_versions
+                .fetch_live_states::<K, V, u64, D>(&shard_id)
+                .await?
+        }
+    };
+
+    let mut known_parts = HashSet::new();
+    let mut known_rollups = HashSet::new();
+    let mut known_writers = HashSet::new();
+    while let Some(v) = state_iter.next() {
+        for writer_id in v.collections.writers.keys() {
+            known_writers.insert(writer_id.clone());
+        }
+        for batch in v.collections.trace.batches() {
+            for batch_part in &batch.parts {
+                known_parts.insert(batch_part.key.clone());
+            }
+        }
+        for rollup in v.collections.rollups.values() {
+            known_rollups.insert(rollup.clone());
+        }
+    }
+
+    let mut unreferenced_blobs = UnreferencedBlobs::default();
+    for (part, writer) in all_parts {
+        if !known_writers.contains(&writer) && !known_parts.contains(&part) {
+            unreferenced_blobs.batch_parts.insert(part);
+        }
+    }
+    for rollup in all_rollups {
+        if !known_rollups.contains(&rollup) {
+            unreferenced_blobs.rollups.insert(rollup);
+        }
+    }
+
+    Ok(unreferenced_blobs)
 }
 
 /// The following is a very terrible hack that no one should draw inspiration from. Currently State
