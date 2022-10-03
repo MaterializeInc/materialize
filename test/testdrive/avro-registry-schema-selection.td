@@ -7,7 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# See mzcompose.py for explanation
+# Tests that precisely manipulate which schema to select from the
+# Confluent Schema Registry.
 
 $ kafka-create-topic topic=schema-strategy-test
 
@@ -15,10 +16,10 @@ $ set first-writer-schema={"type": "record", "name": "row", "fields": [{"name": 
 $ set second-writer-schema={"type": "record", "name": "row", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}, {"name": "c", "type": ["null", "long"], "default": null}]}
 $ set reader-schema={"type": "record", "name": "row", "fields": [{"name": "a", "type": "long"}]}
 
-$ kafka-ingest format=avro topic=schema-strategy-test schema=${first-writer-schema} timestamp=1
+$ kafka-ingest format=avro topic=schema-strategy-test schema=${first-writer-schema} set-schema-id-var=id1
 {"a": 0, "b": 1}
 
-$ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-schema} timestamp=1
+$ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-schema} set-schema-id-var=id2
 {"a": 2, "b": 3, "c": {"long": 4}}
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -43,7 +44,7 @@ a
 > CREATE SOURCE schema_strategy_test_id
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  VALUE STRATEGY ID 1
+  VALUE STRATEGY ID ${id1}
   ENVELOPE NONE
 
 > SELECT * FROM schema_strategy_test_id
@@ -55,7 +56,7 @@ a b
 > CREATE SOURCE schema_strategy_test_id2
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  VALUE STRATEGY ID 2
+  VALUE STRATEGY ID ${id2}
   ENVELOPE NONE
 
 > SELECT * FROM schema_strategy_test_id2
