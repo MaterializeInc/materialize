@@ -24,7 +24,7 @@ schema, and it is not possible to create higher-level views depending on them.
 Introspection sources are maintained by independently collecting internal logging
 information within each of the replicas of a cluster. Thus, in a multi-replica
 cluster, the queries below need to be directed to a specific replica by issuing
-the command `SET cluster_replica = <replica_name>`. Materialize also directly 
+the command `SET cluster_replica = <replica_name>`. Materialize also directly
 exposes replica-specific introspection sources by suffixing the respective catalog
 relation names with a replica number. For example, `mz_internal.mz_compute_frontiers_1`
 corresponds to the introspection source `mz_internal.mz_compute_frontiers` in the
@@ -91,8 +91,8 @@ delays of propagating information within Materialize's compute layer once it
 it read out from storage. For the latter, the following introspection source
 is useful:
 ```sql
--- Histogram of wall-clock delays in propagating data obtained from 
--- storage through materializations
+-- Histogram of wall-clock delays in propagating data obtained from storage
+-- through materializations
 SELECT * FROM mz_internal.mz_worker_compute_delays;
 ```
 
