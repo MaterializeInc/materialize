@@ -1,6 +1,7 @@
 ---
 title: "What is Materialize?"
 description: "Learn more about Materialize"
+disable_list: true
 aliases:
   - /overview/what-is-materialize/
 menu:
