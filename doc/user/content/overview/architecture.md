@@ -7,7 +7,7 @@ menu:
     weight: 2
 ---
 
-Materialize was first built as a single binary that runs on a single node: `materialized`. To support mission-critical deployments at any scale, we are now evolving the binary into a [cloud-native platform](https://materialize.com/blog/materialize-unbundled/) with built-in horizontal scaling, active replication and decoupled storage. To learn more about the future architecture of Materialize, [sign up for early access](https://materialize.com/materialize-cloud-access/).
+Materialize was first built as a single binary that runs on a single node: `materialized`. To support mission-critical deployments at any scale, we are now evolving the binary into a [cloud-native platform](https://materialize.com/blog/next-generation/) with built-in horizontal scaling, active replication and decoupled storage. To learn more about the future architecture of Materialize, [sign up for early access](https://materialize.com/materialize-cloud-access/).
 
 ## The `materialized` binary
 
