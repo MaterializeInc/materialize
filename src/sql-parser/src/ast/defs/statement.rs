@@ -303,7 +303,7 @@ impl<T: AstInfo> AstDisplay for CopyStatement<T> {
                 f.write_node(name);
                 if !columns.is_empty() {
                     f.write_str("(");
-                    f.write_node(&display::comma_separated(&columns));
+                    f.write_node(&display::comma_separated(columns));
                     f.write_str(")");
                 }
             }
@@ -687,7 +687,7 @@ impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
         f.write_node(&self.source);
         if let Some(targets) = &self.targets {
             f.write_str(" (");
-            f.write_node(&display::comma_separated(&targets));
+            f.write_node(&display::comma_separated(targets));
             f.write_str(")");
         }
     }
@@ -954,14 +954,14 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
                 f.write_str(&self.as_type);
                 f.write_str("( ");
                 if !with_options.is_empty() {
-                    f.write_node(&display::comma_separated(&with_options));
+                    f.write_node(&display::comma_separated(with_options));
                 }
                 f.write_str(" )");
             }
             CreateTypeAs::Record { column_defs } => {
                 f.write_str("( ");
                 if !column_defs.is_empty() {
-                    f.write_node(&display::comma_separated(&column_defs));
+                    f.write_node(&display::comma_separated(column_defs));
                 }
                 f.write_str(" )");
             }
@@ -1015,7 +1015,7 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
             }
             ClusterOption::Replicas(replicas) => {
                 f.write_str("REPLICAS (");
-                f.write_node(&display::comma_separated(&replicas));
+                f.write_node(&display::comma_separated(replicas));
                 f.write_str(")");
             }
         }
@@ -1175,12 +1175,12 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
         match &self.action {
             AlterIndexAction::SetOptions(options) => {
                 f.write_str("SET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
             AlterIndexAction::ResetOptions(options) => {
                 f.write_str("RESET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
         }
@@ -1214,12 +1214,12 @@ impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
         match &self.action {
             AlterSourceAction::SetOptions(options) => {
                 f.write_str("SET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
             AlterSourceAction::ResetOptions(options) => {
                 f.write_str("RESET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
         }

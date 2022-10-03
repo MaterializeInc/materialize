@@ -22,8 +22,6 @@
 <meta name="twitter:title" content="{{ $title }}">
 <meta name="twitter:image" content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif">
 <meta name="twitter:description" content="{{ $description }}">
-{{/* TODO(benesch): allow indexing when platform docs become the live docs. */}}
-<meta name="robots" content="noindex">
 <link rel="shortcut icon" type="image/x-icon" href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png">
 <link rel=apple-touch-icon sizes=180x180 href="{{ .Site.BaseURL }}/images/materialize_logo_180.png">
 <link rel=icon type="image/png" sizes=32x32 href="{{ .Site.BaseURL }}/images/materialize_favicon_32.png">
@@ -50,7 +48,7 @@ addEventListener("DOMContentLoaded", () => {
   docsearch({
     apiKey: "5fb0a95d60e603d3c83c2506e1de4a64",
     appId: "9LF5B9GMOF",
-    indexName: "materialize_unstable",
+    indexName: "materialize",
     container: '#docsearch',
   });
 });

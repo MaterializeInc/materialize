@@ -69,7 +69,7 @@ pub enum TestCatalogItem {
 impl CatalogItem for TestCatalogItem {
     fn name(&self) -> &QualifiedObjectName {
         match &self {
-            TestCatalogItem::BaseTable { name, .. } => &name,
+            TestCatalogItem::BaseTable { name, .. } => name,
             _ => unimplemented!(),
         }
     }

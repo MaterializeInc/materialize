@@ -51,7 +51,7 @@ impl<'a> Displayable<'a, HirRelationExpr> {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
     ) -> fmt::Result {
-        if let Some(Except { all, lhs, rhs }) = Hir::un_except(&self.0) {
+        if let Some(Except { all, lhs, rhs }) = Hir::un_except(self.0) {
             if all {
                 writeln!(f, "{}ExceptAll", ctx.indent)?;
             } else {

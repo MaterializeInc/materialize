@@ -515,7 +515,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn handle_terminate(&mut self, session: &mut Session) {
         self.clear_transaction(session).await;
 
-        self.drop_temp_items(&session).await;
+        self.drop_temp_items(session).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");

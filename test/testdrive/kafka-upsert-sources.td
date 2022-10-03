@@ -181,20 +181,20 @@ message Test {
     string f = 1;
 }
 
-$ protobuf-compile-descriptors inputs=test.proto output=test.pb
+$ protobuf-compile-descriptors inputs=test.proto output=test.pb set-var=test-schema
 
 $ kafka-create-topic topic=textproto partitions=1
 
 > CREATE SOURCE textproto
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textproto-${testdrive.seed}')
   KEY FORMAT TEXT
-  VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA FILE '${testdrive.temp-dir}/test.pb'
+  VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA '${test-schema}'
   ENVELOPE UPSERT
 
 > CREATE SOURCE bytesproto
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textproto-${testdrive.seed}')
   KEY FORMAT BYTES
-  VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA FILE '${testdrive.temp-dir}/test.pb'
+  VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA '${test-schema}'
   ENVELOPE UPSERT
 
 $ kafka-ingest topic=textproto

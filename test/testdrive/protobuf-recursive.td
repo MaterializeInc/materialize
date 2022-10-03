@@ -28,15 +28,15 @@ message Mutual3 {
     Mutual1 m = 1;
 }
 
-$ protobuf-compile-descriptors inputs=recursive.proto output=recursive.pb
+$ protobuf-compile-descriptors inputs=recursive.proto output=recursive.pb set-var=recursive-schema
 
 > CREATE CONNECTION kafka_conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
 ! CREATE SOURCE recursive FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-recursive-${testdrive.seed}')
-  FORMAT PROTOBUF MESSAGE '.Self' USING SCHEMA FILE '${testdrive.temp-dir}/recursive.pb'
+  FORMAT PROTOBUF MESSAGE '.Self' USING SCHEMA '${recursive-schema}'
 contains:Recursive types are not supported: Self
 
 ! CREATE SOURCE recursive FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-recursive-${testdrive.seed}')
-  FORMAT PROTOBUF MESSAGE '.Mutual1' USING SCHEMA FILE '${testdrive.temp-dir}/recursive.pb'
+  FORMAT PROTOBUF MESSAGE '.Mutual1' USING SCHEMA '${recursive-schema}'
 contains:Recursive types are not supported: Mutual1

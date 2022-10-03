@@ -1261,7 +1261,7 @@ where
             .flat_map(|uuid| {
                 self.compute
                     .peeks
-                    .remove(&uuid)
+                    .remove(uuid)
                     .map(|(id, time)| (id, ChangeBatch::new_from(time, -1)))
             })
             .collect();

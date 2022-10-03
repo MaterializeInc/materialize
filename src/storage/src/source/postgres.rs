@@ -667,7 +667,7 @@ impl PostgresTaskInfo {
                         Did you forget to set REPLICA IDENTITY to FULL for your table?",
                         rel_id
                     ),
-                    TupleData::Text(b) => std::str::from_utf8(&b)?.into(),
+                    TupleData::Text(b) => std::str::from_utf8(b)?.into(),
                 };
                 packer.push(datum);
             }
@@ -942,7 +942,7 @@ impl PostgresTaskInfo {
                             .rel_ids()
                             .iter()
                             // Filter here makes option handling in map "safe"
-                            .filter_map(|id| self.source_tables.get(&id))
+                            .filter_map(|id| self.source_tables.get(id))
                             .map(|table| format!("name: {} id: {}", table.name, table.oid))
                             .collect::<Vec<String>>();
                         return Err(Fatal(anyhow!(

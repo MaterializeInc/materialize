@@ -102,7 +102,7 @@ SERVICES = [
             "--kafka-option=sasl.password=sekurity "
             "--schema-registry-url=https://materialize:sekurity@schema-registry:8081 "
             "--materialize-url=postgres://materialize@materialized:6875 "
-            "--materialize-url-internal=postgres://materialize@materialized:6877 "
+            "--materialize-internal-url=postgres://materialize@materialized:6877 "
             "--cert=/share/secrets/producer.p12 "
             "--cert-password=mzmzmz "
             '--var=ca="$$(</share/secrets/ca.crt)" '

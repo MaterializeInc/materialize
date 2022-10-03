@@ -379,7 +379,7 @@ where
                 let desired_frontier = &frontiers[0];
                 let persist_frontier = &frontiers[1];
 
-                if PartialOrder::less_than(&*shared_frontier.borrow(), &persist_frontier) {
+                if PartialOrder::less_than(&*shared_frontier.borrow(), persist_frontier) {
                     if sink_id.is_user() {
                         trace!(
                             "persist_sink {sink_id}/{shard_id}: \

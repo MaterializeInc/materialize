@@ -474,11 +474,13 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `"stdrive.aws-endpoint`
 
+#### `testdrive.materialize-internal-http-addr`
+
 #### `testdrive.materialize-http-addr`
 
 #### `testdrive.materialize-sql-addr`
 
-#### `testdrive.materialize-sql-addr-internal`
+#### `testdrive.materialize-internal-sql-addr`
 
 #### `testdrive.materialize-user`
 

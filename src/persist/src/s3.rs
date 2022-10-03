@@ -559,9 +559,7 @@ impl S3Blob {
             .await
             .map_err(|err| Error::from(format!("create_multipart_upload err: {}", err)))?;
         let upload_id = upload_res.upload_id().ok_or_else(|| {
-            Error::from(format!(
-                "create_multipart_upload response missing upload_id"
-            ))
+            Error::from("create_multipart_upload response missing upload_id".to_string())
         })?;
         trace!(
             "s3 create_multipart_upload took {:?}",
@@ -741,7 +739,7 @@ impl MultipartConfig {
                 blob_len
             ));
         }
-        return Ok(blob_len > self.multipart_threshold);
+        Ok(blob_len > self.multipart_threshold)
     }
 
     fn part_iter(&self, blob_len: usize) -> MultipartChunkIter {

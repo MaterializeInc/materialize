@@ -174,5 +174,5 @@ pub fn is_superset_of(mut lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> b
             }
         }
     }
-    return true;
+    true
 }

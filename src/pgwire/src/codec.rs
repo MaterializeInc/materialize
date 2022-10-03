@@ -113,7 +113,7 @@ where
     {
         let message = message.into();
         trace!("cid={} send={:?}", self.conn_id, message);
-        Ok(self.inner.enqueue(message).await?)
+        self.inner.enqueue(message).await
     }
 
     /// Encodes and sends the backend messages in the `messages` iterator to the

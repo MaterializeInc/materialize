@@ -338,7 +338,7 @@ impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, MapFilterProject>
 
         // render `project` field iff not the identity projection
         if &outputs.len() != input_arity || outputs.iter().enumerate().any(|(i, p)| i != *p) {
-            let outputs = Indices(&outputs);
+            let outputs = Indices(outputs);
             writeln!(f, "{}project=({})", ctx.indent, outputs)?;
         }
         // render `filter` field iff predicates are present

@@ -576,7 +576,7 @@ impl MirScalarExpr {
                             if expr2.is_literal() {
                                 // We can at least precompile the regex.
                                 let pattern = expr2.as_literal_str().unwrap();
-                                *e = match like_pattern::compile(&pattern, *case_insensitive) {
+                                *e = match like_pattern::compile(pattern, *case_insensitive) {
                                     Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
                                         func::IsLikeMatch(matcher),
                                     )),

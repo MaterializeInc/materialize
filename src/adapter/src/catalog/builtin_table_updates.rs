@@ -98,7 +98,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&role.id.to_string()),
                 Datum::UInt32(role.oid),
-                Datum::String(&name),
+                Datum::String(name),
             ]),
             diff,
         }
@@ -112,7 +112,7 @@ impl CatalogState {
         let id = self.compute_instances_by_name[name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[Datum::UInt64(id), Datum::String(&name)]),
+            row: Row::pack_slice(&[Datum::UInt64(id), Datum::String(name)]),
             diff,
         }
     }
@@ -142,7 +142,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::UInt64(compute_instance_id),
                 Datum::UInt64(id),
-                Datum::String(&name),
+                Datum::String(name),
                 Datum::from(size),
                 Datum::from(az),
             ]),
@@ -360,8 +360,8 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(name),
-                Datum::String(&public_key_primary),
-                Datum::String(&public_key_secondary),
+                Datum::String(public_key_primary),
+                Datum::String(public_key_secondary),
             ]),
             diff,
         }]
@@ -375,7 +375,7 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let progress_topic_holder;
         let progress_topic = match kafka.progress_topic {
-            Some(ref topic) => Datum::String(&topic),
+            Some(ref topic) => Datum::String(topic),
             None => {
                 progress_topic_holder = self.config.default_kafka_sink_progress_topic(id);
                 Datum::String(&progress_topic_holder)
@@ -388,7 +388,7 @@ impl CatalogState {
                     lower_bound: 1,
                     length: kafka.brokers.len(),
                 }],
-                kafka.brokers.iter().map(|id| Datum::String(&id)),
+                kafka.brokers.iter().map(|id| Datum::String(id)),
             )
             .unwrap();
         let brokers = row.unpack_first();
@@ -663,7 +663,7 @@ impl CatalogState {
                         lower_bound: 1,
                         length: func_impl_details.arg_typs.len(),
                     }],
-                    arg_ids.iter().map(|id| Datum::String(&id)),
+                    arg_ids.iter().map(|id| Datum::String(id)),
                 )
                 .unwrap();
             let arg_ids = row.unpack_first();

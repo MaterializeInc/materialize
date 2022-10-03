@@ -596,7 +596,7 @@ mod tests {
         D: Codec64,
     {
         let value = blob
-            .get(&key)
+            .get(key)
             .await
             .expect("failed to fetch part")
             .expect("missing part");
@@ -1436,21 +1436,21 @@ mod tests {
         );
         assert_eq!(
             ShardId::from_str("x00000000-0000-0000-0000-000000000000"),
-            Err(format!(
+            Err(
                 "invalid ShardId x00000000-0000-0000-0000-000000000000: incorrect prefix"
-            ))
+                    .to_string()
+            )
         );
         assert_eq!(
             ShardId::from_str("s0"),
-            Err(format!(
+            Err(
                 "invalid ShardId s0: invalid length: expected length 32 for simple format, found 1"
-            ))
+                    .to_string()
+            )
         );
         assert_eq!(
             ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
-            Err(format!(
-                "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-zA-Z], found `O` at 38"
-            ))
+            Err("invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-zA-Z], found `O` at 38".to_string())
         );
     }
 

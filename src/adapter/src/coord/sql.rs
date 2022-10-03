@@ -29,8 +29,7 @@ impl<S: Append + 'static> Coordinator<S> {
         params: &mz_sql::plan::Params,
     ) -> Result<mz_sql::plan::Plan, AdapterError> {
         let pcx = session.pcx();
-        let plan =
-            mz_sql::plan::plan(Some(&pcx), &self.catalog.for_session(session), stmt, params)?;
+        let plan = mz_sql::plan::plan(Some(pcx), &self.catalog.for_session(session), stmt, params)?;
         Ok(plan)
     }
 
@@ -74,7 +73,7 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         name: &str,
     ) -> Result<(), AdapterError> {
-        let ps = match session.get_prepared_statement_unverified(&name) {
+        let ps = match session.get_prepared_statement_unverified(name) {
             Some(ps) => ps,
             None => return Err(AdapterError::UnknownPreparedStatement(name.to_string())),
         };
@@ -96,18 +95,18 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         name: &str,
     ) -> Result<(), AdapterError> {
-        let portal = match session.get_portal_unverified(&name) {
+        let portal = match session.get_portal_unverified(name) {
             Some(portal) => portal,
             None => return Err(AdapterError::UnknownCursor(name.to_string())),
         };
         if let Some(revision) = self.verify_statement_revision(
-            &session,
+            session,
             portal.stmt.as_ref(),
             &portal.desc,
             portal.catalog_revision,
         )? {
             let portal = session
-                .get_portal_unverified_mut(&name)
+                .get_portal_unverified_mut(name)
                 .expect("known to exist");
             portal.catalog_revision = revision;
         }

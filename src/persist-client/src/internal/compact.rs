@@ -474,7 +474,7 @@ where
             if let Some(part) = parts.next() {
                 let start = Instant::now();
                 let mut part = fetch_batch_part(
-                    &shard_id,
+                    shard_id,
                     blob.as_ref(),
                     &metrics,
                     &metrics.read.compaction,
@@ -508,7 +508,7 @@ where
                 if let Some(part) = parts.next() {
                     let start = Instant::now();
                     let mut part = fetch_batch_part(
-                        &shard_id,
+                        shard_id,
                         blob.as_ref(),
                         &metrics,
                         &metrics.read.compaction,

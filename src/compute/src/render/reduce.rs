@@ -223,7 +223,7 @@ where
                 let mut datums_local = datums.borrow();
                 // Unpack only the demanded columns.
                 for skip in skips.iter() {
-                    datums_local.push((&mut row_iter).nth(*skip).unwrap());
+                    datums_local.push(row_iter.nth(*skip).unwrap());
                 }
 
                 // Evaluate the key expressions.
@@ -245,7 +245,7 @@ where
                 };
                 row_buf.packer().extend(val);
                 let row = row_buf.clone();
-                return Some((Ok((key, row)), time.clone(), diff.clone()));
+                Some((Ok((key, row)), time.clone(), diff.clone()))
             }
         });
 
@@ -536,7 +536,7 @@ where
             let mut values = Vec::with_capacity(skips.len());
             let mut row_iter = row.iter();
             for skip in skips.iter() {
-                row_buf.packer().push((&mut row_iter).nth(*skip).unwrap());
+                row_buf.packer().push(row_iter.nth(*skip).unwrap());
                 values.push(row_buf.clone());
             }
 
@@ -649,7 +649,7 @@ where
         let mut values = Vec::with_capacity(skips.len());
         let mut row_iter = row.iter();
         for skip in skips.iter() {
-            row_buf.packer().push((&mut row_iter).nth(*skip).unwrap());
+            row_buf.packer().push(row_iter.nth(*skip).unwrap());
             values.push(row_buf.clone());
         }
 
@@ -1444,7 +1444,7 @@ pub mod monoids {
                         }
                     };
                     if swap {
-                        lhs.clone_from(&rhs);
+                        lhs.clone_from(rhs);
                     }
                 }
                 (ReductionMonoid::Max(lhs), ReductionMonoid::Max(rhs)) => {
@@ -1459,7 +1459,7 @@ pub mod monoids {
                         }
                     };
                     if swap {
-                        lhs.clone_from(&rhs);
+                        lhs.clone_from(rhs);
                     }
                 }
                 (lhs, rhs) => {

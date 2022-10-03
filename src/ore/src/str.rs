@@ -79,7 +79,7 @@ impl<'a> Deref for QuotedStr<'a> {
     type Target = str;
 
     fn deref(&self) -> &str {
-        &self.0
+        self.0
     }
 }
 

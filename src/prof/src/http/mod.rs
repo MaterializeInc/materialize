@@ -115,7 +115,7 @@ async fn time_prof<'a>(merge_threads: bool, build_info: &BuildInfo) -> impl Into
         "CPU Time Flamegraph",
         false,
         &[],
-        &build_info,
+        build_info,
     ))
 }
 

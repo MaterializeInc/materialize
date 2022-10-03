@@ -20,7 +20,7 @@
 //! definitions of existing builtins!
 //!
 //! More information about builtin system tables and types can be found in
-//! <https://materialize.com/docs/sql/system-tables/>.
+//! <https://materialize.com/docs/sql/system-catalog/>.
 
 use std::hash::Hash;
 
@@ -2410,7 +2410,7 @@ pub mod BUILTINS {
                 return Some(x);
             }
         }
-        return None;
+        None
     }
 
     pub fn types() -> impl Iterator<Item = &'static BuiltinType<NameReference>> {

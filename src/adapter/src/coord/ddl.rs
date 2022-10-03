@@ -150,7 +150,7 @@ impl<S: Append + 'static> Coordinator<S> {
             } else if let catalog::Op::DropComputeInstanceReplica { name, compute_name } = op {
                 let compute_instance = self.catalog.resolve_compute_instance(compute_name)?;
                 let replica_id = &compute_instance.replica_id_by_name[name];
-                let replica = &compute_instance.replicas_by_id[&replica_id];
+                let replica = &compute_instance.replicas_by_id[replica_id];
 
                 // Drop the introspection sources
                 sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());

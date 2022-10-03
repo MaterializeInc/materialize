@@ -44,7 +44,7 @@ where
         let mut needed_tokens = Vec::new();
         for import_id in import_ids {
             if let Some(token) = tokens.get(&import_id) {
-                needed_tokens.push(Rc::clone(&token))
+                needed_tokens.push(Rc::clone(token))
             }
         }
 
@@ -64,7 +64,7 @@ where
                 .next()
                 .expect("Invariant violated: at least one collection must be present.");
             let unthinned_arity = sink.from_desc.arity();
-            let (permutation, thinning) = permutation_for_arrangement(&key, unthinned_arity);
+            let (permutation, thinning) = permutation_for_arrangement(key, unthinned_arity);
             let mut mfp = MapFilterProject::new(unthinned_arity);
             mfp.permute(permutation, thinning.len() + key.len());
             bundle.as_collection_core(mfp, Some((key.clone(), None)), self.until.clone())

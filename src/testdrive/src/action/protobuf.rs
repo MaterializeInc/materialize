@@ -12,20 +12,15 @@ use std::iter;
 use std::path::{self, PathBuf};
 
 use anyhow::{bail, Context};
-use async_trait::async_trait;
 use tokio::process::Command;
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
-pub struct CompileDescriptorsAction {
-    inputs: Vec<String>,
-    output: String,
-}
-
-pub fn build_compile_descriptors(
+pub async fn run_compile_descriptors(
     mut cmd: BuiltinCommand,
-) -> Result<CompileDescriptorsAction, anyhow::Error> {
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
     let inputs: Vec<String> = cmd
         .args
         .string("inputs")?
@@ -39,29 +34,28 @@ pub fn build_compile_descriptors(
             bail!("separators in paths are forbidden");
         }
     }
-    Ok(CompileDescriptorsAction { inputs, output })
-}
-
-#[async_trait]
-impl Action for CompileDescriptorsAction {
-    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let protoc = match env::var_os("PROTOC") {
-            None => protobuf_src::protoc(),
-            Some(protoc) => PathBuf::from(protoc),
-        };
-        let status = Command::new(protoc)
-            .arg("--include_imports")
-            .arg("-I")
-            .arg(&state.temp_path)
-            .arg("--descriptor_set_out")
-            .arg(state.temp_path.join(&self.output))
-            .args(&self.inputs)
-            .status()
-            .await
-            .context("invoking protoc failed")?;
-        if !status.success() {
-            bail!("protoc exited unsuccessfully");
-        }
-        Ok(ControlFlow::Continue)
+    let protoc = match env::var_os("PROTOC") {
+        None => protobuf_src::protoc(),
+        Some(protoc) => PathBuf::from(protoc),
+    };
+    let output_path = state.temp_path.join(&output);
+    let status = Command::new(protoc)
+        .arg("--include_imports")
+        .arg("-I")
+        .arg(&state.temp_path)
+        .arg("--descriptor_set_out")
+        .arg(state.temp_path.join(&output).clone())
+        .args(&inputs)
+        .status()
+        .await
+        .context("invoking protoc failed")?;
+    if !status.success() {
+        bail!("protoc exited unsuccessfully");
     }
+    if let Some(var) = cmd.args.opt_string("set-var") {
+        let res = std::fs::read(output_path)?;
+        let hex_encoded = hex::encode(res);
+        state.cmd_vars.insert(var, format!("\\x{hex_encoded}"));
+    }
+    Ok(ControlFlow::Continue)
 }

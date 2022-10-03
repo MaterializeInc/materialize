@@ -69,7 +69,7 @@ impl BuildInfo {
             "{:0>2}{:0>3}{:0>2}",
             semver.major, semver.minor, semver.patch
         );
-        return ver_string.parse::<i32>().unwrap();
+        ver_string.parse::<i32>().unwrap()
     }
 }
 

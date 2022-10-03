@@ -122,7 +122,7 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
         match self {
             FetchBatchFilter::Snapshot { as_of } => {
                 // This time is covered by a listen
-                if as_of.less_than(&t) {
+                if as_of.less_than(t) {
                     return false;
                 }
                 t.advance_by(as_of.borrow());
@@ -130,7 +130,7 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
             }
             FetchBatchFilter::Listen { as_of, lower } => {
                 // This time is covered by a snapshot
-                if !as_of.less_than(&t) {
+                if !as_of.less_than(t) {
                     return false;
                 }
 
@@ -141,7 +141,7 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
                 // we just need to filter out anything < the frontier. This
                 // frontier was the upper of the last batch (and thus exclusive)
                 // so for the == case, we still emit.
-                if !lower.less_equal(&t) {
+                if !lower.less_equal(t) {
                     return false;
                 }
                 true
@@ -544,7 +544,7 @@ where
             }
             return Some((k, v, t, d));
         }
-        return None;
+        None
     }
 }
 

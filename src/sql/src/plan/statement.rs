@@ -360,7 +360,7 @@ pub fn plan_copy_from(
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<super::HirRelationExpr, PlanError> {
-    Ok(query::plan_copy_from_rows(pcx, catalog, id, columns, rows)?)
+    query::plan_copy_from_rows(pcx, catalog, id, columns, rows)
 }
 
 /// Whether a SQL object type can be interpreted as matching the type of the given catalog item.

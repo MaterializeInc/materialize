@@ -742,15 +742,15 @@ where
             data.push(Tag::Array.into());
             data.push(array.dims.ndims());
             data.extend_from_slice(array.dims.data);
-            push_untagged_bytes(data, &array.elements.data);
+            push_untagged_bytes(data, array.elements.data);
         }
         Datum::List(list) => {
             data.push(Tag::List.into());
-            push_untagged_bytes(data, &list.data);
+            push_untagged_bytes(data, list.data);
         }
         Datum::Map(dict) => {
             data.push(Tag::Dict.into());
-            push_untagged_bytes(data, &dict.data);
+            push_untagged_bytes(data, dict.data);
         }
         Datum::JsonNull => data.push(Tag::JsonNull.into()),
         Datum::MzTimestamp(t) => {
@@ -790,7 +790,7 @@ where
                 );
                 // There should be no unaligned elements in the prefix or suffix.
                 soft_assert!(prefix.is_empty() && suffix.is_empty());
-                data.extend_from_slice(&lsu_bytes);
+                data.extend_from_slice(lsu_bytes);
             } else {
                 for u in lsu {
                     data.extend_from_slice(&u.to_le_bytes());
@@ -1396,7 +1396,7 @@ impl<'a> DatumList<'a> {
 
     /// For debugging only
     pub fn data(&self) -> &'a [u8] {
-        &self.data
+        self.data
     }
 }
 
@@ -1434,7 +1434,7 @@ impl<'a> DatumMap<'a> {
 
     /// For debugging only
     pub fn data(&self) -> &'a [u8] {
-        &self.data
+        self.data
     }
 }
 

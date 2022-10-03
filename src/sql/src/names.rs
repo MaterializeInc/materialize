@@ -741,7 +741,7 @@ impl<'a> NameResolver<'a> {
                             Some(CatalogTypeDetails {
                                 array_id: Some(array_id),
                                 ..
-                            }) => self.catalog.get_item(&array_id),
+                            }) => self.catalog.get_item(array_id),
                             Some(_) => sql_bail!("type \"{}[]\" does not exist", name),
                             None => sql_bail!(
                                 "{} does not refer to a type",
@@ -1084,7 +1084,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let object_name = self.fold_object_name(secret);
                 match &object_name {
                     ResolvedObjectName::Object { id, .. } => {
-                        let item = self.catalog.get_item(&id);
+                        let item = self.catalog.get_item(id);
                         if item.item_type() != CatalogItemType::Secret {
                             self.status = Err(PlanError::InvalidSecret(object_name.clone()));
                         }
@@ -1151,7 +1151,7 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             ..
         } = name
         {
-            let item = self.catalog.get_item(&id);
+            let item = self.catalog.get_item(id);
             let catalog_full_name = self.catalog.resolve_full_name(item.name());
             if catalog_full_name == *full_name {
                 *print_id = false;

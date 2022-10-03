@@ -176,11 +176,11 @@ impl ClusterClient<PartitionedClient> {
         )
         .map_err(|e| anyhow!("{e}"))?;
 
-        return Ok(TimelyContainer {
+        Ok(TimelyContainer {
             comm_config,
             client_txs,
             worker_guards,
-        });
+        })
     }
 
     fn build(&mut self, comm_config: CommunicationConfig) -> Result<(), Error> {
@@ -617,7 +617,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     fn reconcile(
         &mut self,
         command_rx: &mut CommandReceiverQueue,
-        mut response_tx: &mut ResponseSender,
+        response_tx: &mut ResponseSender,
     ) -> Result<(), RecvError> {
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
@@ -702,7 +702,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         for dataflow in dataflows.iter() {
                             let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
                             if let Some(old_dataflow) = old_dataflows.get(&export_ids) {
-                                let compatible = dataflow.compatible_with(&old_dataflow);
+                                let compatible = dataflow.compatible_with(old_dataflow);
                                 let uncompacted = !export_ids
                                     .iter()
                                     .flat_map(|id| old_frontiers.get(id))
@@ -798,7 +798,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         // Execute the commands to bring us to `new_commands`.
         for command in todo_commands.into_iter() {
-            self.handle_command(&mut response_tx, command);
+            self.handle_command(response_tx, command);
         }
 
         // Overwrite `self.command_history` to reflect `new_commands`.

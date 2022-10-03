@@ -750,7 +750,7 @@ impl<S: Append> Connection<S> {
     }
 
     pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), Error> {
-        Ok(self.stash.consolidate_batch(&collections).await?)
+        Ok(self.stash.consolidate_batch(collections).await?)
     }
 }
 

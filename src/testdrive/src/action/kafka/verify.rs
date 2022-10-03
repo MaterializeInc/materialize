@@ -13,7 +13,6 @@ use std::str;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context};
-use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use chrono::NaiveDate;
 use itertools::Itertools;
@@ -25,7 +24,7 @@ use tokio_stream::StreamExt;
 
 use mz_avro::types::Value;
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{ControlFlow, State};
 use crate::format::{avro, json};
 use crate::parser::BuiltinCommand;
 
@@ -55,6 +54,14 @@ pub struct VerifyAction {
     partial_search: Option<usize>,
     // If true, print partial_search.unwrap_or(expected_messages.len()) number of messages in sink topic
     debug_print_only: bool,
+}
+
+pub async fn run_verify(
+    cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let verify_action = build_verify(cmd)?;
+    run_verify_action(verify_action, state).await
 }
 
 pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, anyhow::Error> {
@@ -154,263 +161,262 @@ async fn get_topic(
     Ok(result)
 }
 
-#[async_trait]
-impl Action for VerifyAction {
-    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let topic: String = match &self.source {
-            Topic::FromSink(sink) => get_topic(&sink, "topic", state).await?,
-            Topic::Named(name) => name.clone(),
-        };
+pub async fn run_verify_action(
+    verify_action: VerifyAction,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let topic: String = match &verify_action.source {
+        Topic::FromSink(sink) => get_topic(sink, "topic", state).await?,
+        Topic::Named(name) => name.clone(),
+    };
 
-        println!("Verifying results in Kafka topic {}", topic);
+    println!("Verifying results in Kafka topic {}", topic);
 
-        let mut config = state.kafka_config.clone();
-        config.set("enable.auto.offset.store", "false");
+    let mut config = state.kafka_config.clone();
+    config.set("enable.auto.offset.store", "false");
 
-        let consumer: StreamConsumer = config.create().context("creating kafka consumer")?;
-        consumer
-            .subscribe(&[&topic])
-            .context("subscribing to kafka topic")?;
+    let consumer: StreamConsumer = config.create().context("creating kafka consumer")?;
+    consumer
+        .subscribe(&[&topic])
+        .context("subscribing to kafka topic")?;
 
-        let (stream_size, stream_timeout) = match self.partial_search {
-            Some(size) => (size, state.default_timeout),
-            None => (self.expected_messages.len(), Duration::from_secs(15)),
-        };
+    let (stream_size, stream_timeout) = match verify_action.partial_search {
+        Some(size) => (size, state.default_timeout),
+        None => (
+            verify_action.expected_messages.len(),
+            Duration::from_secs(15),
+        ),
+    };
 
-        let message_stream = consumer
-            .stream()
-            .take(stream_size)
-            .timeout(cmp::max(state.default_timeout, stream_timeout));
-        pin!(message_stream);
+    let message_stream = consumer
+        .stream()
+        .take(stream_size)
+        .timeout(cmp::max(state.default_timeout, stream_timeout));
+    pin!(message_stream);
 
-        // Collect all messages that arrive without timing out. If we trip
-        // the timeout, suppress the error and return what we have. This
-        // is nicer than returning "timeout expired", as the user will
-        // instead get an error message about the expected messages that
-        // were missing.
-        let mut actual_bytes = vec![];
-        loop {
-            match message_stream.next().await {
-                Some(Ok(message)) => {
-                    let message = message?;
-                    consumer
-                        .store_offset_from_message(&message)
-                        .context("storing message offset")?;
-                    let headers = self
-                        .header_keys
-                        .iter()
-                        .map(|k| {
-                            // Expect a unique header with the given key and a UTF8-formatted body.
-                            let headers =
-                                message.headers().context("expected headers for message")?;
-                            let header = headers
-                                .iter()
-                                .filter(|i| i.key == k)
-                                .exactly_one()
-                                .map_err(|_| {
-                                    anyhow!("expected exactly one header with the given key")
-                                })?;
-                            let value =
-                                str::from_utf8(header.value.context("expected value for header")?)?;
-                            Ok(value.to_owned())
-                        })
-                        .collect::<anyhow::Result<Vec<_>>>()?;
-                    actual_bytes.push(Record {
-                        headers,
-                        key: message.key().map(|b| b.to_owned()),
-                        value: message.payload().map(|b| b.to_owned()),
-                    });
-                }
-                Some(Err(e)) => {
-                    println!("Received error from Kafka stream consumer: {}", e);
-                    break;
-                }
-                None => {
-                    break;
-                }
+    // Collect all messages that arrive without timing out. If we trip
+    // the timeout, suppress the error and return what we have. This
+    // is nicer than returning "timeout expired", as the user will
+    // instead get an error message about the expected messages that
+    // were missing.
+    let mut actual_bytes = vec![];
+    loop {
+        match message_stream.next().await {
+            Some(Ok(message)) => {
+                let message = message?;
+                consumer
+                    .store_offset_from_message(&message)
+                    .context("storing message offset")?;
+                let headers = verify_action
+                    .header_keys
+                    .iter()
+                    .map(|k| {
+                        // Expect a unique header with the given key and a UTF8-formatted body.
+                        let headers = message.headers().context("expected headers for message")?;
+                        let header = headers
+                            .iter()
+                            .filter(|i| i.key == k)
+                            .exactly_one()
+                            .map_err(|_| {
+                                anyhow!("expected exactly one header with the given key")
+                            })?;
+                        let value =
+                            str::from_utf8(header.value.context("expected value for header")?)?;
+                        Ok(value.to_owned())
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                actual_bytes.push(Record {
+                    headers,
+                    key: message.key().map(|b| b.to_owned()),
+                    value: message.payload().map(|b| b.to_owned()),
+                });
+            }
+            Some(Err(e)) => {
+                println!("Received error from Kafka stream consumer: {}", e);
+                break;
+            }
+            None => {
+                break;
             }
         }
+    }
 
-        match &self.format {
-            SinkFormat::Avro => {
-                let value_schema = state
-                    .ccsr_client
-                    .get_schema_by_subject(&format!("{}-value", topic))
-                    .await
-                    .context("fetching schema")?
-                    .raw;
+    match &verify_action.format {
+        SinkFormat::Avro => {
+            let value_schema = state
+                .ccsr_client
+                .get_schema_by_subject(&format!("{}-value", topic))
+                .await
+                .context("fetching schema")?
+                .raw;
 
-                let key_schema = state
-                    .ccsr_client
-                    .get_schema_by_subject(&format!("{}-key", topic))
-                    .await
-                    .ok()
+            let key_schema = state
+                .ccsr_client
+                .get_schema_by_subject(&format!("{}-key", topic))
+                .await
+                .ok()
+                .map(|key_schema| {
+                    avro::parse_schema(&key_schema.raw).context("parsing avro schema")
+                })
+                .transpose()?;
+
+            let value_schema = avro::parse_schema(&value_schema).context("parsing avro schema")?;
+            let value_schema = &value_schema;
+
+            let mut actual_messages = vec![];
+            for record in actual_bytes {
+                let key = key_schema
+                    .as_ref()
                     .map(|key_schema| {
-                        avro::parse_schema(&key_schema.raw).context("parsing avro schema")
+                        let bytes = match record.key {
+                            Some(key) => key,
+                            None => bail!("empty message key"),
+                        };
+                        avro_from_bytes(key_schema, &bytes)
                     })
-                    .transpose()?;
+                    .transpose()?
+                    .map(DebugValue);
+                let value = match record.value {
+                    None => None,
+                    Some(bytes) => Some(avro_from_bytes(value_schema, &bytes)?),
+                }
+                .map(DebugValue);
+                actual_messages.push(Record {
+                    headers: record.headers,
+                    key,
+                    value,
+                });
+            }
 
-                let value_schema =
-                    avro::parse_schema(&value_schema).context("parsing avro schema")?;
-                let value_schema = &value_schema;
+            if verify_action.sort_messages {
+                actual_messages.sort_by_key(|r| format!("{:?}", r.value));
+            }
 
-                let mut actual_messages = vec![];
-                for record in actual_bytes {
-                    let key = key_schema
-                        .as_ref()
-                        .map(|key_schema| {
-                            let bytes = match record.key {
-                                Some(key) => key,
-                                None => bail!("empty message key"),
-                            };
-                            avro_from_bytes(key_schema, &bytes)
-                        })
-                        .transpose()?
-                        .map(DebugValue);
-                    let value = match record.value {
-                        None => None,
-                        Some(bytes) => Some(avro_from_bytes(value_schema, &bytes)?),
+            if verify_action.debug_print_only {
+                bail!(
+                    "records in sink:\n{}",
+                    actual_messages
+                        .into_iter()
+                        .map(|a| format!("{:#?}", a))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+
+            let expected = verify_action
+                .expected_messages
+                .iter()
+                .map(|v| {
+                    let (headers, v) = split_headers(v, verify_action.header_keys.len())?;
+                    let mut deserializer = serde_json::Deserializer::from_str(v).into_iter();
+                    let key = if let Some(key_schema) = &key_schema {
+                        let key: serde_json::Value = match deserializer.next() {
+                            None => bail!("key missing in input line"),
+                            Some(r) => r?,
+                        };
+                        Some(avro::from_json(&key, key_schema.top_node())?)
+                    } else {
+                        None
                     }
                     .map(DebugValue);
-                    actual_messages.push(Record {
-                        headers: record.headers,
+                    let value = match deserializer.next() {
+                        None => None,
+                        Some(r) => {
+                            let value = r.context("parsing json")?;
+                            Some(avro::from_json(&value, value_schema.top_node())?)
+                        }
+                    }
+                    .map(DebugValue);
+                    ensure!(
+                        deserializer.next().is_none(),
+                        "at most two avro records per expect line"
+                    );
+                    Ok(Record {
+                        headers,
                         key,
                         value,
-                    });
-                }
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-                if self.sort_messages {
-                    actual_messages.sort_by_key(|r| format!("{:?}", r.value));
-                }
-
-                if self.debug_print_only {
-                    bail!(
-                        "records in sink:\n{}",
-                        actual_messages
-                            .into_iter()
-                            .map(|a| format!("{:#?}", a))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    );
-                }
-
-                let expected = self
-                    .expected_messages
-                    .iter()
-                    .map(|v| {
-                        let (headers, v) = split_headers(v, self.header_keys.len())?;
-                        let mut deserializer = serde_json::Deserializer::from_str(v).into_iter();
-                        let key = if let Some(key_schema) = &key_schema {
-                            let key: serde_json::Value = match deserializer.next() {
-                                None => bail!("key missing in input line"),
-                                Some(r) => r?,
-                            };
-                            Some(avro::from_json(&key, key_schema.top_node())?)
+            validate_sink_with_partial_search(
+                &expected,
+                &actual_messages,
+                &state.regex,
+                &state.regex_replacement,
+                verify_action.partial_search.is_some(),
+            )?
+        }
+        SinkFormat::Json { key: has_key } => {
+            let mut actual_messages = vec![];
+            for record in actual_bytes {
+                let key = match record.key {
+                    Some(bytes) => {
+                        if *has_key {
+                            Some(serde_json::from_slice(&bytes).context("decoding json")?)
                         } else {
                             None
                         }
-                        .map(DebugValue);
-                        let value = match deserializer.next() {
-                            None => None,
-                            Some(r) => {
-                                let value = r.context("parsing json")?;
-                                Some(avro::from_json(&value, value_schema.top_node())?)
-                            }
-                        }
-                        .map(DebugValue);
-                        ensure!(
-                            deserializer.next().is_none(),
-                            "at most two avro records per expect line"
-                        );
-                        Ok(Record {
-                            headers,
-                            key,
-                            value,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    }
+                    None => None,
+                };
+                let value = match record.value {
+                    None => None,
+                    Some(bytes) => Some(serde_json::from_slice(&bytes).context("decoding json")?),
+                };
 
-                validate_sink_with_partial_search(
-                    &expected,
-                    &actual_messages,
-                    &state.regex,
-                    &state.regex_replacement,
-                    self.partial_search.is_some(),
-                )?
+                actual_messages.push(Record {
+                    headers: record.headers,
+                    key,
+                    value,
+                });
             }
-            SinkFormat::Json { key: has_key } => {
-                let mut actual_messages = vec![];
-                for record in actual_bytes {
-                    let key = match record.key {
-                        Some(bytes) => {
-                            if *has_key {
-                                Some(serde_json::from_slice(&bytes).context("decoding json")?)
-                            } else {
-                                None
-                            }
-                        }
-                        None => None,
-                    };
-                    let value = match record.value {
-                        None => None,
-                        Some(bytes) => {
-                            Some(serde_json::from_slice(&bytes).context("decoding json")?)
-                        }
-                    };
 
-                    actual_messages.push(Record {
-                        headers: record.headers,
+            if verify_action.sort_messages {
+                actual_messages.sort_by_key(|r| format!("{:?}", r.value));
+            }
+
+            if verify_action.debug_print_only {
+                bail!(
+                    "records in sink:\n{}",
+                    actual_messages
+                        .into_iter()
+                        .map(|a| format!("{:#?}", a))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+
+            let expected = verify_action
+                .expected_messages
+                .iter()
+                .map(|v| {
+                    let (headers, v) = split_headers(v, verify_action.header_keys.len())?;
+                    let mut deserializer = json::parse_many(v)?.into_iter();
+                    let key = if *has_key { deserializer.next() } else { None };
+                    let value = deserializer.next();
+                    ensure!(
+                        deserializer.next().is_none(),
+                        "at most two avro records per expect line"
+                    );
+                    Ok(Record {
+                        headers,
                         key,
                         value,
-                    });
-                }
-
-                if self.sort_messages {
-                    actual_messages.sort_by_key(|r| format!("{:?}", r.value));
-                }
-
-                if self.debug_print_only {
-                    bail!(
-                        "records in sink:\n{}",
-                        actual_messages
-                            .into_iter()
-                            .map(|a| format!("{:#?}", a))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    );
-                }
-
-                let expected = self
-                    .expected_messages
-                    .iter()
-                    .map(|v| {
-                        let (headers, v) = split_headers(v, self.header_keys.len())?;
-                        let mut deserializer = json::parse_many(v)?.into_iter();
-                        let key = if *has_key { deserializer.next() } else { None };
-                        let value = deserializer.next();
-                        ensure!(
-                            deserializer.next().is_none(),
-                            "at most two avro records per expect line"
-                        );
-                        Ok(Record {
-                            headers,
-                            key,
-                            value,
-                        })
                     })
-                    .collect::<Result<Vec<_>, anyhow::Error>>()?;
+                })
+                .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-                validate_sink_with_partial_search(
-                    &expected,
-                    &actual_messages,
-                    &state.regex,
-                    &state.regex_replacement,
-                    self.partial_search.is_some(),
-                )?;
-            }
+            validate_sink_with_partial_search(
+                &expected,
+                &actual_messages,
+                &state.regex,
+                &state.regex_replacement,
+                verify_action.partial_search.is_some(),
+            )?;
         }
-        Ok(ControlFlow::Continue)
     }
+    Ok(ControlFlow::Continue)
 }
 
 /// Expect and split out `n` whitespace-delimited headers before the main contents of the 'expect' row.
@@ -509,7 +515,10 @@ pub struct VerifySchemaAction {
     expected_value_schema: String,
 }
 
-pub fn build_verify_schema(mut cmd: BuiltinCommand) -> Result<VerifySchemaAction, anyhow::Error> {
+pub async fn run_verify_schema(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => SinkFormat::Avro,
         "json" => SinkFormat::Json {
@@ -526,16 +535,17 @@ pub fn build_verify_schema(mut cmd: BuiltinCommand) -> Result<VerifySchemaAction
     };
 
     cmd.args.done()?;
-    Ok(VerifySchemaAction {
+    VerifySchemaAction {
         sink,
         format,
         expected_key_schema: key,
         expected_value_schema: value,
-    })
+    }
+    .run(state)
+    .await
 }
 
-#[async_trait]
-impl Action for VerifySchemaAction {
+impl VerifySchemaAction {
     async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let topic = get_topic(&self.sink, "topic", state).await?;
 
