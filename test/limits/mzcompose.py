@@ -1414,7 +1414,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                         f"{replica_name} (REMOTE ["
                         + ", ".join(f"'{n}:2100'" for n in nodes)
                         + "], COMPUTE ["
-                        + ", ".join(f"'{n}:2100'" for n in nodes)
+                        + ", ".join(f"'{n}:2102'" for n in nodes)
                         + f"], WORKERS {args.workers})"
                     )
 
