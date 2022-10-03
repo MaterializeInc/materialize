@@ -1052,8 +1052,8 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
   can respond immediately: <BOOL>
 
 source materialize.public.t1 (u1, storage):
- read frontier:[<TIMESTAMP>]
-write frontier:[<TIMESTAMP>]\n";
+            read frontier:[<TIMESTAMP>]
+           write frontier:[<TIMESTAMP>]\n";
 
     let row = client
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])

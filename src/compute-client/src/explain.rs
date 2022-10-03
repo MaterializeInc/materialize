@@ -340,7 +340,7 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline> fmt::Display
             writeln!(f, "source {}:", source.name)?;
             writeln!(
                 f,
-                " read frontier:{:?}",
+                "            read frontier:{:?}",
                 source
                     .read_frontier
                     .iter()
@@ -349,7 +349,7 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline> fmt::Display
             )?;
             writeln!(
                 f,
-                "write frontier:{:?}",
+                "           write frontier:{:?}",
                 source
                     .write_frontier
                     .iter()
