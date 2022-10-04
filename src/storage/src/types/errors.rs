@@ -348,7 +348,6 @@ impl Display for SourceErrorDetails {
 pub enum DataflowError {
     DecodeError(DecodeError),
     EvalError(EvalError),
-    SourceError(SourceError),
     EnvelopeError(EnvelopeError),
 }
 
@@ -361,7 +360,6 @@ impl RustType<ProtoDataflowError> for DataflowError {
             kind: Some(match self {
                 DataflowError::DecodeError(err) => DecodeError(err.into_proto()),
                 DataflowError::EvalError(err) => EvalError(err.into_proto()),
-                DataflowError::SourceError(err) => SourceError(err.into_proto()),
                 DataflowError::EnvelopeError(err) => EnvelopeErrorV1(Box::new(err.into_proto())),
             }),
         }
@@ -373,8 +371,8 @@ impl RustType<ProtoDataflowError> for DataflowError {
             Some(kind) => match kind {
                 DecodeError(err) => Ok(DataflowError::DecodeError(err.into_rust()?)),
                 EvalError(err) => Ok(DataflowError::EvalError(err.into_rust()?)),
-                SourceError(err) => Ok(DataflowError::SourceError(err.into_rust()?)),
                 EnvelopeErrorV1(err) => Ok(DataflowError::EnvelopeError((*err).into_rust()?)),
+                SourceError(_) => Err(TryFromProtoError::unknown_enum_variant("SourceError")),
             },
             None => Err(TryFromProtoError::missing_field("ProtoDataflowError::kind")),
         }
@@ -403,7 +401,6 @@ impl Display for DataflowError {
         match self {
             DataflowError::DecodeError(e) => write!(f, "Decode error: {}", e),
             DataflowError::EvalError(e) => write!(f, "Evaluation error: {}", e),
-            DataflowError::SourceError(e) => write!(f, "Source error: {}", e),
             DataflowError::EnvelopeError(e) => write!(f, "Envelope error: {}", e),
         }
     }
@@ -418,12 +415,6 @@ impl From<DecodeError> for DataflowError {
 impl From<EvalError> for DataflowError {
     fn from(e: EvalError) -> Self {
         Self::EvalError(e)
-    }
-}
-
-impl From<SourceError> for DataflowError {
-    fn from(e: SourceError) -> Self {
-        Self::SourceError(e)
     }
 }
 
