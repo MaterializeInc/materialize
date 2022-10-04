@@ -180,6 +180,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let remove = pending_subscribes.process_response(response);
                     if remove {
                         self.pending_subscribes.remove(&sink_id);
+                        self.metrics.active_subscribes.dec();
                     }
                 }
             }

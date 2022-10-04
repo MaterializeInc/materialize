@@ -2204,6 +2204,7 @@ impl<S: Append + 'static> Coordinator<S> {
         });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
+        self.metrics.active_subscribes.inc();
         self.pending_subscribes
             .insert(*sink_id, PendingSubscribe::new(tx, emit_progress, arity));
         self.ship_dataflow(dataflow, compute_instance).await;

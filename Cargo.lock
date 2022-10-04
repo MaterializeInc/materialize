@@ -3050,6 +3050,7 @@ dependencies = [
  "mz-storage",
  "mz-transform",
  "once_cell",
+ "prometheus",
  "prost",
  "rand",
  "rdkafka",
