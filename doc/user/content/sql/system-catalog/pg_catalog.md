@@ -41,3 +41,5 @@ the documented [`mz_catalog`](../mz_catalog) API instead.
 If you are having trouble making a PostgreSQL tool work with Materialize, please
 [file a GitHub issue][gh-issue]. Many PostgreSQL tools can be made to work with
 Materialize with minor changes to the `pg_catalog` compatibility shim.
+
+[gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
