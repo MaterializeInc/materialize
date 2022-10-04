@@ -118,6 +118,7 @@ use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::metrics::Metrics;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::{ReadCapability, ReadHolds};
 use crate::coord::timeline::{TimelineState, WriteTimestamp};
@@ -136,6 +137,7 @@ mod dataflows;
 mod ddl;
 mod indexes;
 mod message_handler;
+mod metrics;
 mod read_policy;
 mod sequencer;
 mod sql;
@@ -361,6 +363,9 @@ pub struct Coordinator<S> {
 
     /// Segment analytics client.
     segment_client: Option<mz_segment::Client>,
+
+    /// Coordinator metrics.
+    metrics: Metrics,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -931,6 +936,7 @@ pub async fn serve<S: Append + 'static>(
                 storage_usage_client,
                 storage_usage_collection_interval,
                 segment_client,
+                metrics: Metrics::register_with(&metrics_registry),
             };
             let bootstrap =
                 handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
