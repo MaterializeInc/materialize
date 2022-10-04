@@ -263,12 +263,6 @@ pub struct SourceError {
     pub error: SourceErrorDetails,
 }
 
-impl SourceError {
-    pub fn new(source_id: GlobalId, error: SourceErrorDetails) -> SourceError {
-        SourceError { source_id, error }
-    }
-}
-
 impl RustType<ProtoSourceError> for SourceError {
     fn into_proto(&self) -> ProtoSourceError {
         ProtoSourceError {
