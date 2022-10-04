@@ -166,6 +166,7 @@ impl FormatBuffer for BytesMut {
     }
 
     unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+        // hmm
         self
     }
 }
