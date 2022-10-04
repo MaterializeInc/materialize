@@ -12,8 +12,9 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
+use uuid::Uuid;
 
-use crate::ExitMessage;
+use crate::{ExitMessage, FronteggAPIToken};
 
 /// Cloud providers and regions available.
 #[derive(Debug, Clone, Copy)]
@@ -87,4 +88,44 @@ pub(crate) fn exit_with_fail_message(message: ExitMessage) -> ! {
         ExitMessage::Str(str_message) => println!("{}", str_message),
     }
     exit(1);
+}
+
+pub(crate) type AppPassword = String;
+
+pub(crate) trait FromTos {
+    /// Turn a password into a Materialize app-password
+    fn from_password(password: String) -> Self;
+
+    /// Turn a profile into a Materialize app-password
+    fn from_api_token(api_token: FronteggAPIToken) -> Self;
+
+    /// Turns the app-password into an API token
+    fn to_api_token(&self) -> Option<FronteggAPIToken>;
+}
+
+impl FromTos for AppPassword {
+    fn from_password(password: String) -> Self {
+        password
+    }
+
+    fn from_api_token(api_token: FronteggAPIToken) -> Self {
+        ("mzp_".to_owned() + &api_token.client_id + &api_token.secret).replace('-', "")
+    }
+
+    fn to_api_token(&self) -> Option<FronteggAPIToken> {
+        if self.len() != 68 || !self.starts_with("mzp_") {
+            None
+        } else {
+            let client_id_uuid = Uuid::parse_str(&self[4..36]).ok();
+            let secret_uuid = Uuid::parse_str(&self[36..68]).ok();
+
+            match client_id_uuid {
+                Some(client_id) => secret_uuid.map(|secret| FronteggAPIToken {
+                    client_id: client_id.to_string(),
+                    secret: secret.to_string(),
+                }),
+                None => None,
+            }
+        }
+    }
 }

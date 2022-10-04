@@ -30,6 +30,12 @@ pub(crate) enum Command {
     /// Prints latest consensus rollup state as JSON
     StateRollup(StateArgs),
 
+    /// Prints the count and size of blobs in an environment
+    BlobCount(BlobCountArgs),
+
+    /// Prints the unreferenced blobs across all shards
+    UnreferencedBlobs(StateArgs),
+
     /// Prints each consensus state change as JSON. Output includes the full consensus state
     /// before and after each state transitions:
     ///
@@ -84,6 +90,18 @@ pub struct StateArgs {
     blob_uri: String,
 }
 
+/// Arguments for viewing the blobs of a given shard
+#[derive(Debug, Clone, clap::Parser)]
+pub struct BlobCountArgs {
+    /// Blob to use
+    ///
+    /// When connecting to a deployed environment's blob, the necessary connection glue must be in
+    /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
+    /// URI scoped to the environment's bucket prefix.
+    #[clap(long)]
+    blob_uri: String,
+}
+
 pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
     match command.command {
         Command::State(args) => {
@@ -129,6 +147,20 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
                     })
                 );
             }
+        }
+        Command::BlobCount(args) => {
+            let blob_counts = mz_persist_client::inspect::blob_counts(&args.blob_uri).await?;
+            println!("{}", json!(blob_counts));
+        }
+        Command::UnreferencedBlobs(args) => {
+            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
+            let unreferenced_blobs = mz_persist_client::inspect::unreferenced_blobs(
+                &shard_id,
+                &args.consensus_uri,
+                &args.blob_uri,
+            )
+            .await?;
+            println!("{}", json!(unreferenced_blobs));
         }
     }
 

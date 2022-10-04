@@ -707,6 +707,18 @@ Set the starting value of the `${kafka-ingest.iteration}` variable.
 
 Send the data to the specified partition.
 
+### set-schema-id-var=VAR
+
+Sets the variable named VAR to the ID of the schema with which data was written.
+The variable is only set if the format of the key was Confluent Avro or
+Protobuf.
+
+### set-key-schema-id-var=VAR
+
+Sets the variable named VAR to the ID of the key schema with which data was
+written. The variable is only set if the format of the key was Confluent Avro
+or Protobuf.
+
 #### `kafka-verify format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize]`
 
 Obtains the data from the specified `sink` or `topic` and compares it to the expected data recorded in the test. The comparison algorithm is sensitive to the order in which data arrives, so `sort-messages=true` can be used along with manually pre-sorting the expected data in the test.

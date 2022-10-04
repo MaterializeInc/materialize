@@ -34,10 +34,7 @@ pub(crate) async fn enable_region_environment(
     cloud_provider: &CloudProvider,
     valid_profile: &ValidProfile,
 ) -> Result<Region, reqwest::Error> {
-    let authorization: String = format!(
-        "Bearer {}",
-        valid_profile.frontegg_auth_machine.access_token
-    );
+    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
 
     let headers = build_region_request_headers(&authorization);
     let body: HashMap<char, char> = HashMap::new();
@@ -64,10 +61,7 @@ pub(crate) async fn get_cloud_provider_region_details(
     cloud_provider_region: &CloudProvider,
     valid_profile: &ValidProfile,
 ) -> Result<Vec<Region>, anyhow::Error> {
-    let authorization: String = format!(
-        "Bearer {}",
-        valid_profile.frontegg_auth_machine.access_token
-    );
+    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
     let headers = build_region_request_headers(&authorization);
     let mut region_api_url = cloud_provider_region.region_controller_url.clone();
     region_api_url.push_str("/api/environmentassignment");
@@ -83,10 +77,7 @@ pub(crate) async fn region_environment_details(
     region: &Region,
     valid_profile: &ValidProfile,
 ) -> Result<Option<Vec<Environment>>, Error> {
-    let authorization: String = format!(
-        "Bearer {}",
-        valid_profile.frontegg_auth_machine.access_token
-    );
+    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
     let headers = build_region_request_headers(authorization.as_str());
     let mut region_api_url = region.environment_controller_url
         [0..region.environment_controller_url.len() - 4]
@@ -142,10 +133,7 @@ pub(crate) async fn list_cloud_providers(
     client: &Client,
     valid_profile: &ValidProfile,
 ) -> Result<Vec<CloudProvider>, Error> {
-    let authorization: String = format!(
-        "Bearer {}",
-        valid_profile.frontegg_auth_machine.access_token
-    );
+    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
 
     let headers = build_region_request_headers(&authorization);
 

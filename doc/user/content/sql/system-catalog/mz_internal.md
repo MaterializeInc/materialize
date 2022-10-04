@@ -314,22 +314,9 @@ Field       | Type       | Meaning
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
-[`boolean`]: /sql/types/boolean
-[`bytea`]: /sql/types/bytea
-[`double precision`]: /sql/types/double-precision
-[`jsonb`]: /sql/types/jsonb
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
-[`oid`]: /sql/types/oid
 [`text`]: /sql/types/text
-[`timestamp`]: /sql/types/timestamp
-[`timestamp with time zone`]: /sql/types/timestamp
 [`uuid`]: /sql/types/uuid
-[gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
-[oid]: /sql/types/oid
-[`text array`]: /sql/types/array
 [arrangement]: /overview/arrangements/#arrangements
 [dataflow]: /overview/arrangements/#dataflows
-[`record`]: /sql/types/record
-[librdkafka]: https://github.com/edenhill/librdkafka/tree/v{{< librdkafka-version >}}
-[`STATISTICS.md`]: https://github.com/edenhill/librdkafka/tree/v{{< librdkafka-version >}}/STATISTICS.md
