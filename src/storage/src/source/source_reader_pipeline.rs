@@ -116,10 +116,10 @@ pub struct RawSourceCreationConfig {
 }
 
 /// A batch of messages from a source reader, along with the current upper and
-/// any errors that occured while reading that batch.
+/// any errors that occurred while reading that batch.
 struct SourceMessageBatch<Key, Value, Diff> {
     messages: HashMap<PartitionId, Vec<(SourceMessage<Key, Value, Diff>, MzOffset)>>,
-    /// Any errors that occured while obtaining this batch. TODO: These
+    /// Any errors that occurred while obtaining this batch. TODO: These
     /// non-definite errors should not show up in the dataflows/the persist
     /// shard but it's the current "correct" behaviour. We need to fix this as a
     /// follow-up issue because it's a bigger thing that breaks with the current

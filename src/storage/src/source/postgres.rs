@@ -417,7 +417,7 @@ async fn postgres_replication_loop_inner(
                 })
             }
             Ok(_) => {
-                // shutdown iniated elsewhere
+                // shutdown initiated elsewhere
                 return Ok(());
             }
         }
