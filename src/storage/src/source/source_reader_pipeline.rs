@@ -57,7 +57,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
-use mz_timely_util::operator::StreamExt as _;
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::source::antichain::OffsetAntichain;
@@ -156,10 +155,7 @@ pub fn create_raw_source<G, S: 'static, R>(
     connection_context: ConnectionContext,
     calc: R,
 ) -> (
-    (
-        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
-        timely::dataflow::Stream<G, SourceError>,
-    ),
+    Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
     Option<Rc<dyn Any>>,
 )
 where
@@ -194,12 +190,12 @@ where
         &resume_stream,
     );
 
-    let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
+    let (reclocked_stream, _reclock_token) =
         reclock_operator::<G, S>(scope, config, reclock_follower, batches, remap_stream);
 
     let token = Rc::new((source_reader_token, remap_token));
 
-    ((reclocked_stream, reclocked_err_stream), Some(token))
+    (reclocked_stream, Some(token))
 }
 
 /// A type-alias that represents actual data coming out of the source reader.
@@ -968,10 +964,7 @@ fn reclock_operator<G, S: 'static>(
         HashMap<PartitionId, Vec<(Timestamp, MzOffset)>>,
     >,
 ) -> (
-    (
-        Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
-        timely::dataflow::Stream<G, SourceError>,
-    ),
+    Vec<timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>>,
     Option<SourceToken>,
 )
 where
@@ -1232,17 +1225,11 @@ where
         }
     });
 
-    let (ok_muxed_stream, err_stream) =
-        reclocked_stream.map_fallible("reclock-demux-ok-err", |(output, r)| match r {
-            Ok(ok) => Ok((output, ok)),
-            Err(err) => Err(err),
-        });
-
-    let ok_streams = ok_muxed_stream.partition(u64::cast_from(num_outputs), |(output, data)| {
+    let ok_streams = reclocked_stream.partition(u64::cast_from(num_outputs), |(output, data)| {
         (u64::cast_from(output), data)
     });
 
-    ((ok_streams, err_stream), None)
+    (ok_streams, None)
 }
 
 /// Take `message` and assign it the appropriate timestamps and push it into the
@@ -1256,17 +1243,8 @@ fn handle_message<S: SourceReader>(
     cap_set: &CapabilitySet<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        (
-            usize,
-            Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
-        ),
-        Tee<
-            Timestamp,
-            (
-                usize,
-                Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
-            ),
-        >,
+        (usize, SourceOutput<S::Key, S::Value, S::Diff>),
+        Tee<Timestamp, (usize, SourceOutput<S::Key, S::Value, S::Diff>)>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
     ts: Timestamp,
@@ -1290,7 +1268,7 @@ fn handle_message<S: SourceReader>(
     let ts_cap = cap_set.delayed(&ts);
     output.session(&ts_cap).give((
         message.output,
-        Ok(SourceOutput::new(
+        SourceOutput::new(
             key,
             out,
             offset,
@@ -1298,7 +1276,7 @@ fn handle_message<S: SourceReader>(
             message.partition,
             message.headers,
             message.specific_diff,
-        )),
+        ),
     ));
     match metric_updates.entry(partition) {
         Entry::Occupied(mut entry) => {

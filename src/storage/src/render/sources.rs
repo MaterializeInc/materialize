@@ -110,9 +110,9 @@ where
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let ((ok_sources, err_source), capability) = match connection {
+    let (ok_sources, capability) = match connection {
         SourceConnection::Kafka(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
+            let (oks, cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
@@ -120,10 +120,10 @@ where
                 resumption_calculator,
             );
             let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
+            (oks, cap)
         }
         SourceConnection::Kinesis(connection) => {
-            let ((oks, err), cap) =
+            let (oks, cap) =
                 source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
                     scope,
                     base_source_config,
@@ -132,10 +132,10 @@ where
                     resumption_calculator,
                 );
             let oks = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
+            (oks, cap)
         }
         SourceConnection::S3(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
+            let (oks, cap) = source::create_raw_source::<_, S3SourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
@@ -143,10 +143,10 @@ where
                 resumption_calculator,
             );
             let oks = oks.into_iter().map(SourceType::ByteStream).collect();
-            ((oks, err), cap)
+            (oks, cap)
         }
         SourceConnection::Postgres(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
+            let (oks, cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
@@ -154,10 +154,10 @@ where
                 resumption_calculator,
             );
             let oks = oks.into_iter().map(SourceType::Row).collect();
-            ((oks, err), cap)
+            (oks, cap)
         }
         SourceConnection::LoadGenerator(connection) => {
-            let ((oks, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
+            let (oks, cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
@@ -165,7 +165,7 @@ where
                 resumption_calculator,
             );
             let oks = oks.into_iter().map(SourceType::Row).collect();
-            ((oks, err), cap)
+            (oks, cap)
         }
     };
 
@@ -178,10 +178,7 @@ where
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
-        let error_collections = vec![err_source
-            .map(DataflowError::SourceError)
-            .pass_through("source-errors", 1)
-            .as_collection()];
+        let error_collections = vec![];
 
         let (ok, err, extra_tokens) = render_source_stream(
             scope,
