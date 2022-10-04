@@ -50,7 +50,7 @@ use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::{Stream, StreamExt};
-use tracing::trace;
+use tracing::{trace, warn};
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
@@ -1171,25 +1171,11 @@ where
                         )
                     });
 
-                    // TODO: We should not emit the non-definite errors as
-                    // DataflowErrors, which will make them end up on the persist
-                    // shard for this source. Instead they should be reported to the
-                    // Healthchecker. But that's future work.
                     if !untimestamped_batch.non_definite_errors.is_empty() {
-                        // If there are errors, it means that someone must also have
-                        // given us a capability because a batch/batch-summary was
-                        // emitted to the remap operator.
-                        let err_cap = cap_set.delayed(
-                            cap_set
-                                .first()
-                                .expect("missing a capability for emitting errors"),
-                        );
-                        let mut session = output.session(&err_cap);
-                        let errors = untimestamped_batch
-                            .non_definite_errors
-                            .iter()
-                            .map(|e| (0, Err(e.clone())));
-                        session.give_iterator(errors);
+                        for err in &untimestamped_batch.non_definite_errors {
+                            // TODO: expose these via the healthcheck!
+                            warn!("Ignoring non-definite error for source: {:#?}", err);
+                        }
                     }
                 }
 
