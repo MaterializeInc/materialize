@@ -39,7 +39,7 @@ async fn ensure_kafka_topic(
     mut partition_count: i32,
     mut replication_factor: i32,
     retention: KafkaSinkConnectionRetention,
-) -> Result<(), StorageError> {
+) -> Result<(), anyhow::Error> {
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
     // Newer versions of Kafka can instead send create topic requests with -1 and have this happen
@@ -159,7 +159,7 @@ async fn publish_kafka_schemas(
     key_schema_type: Option<mz_ccsr::SchemaType>,
     value_schema: &str,
     value_schema_type: mz_ccsr::SchemaType,
-) -> Result<(Option<i32>, i32), StorageError> {
+) -> Result<(Option<i32>, i32), anyhow::Error> {
     let value_schema_id = ccsr
         .publish_schema(
             &format!("{}-value", topic),
