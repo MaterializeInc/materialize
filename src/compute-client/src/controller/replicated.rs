@@ -612,10 +612,12 @@ where
         for command in self.state.history.iter() {
             let mut command = command.clone();
             replica_state.specialize_command(&mut command, id);
-            replica_state
-                .command_tx
-                .send(command)
-                .expect("Channel to client has gone away!")
+            if replica_state.command_tx.send(command).is_err() {
+                // We swallow the error here. On the next send, we will fail again, and
+                // restart the connection as well as this rehydration.
+                tracing::warn!("Replica {:?} connection terminated during rehydration", id);
+                break;
+            }
         }
 
         // Start tracking frontiers of persisted_logs collections.
