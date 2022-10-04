@@ -1295,7 +1295,7 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ),
                 replica2 (
                     REMOTE ['computed_2_1:2100', 'computed_2_2:2100'],
-                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2100'],
+                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2102'],
                     WORKERS {args.workers}
                 )
             )
