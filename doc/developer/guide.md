@@ -234,8 +234,7 @@ To speed up the development cycle, you can enable the `dev-web` feature like so:
 
 ```shell
 cd src/environmentd
-cargo build --bin storaged --bin computed
-cargo run --bin environmentd --features=dev-web
+bin/environmentd --features=dev-web
 ```
 
 In this mode, every request for a static file will reload the file from disk.
