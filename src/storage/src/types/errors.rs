@@ -21,6 +21,8 @@ use mz_repr::{GlobalId, Row};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.types.errors.rs"));
 
+/// The underlying data was not decodable in the format we expected: eg.
+/// invalid JSON or Avro data that doesn't match a schema.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
@@ -254,6 +256,8 @@ impl Display for UpsertError {
     }
 }
 
+/// Source-wide durable errors; for example, a replication log being meaningless or corrupted.
+/// This should _not_ include transient source errors, like connection issues or misconfigurations.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct SourceError {
     pub source_id: GlobalId,
@@ -345,6 +349,8 @@ impl Display for SourceErrorDetails {
     }
 }
 
+/// An error that's destined to be presented to the user in a differential dataflow collection.
+/// For example, a divide by zero will be visible in the error collection for a particular row.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
 pub enum DataflowError {
     DecodeError(DecodeError),
