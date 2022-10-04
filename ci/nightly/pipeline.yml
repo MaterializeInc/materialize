@@ -44,6 +44,9 @@ steps:
           - { value: checks-oneatatime-restart-environmentd-storaged }
           - { value: checks-oneatatime-kill-storaged }
           - { value: checks-oneatatime-restart-postgres-backend }
+          - { value: checks-upgrade-entire-mz }
+          - { value: checks-upgrade-computed-first }
+          - { value: checks-upgrade-computed-last }
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
           - { value: unused-deps }
@@ -365,6 +368,36 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartPostgresBackend, --execution-mode=oneatatime]
+
+  - id: checks-upgrade-entire-mz
+    label: "Upgrade entire Mz from v0.27.0-alpha.23"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeEntireMz]
+
+  - id: checks-upgrade-computed-first
+    label: "Upgrade computed from v0.27.0-alpha.23 first"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeComputedFirst]
+
+  - id: checks-upgrade-computed-last
+    label: "Upgrade computed from v0.27.0-alpha.23 last"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeComputedLast]
 
   - id: persist-maelstrom-single-node
     label: Long single-node Maelstrom coverage of persist
