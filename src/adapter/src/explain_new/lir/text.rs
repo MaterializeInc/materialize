@@ -115,20 +115,15 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                     head = body.as_ref();
                 }
 
-                // The body comes first in the text output format in order to
-                // align with the format convention the dataflow is rendered
-                // top to bottom
-                writeln!(f, "{}Let", ctx.indent)?;
+                writeln!(f, "{}Return", ctx.indent)?;
+                ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                writeln!(f, "{}Where", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    Displayable::from(head).fmt_text(f, ctx)?;
-                    writeln!(f, "{}Where", ctx.indent)?;
-                    ctx.indented(|ctx| {
-                        for (id, value) in bindings.iter().rev() {
-                            writeln!(f, "{}{} =", ctx.indent, *id)?;
-                            ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
-                        }
-                        Ok(())
-                    })
+                    for (id, value) in bindings.iter().rev() {
+                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                    }
+                    Ok(())
                 })?;
             }
             Mfp {
