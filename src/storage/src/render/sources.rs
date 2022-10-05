@@ -18,16 +18,16 @@ use std::sync::Arc;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Exchange, Map, OkErr, ToStream};
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
-use crate::controller::{CollectionMetadata, SourceResumptionFrontierCalculator};
+use crate::controller::CollectionMetadata;
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
-use crate::source::types::DecodeResult;
+use crate::source::types::{DecodeResult, SourceOutput};
 use crate::source::{
     self, persist_source, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
     LoadGeneratorSourceReader, PostgresSourceReader, RawSourceCreationConfig, S3SourceReader,
@@ -71,7 +71,7 @@ pub fn render_source<G>(
     resume_upper: Antichain<G::Timestamp>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
-    (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
+    Vec<(Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)>,
     Rc<dyn Any>,
 )
 where
@@ -80,69 +80,51 @@ where
     // Tokens that we should return from the method.
     let mut needed_tokens: Vec<Rc<dyn Any>> = Vec::new();
 
-    // Before proceeding, we may need to remediate sources with non-trivial relational
-    // expressions that post-process the bare source. If the expression is trivial, a
-    // get of the bare source, we can present `src.operators` to the source directly.
-    // Otherwise, we need to zero out `src.operators` and instead perform that logic
-    // at the end of `src.optimized_expr`.
-    //
-    // This has a lot of potential for improvement in the near future.
-
-    let SourceDesc {
-        connection,
-        encoding,
-        envelope,
-        metadata_columns,
-        timestamp_interval,
-    } = description.desc;
-
-    // All sources should push their various error streams into this vector,
-    // whose contents will be concatenated and inserted along the collection.
-    let mut error_collections = Vec::<Collection<_, _, Diff>>::new();
-
     // Note that this `render_source` attaches a single _instance_ of a source
     // to the passed `Scope`, and this instance may be disabled if the
     // source type does not support multiple instances. `render_source`
     // is called on each timely worker as part of
     // [`super::build_storage_dataflow`].
 
+    let connection = description.desc.connection.clone();
     let source_name = format!("{}-{}", connection.name(), id);
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
         upstream_name: connection.upstream_name().map(ToOwned::to_owned),
         id,
-        timestamp_interval,
+        num_outputs: description.desc.num_outputs(),
+        timestamp_interval: description.desc.timestamp_interval.clone(),
         worker_id: scope.index(),
         worker_count: scope.peers(),
-        encoding: encoding.clone(),
+        encoding: description.desc.encoding.clone(),
         now: storage_state.now.clone(),
         // TODO(guswynn): avoid extra clones here
         base_metrics: storage_state.source_metrics.clone(),
         resume_upper: resume_upper.clone(),
-        storage_metadata: description.storage_metadata.clone(),
+        storage_metadata: description.ingestion_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
     };
 
-    let resumption_calculator = SourceResumptionFrontierCalculator::new(
-        description.storage_metadata.clone(),
-        envelope.clone(),
-    );
+    // TODO(petrosagg): put the description as-is in the RawSourceCreationConfig instead of cloning
+    // a million fields
+    let resumption_calculator = description.clone();
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let ((ok_source, err_source), capability) = match connection {
+    let ((ok_sources, err_source), capability) = match connection {
         SourceConnection::Kafka(connection) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
+            let ((oks, err), cap) = source::create_raw_source::<_, KafkaSourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );
-            ((SourceType::Delimited(ok), err), cap)
+            let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
+            ((oks, err), cap)
         }
         SourceConnection::Kinesis(connection) => {
-            let ((ok, err), cap) =
+            let ((oks, err), cap) =
                 source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>, _>(
                     scope,
                     base_source_config,
@@ -150,48 +132,110 @@ where
                     storage_state.connection_context.clone(),
                     resumption_calculator,
                 );
-            ((SourceType::Delimited(ok), err), cap)
+            let oks = oks.into_iter().map(SourceType::Delimited).collect();
+            ((oks, err), cap)
         }
         SourceConnection::S3(connection) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
+            let ((oks, err), cap) = source::create_raw_source::<_, S3SourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );
-            ((SourceType::ByteStream(ok), err), cap)
+            let oks = oks.into_iter().map(SourceType::ByteStream).collect();
+            ((oks, err), cap)
         }
         SourceConnection::Postgres(connection) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
+            let ((oks, err), cap) = source::create_raw_source::<_, PostgresSourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );
-            ((SourceType::Row(ok), err), cap)
+            let oks = oks.into_iter().map(SourceType::Row).collect();
+            ((oks, err), cap)
         }
         SourceConnection::LoadGenerator(connection) => {
-            let ((ok, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
+            let ((oks, err), cap) = source::create_raw_source::<_, LoadGeneratorSourceReader, _>(
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
             );
-            ((SourceType::Row(ok), err), cap)
+            let oks = oks.into_iter().map(SourceType::Row).collect();
+            ((oks, err), cap)
         }
     };
 
-    // Include any source errors.
-    error_collections.push(
-        err_source
+    let source_token = Rc::new(capability);
+
+    needed_tokens.push(source_token);
+
+    let mut outputs = vec![];
+    for ok_source in ok_sources {
+        // All sources should push their various error streams into this vector,
+        // whose contents will be concatenated and inserted along the collection.
+        // All subsources include the non-definite errors of the ingestion
+        let error_collections = vec![err_source
             .map(DataflowError::SourceError)
             .pass_through("source-errors", 1)
-            .as_collection(),
-    );
+            .as_collection()];
 
+        let (ok, err, extra_tokens) = render_source_stream(
+            scope,
+            dataflow_debug_name,
+            id,
+            ok_source,
+            description.clone(),
+            resume_upper.clone(),
+            error_collections,
+            storage_state,
+        );
+        needed_tokens.extend(extra_tokens);
+        outputs.push((ok, err));
+    }
+    (outputs, Rc::new(needed_tokens))
+}
+
+type ConcreteSourceType<G> = SourceType<
+    // Delimited sources
+    Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
+    // ByteStream sources
+    Stream<G, SourceOutput<(), Option<Vec<u8>>, ()>>,
+    // Row sources
+    Stream<G, SourceOutput<(), Row, Diff>>,
+>;
+
+/// Completes the rendering of a particular source stream by applying decoding and envelope
+/// processing as necessary
+fn render_source_stream<G>(
+    scope: &mut G,
+    dataflow_debug_name: &String,
+    id: GlobalId,
+    ok_source: ConcreteSourceType<G>,
+    description: IngestionDescription<CollectionMetadata>,
+    resume_upper: Antichain<G::Timestamp>,
+    mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
+    storage_state: &mut crate::storage_state::StorageState,
+) -> (
+    Collection<G, Row, Diff>,
+    Collection<G, DataflowError, Diff>,
+    Vec<Rc<dyn Any>>,
+)
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let mut needed_tokens: Vec<Rc<dyn Any>> = vec![];
+
+    let SourceDesc {
+        encoding,
+        envelope,
+        metadata_columns,
+        ..
+    } = description.desc;
     let (stream, errors) = {
         let (key_encoding, value_encoding) = match encoding {
             SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
@@ -339,7 +383,14 @@ where
                                 scope,
                                 id,
                                 persist_clients,
-                                description.storage_metadata.clone(),
+                                // TODO(petrosagg): upsert needs to read its output and here we
+                                // assume that all upsert ingestion will output their data to the
+                                // same collection as the one carrying the ingestion. This is the
+                                // case at the time of writing but we need a more robust
+                                // implementation. Consider having the upsert operator hold private
+                                // state (a copy), or encoding the fact that this operator's state
+                                // and the output collection state is the same in an explicit way
+                                description.ingestion_metadata,
                                 Some(Antichain::from_elem(previous_as_of)),
                                 Antichain::new(),
                                 None,
@@ -353,7 +404,6 @@ where
                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                         &transformed_results,
                         resume_upper,
-                        description.typ.arity(),
                         upsert_envelope.clone(),
                         previous_stream,
                         previous_token,
@@ -414,12 +464,8 @@ where
         _ => collection::concatenate(scope, error_collections),
     };
 
-    let source_token = Rc::new(capability);
-
-    needed_tokens.push(source_token);
-
     // Return the collections and any needed tokens.
-    ((collection, err_collection), Rc::new(needed_tokens))
+    (collection, err_collection, needed_tokens)
 }
 
 /// After handling metadata insertion, we split streams into key/value parts for convenience

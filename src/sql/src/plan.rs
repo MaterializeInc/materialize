@@ -184,7 +184,9 @@ impl Plan {
             StatementKind::CreateSchema => vec![PlanKind::CreateSchema],
             StatementKind::CreateSecret => vec![PlanKind::CreateSecret],
             StatementKind::CreateSink => vec![PlanKind::CreateSink],
-            StatementKind::CreateSource => vec![PlanKind::CreateSource],
+            StatementKind::CreateSource | StatementKind::CreateSubsource => {
+                vec![PlanKind::CreateSource]
+            }
             StatementKind::CreateTable => vec![PlanKind::CreateTable],
             StatementKind::CreateType => vec![PlanKind::CreateType],
             StatementKind::CreateView => vec![PlanKind::CreateView],
@@ -652,9 +654,16 @@ pub struct Table {
 #[derive(Clone, Debug)]
 pub struct Source {
     pub create_sql: String,
-    pub connection_id: Option<GlobalId>,
-    pub source_desc: SourceDesc,
+    pub ingestion: Option<Ingestion>,
     pub desc: RelationDesc,
+}
+
+#[derive(Clone, Debug)]
+pub struct Ingestion {
+    pub connection_id: Option<GlobalId>,
+    pub desc: SourceDesc,
+    pub source_imports: HashSet<GlobalId>,
+    pub subsource_exports: HashMap<GlobalId, usize>,
 }
 
 #[derive(Clone, Debug)]

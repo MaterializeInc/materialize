@@ -68,6 +68,7 @@ where
     ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         match self.0.get_next_message()? {
             NextMessage::Ready(SourceMessageType::Finalized(SourceMessage {
+                output,
                 key: _,
                 value,
                 partition,
@@ -77,6 +78,7 @@ where
                 specific_diff,
             })) => Ok(NextMessage::Ready(SourceMessageType::Finalized(
                 SourceMessage {
+                    output,
                     key: None,
                     value,
                     partition,
@@ -87,6 +89,7 @@ where
                 },
             ))),
             NextMessage::Ready(SourceMessageType::InProgress(SourceMessage {
+                output,
                 key: _,
                 value,
                 partition,
@@ -96,6 +99,7 @@ where
                 specific_diff,
             })) => Ok(NextMessage::Ready(SourceMessageType::InProgress(
                 SourceMessage {
+                    output,
                     key: None,
                     value,
                     partition,

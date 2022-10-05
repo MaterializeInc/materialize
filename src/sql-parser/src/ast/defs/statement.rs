@@ -48,6 +48,7 @@ pub enum Statement<T: AstInfo> {
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
     CreateSource(CreateSourceStatement<T>),
+    CreateSubsource(CreateSubsourceStatement<T>),
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateViews(CreateViewsStatement<T>),
@@ -104,6 +105,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateDatabase(stmt) => f.write_node(stmt),
             Statement::CreateSchema(stmt) => f.write_node(stmt),
             Statement::CreateSource(stmt) => f.write_node(stmt),
+            Statement::CreateSubsource(stmt) => f.write_node(stmt),
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateViews(stmt) => f.write_node(stmt),
@@ -460,6 +462,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
+    pub subsources: Option<CreateSourceSubsources<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -491,12 +494,9 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_node(&display::comma_separated(&self.include_metadata));
         }
 
-        match &self.envelope {
-            None => (),
-            Some(envelope) => {
-                f.write_str(" ENVELOPE ");
-                f.write_node(envelope);
-            }
+        if let Some(envelope) = &self.envelope {
+            f.write_str(" ENVELOPE ");
+            f.write_node(envelope);
         }
 
         if !self.with_options.is_empty() {
@@ -504,9 +504,93 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
+
+        if let Some(subsources) = &self.subsources {
+            f.write_str(" ");
+            f.write_node(subsources);
+        }
     }
 }
 impl_display_t!(CreateSourceStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// A selected subsource in a FOR TABLES (..) statement
+pub enum CreateSourceSubsource<T: AstInfo> {
+    /// An unaliased subbsource
+    Bare(UnresolvedObjectName),
+    /// An subbsource aliased to a different name
+    Aliased(UnresolvedObjectName, UnresolvedObjectName),
+    /// An subbsource fully resolved to the target catalog object it will be written to
+    Resolved(UnresolvedObjectName, T::ObjectName),
+}
+
+impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Bare(name) => f.write_node(name),
+            Self::Aliased(name, alias) => {
+                f.write_node(name);
+                f.write_str(" AS ");
+                f.write_node(alias);
+            }
+            Self::Resolved(name, target) => {
+                f.write_node(name);
+                f.write_str(" INTO ");
+                f.write_node(target);
+            }
+        }
+    }
+}
+impl_display_t!(CreateSourceSubsource);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateSourceSubsources<T: AstInfo> {
+    /// A subset defined with FOR TABLES (...)
+    Subset(Vec<CreateSourceSubsource<T>>),
+    /// FOR ALL TABLES
+    All,
+}
+
+impl<T: AstInfo> AstDisplay for CreateSourceSubsources<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Subset(subsources) => {
+                f.write_str("FOR TABLES (");
+                f.write_node(&display::comma_separated(subsources));
+                f.write_str(")");
+            }
+            Self::All => f.write_str("FOR ALL TABLES"),
+        }
+    }
+}
+impl_display_t!(CreateSourceSubsources);
+
+/// `CREATE SUBSOURCE`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSubsourceStatement<T: AstInfo> {
+    pub name: UnresolvedObjectName,
+    pub columns: Vec<ColumnDef<T>>,
+    pub constraints: Vec<TableConstraint<T>>,
+    pub if_not_exists: bool,
+}
+
+impl<T: AstInfo> AstDisplay for CreateSubsourceStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE SUBSOURCE ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.columns));
+        if !self.constraints.is_empty() {
+            f.write_str(", ");
+            f.write_node(&display::comma_separated(&self.constraints));
+        }
+        f.write_str(")");
+    }
+}
+impl_display_t!(CreateSubsourceStatement);
 
 /// An option in a `CREATE SINK` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

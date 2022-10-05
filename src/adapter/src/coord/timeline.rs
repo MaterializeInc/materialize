@@ -542,7 +542,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     CatalogItem::StorageCollection(_) => {
                         timelines.insert(id, Timeline::EpochMilliseconds);
                     }
-                    _ => {}
+                    CatalogItem::Sink(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_) => {}
                 }
             }
         }

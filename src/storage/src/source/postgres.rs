@@ -300,6 +300,7 @@ impl SourceReader for PostgresSourceReader {
                 if end {
                     Ok(NextMessage::Ready(SourceMessageType::Finalized(
                         SourceMessage {
+                            output: 0,
                             partition: PartitionId::None,
                             offset: lsn.into(),
                             upstream_time_millis: None,
@@ -312,6 +313,7 @@ impl SourceReader for PostgresSourceReader {
                 } else {
                     Ok(NextMessage::Ready(SourceMessageType::InProgress(
                         SourceMessage {
+                            output: 0,
                             partition: PartitionId::None,
                             offset: lsn.into(),
                             upstream_time_millis: None,

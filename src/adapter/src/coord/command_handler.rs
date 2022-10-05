@@ -365,6 +365,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
                     | Statement::CreateSource(_)
+                    | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
@@ -435,6 +436,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 });
             }
+
+            // `CREATE SUBSOURCE` statements are disallowed for users and are only generated
+            // automatically as part of purification
+            Statement::CreateSubsource(_) => tx.send(
+                Err(AdapterError::Unsupported(
+                    "CREATE SUBSOURCE cannot be executed directly",
+                )),
+                session,
+            ),
 
             // All other statements are handled immediately.
             _ => match self.plan_statement(&mut session, stmt, &params) {

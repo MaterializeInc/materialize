@@ -99,14 +99,14 @@ use mz_persist_client::usage::StorageUsageClient;
 use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
-use mz_sql::ast::{CreateSourceStatement, Raw, Statement};
+use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
 use mz_storage::controller::CollectionDescription;
 use mz_storage::types::connections::ConnectionContext;
 use mz_storage::types::sinks::StorageSinkConnection;
-use mz_storage::types::sources::{IngestionDescription, Timeline};
+use mz_storage::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -199,7 +199,13 @@ pub struct CreateSourceStatementReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<CreateSourceStatement<Aug>, AdapterError>,
+    pub result: Result<
+        (
+            Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+            CreateSourceStatement<Aug>,
+        ),
+        AdapterError,
+    >,
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
@@ -471,18 +477,34 @@ impl<S: Append + 'static> Coordinator<S> {
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
                     // Re-announce the source description.
-                    let mut ingestion = IngestionDescription {
-                        desc: source.source_desc.clone(),
-                        source_imports: BTreeMap::new(),
-                        storage_metadata: (),
-                        typ: source.desc.typ().clone(),
-                    };
-
-                    for id in entry.uses() {
-                        if self.catalog.state().get_entry(id).source().is_some() {
-                            ingestion.source_imports.insert(*id, ());
+                    let ingestion = source.ingestion.clone().map(|ingestion| {
+                        let mut source_imports = BTreeMap::new();
+                        for source_import in ingestion.source_imports {
+                            source_imports.insert(source_import, ());
                         }
-                    }
+
+                        let mut source_exports = BTreeMap::new();
+                        // By convention the first output corresponds to the main source object
+                        let main_export = SourceExport {
+                            output_index: 0,
+                            storage_metadata: (),
+                        };
+                        source_exports.insert(entry.id(), main_export);
+                        for (subsource, output_index) in ingestion.subsource_exports {
+                            let export = SourceExport {
+                                output_index,
+                                storage_metadata: (),
+                            };
+                            source_exports.insert(subsource, export);
+                        }
+
+                        IngestionDescription {
+                            desc: ingestion.desc,
+                            ingestion_metadata: (),
+                            source_imports,
+                            source_exports,
+                        }
+                    });
 
                     self.controller
                         .storage
@@ -490,7 +512,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             entry.id(),
                             CollectionDescription {
                                 desc: source.desc.clone(),
-                                ingestion: Some(ingestion),
+                                ingestion,
                                 since: None,
                                 status_collection_id,
                                 host_config: Some(source.host_config.clone()),

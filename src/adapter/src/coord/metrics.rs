@@ -54,6 +54,7 @@ where
         StatementKind::CreateDatabase => "create_database",
         StatementKind::CreateSchema => "create_schema",
         StatementKind::CreateSource => "create_source",
+        StatementKind::CreateSubsource => "create_subsource",
         StatementKind::CreateSink => "create_sink",
         StatementKind::CreateView => "create_view",
         StatementKind::CreateViews => "create_views",

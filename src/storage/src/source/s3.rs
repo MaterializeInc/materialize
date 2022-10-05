@@ -941,6 +941,7 @@ impl SourceReader for S3SourceReader {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessageType::Finalized(
                     SourceMessage {
+                        output: 0,
                         partition: PartitionId::None,
                         offset: self.offset.into(),
                         upstream_time_millis: None,
