@@ -48,6 +48,7 @@ steps:
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-computed-first }
           - { value: checks-upgrade-computed-last }
+          - { value: cloudtest-upgrade }
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
           - { value: unused-deps }
@@ -409,6 +410,20 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeComputedLast]
+
+  - id: cloudtest-upgrade
+    label: "Cloudtest upgrade from main to main"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=UpgradeComputedLast]
+    artifact_paths: junit_cloudtest_*.xml
+    plugins:
+      - ./ci/plugins/cloudtest:
+          args: [-m=long, test/cloudtest/test_upgrade.py]
 
   - id: persist-maelstrom-single-node
     label: Long single-node Maelstrom coverage of persist

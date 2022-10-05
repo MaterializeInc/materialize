@@ -9,55 +9,12 @@
 
 from enum import Enum
 
-from materialize.checks.aggregation import *  # noqa: F401 F403
-from materialize.checks.alter_index import *  # noqa: F401 F403
-from materialize.checks.boolean_type import *  # noqa: F401 F403
+from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
-from materialize.checks.cluster import *  # noqa: F401 F403
-from materialize.checks.commit import *  # noqa: F401 F403
-from materialize.checks.constant_plan import *  # noqa: F401 F403
-from materialize.checks.create_index import *  # noqa: F401 F403
-from materialize.checks.create_table import *  # noqa: F401 F403
-from materialize.checks.databases import *  # noqa: F401 F403
-from materialize.checks.debezium import *  # noqa: F401 F403
-from materialize.checks.delete import *  # noqa: F401 F403
-from materialize.checks.drop_index import *  # noqa: F401 F403
-from materialize.checks.drop_table import *  # noqa: F401 F403
-from materialize.checks.error import *  # noqa: F401 F403
-from materialize.checks.float_types import *  # noqa: F401 F403
-from materialize.checks.having import *  # noqa: F401 F403
-from materialize.checks.insert_select import *  # noqa: F401 F403
-from materialize.checks.join_implementations import *  # noqa: F401 F403
-from materialize.checks.join_types import *  # noqa: F401 F403
-from materialize.checks.jsonb_type import *  # noqa: F401 F403
-from materialize.checks.kafka_formats import *  # noqa: F401 F403
-from materialize.checks.large_tables import *  # noqa: F401 F403
-from materialize.checks.like import *  # noqa: F401 F403
-from materialize.checks.materialized_views import *  # noqa: F401 F403
-from materialize.checks.nested_types import *  # noqa: F401 F403
-from materialize.checks.null_value import *  # noqa: F401 F403
-from materialize.checks.numeric_types import *  # noqa: F401 F403
-from materialize.checks.pg_cdc import *  # noqa: F401 F403
-from materialize.checks.regex import *  # noqa: F401 F403
-from materialize.checks.rename_index import *  # noqa: F401 F403
-from materialize.checks.rename_source import *  # noqa: F401 F403
-from materialize.checks.rename_table import *  # noqa: F401 F403
-from materialize.checks.rename_view import *  # noqa: F401 F403
-from materialize.checks.replica import *  # noqa: F401 F403
-from materialize.checks.roles import *  # noqa: F401 F403
-from materialize.checks.rollback import *  # noqa: F401 F403
+from materialize.checks.executors import MzcomposeExecutor
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
-from materialize.checks.sink import *  # noqa: F401 F403
-from materialize.checks.temporal_types import *  # noqa: F401 F403
-from materialize.checks.text_bytea_types import *  # noqa: F401 F403
-from materialize.checks.threshold import *  # noqa: F401 F403
-from materialize.checks.top_k import *  # noqa: F401 F403
-from materialize.checks.update import *  # noqa: F401 F403
-from materialize.checks.upgrade_scenarios import *  # noqa: F401 F403
-from materialize.checks.upsert import *  # noqa: F401 F403
-from materialize.checks.users import *  # noqa: F401 F403
-from materialize.checks.window_functions import *  # noqa: F401 F403
+from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Computed,
@@ -117,7 +74,6 @@ def teardown(c: Composition) -> None:
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # c.silent = True
-
     parser.add_argument(
         "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
     )
@@ -140,22 +96,26 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     checks = (
-        [globals()[c] for c in args.check] if args.check else Check.__subclasses__()
+        [globals()[check] for check in args.check]
+        if args.check
+        else Check.__subclasses__()
     )
+
+    executor = MzcomposeExecutor(composition=c)
 
     for scenario_class in scenarios:
         print(f"Testing scenario {scenario_class}...")
         if args.execution_mode is ExecutionMode.ALLTOGETHER:
             setup(c)
-            scenario = scenario_class(checks=checks)
-            scenario.run(c)
+            scenario = scenario_class(checks=checks, executor=executor)
+            scenario.run()
             teardown(c)
         elif args.execution_mode is ExecutionMode.ONEATATIME:
             for check in checks:
                 print(f"Running individual check {check}, scenario {scenario_class}")
                 setup(c)
-                scenario = scenario_class(checks=[check])
-                scenario.run(c)
+                scenario = scenario_class(checks=[check], executor=executor)
+                scenario.run()
                 teardown(c)
         else:
             assert False

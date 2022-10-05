@@ -22,7 +22,7 @@ class Testdrive(K8sPod):
 
         container = V1Container(
             name="testdrive",
-            image=self.image("testdrive", release_mode),
+            image=self.image("testdrive", release_mode=release_mode),
             command=["sleep", "infinity"],
         )
 
