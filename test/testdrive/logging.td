@@ -43,7 +43,7 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_worker_compute_dependencies);
 1
 
-> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_peek_active);
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_active_peeks);
 1
 
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_raw_peek_durations);

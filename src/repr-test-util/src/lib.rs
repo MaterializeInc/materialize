@@ -12,6 +12,7 @@
 //! These test utilities are relied by crates other than `repr`.
 
 use chrono::NaiveDateTime;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use proc_macro2::TokenTree;
 
 use mz_lowertest::deserialize_optional_generic;
@@ -76,9 +77,13 @@ where
                     } else {
                         NaiveDateTime::parse_from_str(litval, "\"%Y-%m-%d %H:%M:%S\"")
                     };
-                    Ok(Datum::from(datetime.map_err(|e| {
-                        format!("Error while parsing NaiveDateTime: {}", e)
-                    })?))
+                    Ok(Datum::from(
+                        CheckedTimestamp::from_timestamplike(
+                            datetime
+                                .map_err(|e| format!("Error while parsing NaiveDateTime: {}", e))?,
+                        )
+                        .unwrap(),
+                    ))
                 }
                 _ => Err(format!("Unsupported literal type {:?}", littyp)),
             }

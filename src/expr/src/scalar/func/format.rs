@@ -873,10 +873,10 @@ impl DateTimeFormat {
     /// Renders the format string using the timestamp `ts` as the input. The
     /// placeholders in the format string will be filled in appropriately
     /// according to the value of `ts`.
-    pub fn render(&self, ts: impl TimestampLike) -> String {
+    pub fn render(&self, ts: &impl TimestampLike) -> String {
         let mut out = String::new();
         for node in &self.0 {
-            node.render(&mut out, &ts)
+            node.render(&mut out, ts)
                 .expect("rendering to string cannot fail");
         }
         out

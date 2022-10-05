@@ -124,7 +124,6 @@ use crate::coord::read_policy::{ReadCapability, ReadHolds};
 use crate::coord::timeline::{TimelineState, WriteTimestamp};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
-use crate::sink_connection;
 use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter};
 
@@ -382,14 +381,14 @@ impl<S: Append + 'static> Coordinator<S> {
         for instance in self.catalog.compute_instances() {
             self.controller.compute.create_instance(
                 instance.id,
-                instance.logging.clone(),
+                instance.log_indexes.clone(),
                 self.catalog.system_config().max_result_size(),
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config
-                    .persisted_logs
-                    .get_sources()
+                    .logging
+                    .sources
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into()))
                     .collect();
@@ -402,7 +401,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids());
+                persisted_source_ids.extend(replica.config.logging.source_ids());
 
                 self.controller
                     .active_compute()
@@ -570,10 +569,12 @@ impl<S: Append + 'static> Coordinator<S> {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connection =
-                        sink_connection::build(builder.clone(), self.connection_context.clone())
-                            .await
-                            .with_context(|| format!("recreating sink {}", entry.name()))?;
+                    let connection = mz_storage::sink::build_sink_connection(
+                        builder.clone(),
+                        self.connection_context.clone(),
+                    )
+                    .await
+                    .with_context(|| format!("recreating sink {}", entry.name()))?;
                     // `builtin_table_updates` is the desired state of the system tables. However,
                     // it already contains a (cur_sink, +1) entry from [`Catalog::open`]. The line
                     // below this will negate that entry with a (cur_sink, -1) entry. The
@@ -846,7 +847,7 @@ pub async fn serve<S: Append + 'static>(
         availability_zones.push(DUMMY_AVAILABILITY_ZONE.into());
     }
     // Shuffle availability zones for unbiased selection in
-    // Coordinator::sequence_create_compute_instance_replica.
+    // Coordinator::sequence_create_compute_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
     let (mut catalog, builtin_migration_metadata, builtin_table_updates) =

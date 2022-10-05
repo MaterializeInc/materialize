@@ -12,6 +12,7 @@ use std::fmt;
 use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
+use mz_repr::adt::timestamp::TimestampError;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::ComputeError;
@@ -53,7 +54,7 @@ pub enum AdapterError {
     IdExhaustionError,
     /// Unexpected internal state was encountered.
     Internal(String),
-    /// Attempted to read from log sources on a cluster with disabled introspection.
+    /// Attempted to read from log sources of a replica with disabled introspection.
     IntrospectionDisabled {
         log_names: Vec<String>,
     },
@@ -307,7 +308,7 @@ impl fmt::Display for AdapterError {
             AdapterError::Internal(e) => write!(f, "internal error: {}", e),
             AdapterError::IntrospectionDisabled { .. } => write!(
                 f,
-                "cannot read log sources on cluster with disabled introspection"
+                "cannot read log sources of replica with disabled introspection"
             ),
             AdapterError::InvalidLogDependency { object_type, .. } => {
                 write!(f, "{object_type} objects cannot depend on log sources")
@@ -536,6 +537,13 @@ impl From<StorageError> for AdapterError {
 impl From<ComputeError> for AdapterError {
     fn from(e: ComputeError) -> Self {
         AdapterError::Compute(e)
+    }
+}
+
+impl From<TimestampError> for AdapterError {
+    fn from(e: TimestampError) -> Self {
+        let e: EvalError = e.into();
+        e.into()
     }
 }
 

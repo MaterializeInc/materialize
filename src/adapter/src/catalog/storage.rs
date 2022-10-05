@@ -20,7 +20,7 @@ use timely::progress::Timestamp;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::ReplicaId;
-use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceReplicaConfig};
+use mz_compute_client::controller::{ComputeInstanceId, ComputeReplicaConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;
@@ -29,19 +29,17 @@ use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
 };
-use mz_sql::plan::ComputeInstanceIntrospectionConfig;
 use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage::types::sources::Timeline;
 
 use crate::catalog;
 use crate::catalog::builtin::{BuiltinLog, BUILTIN_ROLES};
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::SerializedComputeInstanceReplicaConfig;
+use crate::catalog::SerializedComputeReplicaConfig;
 use crate::catalog::SystemObjectMapping;
 
 use super::{
-    SerializedCatalogItem, SerializedComputeInstanceReplicaLocation,
-    SerializedComputeInstanceReplicaLogging,
+    SerializedCatalogItem, SerializedComputeReplicaLocation, SerializedComputeReplicaLogging,
 };
 
 const USER_VERSION: &str = "user_version";
@@ -217,20 +215,21 @@ async fn migrate<S: Append>(
             )?;
             let default_instance = ComputeInstanceValue {
                 name: "default".into(),
-                config: Some(ComputeInstanceIntrospectionConfig {
-                    debugging: false,
-                    interval: Duration::from_secs(1),
-                }),
             };
-            let default_replica = ComputeInstanceReplicaValue {
+            let default_replica = ComputeReplicaValue {
                 compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
                 name: "default_replica".into(),
-                config: SerializedComputeInstanceReplicaConfig {
-                    persisted_logs: SerializedComputeInstanceReplicaLogging::Default,
-                    location: SerializedComputeInstanceReplicaLocation::Managed {
+                config: SerializedComputeReplicaConfig {
+                    location: SerializedComputeReplicaLocation::Managed {
                         size: bootstrap_args.default_cluster_replica_size.clone(),
                         availability_zone: bootstrap_args.default_availability_zone.clone(),
                         az_user_specified: false,
+                    },
+                    logging: SerializedComputeReplicaLogging {
+                        log_logging: false,
+                        interval: Some(Duration::from_secs(1)),
+                        sources: None,
+                        views: None,
                     },
                 },
             };
@@ -240,8 +239,8 @@ async fn migrate<S: Append>(
                 },
                 default_instance.clone(),
             )?;
-            txn.compute_instance_replicas.insert(
-                ComputeInstanceReplicaKey {
+            txn.compute_replicas.insert(
+                ComputeReplicaKey {
                     id: DEFAULT_REPLICA_ID,
                 },
                 default_replica.clone(),
@@ -271,8 +270,8 @@ async fn migrate<S: Append>(
                         id,
                         EventType::Create,
                         ObjectType::ClusterReplica,
-                        EventDetails::CreateComputeInstanceReplicaV1(
-                            mz_audit_log::CreateComputeInstanceReplicaV1 {
+                        EventDetails::CreateComputeReplicaV1(
+                            mz_audit_log::CreateComputeReplicaV1 {
                                 cluster_id: DEFAULT_COMPUTE_INSTANCE_ID,
                                 cluster_name: default_instance.name,
                                 replica_name: default_replica.name,
@@ -476,34 +475,27 @@ impl<S: Append> Connection<S> {
 
     pub async fn load_compute_instances(
         &mut self,
-    ) -> Result<
-        Vec<(
-            ComputeInstanceId,
-            String,
-            Option<ComputeInstanceIntrospectionConfig>,
-        )>,
-        Error,
-    > {
+    ) -> Result<Vec<(ComputeInstanceId, String)>, Error> {
         Ok(COLLECTION_COMPUTE_INSTANCES
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| (k.id, v.name, v.config))
+            .map(|(k, v)| (k.id, v.name))
             .collect())
     }
 
-    pub async fn load_compute_instance_replicas(
+    pub async fn load_compute_replicas(
         &mut self,
     ) -> Result<
         Vec<(
             ComputeInstanceId,
             ReplicaId,
             String,
-            SerializedComputeInstanceReplicaConfig,
+            SerializedComputeReplicaConfig,
         )>,
         Error,
     > {
-        Ok(COLLECTION_COMPUTE_INSTANCE_REPLICAS
+        Ok(COLLECTION_COMPUTE_REPLICAS
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
@@ -532,7 +524,7 @@ impl<S: Append> Connection<S> {
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
     pub async fn load_system_gids(
         &mut self,
-    ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, u64)>, Error> {
+    ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, String)>, Error> {
         Ok(COLLECTION_SYSTEM_GID_MAPPING
             .peek_one(&mut self.stash)
             .await?
@@ -650,15 +642,15 @@ impl<S: Append> Connection<S> {
         replica_id: ReplicaId,
         compute_instance_id: ComputeInstanceId,
         name: String,
-        config: &ComputeInstanceReplicaConfig,
+        config: &ComputeReplicaConfig,
     ) -> Result<(), Error> {
-        let key = ComputeInstanceReplicaKey { id: replica_id };
-        let val = ComputeInstanceReplicaValue {
+        let key = ComputeReplicaKey { id: replica_id };
+        let val = ComputeReplicaValue {
             compute_instance_id,
             name,
             config: config.clone().into(),
         };
-        COLLECTION_COMPUTE_INSTANCE_REPLICAS
+        COLLECTION_COMPUTE_REPLICAS
             .upsert_key(&mut self.stash, &key, &val)
             .await?;
         Ok(())
@@ -761,7 +753,7 @@ pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<
     let roles = COLLECTION_ROLE.peek_one(stash).await?;
     let items = COLLECTION_ITEM.peek_one(stash).await?;
     let compute_instances = COLLECTION_COMPUTE_INSTANCES.peek_one(stash).await?;
-    let compute_instance_replicas = COLLECTION_COMPUTE_INSTANCE_REPLICAS.peek_one(stash).await?;
+    let compute_replicas = COLLECTION_COMPUTE_REPLICAS.peek_one(stash).await?;
     let introspection_sources = COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
         .peek_one(stash)
         .await?;
@@ -781,7 +773,7 @@ pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<
         items: TableTransaction::new(items, |a, b| a.schema_id == b.schema_id && a.name == b.name),
         roles: TableTransaction::new(roles, |a, b| a.name == b.name),
         compute_instances: TableTransaction::new(compute_instances, |a, b| a.name == b.name),
-        compute_instance_replicas: TableTransaction::new(compute_instance_replicas, |a, b| {
+        compute_replicas: TableTransaction::new(compute_replicas, |a, b| {
             a.compute_instance_id == b.compute_instance_id && a.name == b.name
         }),
         introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false),
@@ -803,8 +795,7 @@ pub struct Transaction<'a, S> {
     items: TableTransaction<ItemKey, ItemValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
     compute_instances: TableTransaction<ComputeInstanceKey, ComputeInstanceValue>,
-    compute_instance_replicas:
-        TableTransaction<ComputeInstanceReplicaKey, ComputeInstanceReplicaValue>,
+    compute_replicas: TableTransaction<ComputeReplicaKey, ComputeReplicaValue>,
     introspection_sources:
         TableTransaction<ComputeIntrospectionSourceIndexKey, ComputeIntrospectionSourceIndexValue>,
     id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
@@ -933,7 +924,6 @@ impl<'a, S: Append> Transaction<'a, S> {
     pub fn insert_compute_instance(
         &mut self,
         cluster_name: &str,
-        config: &Option<ComputeInstanceIntrospectionConfig>,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
         let id = self.get_and_increment_id(COMPUTE_ID_ALLOC_KEY.to_string())?;
@@ -941,7 +931,6 @@ impl<'a, S: Append> Transaction<'a, S> {
             ComputeInstanceKey { id },
             ComputeInstanceValue {
                 name: cluster_name.to_string(),
-                config: config.clone(),
             },
         ) {
             return Err(Error::new(ErrorKind::ClusterAlreadyExists(
@@ -969,30 +958,25 @@ impl<'a, S: Append> Transaction<'a, S> {
         Ok(id)
     }
 
-    pub fn insert_compute_instance_replica(
+    pub fn insert_compute_replica(
         &mut self,
         compute_name: &str,
         replica_name: &str,
-        config: &SerializedComputeInstanceReplicaConfig,
+        config: &SerializedComputeReplicaConfig,
     ) -> Result<ReplicaId, Error> {
         let id = self.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
         let mut compute_instance_id = None;
-        for (
-            ComputeInstanceKey { id },
-            ComputeInstanceValue {
-                name,
-                config: _config,
-            },
-        ) in self.compute_instances.items()
+        for (ComputeInstanceKey { id }, ComputeInstanceValue { name }) in
+            self.compute_instances.items()
         {
             if &name == compute_name {
                 compute_instance_id = Some(id);
                 break;
             }
         }
-        if let Err(_) = self.compute_instance_replicas.insert(
-            ComputeInstanceReplicaKey { id },
-            ComputeInstanceReplicaValue {
+        if let Err(_) = self.compute_replicas.insert(
+            ComputeReplicaKey { id },
+            ComputeReplicaValue {
                 compute_instance_id: compute_instance_id.unwrap(),
                 name: replica_name.into(),
                 config: config.clone(),
@@ -1091,7 +1075,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             assert_eq!(deleted.len(), 1);
             // Cascade delete introsepction sources and cluster replicas.
             let id = deleted.into_element().0.id;
-            self.compute_instance_replicas
+            self.compute_replicas
                 .delete(|_k, v| v.compute_instance_id == id);
             let introspection_source_indexes = self
                 .introspection_sources
@@ -1106,19 +1090,19 @@ impl<'a, S: Append> Transaction<'a, S> {
         }
     }
 
-    pub fn remove_compute_instance_replica(
+    pub fn remove_compute_replica(
         &mut self,
         name: &str,
         compute_id: ComputeInstanceId,
     ) -> Result<(), Error> {
         let deleted = self
-            .compute_instance_replicas
+            .compute_replicas
             .delete(|_k, v| v.compute_instance_id == compute_id && v.name == name);
         if deleted.len() == 1 {
             Ok(())
         } else {
             assert!(deleted.is_empty());
-            Err(SqlCatalogError::UnknownComputeInstanceReplica(name.to_owned()).into())
+            Err(SqlCatalogError::UnknownComputeReplica(name.to_owned()).into())
         }
     }
 
@@ -1175,7 +1159,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     /// Panics if provided id is not a system id.
     pub fn update_system_object_mappings(
         &mut self,
-        mappings: &HashMap<GlobalId, SystemObjectMapping>,
+        mappings: HashMap<GlobalId, SystemObjectMapping>,
     ) -> Result<(), Error> {
         let n = self.system_gid_mapping.update(|_k, v| {
             if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
@@ -1186,7 +1170,7 @@ impl<'a, S: Append> Transaction<'a, S> {
                 };
                 Some(GidMappingValue {
                     id,
-                    fingerprint: mapping.fingerprint,
+                    fingerprint: mapping.fingerprint.clone(),
                 })
             } else {
                 None
@@ -1307,8 +1291,8 @@ impl<'a, S: Append> Transaction<'a, S> {
         add_batch(
             self.stash,
             &mut batches,
-            &COLLECTION_COMPUTE_INSTANCE_REPLICAS,
-            self.compute_instance_replicas.pending(),
+            &COLLECTION_COMPUTE_REPLICAS,
+            self.compute_replicas.pending(),
         )
         .await?;
         add_batch(
@@ -1433,7 +1417,7 @@ pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
         &COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX,
     )
     .await?;
-    add_batch(stash, &mut batches, &COLLECTION_COMPUTE_INSTANCE_REPLICAS).await?;
+    add_batch(stash, &mut batches, &COLLECTION_COMPUTE_REPLICAS).await?;
     add_batch(stash, &mut batches, &COLLECTION_DATABASE).await?;
     add_batch(stash, &mut batches, &COLLECTION_SCHEMA).await?;
     add_batch(stash, &mut batches, &COLLECTION_ITEM).await?;
@@ -1475,7 +1459,7 @@ struct GidMappingKey {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct GidMappingValue {
     id: u64,
-    fingerprint: u64,
+    fingerprint: String,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -1486,7 +1470,6 @@ struct ComputeInstanceKey {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeInstanceValue {
     name: String,
-    config: Option<ComputeInstanceIntrospectionConfig>,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -1506,15 +1489,15 @@ struct DatabaseKey {
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct ComputeInstanceReplicaKey {
+struct ComputeReplicaKey {
     id: ReplicaId,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
-struct ComputeInstanceReplicaValue {
+struct ComputeReplicaValue {
     compute_instance_id: ComputeInstanceId,
     name: String,
-    config: SerializedComputeInstanceReplicaConfig,
+    config: SerializedComputeReplicaConfig,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
@@ -1603,10 +1586,8 @@ static COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX: TypedCollection<
     ComputeIntrospectionSourceIndexKey,
     ComputeIntrospectionSourceIndexValue,
 > = TypedCollection::new("compute_introspection_source_index");
-static COLLECTION_COMPUTE_INSTANCE_REPLICAS: TypedCollection<
-    ComputeInstanceReplicaKey,
-    ComputeInstanceReplicaValue,
-> = TypedCollection::new("compute_instance_replicas");
+static COLLECTION_COMPUTE_REPLICAS: TypedCollection<ComputeReplicaKey, ComputeReplicaValue> =
+    TypedCollection::new("compute_replicas");
 static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
     TypedCollection::new("database");
 static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> = TypedCollection::new("schema");

@@ -27,7 +27,7 @@ pub fn run_random_sleep(cmd: BuiltinCommand) -> Result<ControlFlow, anyhow::Erro
 fn run_sleep_inner(mut cmd: BuiltinCommand, random: bool) -> Result<ControlFlow, anyhow::Error> {
     let arg = cmd.args.string("duration")?;
     cmd.args.done()?;
-    let duration = mz_repr::util::parse_duration(&arg).context("parsing duration")?;
+    let duration = humantime::parse_duration(&arg).context("parsing duration")?;
     let sleep = if random {
         let mut rng = rand::thread_rng();
         rng.gen_range(Duration::from_secs(0)..duration)

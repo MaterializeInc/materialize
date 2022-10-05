@@ -12,16 +12,14 @@
 > CREATE CONNECTION IF NOT EXISTS s3_conn FOR AWS
   ACCESS KEY ID = '${testdrive.aws-access-key-id}',
   SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}';
+  TOKEN = '${testdrive.aws-token}',
+  REGION = '${testdrive.aws-region}',
+  ENDPOINT = '${testdrive.aws-endpoint}';
 
 > CREATE SOURCE s3_text
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 's3/*.text'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT TEXT;
 
 > CREATE SOURCE s3_gzip
@@ -29,8 +27,4 @@
   DISCOVER OBJECTS MATCHING 's3/*.gzip'
   USING BUCKET SCAN 'testdrive-test-${testdrive.seed}',
   COMPRESSION GZIP
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT TEXT;

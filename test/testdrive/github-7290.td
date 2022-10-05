@@ -18,15 +18,13 @@ bar
 > CREATE CONNECTION s3_conn FOR AWS
   ACCESS KEY ID = '${testdrive.aws-access-key-id}',
   SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}';
+  TOKEN = '${testdrive.aws-token}',
+  REGION = '${testdrive.aws-region}',
+  ENDPOINT = '${testdrive.aws-endpoint}';
 
 > CREATE SOURCE posix
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'posix' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT BYTES;
 
 > SELECT data FROM posix
@@ -40,10 +38,6 @@ bar
 > CREATE SOURCE non_posix
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS MATCHING 'non-posix' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT BYTES;
 
 > SELECT data FROM non_posix

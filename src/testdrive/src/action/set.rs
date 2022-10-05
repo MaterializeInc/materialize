@@ -51,7 +51,7 @@ pub fn run_sql_timeout(
     let duration = if duration.to_lowercase() == "default" {
         None
     } else {
-        Some(mz_repr::util::parse_duration(&duration).context("parsing duration")?)
+        Some(humantime::parse_duration(&duration).context("parsing duration")?)
     };
     let force = cmd.args.opt_bool("force")?.unwrap_or(false);
     cmd.args.done()?;

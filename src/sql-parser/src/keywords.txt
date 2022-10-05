@@ -108,15 +108,18 @@ Distinct
 Dot
 Double
 Drop
+Element
 Else
 Enable
 End
+Endpoint
 Enforced
 Envelope
 Escape
 Except
 Execute
 Exists
+Expected
 Explain
 Extract
 Factor
@@ -181,7 +184,6 @@ Latest
 Leading
 Least
 Left
-Legacywith
 Level
 Like
 Limit
@@ -226,7 +228,7 @@ Only
 Operator
 Optimized
 Optimizer
-Option
+Options
 Or
 Order
 Ordinality
@@ -258,6 +260,7 @@ Real
 References
 Refresh
 Regex
+Region
 Registry
 Remote
 Rename

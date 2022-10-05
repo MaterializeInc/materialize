@@ -24,7 +24,6 @@
 
 use std::hash::Hash;
 
-use differential_dataflow::Hashable;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
@@ -139,49 +138,67 @@ pub struct BuiltinRole {
 
 /// Uniquely identifies the definition of a builtin object.
 pub trait Fingerprint {
-    fn fingerprint(&self) -> u64;
+    fn fingerprint(&self) -> String;
 }
 
-impl<T: Hash> Fingerprint for &T {
-    fn fingerprint(&self) -> u64 {
-        self.hashed()
+impl<T: TypeReference> Fingerprint for &Builtin<T> {
+    fn fingerprint(&self) -> String {
+        match self {
+            Builtin::Log(log) => log.fingerprint(),
+            Builtin::Table(table) => table.fingerprint(),
+            Builtin::View(view) => view.fingerprint(),
+            Builtin::Type(typ) => typ.fingerprint(),
+            Builtin::Func(func) => func.fingerprint(),
+            Builtin::StorageCollection(coll) => coll.fingerprint(),
+        }
     }
 }
 
 // Types and Funcs never change fingerprints so we just return constant 0
 impl<T: TypeReference> Fingerprint for &BuiltinType<T> {
-    fn fingerprint(&self) -> u64 {
-        0
+    fn fingerprint(&self) -> String {
+        "".to_string()
     }
 }
-impl Fingerprint for BuiltinFunc {
-    fn fingerprint(&self) -> u64 {
-        0
+impl Fingerprint for &BuiltinFunc {
+    fn fingerprint(&self) -> String {
+        "".to_string()
     }
 }
 
-impl<T: TypeReference> Fingerprint for &Builtin<T> {
-    fn fingerprint(&self) -> u64 {
-        match self {
-            Builtin::Log(log) => log.variant.desc().fingerprint(),
-            Builtin::Table(table) => table.desc.fingerprint(),
-            Builtin::View(view) => view.sql.hashed(),
-            Builtin::Type(typ) => typ.fingerprint(),
-            Builtin::Func(func) => func.fingerprint(),
-            Builtin::StorageCollection(coll) => coll.desc.fingerprint(),
-        }
+impl Fingerprint for &BuiltinLog {
+    fn fingerprint(&self) -> String {
+        self.variant.desc().fingerprint()
+    }
+}
+
+impl Fingerprint for &BuiltinTable {
+    fn fingerprint(&self) -> String {
+        self.desc.fingerprint()
+    }
+}
+
+impl Fingerprint for &BuiltinView {
+    fn fingerprint(&self) -> String {
+        self.sql.to_string()
+    }
+}
+
+impl Fingerprint for &BuiltinStorageCollection {
+    fn fingerprint(&self) -> String {
+        self.desc.fingerprint()
     }
 }
 
 impl Fingerprint for RelationDesc {
-    fn fingerprint(&self) -> u64 {
+    fn fingerprint(&self) -> String {
         self.typ().fingerprint()
     }
 }
 
 impl Fingerprint for RelationType {
-    fn fingerprint(&self) -> u64 {
-        self.hashed()
+    fn fingerprint(&self) -> String {
+        serde_json::to_string(self).expect("serialization cannot fail")
     }
 }
 
@@ -1030,8 +1047,8 @@ pub const MZ_RAW_WORKER_COMPUTE_DELAYS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
 };
 
-pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
-    name: "mz_peek_active",
+pub const MZ_ACTIVE_PEEKS: BuiltinLog = BuiltinLog {
+    name: "mz_active_peeks",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
 };
@@ -2336,7 +2353,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_WORKER_COMPUTE_DEPENDENCIES),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
-        Builtin::Log(&MZ_PEEK_ACTIVE),
+        Builtin::Log(&MZ_ACTIVE_PEEKS),
         Builtin::Log(&MZ_RAW_PEEK_DURATIONS),
         Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
         Builtin::Log(&MZ_RAW_COMPUTE_OPERATOR_DURATIONS_INTERNAL),

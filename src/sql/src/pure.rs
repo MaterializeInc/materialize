@@ -17,7 +17,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
-use aws_arn::ResourceName as AmazonResourceName;
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{
     CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, Envelope,
@@ -47,7 +46,6 @@ use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::kafka_util::KafkaConfigOptionExtracted;
 use crate::names::Aug;
-use crate::normalize;
 use crate::plan::StatementContext;
 
 /// Purifies a statement, removing any dependencies on external state.
@@ -69,14 +67,9 @@ pub async fn purify_create_source(
         connection,
         format,
         envelope,
-        legacy_with_options: with_options,
         include_metadata: _,
         ..
     } = &mut stmt;
-
-    let _ = catalog;
-
-    let mut with_options_map = normalize::options(with_options)?;
 
     match connection {
         CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -154,42 +147,31 @@ pub async fn purify_create_source(
         }
         CreateSourceConnection::S3 { connection, .. } => {
             let scx = StatementContext::new(None, &*catalog);
-            let connection = {
+            let aws = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
-                    Connection::Aws(connection) => connection.clone(),
+                    Connection::Aws(aws) => aws.clone(),
                     _ => bail!("{} is not an AWS connection", item.name()),
                 }
             };
-
-            let aws_config = normalize::aws_config(&mut with_options_map, None, connection)?;
             validate_aws_credentials(
-                &aws_config,
+                &aws,
                 connection_context.aws_external_id_prefix.as_ref(),
                 &*connection_context.secrets_reader,
             )
             .await?;
         }
-        CreateSourceConnection::Kinesis { connection, arn } => {
-            let region = arn
-                .parse::<AmazonResourceName>()
-                .context("Unable to parse provided ARN")?
-                .region
-                .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
-
+        CreateSourceConnection::Kinesis { connection, .. } => {
             let scx = StatementContext::new(None, &*catalog);
-            let connection = {
+            let aws = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection()? {
-                    Connection::Aws(connection) => connection.clone(),
+                    Connection::Aws(aws) => aws.clone(),
                     _ => bail!("{} is not an AWS connection", item.name()),
                 }
             };
-
-            let aws_config =
-                normalize::aws_config(&mut with_options_map, Some(region.into()), connection)?;
             validate_aws_credentials(
-                &aws_config,
+                &aws,
                 connection_context.aws_external_id_prefix.as_ref(),
                 &*connection_context.secrets_reader,
             )

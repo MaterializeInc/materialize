@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeInstanceReplicaLocation, ComputeInstanceStatus,
+    ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
@@ -118,7 +118,7 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_instance_replica_update(
+    pub(super) fn pack_compute_replica_update(
         &self,
         compute_instance_id: ComputeInstanceId,
         name: &str,
@@ -129,13 +129,13 @@ impl CatalogState {
         let replica = &instance.replicas_by_id[&id];
 
         let (size, az) = match &replica.config.location {
-            ComputeInstanceReplicaLocation::Managed {
+            ComputeReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified: _,
                 allocation: _,
             } => (Some(&**size), Some(availability_zone.as_str())),
-            ComputeInstanceReplicaLocation::Remote { .. } => (None, None),
+            ComputeReplicaLocation::Remote { .. } => (None, None),
         };
 
         BuiltinTableUpdate {
@@ -173,7 +173,7 @@ impl CatalogState {
                 Datum::UInt64(replica_id),
                 Datum::Int64(process_id),
                 Datum::String(status),
-                Datum::TimestampTz(event.time),
+                Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),
             diff,
         }
@@ -769,7 +769,7 @@ impl CatalogState {
                     Some(user) => Datum::String(user),
                     None => Datum::Null,
                 },
-                Datum::TimestampTz(DateTime::from_utc(dt, Utc)),
+                Datum::TimestampTz(DateTime::from_utc(dt, Utc).try_into().expect("must fit")),
             ]),
             diff: 1,
         })
@@ -783,7 +783,10 @@ impl CatalogState {
     ) -> BuiltinTableUpdate {
         let ReplicaMetadata { last_heartbeat } = md;
         let table = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
-        let row = Row::pack_slice(&[Datum::UInt64(id), Datum::TimestampTz(last_heartbeat)]);
+        let row = Row::pack_slice(&[
+            Datum::UInt64(id),
+            Datum::TimestampTz(last_heartbeat.try_into().expect("must fit")),
+        ]);
         BuiltinTableUpdate {
             id: table,
             row,
@@ -813,7 +816,7 @@ impl CatalogState {
             Datum::UInt64(id),
             object_id_val,
             Datum::UInt64(size_bytes),
-            Datum::TimestampTz(DateTime::from_utc(dt, Utc)),
+            Datum::TimestampTz(DateTime::from_utc(dt, Utc).try_into().expect("must fit")),
         ]);
         let diff = 1;
         Ok(BuiltinTableUpdate {

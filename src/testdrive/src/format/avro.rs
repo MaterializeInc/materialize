@@ -53,14 +53,14 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             let ts = n.as_i64().unwrap();
             Ok(Value::Timestamp(chrono::NaiveDateTime::from_timestamp(
                 ts / 1_000,
-                ((ts % 1_000) * 1_000_000) as u32,
+                ((ts % 1_000).abs() * 1_000_000) as u32,
             )))
         }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMicro) => {
             let ts = n.as_i64().unwrap();
             Ok(Value::Timestamp(chrono::NaiveDateTime::from_timestamp(
                 ts / 1_000_000,
-                ((ts % 1_000_000) * 1_000) as u32,
+                ((ts % 1_000_000).abs() * 1_000) as u32,
             )))
         }
         (JsonValue::Array(items), SchemaPiece::Array(inner)) => Ok(Value::Array(

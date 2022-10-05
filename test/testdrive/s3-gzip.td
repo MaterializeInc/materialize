@@ -26,16 +26,14 @@ b3
 > CREATE CONNECTION s3_conn FOR AWS
   ACCESS KEY ID = '${testdrive.aws-access-key-id}',
   SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-  TOKEN = '${testdrive.aws-token}';
+  TOKEN = '${testdrive.aws-token}',
+  REGION = '${testdrive.aws-region}',
+  ENDPOINT = '${testdrive.aws-endpoint}';
 
 > CREATE SOURCE s3_all_none
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-no-compression-${testdrive.seed}'
   COMPRESSION NONE
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT TEXT;
 
 > SELECT * FROM s3_all_none
@@ -67,10 +65,6 @@ b3
   FROM S3 CONNECTION s3_conn
   DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-gzip-compression-${testdrive.seed}'
   COMPRESSION GZIP
-  LEGACYWITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}'
-  )
   FORMAT TEXT;
 
 > SELECT * FROM s3_all_gzip

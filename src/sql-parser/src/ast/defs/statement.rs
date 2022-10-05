@@ -454,7 +454,6 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
     pub connection: CreateSourceConnection<T>,
-    pub legacy_with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
     pub envelope: Option<Envelope>,
@@ -486,11 +485,6 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         }
         f.write_str("FROM ");
         f.write_node(&self.connection);
-        if !self.legacy_with_options.is_empty() {
-            f.write_str(" LEGACYWITH (");
-            f.write_node(&display::comma_separated(&self.legacy_with_options));
-            f.write_str(")");
-        }
         f.write_node(&self.format);
         if !self.include_metadata.is_empty() {
             f.write_str(" INCLUDE ");
@@ -745,7 +739,6 @@ pub struct CreateTableStatement<T: AstInfo> {
     /// Optional schema
     pub columns: Vec<ColumnDef<T>>,
     pub constraints: Vec<TableConstraint<T>>,
-    pub with_options: Vec<WithOption<T>>,
     pub if_not_exists: bool,
     pub temporary: bool,
 }
@@ -768,12 +761,6 @@ impl<T: AstInfo> AstDisplay for CreateTableStatement<T> {
             f.write_node(&display::comma_separated(&self.constraints));
         }
         f.write_str(")");
-
-        if !self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
-        }
     }
 }
 impl_display_t!(CreateTableStatement);
@@ -950,11 +937,19 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
         f.write_node(&self.name);
         f.write_str(" AS ");
         match &self.as_type {
-            CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
+            CreateTypeAs::List { options } => {
                 f.write_str(&self.as_type);
                 f.write_str("( ");
-                if !with_options.is_empty() {
-                    f.write_node(&display::comma_separated(with_options));
+                if !options.is_empty() {
+                    f.write_node(&display::comma_separated(options));
+                }
+                f.write_str(" )");
+            }
+            CreateTypeAs::Map { options } => {
+                f.write_str(&self.as_type);
+                f.write_str("( ");
+                if !options.is_empty() {
+                    f.write_node(&display::comma_separated(options));
                 }
                 f.write_str(" )");
             }
@@ -994,10 +989,6 @@ impl_display_t!(CreateClusterStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClusterOption<T: AstInfo> {
-    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
-    IntrospectionInterval(WithOptionValue<T>),
-    /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
-    IntrospectionDebugging(WithOptionValue<T>),
     /// The `REPLICAS` option.
     Replicas(Vec<ReplicaDefinition<T>>),
 }
@@ -1005,14 +996,6 @@ pub enum ClusterOption<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterOption::IntrospectionInterval(interval) => {
-                f.write_str("INTROSPECTION INTERVAL ");
-                f.write_node(interval);
-            }
-            ClusterOption::IntrospectionDebugging(debugging) => {
-                f.write_str("INTROSPECTION DEBUGGING ");
-                f.write_node(debugging);
-            }
             ClusterOption::Replicas(replicas) => {
                 f.write_str("REPLICAS (");
                 f.write_node(&display::comma_separated(replicas));
@@ -1075,6 +1058,10 @@ pub enum ReplicaOptionName {
     Workers,
     /// The `COMPUTE [<host> [, <host> ...]]` option.
     Compute,
+    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
+    IntrospectionInterval,
+    /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
+    IntrospectionDebugging,
 }
 
 impl AstDisplay for ReplicaOptionName {
@@ -1085,6 +1072,8 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
             ReplicaOptionName::Workers => f.write_str("WORKERS"),
             ReplicaOptionName::Compute => f.write_str("COMPUTE"),
+            ReplicaOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
+            ReplicaOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
         }
     }
 }
@@ -1109,9 +1098,15 @@ impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
 /// `CREATE TYPE .. AS <TYPE>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateTypeAs<T: AstInfo> {
-    List { with_options: Vec<WithOption<T>> },
-    Map { with_options: Vec<WithOption<T>> },
-    Record { column_defs: Vec<ColumnDef<T>> },
+    List {
+        options: Vec<CreateTypeListOption<T>>,
+    },
+    Map {
+        options: Vec<CreateTypeMapOption<T>>,
+    },
+    Record {
+        column_defs: Vec<ColumnDef<T>>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for CreateTypeAs<T> {
@@ -1124,6 +1119,66 @@ impl<T: AstInfo> AstDisplay for CreateTypeAs<T> {
     }
 }
 impl_display_t!(CreateTypeAs);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateTypeListOptionName {
+    ElementType,
+}
+
+impl AstDisplay for CreateTypeListOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CreateTypeListOptionName::ElementType => "ELEMENT TYPE",
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateTypeListOption<T: AstInfo> {
+    pub name: CreateTypeListOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateTypeListOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateTypeMapOptionName {
+    KeyType,
+    ValueType,
+}
+
+impl AstDisplay for CreateTypeMapOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CreateTypeMapOptionName::KeyType => "KEY TYPE",
+            CreateTypeMapOptionName::ValueType => "VALUE TYPE",
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateTypeMapOption<T: AstInfo> {
+    pub name: CreateTypeMapOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateTypeMapOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
 
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2041,29 +2096,10 @@ impl<T: AstInfo> AstDisplay for ShowStatementFilter<T> {
 impl_display_t!(ShowStatementFilter);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct WithOption<T: AstInfo> {
-    pub key: Ident,
-    pub value: Option<WithOptionValue<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for WithOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.key);
-        if let Some(opt) = &self.value {
-            f.write_str(" = ");
-            f.write_node(opt);
-        }
-    }
-}
-impl_display_t!(WithOption);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WithOptionValue<T: AstInfo> {
     Value(Value),
     Ident(Ident),
     DataType(T::DataType),
-    // Temporary variant until we have support for connections, which will use
-    // explicit fields for each secret reference.
     Secret(T::ObjectName),
     Object(T::ObjectName),
 }

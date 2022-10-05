@@ -35,7 +35,6 @@ pub mod explain_new;
 pub mod global_id;
 pub mod strconv;
 pub mod url;
-pub mod util;
 
 use std::{convert::TryFrom, num::TryFromIntError, time::Duration};
 

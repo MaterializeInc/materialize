@@ -11,9 +11,9 @@
 
 > SHOW TYPES
 
-> CREATE TYPE bool AS LIST (element_type=int4)
+> CREATE TYPE bool AS LIST (ELEMENT TYPE = int4)
 
-> CREATE TYPE custom AS LIST (element_type=bool)
+> CREATE TYPE custom AS LIST (ELEMENT TYPE = bool)
 
 $ set-regex match=^s\d*$ replacement=<GID>
 # Without qualifiers, should default to builtin bool.
@@ -22,7 +22,7 @@ $ set-regex match=^s\d*$ replacement=<GID>
   WHERE name = 'custom'
 <GID>
 
-> CREATE TYPE another_custom AS LIST (element_type=public.bool)
+> CREATE TYPE another_custom AS LIST (ELEMENT TYPE = public.bool)
 
 $ set-regex match=^u\d*$ replacement=<GID>
 # Qualified name should point to user-defined bool.
@@ -33,7 +33,7 @@ $ set-regex match=^u\d*$ replacement=<GID>
 
 > CREATE SCHEMA test_schema
 
-> CREATE TYPE test_schema.bool AS LIST (element_type=float4)
+> CREATE TYPE test_schema.bool AS LIST (ELEMENT TYPE = float4)
 
 > SHOW TYPES
 name
@@ -60,5 +60,5 @@ contains:cannot drop materialize.public.bool: still depended upon by catalog ite
 ! CREATE TABLE f1 (a char list);
 contains:char list not yet supported
 
-! CREATE TYPE test_schema.bool AS LIST (element_type=char)
-contains:char list not yet supported
+! CREATE TYPE test_schema.bool AS LIST (ELEMENT TYPE = char)
+contains:embedding char type in a list or map not yet supported

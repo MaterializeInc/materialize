@@ -183,7 +183,9 @@ impl Generator for Auction {
                         Datum::String(&rng.gen_range(1..=CELEBRETIES.len()).to_string()), // seller
                         Datum::String(AUCTIONS.choose(&mut rng).unwrap()), // item
                         Datum::String(&cast_timestamp_tz_to_string(
-                            now + chrono::Duration::seconds(10),
+                            (now + chrono::Duration::seconds(10))
+                                .try_into()
+                                .expect("timestamp must fit"),
                         )), // end time
                     ]);
                     pending.push_back(vec![auction]);
@@ -201,7 +203,9 @@ impl Generator for Auction {
                                 Datum::String(&counter.to_string()), // auction id
                                 Datum::String(&rng.gen_range(1..100).to_string()), // amount
                                 Datum::String(&cast_timestamp_tz_to_string(
-                                    now + chrono::Duration::seconds(i),
+                                    (now + chrono::Duration::seconds(i))
+                                        .try_into()
+                                        .expect("timestamp must fit"),
                                 )), // bid time
                             ]);
                             bid

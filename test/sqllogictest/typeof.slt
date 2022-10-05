@@ -40,10 +40,10 @@ numeric
 # Custom types
 
 statement ok
-CREATE TYPE int4_list AS LIST (element_type=int4)
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4)
 
 statement ok
-CREATE TYPE int4_list_list AS LIST (element_type=int4_list)
+CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list)
 
 statement ok
 CREATE TYPE composite AS (a int, b text, c float8);

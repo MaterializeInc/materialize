@@ -30,7 +30,7 @@ _target&lowbar;elem_ | Return identified columns or functions.
 _join&lowbar;expr_ | A join expression; for more details, see the [`JOIN` documentation](../join).
 **WHERE** _expression_ | Filter tuples by _expression_.
 **GROUP BY** _col&lowbar;ref_ | Group aggregations by _col&lowbar;ref_.
-**OPTION (** _hint&lowbar;list_ **)** | Specify one or more [query hints](#query-hints).
+**OPTIONS (** _hint&lowbar;list_ **)** | Specify one or more [query hints](#query-hints).
 **HAVING** _expression_ | Filter aggregations by _expression_.
 **ORDER BY** _col&lowbar;ref_... | Sort results in either **ASC** or **DESC** order (_default: **ASC**_).<br/><br/>Use the **NULLS FIRST** and **NULLS LAST** options to determine whether nulls appear before or after non-null values in the sort ordering _(default: **NULLS LAST** for **ASC**, **NULLS FIRST** for **DESC**)_.<br/><br>
 **LIMIT** | Limit the number of returned results to _integer_.
@@ -107,7 +107,7 @@ The following query hints are valid within the `OPTION` clause.
 
 Hint | Value type | Description
 ------|------------|------------
-`expected_group_size` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
+`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
 
 For an example, see [Using query hints](#using-query-hints).
 
@@ -216,7 +216,7 @@ SELECT a,
        min(b) AS min
 FROM example
 GROUP BY a
-OPTION (expected_group_size = 100)
+OPTIONS (EXPECTED GROUP SIZE = 100)
 ```
 
 Here the hint indicates that there may be up to a hundred distinct `(a, b)` pairs

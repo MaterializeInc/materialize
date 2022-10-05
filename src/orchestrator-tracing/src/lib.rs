@@ -158,7 +158,7 @@ pub struct TracingCliArgs {
         long,
         env = "TOKIO_CONSOLE_PUBLISH_INTERVAL",
         requires = "tokio-console-listen-addr",
-        parse(try_from_str = mz_repr::util::parse_duration),
+        parse(try_from_str = humantime::parse_duration),
         default_value = "1s",
     )]
     pub tokio_console_publish_interval: Duration,
@@ -170,7 +170,7 @@ pub struct TracingCliArgs {
         long,
         env = "TOKIO_CONSOLE_RETENTION",
         requires = "tokio-console-listen-addr",
-        parse(try_from_str = mz_repr::util::parse_duration),
+        parse(try_from_str = humantime::parse_duration),
         default_value = "1h",
     )]
     pub tokio_console_retention: Duration,

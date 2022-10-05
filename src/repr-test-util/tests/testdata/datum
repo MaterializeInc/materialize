@@ -96,12 +96,12 @@ Numeric(OrderedDecimal(5.2))
 build-datum
 "2021-01-02 00:12:59" timestamp
 ----
-Timestamp(2021-01-02T00:12:59)
+Timestamp(CheckedTimestamp { t: 2021-01-02T00:12:59 })
 
 build-datum
 "1999-12-31 23:42:23.342" timestamp
 ----
-Timestamp(1999-12-31T23:42:23.342)
+Timestamp(CheckedTimestamp { t: 1999-12-31T23:42:23.342 })
 
 build-datum
 2 (list jsonb (user 100))
