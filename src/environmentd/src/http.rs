@@ -98,16 +98,7 @@ impl HttpServer {
         adapter_client_tx
             .send(adapter_client)
             .expect("rx known to be live");
-        let router = Router::new()
-            .route("/", routing::get(root::handle_home))
-            .route("/api/sql", routing::post(sql::handle_sql))
-            .route("/memory", routing::get(memory::handle_memory))
-            .route(
-                "/hierarchical-memory",
-                routing::get(memory::handle_hierarchical_memory),
-            )
-            .nest("/prof/", mz_prof::http::router(&BUILD_INFO))
-            .route("/static/*path", routing::get(root::handle_static))
+        let router = base_router(BaseRouterConfig { profiling: false })
             .layer(middleware::from_fn(move |req, next| {
                 let frontegg = Arc::clone(&frontegg);
                 async move { auth(req, next, tls_mode, &frontegg).await }
@@ -181,7 +172,7 @@ impl InternalHttpServer {
             adapter_client_rx,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
-        let router = Router::new()
+        let router = base_router(BaseRouterConfig { profiling: true })
             .route(
                 "/metrics",
                 routing::get(move || async move {
@@ -417,4 +408,31 @@ async fn auth<B>(
 
     // Run the request.
     Ok(next.run(req).await)
+}
+
+/// Configuration for [`base_router`].
+struct BaseRouterConfig {
+    /// Whether to enable the profiling routes.
+    profiling: bool,
+}
+
+/// Returns the router for routes that are shared between the internal and
+/// external HTTP servers.
+fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
+    let mut router = Router::new()
+        .route(
+            "/",
+            routing::get(move || async move { root::handle_home(profiling).await }),
+        )
+        .route("/api/sql", routing::post(sql::handle_sql))
+        .route("/memory", routing::get(memory::handle_memory))
+        .route(
+            "/hierarchical-memory",
+            routing::get(memory::handle_hierarchical_memory),
+        )
+        .route("/static/*path", routing::get(root::handle_static));
+    if profiling {
+        router = router.nest("/prof/", mz_prof::http::router(&BUILD_INFO));
+    }
+    router
 }
