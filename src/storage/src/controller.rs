@@ -60,7 +60,7 @@ use crate::protocol::client::{
     StorageCommand, StorageResponse, Update,
 };
 use crate::types::errors::DataflowError;
-use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
+use crate::types::hosts::StorageHostConfig;
 use crate::types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
 use crate::types::sources::{IngestionDescription, SourceExport};
 
@@ -138,11 +138,9 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub sink: StorageSinkDesc<(), T>,
-    /// The address of a `storaged` process on which to install the source.
-    ///
-    /// If `None`, the controller manages the lifetime of the `storaged`
-    /// process.
-    pub remote_addr: Option<String>,
+    /// The address of a `storaged` process on which to install the sink or the
+    /// settings for spinning up a controller-managed process.
+    pub host_config: StorageHostConfig,
 }
 
 #[async_trait(?Send)]
@@ -1022,16 +1020,8 @@ where
                 },
             };
 
-            // TODO: allow specifying a size parameter for sinks, tracked in #13889
-            let host_config = match description.remote_addr {
-                Some(addr) => StorageHostConfig::Remote { addr },
-                None => StorageHostConfig::Managed {
-                    allocation: StorageHostResourceAllocation::temp_default_for_sinks(),
-                    size: "arbitrary".to_string(),
-                },
-            };
             // Provision a storage host for the ingestion.
-            let client = self.hosts.provision(id, host_config).await?;
+            let client = self.hosts.provision(id, description.host_config).await?;
 
             client.send(StorageCommand::CreateSinks(vec![cmd]));
         }

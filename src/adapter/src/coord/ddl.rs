@@ -440,7 +440,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 id,
                 ExportDescription {
                     sink: storage_sink_desc,
-                    remote_addr: None,
+                    host_config: sink.host_config.clone(),
                 },
             )])
             .await?)
