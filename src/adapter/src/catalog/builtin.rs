@@ -1047,8 +1047,8 @@ pub const MZ_WORKER_COMPUTE_DELAYS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
 };
 
-pub const MZ_PEEK_ACTIVE: BuiltinLog = BuiltinLog {
-    name: "mz_peek_active",
+pub const MZ_ACTIVE_PEEKS: BuiltinLog = BuiltinLog {
+    name: "mz_active_peeks",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
 };
@@ -2320,7 +2320,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_WORKER_COMPUTE_DEPENDENCIES),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_INTERNAL),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_INTERNAL),
-        Builtin::Log(&MZ_PEEK_ACTIVE),
+        Builtin::Log(&MZ_ACTIVE_PEEKS),
         Builtin::Log(&MZ_PEEK_DURATIONS),
         Builtin::Log(&MZ_SCHEDULING_ELAPSED_INTERNAL),
         Builtin::Log(&MZ_SCHEDULING_HISTOGRAM_INTERNAL),
