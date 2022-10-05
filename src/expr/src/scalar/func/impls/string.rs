@@ -12,6 +12,7 @@ use std::fmt;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use mz_repr::adt::date::Date;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -166,14 +167,18 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "text_to_timestamp"]
-    fn cast_string_to_timestamp<'a>(a: &'a str) -> Result<NaiveDateTime, EvalError> {
+    fn cast_string_to_timestamp<'a>(
+        a: &'a str,
+    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
         strconv::parse_timestamp(a).err_into()
     }
 );
 
 sqlfunc!(
     #[sqlname = "text_to_timestamp_with_time_zone"]
-    fn cast_string_to_timestamp_tz<'a>(a: &'a str) -> Result<DateTime<Utc>, EvalError> {
+    fn cast_string_to_timestamp_tz<'a>(
+        a: &'a str,
+    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
         strconv::parse_timestamptz(a).err_into()
     }
 );

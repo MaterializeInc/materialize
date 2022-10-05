@@ -55,6 +55,7 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::adt::timestamp::CheckedTimestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.strconv.rs"));
 
@@ -442,15 +443,16 @@ where
 }
 
 /// Parses a `NaiveDateTime` from `s`.
-pub fn parse_timestamp(s: &str) -> Result<NaiveDateTime, ParseError> {
+pub fn parse_timestamp(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
     match parse_timestamp_string(s) {
-        Ok((date, time, _)) => Ok(date.and_time(time)),
+        Ok((date, time, _)) => CheckedTimestamp::from_timestamplike(date.and_time(time))
+            .map_err(|_| ParseError::out_of_range("timestamp", s)),
         Err(e) => Err(ParseError::invalid_input_syntax("timestamp", s).with_details(e)),
     }
 }
 
 /// Writes a [`NaiveDateTime`] timestamp to `buf`.
-pub fn format_timestamp<F>(buf: &mut F, ts: NaiveDateTime) -> Nestable
+pub fn format_timestamp<F>(buf: &mut F, ts: &NaiveDateTime) -> Nestable
 where
     F: FormatBuffer,
 {
@@ -465,7 +467,7 @@ where
 }
 
 /// Parses a `DateTime<Utc>` from `s`. See `mz_expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
-pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
+pub fn parse_timestamptz(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
     parse_timestamp_string(s)
         .and_then(|(date, time, timezone)| {
             use datetime::Timezone::*;
@@ -488,10 +490,14 @@ pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
         .map_err(|e| {
             ParseError::invalid_input_syntax("timestamp with time zone", s).with_details(e)
         })
+        .and_then(|ts| {
+            CheckedTimestamp::from_timestamplike(ts)
+                .map_err(|_| ParseError::out_of_range("timestamp with time zone", s))
+        })
 }
 
 /// Writes a [`DateTime<Utc>`] timestamp to `buf`.
-pub fn format_timestamptz<F>(buf: &mut F, ts: DateTime<Utc>) -> Nestable
+pub fn format_timestamptz<F>(buf: &mut F, ts: &DateTime<Utc>) -> Nestable
 where
     F: FormatBuffer,
 {

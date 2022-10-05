@@ -11,6 +11,7 @@ use std::fmt;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
 use mz_repr::adt::date::Date;
+use mz_repr::adt::timestamp::{CheckedTimestamp, DateLike};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -21,49 +22,6 @@ use mz_repr::{strconv, ColumnType, ScalarType};
 
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
-
-/// Common set of methods for date component.
-pub trait DateLike: chrono::Datelike {
-    fn extract_epoch(&self) -> i64 {
-        let naive_date =
-            NaiveDate::from_ymd(self.year(), self.month(), self.day()).and_hms(0, 0, 0);
-        naive_date.timestamp()
-    }
-
-    fn millennium(&self) -> i32 {
-        (self.year() + if self.year() > 0 { 999 } else { -1_000 }) / 1_000
-    }
-
-    fn century(&self) -> i32 {
-        (self.year() + if self.year() > 0 { 99 } else { -100 }) / 100
-    }
-
-    fn decade(&self) -> i32 {
-        self.year().div_euclid(10)
-    }
-
-    fn quarter(&self) -> f64 {
-        (f64::from(self.month()) / 3.0).ceil()
-    }
-
-    /// Extract the iso week of the year
-    ///
-    /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
-    /// 1 about half of the time
-    fn iso_week_number(&self) -> u32 {
-        self.iso_week().week()
-    }
-
-    fn day_of_week(&self) -> u32 {
-        self.weekday().num_days_from_sunday()
-    }
-
-    fn iso_day_of_week(&self) -> u32 {
-        self.weekday().number_from_monday()
-    }
-}
-
-impl<T> DateLike for T where T: chrono::Datelike {}
 
 sqlfunc!(
     #[sqlname = "date_to_text"]
@@ -78,16 +36,20 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "date_to_timestamp"]
     #[preserves_uniqueness = true]
-    fn cast_date_to_timestamp(a: Date) -> NaiveDateTime {
-        NaiveDate::from(a).and_hms(0, 0, 0)
+    fn cast_date_to_timestamp(a: Date) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        Ok(CheckedTimestamp::from_timestamplike(
+            NaiveDate::from(a).and_hms(0, 0, 0),
+        )?)
     }
 );
 
 sqlfunc!(
     #[sqlname = "date_to_timestamp_with_timezone"]
     #[preserves_uniqueness = true]
-    fn cast_date_to_timestamp_tz(a: Date) -> DateTime<Utc> {
-        DateTime::<Utc>::from_utc(NaiveDate::from(a).and_hms(0, 0, 0), Utc)
+    fn cast_date_to_timestamp_tz(a: Date) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        Ok(CheckedTimestamp::from_timestamplike(
+            DateTime::<Utc>::from_utc(NaiveDate::from(a).and_hms(0, 0, 0), Utc),
+        )?)
     }
 );
 

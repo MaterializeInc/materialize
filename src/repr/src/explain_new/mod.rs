@@ -675,6 +675,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::adt::timestamp::CheckedTimestamp;
+
     use super::*;
 
     struct Environment {
@@ -858,14 +860,22 @@ mod tests {
                 r#""12:10:22""#,
             ),
             (
-                Datum::Timestamp(chrono::NaiveDateTime::from_timestamp(1023123, 234)),
+                Datum::Timestamp(
+                    CheckedTimestamp::from_timestamplike(chrono::NaiveDateTime::from_timestamp(
+                        1023123, 234,
+                    ))
+                    .unwrap(),
+                ),
                 r#""1970-01-12T20:12:03.000000234""#,
             ),
             (
-                Datum::TimestampTz(chrono::DateTime::from_utc(
-                    chrono::NaiveDateTime::from_timestamp(90234242, 234),
-                    chrono::Utc,
-                )),
+                Datum::TimestampTz(
+                    CheckedTimestamp::from_timestamplike(chrono::DateTime::from_utc(
+                        chrono::NaiveDateTime::from_timestamp(90234242, 234),
+                        chrono::Utc,
+                    ))
+                    .unwrap(),
+                ),
                 r#""1972-11-10T09:04:02.000000234Z""#,
             ),
             (
