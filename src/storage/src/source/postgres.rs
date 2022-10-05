@@ -20,7 +20,7 @@ use postgres_protocol::message::backend::{
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio_postgres::error::{DbError, Severity, SqlState};
+use tokio_postgres::error::DbError;
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
@@ -68,39 +68,31 @@ impl ErrorExt for tokio::time::error::Elapsed {
 
 impl ErrorExt for tokio_postgres::Error {
     fn is_definite(&self) -> bool {
-        let indefinite = match self.source() {
-            Some(err) => {
-                // TODO(bkirwi): change the default for unknown dberrors to indefinite?
-                match err.downcast_ref::<DbError>() {
-                    Some(db_err) => {
-                        use Severity::*;
-                        // Connection and non-fatal errors
-                        db_err.code() == &SqlState::CONNECTION_EXCEPTION
-                            || db_err.code() == &SqlState::CONNECTION_DOES_NOT_EXIST
-                            || db_err.code() == &SqlState::CONNECTION_FAILURE
-                            || db_err.code() == &SqlState::TOO_MANY_CONNECTIONS
-                            || db_err.code() == &SqlState::CANNOT_CONNECT_NOW
-                            || db_err.code() == &SqlState::ADMIN_SHUTDOWN
-                            || db_err.code() == &SqlState::CRASH_SHUTDOWN
-                            || !matches!(
-                                db_err.parsed_severity(),
-                                Some(Error) | Some(Fatal) | Some(Panic)
-                            )
+        match self.source() {
+            Some(err) => match err.downcast_ref::<DbError>() {
+                Some(db_err) => {
+                    let class = &db_err.code().code()[0..2];
+                    match class {
+                        // See https://www.postgresql.org/docs/current/errcodes-appendix.html
+                        // for the class definitions.
+
+                        // unknown catalog or schema names
+                        "3D" | "3F" => true,
+                        // syntax error or access rule violation
+                        "42" => true,
+                        _ => false,
                     }
-                    // IO errors
-                    // TODO(bkirwi): change the default for non-ioerrors to indefinite?
-                    None => err.is::<std::io::Error>(),
                 }
-            }
+                None => false,
+            },
             // We have no information about what happened, it might be a fatal error or
             // it might not. Unexpected errors can happen if the upstream crashes for
             // example in which case we should retry.
             //
             // Therefore, we adopt a "recoverable unless proven otherwise" policy and
             // keep retrying in the event of unexpected errors.
-            None => true,
-        };
-        !indefinite
+            None => false,
+        }
     }
 }
 
