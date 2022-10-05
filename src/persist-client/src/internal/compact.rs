@@ -193,11 +193,13 @@ where
         // were just written, but it does result in non-trivial blob traffic
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
-        let should_compact = req.inputs.len() >= self.cfg.compaction_heuristic_min_inputs
-            || req.inputs.iter().filter(|x| x.len > 0).count()
-                > self.cfg.compaction_heuristic_min_non_empty_inputs
-            || req.inputs.iter().map(|x| x.len).sum::<usize>()
-                >= self.cfg.compaction_heuristic_min_updates;
+        let num_inputs_with_updates = req.inputs.iter().filter(|x| x.len > 0).count();
+        let num_updates = req.inputs.iter().map(|x| x.len).sum::<usize>();
+
+        let should_compact = req.inputs.len() >= self.cfg.compaction_heuristic_min_total_inputs
+            || num_inputs_with_updates >= self.cfg.compaction_heuristic_min_inputs_with_updates
+            || (num_updates >= self.cfg.compaction_heuristic_min_updates
+                && num_inputs_with_updates >= 2);
         if !should_compact {
             self.metrics.compaction.skipped.inc();
             return None;

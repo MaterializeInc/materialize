@@ -208,17 +208,19 @@ pub struct PersistConfig {
     /// consolidation of updates, at the cost of greater memory usage.
     pub compaction_memory_bound_bytes: usize,
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
-    /// if the number of non-empty inputs is at least this many. Compaction is
-    /// performed if any of the heuristic criteria are met (they are OR'd).
-    pub compaction_heuristic_min_non_empty_inputs: usize,
-    /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
     /// if the number of inputs, including empty batches, is at least this many.
     /// Compaction is performed if any of the heuristic criteria are met (they are OR'd).
-    /// Expected to be larger than `compaction_heuristic_min_non_empty_inputs`
-    pub compaction_heuristic_min_inputs: usize,
+    /// Expected to be larger than `compaction_heuristic_min_inputs_with_updates`
+    pub compaction_heuristic_min_total_inputs: usize,
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
-    /// if the number of updates is at least this many. Compaction is performed
-    /// if any of the heuristic criteria are met (they are OR'd).
+    /// if the number of non-empty inputs is at least this many. Compaction is
+    /// performed if any of the heuristic criteria are met (they are OR'd).
+    /// Expected to be smaller than `compaction_heuristic_min_total_inputs`
+    pub compaction_heuristic_min_inputs_with_updates: usize,
+    /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
+    /// if the number of updates is at least this many, spread across at least two
+    /// different batches. Compaction is performed if any of the heuristic criteria
+    /// are met (they are OR'd).
     pub compaction_heuristic_min_updates: usize,
     /// The maximum size of the connection pool to Postgres/CRDB when performing
     /// consensus reads and writes.
@@ -286,8 +288,8 @@ impl PersistConfig {
             batch_builder_max_outstanding_parts: 2,
             compaction_enabled: !compaction_disabled,
             compaction_memory_bound_bytes: 1024 * MB,
-            compaction_heuristic_min_non_empty_inputs: 128,
-            compaction_heuristic_min_inputs: 8,
+            compaction_heuristic_min_total_inputs: 128,
+            compaction_heuristic_min_inputs_with_updates: 8,
             compaction_heuristic_min_updates: 1024,
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: Duration::from_secs(60 * 15),
