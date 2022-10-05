@@ -1402,6 +1402,7 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4493,6 +4494,7 @@ impl<S: Append> Catalog<S> {
             Plan::CreateSink(CreateSinkPlan {
                 sink,
                 with_snapshot,
+                host_config,
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
@@ -4502,6 +4504,7 @@ impl<S: Append> Catalog<S> {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
+                host_config: self.resolve_storage_host_config(host_config)?,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,

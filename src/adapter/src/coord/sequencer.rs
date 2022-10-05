@@ -1059,7 +1059,7 @@ impl<S: Append + 'static> Coordinator<S> {
             sink,
             with_snapshot,
             if_not_exists,
-            host_config: _host_config,
+            host_config,
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
@@ -1074,6 +1074,15 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
+                return;
+            }
+        };
+
+        // Validate the storage host config
+        let host_config = match self.catalog.resolve_storage_host_config(host_config) {
+            Ok(host_config) => host_config,
+            Err(e) => {
+                tx.send(Err(e), session);
                 return;
             }
         };
@@ -1099,6 +1108,7 @@ impl<S: Append + 'static> Coordinator<S> {
             envelope: sink.envelope,
             with_snapshot,
             depends_on,
+            host_config,
         };
 
         let ops = vec![catalog::Op::CreateItem {
