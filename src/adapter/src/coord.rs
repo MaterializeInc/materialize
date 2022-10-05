@@ -381,14 +381,14 @@ impl<S: Append + 'static> Coordinator<S> {
         for instance in self.catalog.compute_instances() {
             self.controller.compute.create_instance(
                 instance.id,
-                instance.logging.clone(),
+                instance.log_indexes.clone(),
                 self.catalog.system_config().max_result_size(),
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config
-                    .persisted_logs
-                    .get_sources()
+                    .logging
+                    .sources
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into()))
                     .collect();
@@ -401,7 +401,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids());
+                persisted_source_ids.extend(replica.config.logging.source_ids());
 
                 self.controller
                     .active_compute()

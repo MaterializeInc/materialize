@@ -142,7 +142,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 // Drop the introspection sources
                 for replica in instance.replicas_by_id.values() {
-                    sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
+                    sources_to_drop.extend(replica.config.logging.source_ids());
                 }
 
                 // Drop timelines
@@ -153,7 +153,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let replica = &compute_instance.replicas_by_id[replica_id];
 
                 // Drop the introspection sources
-                sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
+                sources_to_drop.extend(replica.config.logging.source_ids());
             }
         }
 

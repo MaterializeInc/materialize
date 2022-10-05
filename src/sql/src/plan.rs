@@ -250,7 +250,6 @@ pub struct CreateRolePlan {
 #[derive(Debug)]
 pub struct CreateComputeInstancePlan {
     pub name: String,
-    pub config: Option<ComputeInstanceIntrospectionConfig>,
     pub replicas: Vec<(String, ComputeInstanceReplicaConfig)>,
 }
 
@@ -261,9 +260,9 @@ pub struct CreateComputeInstanceReplicaPlan {
     pub config: ComputeInstanceReplicaConfig,
 }
 
-/// Configuration of introspection for a compute instance.
+/// Configuration of introspection for a compute instance replica.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
-pub struct ComputeInstanceIntrospectionConfig {
+pub struct ComputeInstanceReplicaIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
     /// The interval at which to introspect.
@@ -276,10 +275,12 @@ pub enum ComputeInstanceReplicaConfig {
         addrs: BTreeSet<String>,
         compute_addrs: BTreeSet<String>,
         workers: NonZeroUsize,
+        introspection: Option<ComputeInstanceReplicaIntrospectionConfig>,
     },
     Managed {
         size: String,
         availability_zone: Option<String>,
+        introspection: Option<ComputeInstanceReplicaIntrospectionConfig>,
     },
 }
 
@@ -290,10 +291,12 @@ impl ComputeInstanceReplicaConfig {
                 addrs: _,
                 compute_addrs: _,
                 workers: _,
+                introspection: _,
             } => None,
             ComputeInstanceReplicaConfig::Managed {
                 size: _,
                 availability_zone,
+                introspection: _,
             } => availability_zone.as_deref(),
         }
     }

@@ -33,10 +33,7 @@ use mz_compute_client::controller::{
     ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceReplicaAllocation,
     ComputeInstanceReplicaConfig, ComputeInstanceReplicaLocation, ComputeInstanceReplicaLogging,
 };
-use mz_compute_client::logging::{
-    LogVariant, LogView, LoggingConfig as DataflowLoggingConfig, DEFAULT_LOG_VARIANTS,
-    DEFAULT_LOG_VIEWS,
-};
+use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -57,9 +54,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    AlterSourceItem, ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    AlterSourceItem, CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
     StorageHostConfig as PlanStorageHostConfig,
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
@@ -208,7 +205,7 @@ impl CatalogState {
         let mut persisted_source_ids = HashSet::new();
         for instance in self.compute_instances_by_id.values() {
             for replica in instance.replicas_by_id.values() {
-                persisted_source_ids.extend(replica.config.persisted_logs.get_source_ids());
+                persisted_source_ids.extend(replica.config.logging.source_ids());
             }
         }
 
@@ -393,10 +390,10 @@ impl CatalogState {
     /// Create and insert the per replica log sources and log views.
     fn insert_replica_introspection_items(
         &mut self,
-        persisted_logs: &ComputeInstanceReplicaLogging,
+        logging: &ComputeInstanceReplicaLogging,
         replica_id: u64,
     ) {
-        for (variant, source_id) in persisted_logs.get_sources() {
+        for (variant, source_id) in &logging.sources {
             let oid = self.allocate_oid().expect("cannot return error here");
             // TODO(lh): Once we get rid of legacy active logs, we should refactor the
             // CatalogItem::Log. For now  we just use the log variant to lookup the unique CatalogItem
@@ -415,7 +412,7 @@ impl CatalogState {
             self.insert_item(*source_id, oid, source_name, CatalogItem::Log(log));
         }
 
-        for (logview, id) in persisted_logs.get_views() {
+        for (logview, id) in &logging.views {
             let (sql_template, name_template) = logview.get_template();
             assert!(sql_template.find("{}").is_some());
             assert!(name_template.find("{}").is_some());
@@ -644,73 +641,59 @@ impl CatalogState {
         &mut self,
         id: ComputeInstanceId,
         name: String,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
-        let logging = match introspection {
-            None => None,
-            Some(introspection) => {
-                let mut active_logs = BTreeMap::new();
-                for (log, index_id) in introspection_source_indexes {
-                    let source_name = FullObjectName {
-                        database: RawDatabaseSpecifier::Ambient,
-                        schema: log.schema.into(),
-                        item: log.name.into(),
-                    };
-                    let index_name = format!("{}_{}_primary_idx", log.name, id);
-                    let mut index_name = QualifiedObjectName {
-                        qualifiers: ObjectQualifiers {
-                            database_spec: ResolvedDatabaseSpecifier::Ambient,
-                            schema_spec: SchemaSpecifier::Id(
-                                self.get_mz_internal_schema_id().clone(),
-                            ),
-                        },
-                        item: index_name.clone(),
-                    };
-                    index_name = self.find_available_name(index_name, SYSTEM_CONN_ID);
-                    let index_item_name = index_name.item.clone();
-                    // TODO(clusters): Avoid panicking here on ID exhaustion
-                    // before stabilization.
-                    //
-                    // The OID counter is an i32, and could plausibly be exhausted.
-                    // Preallocating OIDs for each logging index is eminently
-                    // doable, but annoying enough that we don't bother now.
-                    let oid = self.allocate_oid().expect("cannot return error here");
-                    let log_id = self.resolve_builtin_log(log);
-                    self.insert_item(
-                        index_id,
-                        oid,
-                        index_name,
-                        CatalogItem::Index(Index {
-                            on: log_id,
-                            keys: log
-                                .variant
-                                .index_by()
-                                .into_iter()
-                                .map(MirScalarExpr::Column)
-                                .collect(),
-                            create_sql: index_sql(
-                                index_item_name,
-                                id,
-                                source_name,
-                                &log.variant.desc(),
-                                &log.variant.index_by(),
-                            ),
-                            conn_id: None,
-                            depends_on: vec![log_id],
-                            compute_instance: id,
-                        }),
-                    );
-                    active_logs.insert(log.variant.clone(), index_id);
-                }
-                Some(DataflowLoggingConfig {
-                    interval_ns: introspection.interval.as_nanos(),
-                    log_logging: introspection.debugging,
-                    active_logs,
-                    sink_logs: BTreeMap::new(),
-                })
-            }
-        };
+        let mut log_indexes = BTreeMap::new();
+        for (log, index_id) in introspection_source_indexes {
+            let source_name = FullObjectName {
+                database: RawDatabaseSpecifier::Ambient,
+                schema: log.schema.into(),
+                item: log.name.into(),
+            };
+            let index_name = format!("{}_{}_primary_idx", log.name, id);
+            let mut index_name = QualifiedObjectName {
+                qualifiers: ObjectQualifiers {
+                    database_spec: ResolvedDatabaseSpecifier::Ambient,
+                    schema_spec: SchemaSpecifier::Id(self.get_mz_internal_schema_id().clone()),
+                },
+                item: index_name.clone(),
+            };
+            index_name = self.find_available_name(index_name, SYSTEM_CONN_ID);
+            let index_item_name = index_name.item.clone();
+            // TODO(clusters): Avoid panicking here on ID exhaustion
+            // before stabilization.
+            //
+            // The OID counter is an i32, and could plausibly be exhausted.
+            // Preallocating OIDs for each logging index is eminently
+            // doable, but annoying enough that we don't bother now.
+            let oid = self.allocate_oid().expect("cannot return error here");
+            let log_id = self.resolve_builtin_log(log);
+            self.insert_item(
+                index_id,
+                oid,
+                index_name,
+                CatalogItem::Index(Index {
+                    on: log_id,
+                    keys: log
+                        .variant
+                        .index_by()
+                        .into_iter()
+                        .map(MirScalarExpr::Column)
+                        .collect(),
+                    create_sql: index_sql(
+                        index_item_name,
+                        id,
+                        source_name,
+                        &log.variant.desc(),
+                        &log.variant.index_by(),
+                    ),
+                    conn_id: None,
+                    depends_on: vec![log_id],
+                    compute_instance: id,
+                }),
+            );
+            log_indexes.insert(log.variant.clone(), index_id);
+        }
 
         self.compute_instances_by_id.insert(
             id,
@@ -718,7 +701,7 @@ impl CatalogState {
                 name: name.clone(),
                 id,
                 exports: HashSet::new(),
-                logging,
+                log_indexes,
                 replica_id_by_name: HashMap::new(),
                 replicas_by_id: HashMap::new(),
             },
@@ -733,7 +716,7 @@ impl CatalogState {
         replica_id: ReplicaId,
         config: ComputeInstanceReplicaConfig,
     ) {
-        self.insert_replica_introspection_items(&config.persisted_logs, replica_id);
+        self.insert_replica_introspection_items(&config.logging, replica_id);
         let replica = ComputeInstanceReplica {
             config,
             process_status: HashMap::new(),
@@ -1321,7 +1304,7 @@ impl Role {
 pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
-    pub logging: Option<DataflowLoggingConfig>,
+    pub log_indexes: BTreeMap<LogVariant, GlobalId>,
     /// Indexes and materialized views exported by this compute instance.
     /// Does not include introspection source indexes.
     pub exports: HashSet<GlobalId>,
@@ -2138,46 +2121,39 @@ impl<S: Append> Catalog<S> {
             .await?;
 
         let compute_instances = catalog.storage().await.load_compute_instances().await?;
-        for (id, name, introspection) in compute_instances {
-            let introspection_sources = if introspection.is_some() {
-                let introspection_source_index_gids = catalog
-                    .storage()
-                    .await
-                    .load_introspection_source_index_gids(id)
-                    .await?;
+        for (id, name) in compute_instances {
+            let introspection_source_index_gids = catalog
+                .storage()
+                .await
+                .load_introspection_source_index_gids(id)
+                .await?;
 
-                let AllocatedBuiltinSystemIds {
-                    all_builtins: all_indexes,
-                    new_builtins: new_indexes,
-                    ..
-                } = catalog
-                    .allocate_system_ids(BUILTINS::logs().collect(), |log| {
-                        introspection_source_index_gids
-                            .get(log.name)
-                            .cloned()
-                            // We don't migrate indexes so we can hardcode the fingerprint as 0
-                            .map(|id| (id, 0))
-                    })
-                    .await?;
+            let AllocatedBuiltinSystemIds {
+                all_builtins: all_indexes,
+                new_builtins: new_indexes,
+                ..
+            } = catalog
+                .allocate_system_ids(BUILTINS::logs().collect(), |log| {
+                    introspection_source_index_gids
+                        .get(log.name)
+                        .cloned()
+                        // We don't migrate indexes so we can hardcode the fingerprint as 0
+                        .map(|id| (id, 0))
+                })
+                .await?;
 
-                catalog
-                    .storage()
-                    .await
-                    .set_introspection_source_index_gids(
-                        new_indexes
-                            .iter()
-                            .map(|(log, index_id)| (id, log.name, *index_id))
-                            .collect(),
-                    )
-                    .await?;
-
-                all_indexes
-            } else {
-                Vec::new()
-            };
             catalog
-                .state
-                .insert_compute_instance(id, name, introspection, introspection_sources);
+                .storage()
+                .await
+                .set_introspection_source_index_gids(
+                    new_indexes
+                        .iter()
+                        .map(|(log, index_id)| (id, log.name, *index_id))
+                        .collect(),
+                )
+                .await?;
+
+            catalog.state.insert_compute_instance(id, name, all_indexes);
         }
 
         let replicas = catalog
@@ -2186,29 +2162,24 @@ impl<S: Append> Catalog<S> {
             .load_compute_instance_replicas()
             .await?;
         for (instance_id, replica_id, name, serialized_config) in replicas {
-            // Instantiate the default logging settings for replicas
-            let persisted_logs = match &serialized_config.persisted_logs {
-                SerializedComputeInstanceReplicaLogging::Default => {
-                    let inst = catalog
-                        .state
-                        .compute_instances_by_id
-                        .get(&instance_id)
-                        .unwrap();
-                    if inst.logging.is_some() {
-                        catalog.allocate_persisted_introspection_items().await
-                    } else {
-                        ComputeInstanceReplicaLogging::ConcreteViews(vec![], vec![])
-                    }
-                }
-
-                SerializedComputeInstanceReplicaLogging::ConcreteViews(x, y) => {
-                    ComputeInstanceReplicaLogging::ConcreteViews(x.clone(), y.clone())
-                }
+            let log_sources = match serialized_config.logging.sources {
+                Some(sources) => sources,
+                None => catalog.allocate_persisted_introspection_sources().await,
+            };
+            let log_views = match serialized_config.logging.views {
+                Some(views) => views,
+                None => catalog.allocate_persisted_introspection_views().await,
             };
 
+            let logging = ComputeInstanceReplicaLogging {
+                log_logging: serialized_config.logging.log_logging,
+                interval: serialized_config.logging.interval,
+                sources: log_sources,
+                views: log_views,
+            };
             let config = ComputeInstanceReplicaConfig {
                 location: catalog.concretize_replica_location(serialized_config.location)?,
-                persisted_logs: persisted_logs.clone(),
+                logging,
             };
 
             // And write the allocated sources back to storage
@@ -2649,17 +2620,15 @@ impl<S: Append> Catalog<S> {
             .introspection_source_index_updates
             .drain()
         {
-            let config = self
+            let log_indexes = &mut self
                 .state
                 .compute_instances_by_id
                 .get_mut(&compute_instance)
                 .expect("invalid compute instance {compute_instance}")
-                .logging
-                .as_mut()
-                .expect("invalid log update");
+                .log_indexes;
             for (variant, new_id) in updates {
-                config.active_logs.remove(&variant);
-                config.active_logs.insert(variant, new_id);
+                log_indexes.remove(&variant);
+                log_indexes.insert(variant, new_id);
             }
         }
 
@@ -3368,7 +3337,6 @@ impl<S: Append> Catalog<S> {
             CreateComputeInstance {
                 id: ComputeInstanceId,
                 name: String,
-                config: Option<ComputeInstanceIntrospectionConfig>,
                 // These are the legacy, active logs of this compute instance
                 arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
             },
@@ -3606,7 +3574,6 @@ impl<S: Append> Catalog<S> {
                 }
                 Op::CreateComputeInstance {
                     name,
-                    config,
                     arranged_introspection_sources,
                 } => {
                     if is_reserved_name(&name) {
@@ -3614,11 +3581,7 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    let id = tx.insert_compute_instance(
-                        &name,
-                        &config,
-                        &arranged_introspection_sources,
-                    )?;
+                    let id = tx.insert_compute_instance(&name, &arranged_introspection_sources)?;
                     state.add_to_audit_log(
                         session,
                         tx,
@@ -3637,7 +3600,6 @@ impl<S: Append> Catalog<S> {
                         Action::CreateComputeInstance {
                             id,
                             name,
-                            config,
                             arranged_introspection_sources,
                         },
                     )?;
@@ -4179,7 +4141,6 @@ impl<S: Append> Catalog<S> {
                 Action::CreateComputeInstance {
                     id,
                     name,
-                    config,
                     arranged_introspection_sources,
                 } => {
                     info!("create cluster {}", name);
@@ -4188,12 +4149,7 @@ impl<S: Append> Catalog<S> {
                             .iter()
                             .map(|(_, id)| *id)
                             .collect();
-                    state.insert_compute_instance(
-                        id,
-                        name.clone(),
-                        config,
-                        arranged_introspection_sources,
-                    );
+                    state.insert_compute_instance(id, name.clone(), arranged_introspection_sources);
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
                     for id in arranged_introspection_source_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
@@ -4207,8 +4163,7 @@ impl<S: Append> Catalog<S> {
                     config,
                 } => {
                     let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
-                    let introspection_ids: Vec<_> =
-                        config.persisted_logs.get_source_and_view_ids().collect();
+                    let introspection_ids: Vec<_> = config.logging.source_and_view_ids().collect();
                     state.insert_compute_instance_replica(
                         compute_instance_id,
                         name.clone(),
@@ -4288,7 +4243,7 @@ impl<S: Append> Catalog<S> {
                         .expect("can only drop replicas from known instances");
                     let replica_id = instance.replica_id_by_name.remove(&name).unwrap();
                     let replica = instance.replicas_by_id.remove(&replica_id).unwrap();
-                    let persisted_log_ids = replica.config.persisted_logs.get_source_and_view_ids();
+                    let persisted_log_ids = replica.config.logging.source_and_view_ids();
                     assert!(instance.replica_id_by_name.len() == instance.replicas_by_id.len());
 
                     for id in persisted_log_ids {
@@ -4608,15 +4563,14 @@ impl<S: Append> Catalog<S> {
 
     /// Allocate ids for persisted introspection views. Called once per compute replica creation
     pub async fn allocate_persisted_introspection_views(&mut self) -> Vec<(LogView, GlobalId)> {
-        let log_amount = DEFAULT_LOG_VIEWS.len();
+        let log_amount = DEFAULT_LOG_VIEWS
+            .len()
+            .try_into()
+            .expect("default log variants should fit into u64");
         let system_ids = self
             .storage()
             .await
-            .allocate_system_ids(
-                log_amount
-                    .try_into()
-                    .expect("default log variants should fit into u64"),
-            )
+            .allocate_system_ids(log_amount)
             .await
             .expect("cannot fail to allocate system ids");
 
@@ -4627,35 +4581,27 @@ impl<S: Append> Catalog<S> {
             .collect()
     }
 
-    /// Allocate ids for persisted introspection sources and views.
+    /// Allocate ids for persisted introspection sources.
     /// Called once per compute replica creation.
-    pub async fn allocate_persisted_introspection_items(
+    pub async fn allocate_persisted_introspection_sources(
         &mut self,
-    ) -> ComputeInstanceReplicaLogging {
-        let logs = {
-            let log_amount = DEFAULT_LOG_VARIANTS.len();
-            let system_ids = self
-                .storage()
-                .await
-                .allocate_system_ids(
-                    log_amount
-                        .try_into()
-                        .expect("default log variants should fit into u64"),
-                )
-                .await
-                .expect("cannot fail to allocate system ids");
+    ) -> Vec<(LogVariant, GlobalId)> {
+        let log_amount = DEFAULT_LOG_VARIANTS
+            .len()
+            .try_into()
+            .expect("default log variants should fit into u64");
+        let system_ids = self
+            .storage()
+            .await
+            .allocate_system_ids(log_amount)
+            .await
+            .expect("cannot fail to allocate system ids");
 
-            DEFAULT_LOG_VARIANTS
-                .clone()
-                .into_iter()
-                .zip(system_ids.into_iter())
-                .collect()
-        };
-
-        ComputeInstanceReplicaLogging::ConcreteViews(
-            logs,
-            self.allocate_persisted_introspection_views().await,
-        )
+        DEFAULT_LOG_VARIANTS
+            .clone()
+            .into_iter()
+            .zip(system_ids.into_iter())
+            .collect()
     }
 
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
@@ -4706,7 +4652,6 @@ pub enum Op {
     },
     CreateComputeInstance {
         name: String,
-        config: Option<ComputeInstanceIntrospectionConfig>,
         arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     },
     CreateComputeInstanceReplica {
@@ -4781,20 +4726,33 @@ pub enum SerializedCatalogItem {
 
 /// Serialized (stored alongside the replica) logging configuration of
 /// a replica. Serialized variant of `ComputeInstanceReplicaLogging`.
+///
+/// A `None` value for `sources` or `views` indicates that we did not yet create them in the
+/// catalog. This is only used for initializing the default replica of the default compute
+/// instance.
+/// To indicate the absence of sources/views, use `Some(Vec::new())`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SerializedComputeInstanceReplicaLogging {
-    /// Instantiate default logging configuration upon system start.
-    /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
-    Default,
-    /// Logging sources and views have been built for this replica.
-    ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
+pub struct SerializedComputeInstanceReplicaLogging {
+    log_logging: bool,
+    interval: Option<Duration>,
+    sources: Option<Vec<(LogVariant, GlobalId)>>,
+    views: Option<Vec<(LogView, GlobalId)>>,
 }
 
 impl From<ComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLogging {
-    fn from(logging: ComputeInstanceReplicaLogging) -> Self {
-        match logging {
-            ComputeInstanceReplicaLogging::Default => Self::Default,
-            ComputeInstanceReplicaLogging::ConcreteViews(x, y) => Self::ConcreteViews(x, y),
+    fn from(
+        ComputeInstanceReplicaLogging {
+            log_logging,
+            interval,
+            sources,
+            views,
+        }: ComputeInstanceReplicaLogging,
+    ) -> Self {
+        Self {
+            log_logging,
+            interval,
+            sources: Some(sources),
+            views: Some(views),
         }
     }
 }
@@ -4804,20 +4762,17 @@ impl From<ComputeInstanceReplicaLogging> for SerializedComputeInstanceReplicaLog
 /// format independently from the SQL layer.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedComputeInstanceReplicaConfig {
-    pub persisted_logs: SerializedComputeInstanceReplicaLogging,
     pub location: SerializedComputeInstanceReplicaLocation,
+    pub logging: SerializedComputeInstanceReplicaLogging,
 }
 
 impl From<ComputeInstanceReplicaConfig> for SerializedComputeInstanceReplicaConfig {
     fn from(
-        ComputeInstanceReplicaConfig {
-            location,
-            persisted_logs,
-        }: ComputeInstanceReplicaConfig,
+        ComputeInstanceReplicaConfig { location, logging }: ComputeInstanceReplicaConfig,
     ) -> Self {
         SerializedComputeInstanceReplicaConfig {
-            persisted_logs: persisted_logs.into(),
             location: location.into(),
+            logging: logging.into(),
         }
     }
 }

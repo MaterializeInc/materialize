@@ -29,11 +29,12 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
@@ -172,7 +173,7 @@ impl From<anyhow::Error> for ComputeError {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComputeInstanceReplicaConfig {
     pub location: ComputeInstanceReplicaLocation,
-    pub persisted_logs: ComputeInstanceReplicaLogging,
+    pub logging: ComputeInstanceReplicaLogging,
 }
 
 /// Size or location of a replica
@@ -233,46 +234,39 @@ impl ComputeInstanceReplicaAllocation {
 }
 
 /// Logging configuration of a replica.
-/// Changing this type requires a catalog storage migration!
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ComputeInstanceReplicaLogging {
-    /// Instantiate default logging configuration upon system start.
-    /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
-    Default,
-    /// Logging sources and views have been built for this replica.
-    ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ComputeInstanceReplicaLogging {
+    /// Whether to enable logging for the logging dataflows.
+    pub log_logging: bool,
+    /// The interval at which to log.
+    ///
+    /// A `None` value indicates that logging is disabled.
+    pub interval: Option<Duration>,
+    /// Log sources of this replica.
+    pub sources: Vec<(LogVariant, GlobalId)>,
+    /// Log views of this replica.
+    pub views: Vec<(LogView, GlobalId)>,
 }
 
 impl ComputeInstanceReplicaLogging {
-    /// Return all persisted introspection sources contained.
-    pub fn get_sources(&self) -> &[(LogVariant, GlobalId)] {
-        match self {
-            ComputeInstanceReplicaLogging::Default => &[],
-            ComputeInstanceReplicaLogging::ConcreteViews(logs, _) => logs,
-        }
-    }
-
-    /// Return all persisted introspection views contained.
-    pub fn get_views(&self) -> &[(LogView, GlobalId)] {
-        match self {
-            ComputeInstanceReplicaLogging::Default => &[],
-            ComputeInstanceReplicaLogging::ConcreteViews(_, views) => views,
-        }
+    /// Return whether logging is enabled.
+    pub fn enabled(&self) -> bool {
+        self.interval.is_some()
     }
 
     /// Return all ids of the persisted introspection views contained.
-    pub fn get_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.get_views().into_iter().map(|(_, id)| *id)
+    pub fn view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.views.iter().map(|(_, id)| *id)
     }
 
     /// Return all ids of the persisted introspection sources contained.
-    pub fn get_source_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.get_sources().into_iter().map(|(_, id)| *id)
+    pub fn source_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.sources.iter().map(|(_, id)| *id)
     }
 
     /// Return all ids of the persisted introspection sources and logs contained.
-    pub fn get_source_and_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.get_source_ids().chain(self.get_view_ids())
+    pub fn source_and_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.source_ids().chain(self.view_ids())
     }
 }
 
@@ -362,15 +356,17 @@ where
     pub fn create_instance(
         &mut self,
         id: ComputeInstanceId,
-        logging: Option<LoggingConfig>,
+        arranged_logs: BTreeMap<LogVariant, GlobalId>,
         max_result_size: u32,
     ) -> Result<(), ComputeError> {
         if self.instances.contains_key(&id) {
             return Err(ComputeError::InstanceExists(id));
         }
 
-        self.instances
-            .insert(id, Instance::new(self.build_info, logging, max_result_size));
+        self.instances.insert(
+            id,
+            Instance::new(self.build_info, arranged_logs, max_result_size),
+        );
 
         if self.initialized {
             self.instances
@@ -482,30 +478,19 @@ where
         replica_id: ReplicaId,
         config: ComputeInstanceReplicaConfig,
     ) -> Result<(), ComputeError> {
-        let persisted_logs = config
-            .persisted_logs
-            .get_sources()
-            .iter()
-            .cloned()
-            .collect();
-
-        // Add replicas backing that instance.
-        match config.location {
+        let (addrs, communication_config) = match config.location {
             ComputeInstanceReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
             } => {
-                self.instance(instance_id)?.add_replica(
-                    replica_id,
-                    addrs.into_iter().collect(),
-                    persisted_logs,
-                    CommunicationConfig {
-                        workers: workers.get(),
-                        process: 0,
-                        addresses: compute_addrs.into_iter().collect(),
-                    },
-                );
+                let addrs = addrs.into_iter().collect();
+                let comm = CommunicationConfig {
+                    workers: workers.get(),
+                    process: 0,
+                    addresses: compute_addrs.into_iter().collect(),
+                };
+                (addrs, comm)
             }
             ComputeInstanceReplicaLocation::Managed {
                 allocation,
@@ -518,20 +503,22 @@ where
                     .ensure_replica(instance_id, replica_id, allocation, availability_zone)
                     .await?;
 
-                self.instance(instance_id)?.add_replica(
-                    replica_id,
-                    service.addresses("controller"),
-                    persisted_logs,
-                    CommunicationConfig {
-                        workers: allocation.workers.get(),
-                        process: 0,
-                        addresses: service.addresses("compute"),
-                    },
-                );
+                let addrs = service.addresses("controller");
+                let comm = CommunicationConfig {
+                    workers: allocation.workers.get(),
+                    process: 0,
+                    addresses: service.addresses("compute"),
+                };
+                (addrs, comm)
             }
-        }
+        };
 
-        Ok(())
+        self.instance(instance_id)?.add_replica(
+            replica_id,
+            addrs,
+            config.logging,
+            communication_config,
+        )
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
@@ -709,6 +696,8 @@ struct Instance<T> {
     replicas: ActiveReplication<T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
+    /// IDs of arranged log sources maintained by this compute instance.
+    arranged_logs: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks: identifiers and timestamps.
     peeks: BTreeMap<Uuid, (GlobalId, T)>,
 }
@@ -747,34 +736,34 @@ where
 {
     fn new(
         build_info: &'static BuildInfo,
-        logging: Option<LoggingConfig>,
+        arranged_logs: BTreeMap<LogVariant, GlobalId>,
         max_result_size: u32,
     ) -> Self {
-        let mut collections = BTreeMap::default();
-        if let Some(logging_config) = logging.as_ref() {
-            for id in logging_config.log_identifiers() {
-                collections.insert(
-                    id,
-                    CollectionState::new(
-                        Antichain::from_elem(T::minimum()),
-                        Vec::new(),
-                        Vec::new(),
-                    ),
+        let collections = arranged_logs
+            .iter()
+            .map(|(_, id)| {
+                let state = CollectionState::new(
+                    Antichain::from_elem(T::minimum()),
+                    Vec::new(),
+                    Vec::new(),
                 );
-            }
-        }
+                (*id, state)
+            })
+            .collect();
+
         let mut replicas = ActiveReplication::new(build_info);
         // These commands will be modified by ActiveReplication
         replicas.send(ComputeCommand::CreateTimely(Default::default()));
         replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
-            logging,
+            logging: None,
             max_result_size,
         }));
 
         Self {
             replicas,
             collections,
+            arranged_logs,
             peeks: Default::default(),
         }
     }
@@ -816,35 +805,48 @@ where
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
-        persisted_logs: HashMap<LogVariant, GlobalId>,
+        logging: ComputeInstanceReplicaLogging,
         communication_config: CommunicationConfig,
-    ) {
-        // Create ComputeState entries in Instance
-        for id in persisted_logs.values() {
-            self.compute.collections.insert(
-                *id,
-                CollectionState::new(Antichain::from_elem(T::minimum()), Vec::new(), Vec::new()),
-            );
-        }
+    ) -> Result<(), ComputeError> {
+        let logging_config = if let Some(interval) = logging.interval {
+            // Initialize state for per-replica log sources.
+            let mut sink_logs = BTreeMap::new();
+            for (variant, id) in logging.sources {
+                self.compute.collections.insert(
+                    id,
+                    CollectionState::new(
+                        Antichain::from_elem(T::minimum()),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                );
 
-        // Enrich log collections with metadata such that they can be sent over to computed
-        let persisted_logs = persisted_logs
-            .into_iter()
-            .map(|(variant, id)| {
-                let meta = self
+                let storage_meta = self
                     .storage_controller
-                    .collection(id)
-                    .expect("cannot get collection metadata")
+                    .collection(id)?
                     .collection_metadata
                     .clone();
-                (variant, (id, meta))
+                sink_logs.insert(variant, (id, storage_meta));
+            }
+
+            Some(LoggingConfig {
+                interval_ns: interval.as_nanos(),
+                active_logs: self.compute.arranged_logs.clone(),
+                log_logging: logging.log_logging,
+                sink_logs,
             })
-            .collect();
+        } else {
+            None
+        };
+
+        // Initialize collection state for per-replica log collections.
 
         // Add the replica
         self.compute
             .replicas
-            .add_replica(id, addrs, persisted_logs, communication_config);
+            .add_replica(id, addrs, logging_config, communication_config);
+
+        Ok(())
     }
 
     /// Remove an existing instance replica, by ID.
