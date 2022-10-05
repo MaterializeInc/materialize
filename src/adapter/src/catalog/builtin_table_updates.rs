@@ -203,7 +203,10 @@ impl CatalogState {
                     Some(ingestion) => ingestion.desc.name(),
                     None => "subsource",
                 };
-                let connection_id = source.ingestion.as_ref().and_then(|ingestion| ingestion.connection_id);
+                let connection_id = source
+                    .ingestion
+                    .as_ref()
+                    .and_then(|ingestion| ingestion.connection_id);
                 self.pack_source_update(
                     id,
                     oid,

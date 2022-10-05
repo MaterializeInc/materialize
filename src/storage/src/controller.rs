@@ -33,7 +33,6 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::StreamExt;
 use itertools::Itertools;
-use mz_persist_client::PersistClient;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -46,10 +45,9 @@ use tokio_stream::StreamMap;
 use tracing::debug;
 
 use mz_build_info::BuildInfo;
-use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{write::WriteHandle, PersistLocation, ShardId};
+use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -63,7 +61,7 @@ use crate::protocol::client::{
 use crate::types::errors::DataflowError;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use crate::types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
-use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceEnvelope};
+use crate::types::sources::{IngestionDescription, SourceExport};
 
 mod hosts;
 mod rehydration;
@@ -428,144 +426,10 @@ pub trait ResumptionFrontierCalculator<T> {
 
     /// Creates an opaque state type that can be used to efficiently calculate a
     /// new _resumption frontier_ when needed.
-    // TODO: This could also take an Arc<Mutex<PersistClientsCache>>. We know
-    // the persist location internally, most likely.
-    async fn initialize_state(&self, persist_clients: &PersistClient) -> Self::State;
+    async fn initialize_state(&self, client_cache: &mut PersistClientCache) -> Self::State;
 
     /// Calculates a new, safe _resumption frontier_.
     async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T>;
-}
-
-/// A [`ResumptionFrontierCalculator`] that can calculate the resumption
-/// frontier for a source.
-pub struct SourceResumptionFrontierCalculator {
-    collection_metadata: CollectionMetadata,
-    source_envelope: SourceEnvelope,
-}
-
-impl SourceResumptionFrontierCalculator {
-    pub fn new(collection_metadata: CollectionMetadata, source_envelope: SourceEnvelope) -> Self {
-        Self {
-            collection_metadata,
-            source_envelope,
-        }
-    }
-}
-
-#[async_trait]
-impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
-    for SourceResumptionFrontierCalculator
-{
-    // A `WriteHandle` each for the data shard and remap shard. Once we have
-    // source envelopes that keep additional shards we have to specialize this
-    // some more.
-    type State = (
-        WriteHandle<(), PartitionId, T, MzOffset>,
-        WriteHandle<SourceData, (), T, Diff>,
-    );
-
-    async fn initialize_state(&self, persist_client: &PersistClient) -> Self::State {
-        self.collection_metadata
-            .get_write_handles(persist_client)
-            .await
-    }
-
-    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T> {
-        let (remap_write, data_write) = state;
-
-        // Update to latest upper.
-        remap_write.fetch_recent_upper().await;
-        data_write.fetch_recent_upper().await;
-
-        self.collection_metadata.get_resume_upper_from_handles(
-            remap_write,
-            data_write,
-            &self.source_envelope,
-        )
-    }
-}
-
-impl CollectionMetadata {
-    /// Calculate the point at which we can resume ingestion computing the greatest
-    /// antichain that is less or equal to all state and output shard uppers,
-    /// using pre-existing `WriteHandle`s
-    pub fn get_resume_upper_from_handles<T>(
-        &self,
-        remap_write: &mut WriteHandle<(), PartitionId, T, MzOffset>,
-        data_write: &mut WriteHandle<SourceData, (), T, Diff>,
-        source_envelope: &SourceEnvelope,
-    ) -> Antichain<T>
-    where
-        T: timely::progress::Timestamp + Lattice + Codec64,
-    {
-        // Calculate the point at which we can resume ingestion computing the greatest
-        // antichain that is less or equal to all state and output shard uppers.
-        let mut resume_upper: Antichain<T> = Antichain::new();
-        for t in remap_write.upper().elements() {
-            resume_upper.insert(t.clone());
-        }
-        for t in data_write.upper().elements() {
-            resume_upper.insert(t.clone());
-        }
-
-        // Check if this ingestion is using any operators that are stateful AND are not
-        // storing their state in persist shards. This whole section should be eventually
-        // removed as we make each operator durably record its state in persist shards.
-        let resume_upper = match source_envelope {
-            // We can only resume with the None envelope, which is stateless,
-            // or with the [Debezium] Upsert envelope, which is easy
-            //   (re-ingest the last emitted state)
-            SourceEnvelope::None(_) => resume_upper,
-            SourceEnvelope::Upsert(_) => resume_upper,
-            // Otherwise re-ingest everything
-            _ => Antichain::from_elem(T::minimum()),
-        };
-
-        resume_upper
-    }
-
-    /// Returns the `WriteHandle` for the remap shard and the data shard
-    pub async fn get_write_handles<T>(
-        &self,
-        persist: &PersistClient,
-    ) -> (
-        WriteHandle<(), PartitionId, T, MzOffset>,
-        WriteHandle<SourceData, (), T, Diff>,
-    )
-    where
-        T: timely::progress::Timestamp + Lattice + Codec64,
-    {
-        // Calculate the point at which we can resume ingestion computing the greatest
-        // antichain that is less or equal to all state and output shard uppers.
-        let remap_write = persist
-            .open_writer::<(), PartitionId, T, MzOffset>(self.remap_shard)
-            .await
-            .unwrap();
-        let data_write = persist
-            .open_writer::<SourceData, (), T, Diff>(self.data_shard)
-            .await
-            .unwrap();
-
-        (remap_write, data_write)
-    }
-
-    /// Calculate the point at which we can resume ingestion computing the greatest
-    /// antichain that is less or equal to all state and output shard uppers.
-    ///
-    /// This is a convenience method that combines
-    /// [`CollectionMetadata::get_write_handles`] and
-    /// [`CollectionMetadata::get_resume_upper_from_handles`].
-    pub async fn get_resume_upper<T>(
-        &self,
-        persist: &PersistClient,
-        source_envelope: &SourceEnvelope,
-    ) -> Antichain<T>
-    where
-        T: timely::progress::Timestamp + Lattice + Codec64,
-    {
-        let (mut remap_write, mut data_write) = self.get_write_handles(persist).await;
-        self.get_resume_upper_from_handles(&mut remap_write, &mut data_write, source_envelope)
-    }
 }
 
 /// The subset of [`CollectionMetadata`] that must be durable stored.
@@ -968,9 +832,15 @@ where
                 let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
 
                 let mut source_exports = BTreeMap::new();
-                for (id, (stream, _)) in ingestion.source_exports {
-                    let metadata = self.collection(id)?.collection_metadata.clone();
-                    source_exports.insert(id, (stream, metadata));
+                for (id, export) in ingestion.source_exports {
+                    let storage_metadata = self.collection(id)?.collection_metadata.clone();
+                    source_exports.insert(
+                        id,
+                        SourceExport {
+                            storage_metadata,
+                            output_index: export.output_index,
+                        },
+                    );
                 }
 
                 let desc = IngestionDescription {
@@ -981,20 +851,8 @@ where
                     desc: ingestion.desc,
                 };
                 let mut persist_clients = self.persist.lock().await;
-                let mut resume_upper = Antichain::new();
-                for (_, storage_metadata) in desc.source_exports.values() {
-                    let persist_client = persist_clients
-                        .open(storage_metadata.persist_location.clone())
-                        .await
-                        .expect("error creating persist client");
-
-                    let export_resume_upper = storage_metadata
-                        .get_resume_upper::<T>(&persist_client, &desc.desc.envelope)
-                        .await;
-                    for ts in export_resume_upper {
-                        resume_upper.insert(ts);
-                    }
-                }
+                let mut state = desc.initialize_state(&mut persist_clients).await;
+                let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
 
                 let augmented_ingestion = CreateSourceCommand {
                     id,

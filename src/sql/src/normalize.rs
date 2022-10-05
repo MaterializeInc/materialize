@@ -23,10 +23,10 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement, CreateTableStatement,
-    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op,
-    Query, Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName,
-    Value, ViewDefinition,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
+    IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{

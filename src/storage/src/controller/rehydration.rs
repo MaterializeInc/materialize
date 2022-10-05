@@ -38,6 +38,7 @@ use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId};
 use mz_service::client::GenericClient;
 
+use crate::controller::ResumptionFrontierCalculator;
 use crate::protocol::client::{
     CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
@@ -172,7 +173,15 @@ where
 
         for ingest in self.sources.values_mut() {
             let mut persist_clients = self.persist.lock().await;
-            ingest.resume_upper = ingest.description.resume_upper(&mut persist_clients).await;
+            let mut state = ingest
+                .description
+                .initialize_state(&mut persist_clients)
+                .await;
+            let resume_upper = ingest
+                .description
+                .calculate_resumption_frontier(&mut state)
+                .await;
+            ingest.resume_upper = resume_upper;
         }
 
         for export in self.sinks.values_mut() {

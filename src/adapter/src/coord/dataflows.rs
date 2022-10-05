@@ -414,6 +414,8 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
 
     /// Determine the given source's monotonicity.
     fn monotonic_source(&self, source: &Source) -> bool {
+        // TODO(petrosagg): store an inverse mapping of subsource -> source in the catalog so that
+        // we can retrieve monotonicity information from the parent source.
         match &source.ingestion {
             Some(ingestion) => ingestion.desc.monotonic(),
             None => false,

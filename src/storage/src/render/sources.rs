@@ -25,7 +25,7 @@ use tokio::runtime::Handle as TokioHandle;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
-use crate::controller::{CollectionMetadata, SourceResumptionFrontierCalculator};
+use crate::controller::CollectionMetadata;
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::types::{DecodeResult, SourceOutput};
 use crate::source::{
@@ -105,10 +105,9 @@ where
         persist_clients: Arc::clone(&storage_state.persist_clients),
     };
 
-    let resumption_calculator = SourceResumptionFrontierCalculator::new(
-        description.ingestion_metadata.clone(),
-        description.desc.envelope.clone(),
-    );
+    // TODO(petrosagg): put the description as-is in the RawSourceCreationConfig instead of cloning
+    // a million fields
+    let resumption_calculator = description.clone();
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
@@ -185,17 +184,17 @@ where
             .pass_through("source-errors", 1)
             .as_collection()];
 
-        let (ok, err) = render_source_stream(
+        let (ok, err, extra_tokens) = render_source_stream(
             scope,
             dataflow_debug_name,
             id,
             ok_source,
             description.clone(),
-            &mut needed_tokens,
             resume_upper.clone(),
             error_collections,
             storage_state,
         );
+        needed_tokens.extend(extra_tokens);
         outputs.push((ok, err));
     }
     (outputs, Rc::new(needed_tokens))
@@ -218,14 +217,19 @@ fn render_source_stream<G>(
     id: GlobalId,
     ok_source: ConcreteSourceType<G>,
     description: IngestionDescription<CollectionMetadata>,
-    needed_tokens: &mut Vec<Rc<dyn Any>>,
     resume_upper: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &mut crate::storage_state::StorageState,
-) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
+) -> (
+    Collection<G, Row, Diff>,
+    Collection<G, DataflowError, Diff>,
+    Vec<Rc<dyn Any>>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let mut needed_tokens: Vec<Rc<dyn Any>> = vec![];
+
     let SourceDesc {
         encoding,
         envelope,
@@ -461,7 +465,7 @@ where
     };
 
     // Return the collections and any needed tokens.
-    (collection, err_collection)
+    (collection, err_collection, needed_tokens)
 }
 
 /// After handling metadata insertion, we split streams into key/value parts for convenience

@@ -1247,7 +1247,7 @@ where
     });
 
     let (ok_muxed_stream, err_stream) =
-        reclocked_stream.map_fallible("reclock-demux", |(output, r)| match r {
+        reclocked_stream.map_fallible("reclock-demux-ok-err", |(output, r)| match r {
             Ok(ok) => Ok((output, ok)),
             Err(err) => Err(err),
         });

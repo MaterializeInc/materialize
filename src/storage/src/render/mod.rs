@@ -151,13 +151,13 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 storage_state,
             );
 
-            for (target, (output_idx, metadata)) in description.source_exports {
-                let (ok, err) = &outputs[output_idx];
+            for (target, export) in description.source_exports {
+                let (ok, err) = &outputs[export.output_index];
                 let source_data = ok.map(Ok).concat(&err.map(Err));
                 crate::render::persist_sink::render(
                     region,
                     target,
-                    metadata,
+                    export.storage_metadata,
                     source_data,
                     storage_state,
                     Rc::clone(&token),

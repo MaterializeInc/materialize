@@ -59,7 +59,7 @@ use mz_sql::plan::{
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
 use mz_storage::types::sinks::StorageSinkConnectionBuilder;
-use mz_storage::types::sources::IngestionDescription;
+use mz_storage::types::sources::{IngestionDescription, SourceExport};
 
 use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection, SerializedComputeReplicaLocation,
@@ -491,9 +491,17 @@ impl<S: Append + 'static> Coordinator<S> {
 
                         let mut source_exports = BTreeMap::new();
                         // By convention the first output corresponds to the main source object
-                        source_exports.insert(source_id, (0, ()));
-                        for (subsource, stream_idx) in ingestion.subsource_exports {
-                            source_exports.insert(subsource, (stream_idx, ()));
+                        let main_export = SourceExport {
+                            output_index: 0,
+                            storage_metadata: (),
+                        };
+                        source_exports.insert(source_id, main_export);
+                        for (subsource, output_index) in ingestion.subsource_exports {
+                            let export = SourceExport {
+                                output_index,
+                                storage_metadata: (),
+                            };
+                            source_exports.insert(subsource, export);
                         }
 
                         IngestionDescription {

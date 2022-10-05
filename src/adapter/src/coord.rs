@@ -106,7 +106,7 @@ use mz_stash::Append;
 use mz_storage::controller::CollectionDescription;
 use mz_storage::types::connections::ConnectionContext;
 use mz_storage::types::sinks::StorageSinkConnection;
-use mz_storage::types::sources::{IngestionDescription, Timeline};
+use mz_storage::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -485,9 +485,17 @@ impl<S: Append + 'static> Coordinator<S> {
 
                         let mut source_exports = BTreeMap::new();
                         // By convention the first output corresponds to the main source object
-                        source_exports.insert(entry.id(), (0, ()));
-                        for (subsource, stream_idx) in ingestion.subsource_exports {
-                            source_exports.insert(subsource, (stream_idx, ()));
+                        let main_export = SourceExport {
+                            output_index: 0,
+                            storage_metadata: (),
+                        };
+                        source_exports.insert(entry.id(), main_export);
+                        for (subsource, output_index) in ingestion.subsource_exports {
+                            let export = SourceExport {
+                                output_index,
+                                storage_metadata: (),
+                            };
+                            source_exports.insert(subsource, export);
                         }
 
                         IngestionDescription {

@@ -15,6 +15,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
+use async_trait::async_trait;
 use bytes::BufMut;
 use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
@@ -22,23 +23,24 @@ use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use uuid::Uuid;
 
 use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::write::WriteHandle;
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::TryFromProtoError;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType};
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
-use crate::controller::CollectionMetadata;
+use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::aws::AwsConfig;
 use crate::types::connections::{KafkaConnection, PostgresConnection, StringOrSecret};
 use crate::types::errors::DataflowError;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
+use proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
 use proto_load_generator_source_connection::Generator as ProtoGenerator;
 
 pub mod encoding;
@@ -54,22 +56,33 @@ pub struct IngestionDescription<S = ()> {
     pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
     pub ingestion_metadata: S,
-    /// Collections to be exported by this ingestion. Each GlobalId is associated with the ordinal
-    /// of the output stream it should be connected to
-    pub source_exports: BTreeMap<GlobalId, (usize, S)>,
+    /// Collections to be exported by this ingestion.
+    pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
 }
 
-impl IngestionDescription<CollectionMetadata> {
-    /// Calculates the frontier that this ingestion can resume at
-    pub async fn resume_upper<T: Timestamp + Codec64 + Lattice>(
-        &self,
-        client_cache: &mut PersistClientCache,
-    ) -> Antichain<T> {
-        // An ingestion can resume at the minimum of..
-        let mut resume_upper = Antichain::new();
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SourceExport<S = ()> {
+    /// The index of the exported output stream
+    pub output_index: usize,
+    /// The collection metadata needed to write the exported data
+    pub storage_metadata: S,
+}
 
-        // ..the upper frontier of each source export
-        for (_, metadata) in self.source_exports.values() {
+#[async_trait]
+impl<T: timely::progress::Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
+    for IngestionDescription<CollectionMetadata>
+{
+    // A `WriteHandle` per output data shard and one for the remap shard. Once we have
+    // source envelopes that keep additional shards we have to specialize this
+    // some more.
+    type State = (
+        Vec<WriteHandle<SourceData, (), T, Diff>>,
+        WriteHandle<(), PartitionId, T, MzOffset>,
+    );
+
+    async fn initialize_state(&self, client_cache: &mut PersistClientCache) -> Self::State {
+        let mut data_handles = vec![];
+        for export in self.source_exports.values() {
             // Explicit destructuring to force a compile error when the metadata change
             let CollectionMetadata {
                 persist_location,
@@ -77,7 +90,7 @@ impl IngestionDescription<CollectionMetadata> {
                 data_shard,
                 // The status shard only contains non-definite status updates
                 status_shard: _,
-            } = metadata;
+            } = &export.storage_metadata;
             let handle = client_cache
                 .open(persist_location.clone())
                 .await
@@ -85,12 +98,9 @@ impl IngestionDescription<CollectionMetadata> {
                 .open_writer::<SourceData, (), T, Diff>(*data_shard)
                 .await
                 .unwrap();
-            for t in handle.upper().elements() {
-                resume_upper.insert(t.clone());
-            }
+            data_handles.push(handle);
         }
 
-        // ..the upper frontier of ingestion state
         let CollectionMetadata {
             persist_location,
             remap_shard,
@@ -98,14 +108,33 @@ impl IngestionDescription<CollectionMetadata> {
             // The status shard only contains non-definite status updates
             status_shard: _,
         } = &self.ingestion_metadata;
-        let handle = client_cache
+        let remap_handle = client_cache
             .open(persist_location.clone())
             .await
             .expect("error creating persist client")
             .open_writer::<(), PartitionId, T, MzOffset>(*remap_shard)
             .await
             .unwrap();
-        for t in handle.upper().elements() {
+
+        (data_handles, remap_handle)
+    }
+
+    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T> {
+        let (data_handles, remap_handle) = state;
+        // An ingestion can resume at the minimum of..
+        let mut resume_upper = Antichain::new();
+
+        // ..the upper frontier of each source export
+        for handle in data_handles {
+            handle.fetch_recent_upper().await;
+            for t in handle.upper().elements() {
+                resume_upper.insert(t.clone());
+            }
+        }
+
+        // ..the upper frontier of ingestion state
+        remap_handle.fetch_recent_upper().await;
+        for t in remap_handle.upper().elements() {
             resume_upper.insert(t.clone());
         }
 
@@ -138,7 +167,7 @@ where
         (
             any::<SourceDesc>(),
             any::<BTreeMap<GlobalId, S>>(),
-            any::<BTreeMap<GlobalId, (usize, S)>>(),
+            any::<BTreeMap<GlobalId, SourceExport<S>>>(),
             any::<S>(),
         )
             .prop_map(
@@ -155,28 +184,9 @@ where
 
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
     fn into_proto(&self) -> ProtoIngestionDescription {
-        use proto_ingestion_description::*;
-        // we have to turn a BTreeMap into a vec here
-        let source_imports: Vec<_> = self
-            .source_imports
-            .iter()
-            .map(|(id, meta)| ProtoSourceImport {
-                id: Some(id.into_proto()),
-                storage_metadata: Some(meta.into_proto()),
-            })
-            .collect();
-        let source_exports: Vec<_> = self
-            .source_exports
-            .iter()
-            .map(|(id, (output_index, meta))| ProtoSourceExport {
-                id: Some(id.into_proto()),
-                output_index: output_index.into_proto(),
-                storage_metadata: Some(meta.into_proto()),
-            })
-            .collect();
         ProtoIngestionDescription {
-            source_imports,
-            source_exports,
+            source_imports: self.source_imports.into_proto(),
+            source_exports: self.source_exports.into_proto(),
             ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
             desc: Some(self.desc.into_proto()),
         }
@@ -184,34 +194,8 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
 
     fn from_proto(proto: ProtoIngestionDescription) -> Result<Self, TryFromProtoError> {
         Ok(IngestionDescription {
-            // we have to turn a vec into a BTreeMap here
-            source_imports: proto
-                .source_imports
-                .into_iter()
-                .map(
-                    |psmi| -> Result<(GlobalId, CollectionMetadata), TryFromProtoError> {
-                        let id = psmi.id.into_rust_if_some("ProtoSourceImport::id")?;
-                        let meta = psmi
-                            .storage_metadata
-                            .into_rust_if_some("ProtoSourceImport::storage_metadata")?;
-                        Ok((id, meta))
-                    },
-                )
-                .collect::<Result<_, TryFromProtoError>>()?,
-            source_exports: proto
-                .source_exports
-                .into_iter()
-                .map(
-                    |psme| -> Result<(GlobalId, (usize, CollectionMetadata)), TryFromProtoError> {
-                        let id = psme.id.into_rust_if_some("ProtoSourceImport::id")?;
-                        let output_index = psme.output_index.into_rust()?;
-                        let meta = psme
-                            .storage_metadata
-                            .into_rust_if_some("ProtoSourceImport::storage_metadata")?;
-                        Ok((id, (output_index, meta)))
-                    },
-                )
-                .collect::<Result<_, TryFromProtoError>>()?,
+            source_imports: proto.source_imports.into_rust()?,
+            source_exports: proto.source_exports.into_rust()?,
             desc: proto
                 .desc
                 .into_rust_if_some("ProtoIngestionDescription::desc")?,
@@ -219,6 +203,62 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
                 .ingestion_metadata
                 .into_rust_if_some("ProtoIngestionDescription::ingestion_metadata")?,
         })
+    }
+}
+
+impl ProtoMapEntry<GlobalId, CollectionMetadata> for ProtoSourceImport {
+    fn from_rust<'a>(entry: (&'a GlobalId, &'a CollectionMetadata)) -> Self {
+        ProtoSourceImport {
+            id: Some(entry.0.into_proto()),
+            storage_metadata: Some(entry.1.into_proto()),
+        }
+    }
+
+    fn into_rust(self) -> Result<(GlobalId, CollectionMetadata), TryFromProtoError> {
+        Ok((
+            self.id.into_rust_if_some("ProtoSourceImport::id")?,
+            self.storage_metadata
+                .into_rust_if_some("ProtoSourceImport::storage_metadata")?,
+        ))
+    }
+}
+
+impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceExport {
+    fn from_rust<'a>(entry: (&'a GlobalId, &'a SourceExport<CollectionMetadata>)) -> Self {
+        ProtoSourceExport {
+            id: Some(entry.0.into_proto()),
+            output_index: entry.1.output_index.into_proto(),
+            storage_metadata: Some(entry.1.storage_metadata.into_proto()),
+        }
+    }
+
+    fn into_rust(self) -> Result<(GlobalId, SourceExport<CollectionMetadata>), TryFromProtoError> {
+        Ok((
+            self.id.into_rust_if_some("ProtoSourceExport::id")?,
+            SourceExport {
+                output_index: self.output_index.into_rust()?,
+                storage_metadata: self
+                    .storage_metadata
+                    .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
+            },
+        ))
+    }
+}
+
+impl<S> Arbitrary for SourceExport<S>
+where
+    S: Arbitrary + 'static,
+{
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (any::<usize>(), any::<S>())
+            .prop_map(|(output_index, storage_metadata)| Self {
+                output_index,
+                storage_metadata,
+            })
+            .boxed()
     }
 }
 

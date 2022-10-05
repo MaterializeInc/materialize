@@ -1380,6 +1380,11 @@ pub struct Ingestion {
     // derived from the connection ID. Too hard to fix at the moment.
     pub desc: SourceDesc,
     pub source_imports: HashSet<GlobalId>,
+    /// The *additional* subsource exports of this ingestion. Each collection identified by its
+    /// GlobalId will contain the contents of this ingestion's output stream that is identified by
+    /// the index.
+    ///
+    /// This map does *not* include the export of the source associated with the ingestion itself
     pub subsource_exports: HashMap<GlobalId, usize>,
 }
 

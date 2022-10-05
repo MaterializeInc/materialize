@@ -107,9 +107,9 @@ use crate::plan::{
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
-    DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index,
-    Ingestion, MaterializedView, Params, Plan, RotateKeysPlan, Secret, Sink, Source, StorageHostConfig, Table,
-    Type, View,
+    DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    FullObjectName, Index, Ingestion, MaterializedView, Params, Plan, RotateKeysPlan, Secret, Sink,
+    Source, StorageHostConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -367,7 +367,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connection, connection_id, encoding) = match connection {
+    let (external_connection, connection_id, encoding, available_subsources) = match connection {
         CreateSourceConnection::Kafka(mz_sql_parser::ast::KafkaSourceConnection {
             connection:
                 mz_sql_parser::ast::KafkaConnection {
@@ -490,7 +490,7 @@ pub fn plan_create_source(
 
             let connection = SourceConnection::Kafka(connection);
 
-            (connection, Some(item.id()), encoding)
+            (connection, Some(item.id()), encoding, None)
         }
         CreateSourceConnection::Kinesis {
             connection: aws_connection,
@@ -517,7 +517,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(scx, format, &envelope, connection)?;
             let connection =
                 SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
-            (connection, Some(item.id()), encoding)
+            (connection, Some(item.id()), encoding, None)
         }
         CreateSourceConnection::S3 {
             connection: aws_connection,
@@ -571,7 +571,7 @@ pub fn plan_create_source(
                     Compression::None => mz_storage::types::sources::Compression::None,
                 },
             });
-            (connection, Some(item.id()), encoding)
+            (connection, Some(item.id()), encoding, None)
         }
         CreateSourceConnection::Postgres {
             connection,
@@ -604,7 +604,7 @@ pub fn plan_create_source(
 
             let encoding =
                 SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Postgres));
-            (connection, Some(item.id()), encoding)
+            (connection, Some(item.id()), encoding, None)
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let load_generator = match generator {
@@ -624,7 +624,7 @@ pub fn plan_create_source(
                 load_generator,
                 tick_micros,
             });
-            (connection, None, generator.data_encoding())
+            (connection, None, generator.data_encoding(), None)
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -759,20 +759,8 @@ pub fn plan_create_source(
         timestamp_interval,
     };
 
-    // Here we will store the available subsources for this ingestion. Sources like postgres and
-    // the load generator make additional streams available identified by their index and
-    // associated to a FullObjectName
-    let mut available_subsources = HashMap::new();
-    for (name, output_idx) in source_desc.subsource_outputs() {
-        let name = match normalize::full_name(name) {
-            Ok(name) => name,
-            Err(_) => sql_bail!("[internal error] sources must declare valid subsource names"),
-        };
-        available_subsources.insert(name, output_idx);
-    }
-
-    let requested_subsources = match subsources {
-        Some(CreateSourceSubsources::Subset(subsources)) => {
+    let (available_subsources, requested_subsources) = match (available_subsources, subsources) {
+        (Some(available_subsources), Some(CreateSourceSubsources::Subset(subsources))) => {
             let mut requested_subsources = vec![];
             for subsource in subsources {
                 let (name, target) = match subsource {
@@ -785,19 +773,16 @@ pub fn plan_create_source(
                 };
                 requested_subsources.push((name.clone(), target));
             }
-            requested_subsources
+            (available_subsources, requested_subsources)
         }
-        None => {
-            // The user is only allowed to skip specifying subsources if there aren't any
-            if !available_subsources.is_empty() {
-                let subtables = available_subsources.keys().collect_vec();
-                sql_bail!("Source has the following subtables: {subtables:?}. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
-            }
-            vec![]
+        (Some(_), None) => {
+            // Multi-output sources must have a table selection clause
+            sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
         }
-        Some(CreateSourceSubsources::All) => {
+        (None, Some(_)) | (Some(_), Some(CreateSourceSubsources::All)) => {
             sql_bail!("[internal error] subsources should be resolved during purification")
         }
+        (None, None) => (HashMap::<FullObjectName, usize>::new(), vec![]),
     };
 
     let mut subsource_exports = HashMap::new();
