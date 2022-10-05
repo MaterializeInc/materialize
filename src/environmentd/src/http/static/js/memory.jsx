@@ -31,7 +31,7 @@ function formatNameForQuery(name) {
 
 const { useState, useEffect } = React;
 
-function ClusterView() {
+function ClusterReplicaView() {
   const [currentClusterName, setCurrentClusterName] = useState(null);
   const [currentReplicaName, setCurrentReplicaName] = useState(null);
   const [sqlResponse, setSqlResponse] = useState(null);
@@ -39,12 +39,12 @@ function ClusterView() {
   const [error, setError] = useState(false);
 
   const queryClusterReplicas = `
-    SELECT DISTINCT ON(clusters.name)
+    SELECT
       clusters.name AS cluster_name, replicas.name AS replica_name
     FROM
       mz_catalog.mz_cluster_replicas replicas
       LEFT JOIN mz_catalog.mz_clusters clusters ON clusters.id = replicas.cluster_id
-    ORDER BY cluster_name asc
+    ORDER BY cluster_name ASC, replica_name ASC
   `;
 
   useEffect(() => {
@@ -63,8 +63,14 @@ function ClusterView() {
         const results = data.results[0].rows;
         setSqlResponse(results);
         if (!replicaName && results.length > 0) {
-          setCurrentClusterName(results[0][0]);
-          setCurrentReplicaName(results[0][1]);
+          if(results.some(
+            result => ('default' == result[0]) && ('default_replica' == result[1]))) {
+            setCurrentClusterName('default');
+            setCurrentReplicaName('default_replica');
+          } else {
+            setCurrentClusterName(results[0][0]);
+            setCurrentReplicaName(results[0][1]);
+          }
         }
         setLoading(false);
       })
@@ -80,7 +86,7 @@ function ClusterView() {
     params.set('cluster_name', currentClusterName);
     params.set('replica_name', currentReplicaName);
     window.history.replaceState({}, '', `${location.pathname}?${params}`);
-  }, [currentClusterName, currentReplicaName])
+  }, [currentClusterName, currentReplicaName]);
 
   return (
     <div>
@@ -90,10 +96,10 @@ function ClusterView() {
         <div>error: {error}</div>
       ) : (
         <div>
-          <label htmlFor="cluster">Cluster </label>
+          <label htmlFor="cluster_replica">Cluster Replica </label>
           <select
-            id="cluster"
-            name="cluster"
+            id="cluster_replica"
+            name="cluster_replica"
             onChange={(event) => {
               const clusterReplicaJson = event.target.value;
               const clusterReplica = JSON.parse(clusterReplicaJson);
@@ -104,7 +110,7 @@ function ClusterView() {
           >
             {sqlResponse.map((v) => (
               <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
-                {`${v[0]}`}
+                {`${v[0]}.${v[1]}`}
               </option>
             ))}
           </select>
@@ -666,4 +672,4 @@ function dispNs(ns) {
 }
 
 const content = document.getElementById('content');
-ReactDOM.render(<ClusterView />, content);
+ReactDOM.render(<ClusterReplicaView />, content);
