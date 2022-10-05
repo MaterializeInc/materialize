@@ -25,9 +25,13 @@ async function query(sql) {
   return data;
 }
 
+function formatNameForQuery(name) {
+  return `'${name.replace('\'', '\'\'')}'`;
+}
+
 const { useState, useEffect } = React;
 
-function ReplicaView() {
+function ClusterView() {
   const [currentClusterName, setCurrentClusterName] = useState(null);
   const [currentReplicaName, setCurrentReplicaName] = useState(null);
   const [sqlResponse, setSqlResponse] = useState(null);
@@ -35,12 +39,12 @@ function ReplicaView() {
   const [error, setError] = useState(false);
 
   const queryClusterReplicas = `
-    SELECT
-    clusters.name AS cluster_name, replicas.name AS replica_name
+    SELECT DISTINCT ON(clusters.name)
+      clusters.name AS cluster_name, replicas.name AS replica_name
     FROM
       mz_catalog.mz_cluster_replicas replicas
       LEFT JOIN mz_catalog.mz_clusters clusters ON clusters.id = replicas.cluster_id
-    ORDER BY replicas.id asc
+    ORDER BY cluster_name asc
   `;
 
   useEffect(() => {
@@ -86,20 +90,21 @@ function ReplicaView() {
         <div>error: {error}</div>
       ) : (
         <div>
-          <label htmlFor="cluster_replica">Cluster Replica </label>
+          <label htmlFor="cluster">Cluster </label>
           <select
-            id="cluster_replica"
-            name="cluster_replica"
+            id="cluster"
+            name="cluster"
             onChange={(event) => {
-              const clusterReplica = event.target.value;
-              const clusterReplicaSplit = clusterReplica.split('|');
-              setCurrentClusterName(clusterReplicaSplit[0]);
-              setCurrentReplicaName(clusterReplicaSplit[1]);
+              const clusterReplicaJson = event.target.value;
+              const clusterReplica = JSON.parse(clusterReplicaJson);
+              setCurrentClusterName(clusterReplica[0]);
+              setCurrentReplicaName(clusterReplica[1]);
             }}
-            defaultValue={`${currentClusterName}|${currentReplicaName}`}>
+            defaultValue={JSON.stringify([currentClusterName, currentReplicaName])}
+          >
             {sqlResponse.map((v) => (
-              <option key={`${v[0]}|${v[1]}`} value={`${v[0]}|${v[1]}`}>
-                {`${v[0]}.${v[1]}`}
+              <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
+                {`${v[0]}`}
               </option>
             ))}
           </select>
@@ -150,8 +155,8 @@ function Views(props) {
       const {
         results: [_set_cluster, _set_replica, records_table],
       } = await query(`
-        SET cluster = ${props.clusterName};
-        SET cluster_replica = ${props.replicaName};
+        SET cluster = ${formatNameForQuery(props.clusterName)};
+        SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
           id, name, records
         FROM
@@ -257,8 +262,8 @@ function View(props) {
       const {
         results: [_set_cluster, _set_replica, stats_table, addr_table, oper_table, chan_table, elapsed_table, records_table],
       } = await query(`
-        SET cluster = ${props.clusterName};
-        SET cluster_replica = ${props.replicaName};
+        SET cluster = ${formatNameForQuery(props.clusterName)};
+        SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
           name, records
         FROM
@@ -661,4 +666,4 @@ function dispNs(ns) {
 }
 
 const content = document.getElementById('content');
-ReactDOM.render(<ReplicaView />, content);
+ReactDOM.render(<ClusterView />, content);
