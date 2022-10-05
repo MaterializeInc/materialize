@@ -343,14 +343,14 @@ where
                                 SourceMessageType::Finalized(message) | SourceMessageType::InProgress(message) => {
                                     let pid = message.partition.clone();
                                     let offset = message.offset;
-                                    // advance the _offset_ frontier if this the final message for that offset
+                                    // Advance the offset _frontier_ to past this message's offset.
+                                    // This will not affect the upper of the data shard(s) until
+                                    // the `reclock` operator processes ALL batches at this offset.
                                     //
-                                    // TODO(guswynn): when we remove this, we can simplify some of
+                                    // TODO(guswynn): We can simplify some of
                                     // the code in the reclock operator (probably), but using
                                     // subtraction/addition on the upper we pass through.
-                                    if let Some(true) = is_final {
-                                        source_upper.insert_data_up_to(pid.clone(), offset);
-                                    }
+                                    source_upper.insert_data_up_to(pid.clone(), offset);
                                     untimestamped_messages.entry(pid).or_default().push((message, offset));
                                 }
                                 SourceMessageType::SourceStatus(update) => {
@@ -1066,7 +1066,9 @@ where
                             // If the batch_input frontier has advanced past this batch time, then
                             // we can advance the `global_source_upper`, which will later downgrade
                             // `cap_set`, as we are sure we have seen all messages for this
-                            // `source_upper`.
+                            // `source_upper`. Note that downgrading this capability directly
+                            // communicates to the `persist_sink` that a timestamp (for
+                            // an offset) is closed, and should be `compare_and_appended`.
                             let should_advance =
                                 if let Some(frontier_ts) = frontiers[0].frontier().as_option() {
                                     frontier_ts > batch_ts
@@ -1125,8 +1127,12 @@ where
 
             trace!(
                 "reclock({id}) {worker_id}/{worker_count}: \
-                untimestamped_batches.len(): {}",
+                untimestamped_batches.len(): {}, total messages: {}",
                 untimestamped_batches.len(),
+                untimestamped_batches
+                    .iter()
+                    .map(|b| b.messages.values().map(|v| v.len()).sum::<usize>())
+                    .sum::<usize>()
             );
 
             while let Some(untimestamped_batch) = untimestamped_batches.front_mut() {
