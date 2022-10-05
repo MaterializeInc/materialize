@@ -384,103 +384,116 @@ where
                     .remove(&uuid)
                     .map(|_| ActiveReplicationResponse::PeekResponse(uuid, response, otel_ctx))
             }
-            ComputeResponse::FrontierUppers(list) => {
-                let mut new_uppers = Vec::new();
-
-                for (id, new_upper) in list {
-                    if let Some(reported) = self.uppers.get_mut(&id) {
-                        if reported.update(replica_id, new_upper) {
-                            new_uppers.push((id, reported.bounds.clone()));
-                        }
-                    } else if let Some(reported) = self.log_uppers.get_mut(&id) {
-                        if PartialOrder::less_than(reported, &new_upper) {
-                            reported.clone_from(&new_upper);
-                            new_uppers.push((
-                                id,
-                                FrontierBounds {
-                                    lower: new_upper.clone(),
-                                    upper: new_upper,
-                                },
-                            ));
-                        }
-                    }
-                }
-                if !new_uppers.is_empty() {
-                    Some(ActiveReplicationResponse::FrontierUppers(new_uppers))
-                } else {
-                    None
-                }
-            }
+            ComputeResponse::FrontierUppers(list) => self.handle_frontier_uppers(list, replica_id),
             ComputeResponse::SubscribeResponse(id, response) => {
-                if let Some(entry) = self.uppers.get_mut(&id) {
-                    match response {
-                        SubscribeResponse::Batch(SubscribeBatch {
-                            lower: _,
-                            upper,
-                            mut updates,
-                        }) => {
-                            // We track both the upper and the lower bound of all upper frontiers
-                            // reported by all replicas.
-                            //  * If the upper bound advances, we can emit all updates at times greater
-                            //    or equal to the last reported upper bound (to avoid emitting duplicate
-                            //    updates) as a `SubscribeResponse`.
-                            //  * If either the upper or the lower bound advances, we emit this
-                            //    information as a `FrontierUppers` response.
-
-                            let old_upper_bound = entry.bounds.upper.clone();
-
-                            if entry.update(replica_id, upper) {
-                                if PartialOrder::less_than(&old_upper_bound, &entry.bounds.upper) {
-                                    let new_lower = old_upper_bound;
-                                    updates
-                                        .retain(|(time, _data, _diff)| new_lower.less_equal(time));
-                                    self.pending_response.push_back(
-                                        ActiveReplicationResponse::SubscribeResponse(
-                                            id,
-                                            SubscribeResponse::Batch(SubscribeBatch {
-                                                lower: new_lower,
-                                                upper: entry.bounds.upper.clone(),
-                                                updates,
-                                            }),
-                                        ),
-                                    )
-                                }
-
-                                let frontier_updates = vec![(id, entry.bounds.clone())];
-                                self.pending_response.push_back(
-                                    ActiveReplicationResponse::FrontierUppers(frontier_updates),
-                                );
-                            }
-                        }
-                        SubscribeResponse::DroppedAt(frontier) => {
-                            // Advance the subscribe upper to the empty frontier, to suppress all
-                            // future `SubscribeResponse`s. We still need to keep tracking this
-                            // subscribe, to ensure its inputs don't get compacted as long as slower
-                            // replicas might still be reading from them.
-
-                            // Pass on only the first `DroppedAt` response we see for a subscribe.
-                            if !entry.bounds.upper.is_empty() {
-                                self.pending_response.push_back(
-                                    ActiveReplicationResponse::SubscribeResponse(
-                                        id,
-                                        SubscribeResponse::DroppedAt(frontier),
-                                    ),
-                                );
-                            }
-
-                            if entry.update(replica_id, Antichain::new()) {
-                                let frontier_updates = vec![(id, entry.bounds.clone())];
-                                self.pending_response.push_back(
-                                    ActiveReplicationResponse::FrontierUppers(frontier_updates),
-                                );
-                            }
-                        }
-                    }
-                }
-
-                self.pending_response.pop_front()
+                self.handle_subscribe_response(id, response, replica_id)
             }
         }
+    }
+
+    fn handle_frontier_uppers(
+        &mut self,
+        list: Vec<(GlobalId, Antichain<T>)>,
+        replica_id: ReplicaId,
+    ) -> Option<ActiveReplicationResponse<T>> {
+        let mut new_uppers = Vec::new();
+
+        for (id, new_upper) in list {
+            if let Some(reported) = self.uppers.get_mut(&id) {
+                if reported.update(replica_id, new_upper) {
+                    new_uppers.push((id, reported.bounds.clone()));
+                }
+            } else if let Some(reported) = self.log_uppers.get_mut(&id) {
+                if PartialOrder::less_than(reported, &new_upper) {
+                    reported.clone_from(&new_upper);
+                    new_uppers.push((
+                        id,
+                        FrontierBounds {
+                            lower: new_upper.clone(),
+                            upper: new_upper,
+                        },
+                    ));
+                }
+            }
+        }
+
+        if !new_uppers.is_empty() {
+            Some(ActiveReplicationResponse::FrontierUppers(new_uppers))
+        } else {
+            None
+        }
+    }
+
+    fn handle_subscribe_response(
+        &mut self,
+        subscribe_id: GlobalId,
+        response: SubscribeResponse<T>,
+        replica_id: ReplicaId,
+    ) -> Option<ActiveReplicationResponse<T>> {
+        let entry = self.uppers.get_mut(&subscribe_id)?;
+
+        match response {
+            SubscribeResponse::Batch(SubscribeBatch {
+                lower: _,
+                upper,
+                mut updates,
+            }) => {
+                // We track both the upper and the lower bound of all upper frontiers
+                // reported by all replicas.
+                //  * If the upper bound advances, we can emit all updates at times greater
+                //    or equal to the last reported upper bound (to avoid emitting duplicate
+                //    updates) as a `SubscribeResponse`.
+                //  * If either the upper or the lower bound advances, we emit this
+                //    information as a `FrontierUppers` response.
+
+                let old_upper_bound = entry.bounds.upper.clone();
+                if !entry.update(replica_id, upper) {
+                    // There are no new updates to report.
+                    return None;
+                }
+
+                if PartialOrder::less_than(&old_upper_bound, &entry.bounds.upper) {
+                    let new_lower = old_upper_bound;
+                    updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
+                    self.pending_response
+                        .push_back(ActiveReplicationResponse::SubscribeResponse(
+                            subscribe_id,
+                            SubscribeResponse::Batch(SubscribeBatch {
+                                lower: new_lower,
+                                upper: entry.bounds.upper.clone(),
+                                updates,
+                            }),
+                        ))
+                }
+
+                let frontier_updates = vec![(subscribe_id, entry.bounds.clone())];
+                self.pending_response
+                    .push_back(ActiveReplicationResponse::FrontierUppers(frontier_updates));
+            }
+            SubscribeResponse::DroppedAt(frontier) => {
+                // Advance the subscribe upper to the empty frontier, to suppress all
+                // future `SubscribeResponse`s. We still need to keep tracking this
+                // subscribe, to ensure its inputs don't get compacted as long as slower
+                // replicas might still be reading from them.
+
+                // Pass on only the first `DroppedAt` response we see for a subscribe.
+                if !entry.bounds.upper.is_empty() {
+                    self.pending_response
+                        .push_back(ActiveReplicationResponse::SubscribeResponse(
+                            subscribe_id,
+                            SubscribeResponse::DroppedAt(frontier),
+                        ));
+                }
+
+                if entry.update(replica_id, Antichain::new()) {
+                    let frontier_updates = vec![(subscribe_id, entry.bounds.clone())];
+                    self.pending_response
+                        .push_back(ActiveReplicationResponse::FrontierUppers(frontier_updates));
+                }
+            }
+        }
+
+        self.pending_response.pop_front()
     }
 }
 
