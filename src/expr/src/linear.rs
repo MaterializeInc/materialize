@@ -472,7 +472,7 @@ impl MapFilterProject {
             }
             1 => {
                 let output_arity = mfps[0].projection.len();
-                std::mem::replace(&mut mfps[0], MapFilterProject::new(output_arity))
+                std::mem::replace(mfps[0], MapFilterProject::new(output_arity))
             }
             _ => {
                 // Prepare a return `Self`.
@@ -1338,7 +1338,7 @@ pub mod util {
             .collect();
         let thinning = (0..unthinned_arity)
             .into_iter()
-            .filter(|c| !columns_in_key.contains_key(&c))
+            .filter(|c| !columns_in_key.contains_key(c))
             .collect();
         (permutation, thinning)
     }
@@ -1487,15 +1487,15 @@ pub mod plan {
             let mut expression = 0;
             for (support, predicate) in self.mfp.predicates.iter() {
                 while self.mfp.input_arity + expression < *support {
-                    datums.push(self.mfp.expressions[expression].eval(&datums[..], &arena)?);
+                    datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
                     expression += 1;
                 }
-                if predicate.eval(&datums[..], &arena)? != Datum::True {
+                if predicate.eval(&datums[..], arena)? != Datum::True {
                     return Ok(false);
                 }
             }
             while expression < self.mfp.expressions.len() {
-                datums.push(self.mfp.expressions[expression].eval(&datums[..], &arena)?);
+                datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
                 expression += 1;
             }
             Ok(true)
@@ -1621,7 +1621,7 @@ pub mod plan {
                             != MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
                     {
                         return Err(format!(
-                            "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mztimestamp-castable expression. Expression found: {}",
+                            "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mz_timestamp-castable expression. Expression found: {}",
                             MirScalarExpr::CallBinary { func, expr1, expr2 },
                             ));
                     }
@@ -1659,7 +1659,7 @@ pub mod plan {
                     }
                 } else {
                     return Err(format!(
-                        "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mztimestamp-castable type. Expression found: {}",
+                        "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: {}",
                         predicate,
                         ));
                 }
@@ -1721,7 +1721,7 @@ pub mod plan {
             row_builder: &mut Row,
         ) -> impl Iterator<Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>>
         {
-            match self.mfp.evaluate_inner(datums, &arena) {
+            match self.mfp.evaluate_inner(datums, arena) {
                 Err(e) => {
                     return Some(Err((e.into(), time, diff)))
                         .into_iter()
@@ -1744,7 +1744,7 @@ pub mod plan {
             // Advance our lower bound to be at least the result of any lower bound
             // expressions.
             for l in self.lower_bounds.iter() {
-                match l.eval(datums, &arena) {
+                match l.eval(datums, arena) {
                     Err(e) => {
                         return Some(Err((e.into(), time, diff)))
                             .into_iter()
@@ -1757,7 +1757,7 @@ pub mod plan {
                         null_eval = true;
                     }
                     x => {
-                        panic!("Non-mztimestamp value in temporal predicate: {:?}", x);
+                        panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
                     }
                 }
             }
@@ -1772,7 +1772,7 @@ pub mod plan {
                 // We can cease as soon as the lower and upper bounds match,
                 // as the update will certainly not be produced in that case.
                 if upper_bound != Some(lower_bound) {
-                    match u.eval(datums, &arena) {
+                    match u.eval(datums, arena) {
                         Err(e) => {
                             return Some(Err((e.into(), time, diff)))
                                 .into_iter()
@@ -1796,7 +1796,7 @@ pub mod plan {
                             null_eval = true;
                         }
                         x => {
-                            panic!("Non-mztimestamp value in temporal predicate: {:?}", x);
+                            panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
                         }
                     }
                 }

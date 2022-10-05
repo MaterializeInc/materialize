@@ -43,7 +43,7 @@ class Generator:
         print("> DROP SCHEMA IF EXISTS public CASCADE;")
         print(f"> CREATE SCHEMA public /* {cls} */;")
         print(
-            "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}"
+            "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}"
         )
 
     @classmethod
@@ -513,7 +513,7 @@ class KafkaSinksSameSource(Generator):
                      > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
                      > CREATE SINK s{i} FROM v1
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
-                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM
                      """
                 )
@@ -1295,7 +1295,7 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ),
                 replica2 (
                     REMOTE ['computed_2_1:2100', 'computed_2_2:2100'],
-                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2100'],
+                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2102'],
                     WORKERS {args.workers}
                 )
             )
@@ -1366,7 +1366,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             c.testdrive(
                 dedent(
                     """
-                    $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}
+                    $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
                     """
                     f"""
@@ -1414,7 +1414,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                         f"{replica_name} (REMOTE ["
                         + ", ".join(f"'{n}:2100'" for n in nodes)
                         + "], COMPUTE ["
-                        + ", ".join(f"'{n}:2100'" for n in nodes)
+                        + ", ".join(f"'{n}:2102'" for n in nodes)
                         + f"], WORKERS {args.workers})"
                     )
 
@@ -1438,8 +1438,8 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                          > CREATE MATERIALIZED VIEW v_{cluster_name} AS
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
-                        > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                          FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+                         > CREATE CONNECTION IF NOT EXISTS kafka_conn
+                           FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
 
                          > CREATE CONNECTION IF NOT EXISTS csr_conn
                            FOR CONFLUENT SCHEMA REGISTRY

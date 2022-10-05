@@ -21,7 +21,7 @@ To [connect](https://www.psycopg.org/docs/usage.html) to a local Materialize ins
 import psycopg2
 import sys
 
-dsn = "postgresql://MATERIALIZE_USERNAME:MATERIALIZE_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=enabled"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 ```
 
@@ -37,7 +37,7 @@ To read a stream of updates from an existing materialized view, open a long-live
 import psycopg2
 import sys
 
-dsn = "postgresql://MATERIALIZE_USERNAME:MATERIALIZE_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=enabled"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 
 with conn.cursor() as cur:
@@ -77,7 +77,7 @@ it provides has a `stream` feature where rows are not buffered, which allows you
 import psycopg3
 import sys
 
-dsn = "postgresql://MATERIALIZE_USERNAME:MATERIALIZE_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=enabled"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg3.connect(dsn)
 
 conn = psycopg3.connect(dsn)
@@ -100,7 +100,7 @@ To query a view `my_view` with a `SELECT` statement:
 import psycopg2
 import sys
 
-dsn = "postgresql://MATERIALIZE_USERNAME:MATERIALIZE_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=enabled"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 
 with conn.cursor() as cur:
@@ -123,7 +123,7 @@ Most data in Materialize will stream in via an external system, but a [table](/s
 import psycopg2
 import sys
 
-dsn = "postgresql://MATERIALIZE_USERNAME:MATERIALIZE_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=enabled"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 
 cur = conn.cursor()
@@ -153,7 +153,7 @@ Typically, you create sources, views, and indexes when deploying Materialize, al
 import psycopg2
 import sys
 
-dsn = "postgresql://MATERIALIZE_USERNAME:MATERIALIZE_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=enabled"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 conn.autocommit = True
 
@@ -177,7 +177,7 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
 import psycopg2
 import sys
 
-dsn = "postgresql://MATERIALIZE_USERNAME:MATERIALIZE_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=enabled"
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
 conn.autocommit = True
 

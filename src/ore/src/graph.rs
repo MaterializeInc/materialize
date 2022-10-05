@@ -231,5 +231,5 @@ where
             return Some(child);
         }
     }
-    return None;
+    None
 }

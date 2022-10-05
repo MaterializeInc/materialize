@@ -162,7 +162,7 @@ impl<'de> Deserialize<'de> for SshKeypair {
             }
         }
 
-        const FIELDS: &'static [&'static str] = &["public_key", "private_key"];
+        const FIELDS: &[&str] = &["public_key", "private_key"];
         deserializer.deserialize_struct("SshKeypair", FIELDS, SshKeypairVisitor)
     }
 }

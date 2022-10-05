@@ -22,7 +22,7 @@
 //! compacted frontiers, as the underlying resources to rebuild them any earlier may not
 //! exist any longer.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::time::Duration;
 
 use anyhow::bail;
@@ -35,6 +35,7 @@ use timely::PartialOrder;
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
@@ -42,10 +43,9 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
-use mz_storage::controller::CollectionMetadata;
 
 use crate::command::{CommunicationConfig, ComputeCommand, ComputeCommandHistory, Peek, ReplicaId};
-use crate::logging::LogVariant;
+use crate::logging::LoggingConfig;
 use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -145,6 +145,112 @@ struct PendingPeek {
     otel_ctx: OpenTelemetryContext,
 }
 
+/// Reported upper frontiers for a single compute collection.
+///
+/// The type maintains the following invariants:
+///   * replica frontiers only advance
+///   * frontier bounds only advance
+///   * `bounds.lower` <= `bounds.upper`
+///   * `bounds.lower` is the lower bound of the frontiers of all active replicas
+///   * `bounds.upper` is the upper bound of the frontiers of all replicas
+#[derive(Debug)]
+struct ReportedUppers<T> {
+    /// The reported uppers per replica.
+    per_replica: HashMap<ReplicaId, Antichain<T>>,
+    /// The lower and upper bound of all reported uppers.
+    bounds: FrontierBounds<T>,
+}
+
+impl<T> ReportedUppers<T>
+where
+    T: Timestamp + Lattice,
+{
+    /// Construct a [`ReportedUppers`] that tracks frontiers of the given replicas.
+    fn new(replica_ids: &BTreeSet<ReplicaId>) -> Self {
+        let per_replica = replica_ids
+            .iter()
+            .map(|id| (*id, Antichain::from_elem(T::minimum())))
+            .collect();
+
+        Self {
+            per_replica,
+            bounds: FrontierBounds {
+                lower: Antichain::from_elem(T::minimum()),
+                upper: Antichain::from_elem(T::minimum()),
+            },
+        }
+    }
+
+    /// Start tracking the given replica.
+    ///
+    /// # Panics
+    /// - If the given `replica_id` is already tracked.
+    fn add_replica(&mut self, id: ReplicaId) {
+        let previous = self.per_replica.insert(id, self.bounds.lower.clone());
+        assert!(previous.is_none(), "replica already tracked");
+    }
+
+    /// Stop tracking the given replica.
+    ///
+    /// Returns `true` iff the update caused a change in any of the two bounds.
+    ///
+    /// # Panics
+    /// - If the given `replica_id` is not tracked.
+    fn remove_replica(&mut self, id: ReplicaId) -> bool {
+        self.per_replica.remove(&id).expect("replica not tracked");
+
+        self.update_lower_bound()
+    }
+
+    /// Apply a frontier update from a single replica.
+    ///
+    /// Returns `true` iff the update caused a change in any of the two bounds.
+    ///
+    /// # Panics
+    /// - If the given `replica_id` is not tracked.
+    fn update(&mut self, replica_id: ReplicaId, new_upper: Antichain<T>) -> bool {
+        let replica_upper = self
+            .per_replica
+            .get_mut(&replica_id)
+            .expect("replica not tracked");
+
+        // Replica frontiers only advance.
+        if PartialOrder::less_than(&new_upper, replica_upper) {
+            return false;
+        }
+
+        replica_upper.clone_from(&new_upper);
+
+        let upper_bound_changed = PartialOrder::less_than(&self.bounds.upper, &new_upper);
+        if upper_bound_changed {
+            self.bounds.upper = new_upper;
+        }
+
+        let lower_bound_changed = self.update_lower_bound();
+
+        upper_bound_changed || lower_bound_changed
+    }
+
+    /// Update `bounds.lower` to restore its invariants.
+    ///
+    /// Returns `true` iff the update caused a change in the lower bound.
+    fn update_lower_bound(&mut self) -> bool {
+        // This operation is linear in the number of replicas. We could do better, but since the
+        // number of replicas is expected to be small, this is fine.
+        let mut new_lower_bound = self.bounds.upper.clone();
+        for frontier in self.per_replica.values() {
+            new_lower_bound.meet_assign(frontier);
+        }
+
+        let lower_bound_changed = PartialOrder::less_than(&self.bounds.lower, &new_lower_bound);
+        if lower_bound_changed {
+            self.bounds.lower = new_lower_bound;
+        }
+
+        lower_bound_changed
+    }
+}
+
 /// The internal state of the client.
 ///
 /// This lives in a separate struct from the handles to the individual replica
@@ -152,12 +258,17 @@ struct PendingPeek {
 /// while holding mutable borrows to those.
 #[derive(Debug)]
 struct ActiveReplicationState<T> {
+    /// IDs of connected replicas.
+    replica_ids: BTreeSet<ReplicaId>,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashMap<uuid::Uuid, PendingPeek>,
-    /// Reported frontier of each in-progress subscribe.
-    tails: HashMap<GlobalId, Antichain<T>>,
-    /// Frontier information, unioned across all replicas.
-    uppers: HashMap<GlobalId, Antichain<T>>,
+    /// Reported upper frontiers for replicated collections and in-progress subscribes.
+    uppers: HashMap<GlobalId, ReportedUppers<T>>,
+    /// Reported upper frontiers for log collections.
+    ///
+    /// Log collections are special in that they are replica-specific. We therefore track their
+    /// frontiers separately from those of replicated collections.
+    log_uppers: HashMap<GlobalId, Antichain<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
     /// Responses that should be emitted on the next `recv` call.
@@ -171,6 +282,32 @@ impl<T> ActiveReplicationState<T>
 where
     T: Timestamp + Lattice,
 {
+    fn add_replica(&mut self, id: ReplicaId) {
+        self.replica_ids.insert(id);
+
+        for uppers in self.uppers.values_mut() {
+            uppers.add_replica(id);
+        }
+    }
+
+    fn remove_replica(&mut self, id: ReplicaId) {
+        self.replica_ids.remove(&id);
+
+        // Removing a replica might have elicit changes to collection frontiers, which we must
+        // report up the chain.
+        let mut new_uppers = Vec::new();
+        for (collection_id, uppers) in self.uppers.iter_mut() {
+            if uppers.remove_replica(id) {
+                new_uppers.push((*collection_id, uppers.bounds.clone()));
+            }
+        }
+
+        if !new_uppers.is_empty() {
+            self.pending_response
+                .push_back(ActiveReplicationResponse::FrontierUppers(new_uppers));
+        }
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     fn handle_command(&mut self, cmd: &ComputeCommand<T>) {
         // Update our tracking of peek commands.
@@ -197,11 +334,7 @@ where
                             tracing::warn!("did not find pending peek for {}", uuid);
                             OpenTelemetryContext::empty()
                         });
-                    ActiveReplicationResponse::ComputeResponse(ComputeResponse::PeekResponse(
-                        *uuid,
-                        PeekResponse::Canceled,
-                        otel_ctx,
-                    ))
+                    ActiveReplicationResponse::PeekResponse(*uuid, PeekResponse::Canceled, otel_ctx)
                 }));
             }
             _ => {}
@@ -212,9 +345,8 @@ where
         let mut cease = Vec::new();
         cmd.frontier_tracking(&mut start, &mut cease);
         for id in start.into_iter() {
-            let frontier = timely::progress::Antichain::from_elem(T::minimum());
-
-            let previous = self.uppers.insert(id, frontier);
+            let uppers = ReportedUppers::new(&self.replica_ids);
+            let previous = self.uppers.insert(id, uppers);
             assert!(previous.is_none());
         }
         for id in cease.into_iter() {
@@ -248,84 +380,105 @@ where
                 //
                 // Additionally, we just use the `otel_ctx` from the first worker to
                 // respond.
-                self.peeks.remove(&uuid).map(|_| {
-                    ActiveReplicationResponse::ComputeResponse(ComputeResponse::PeekResponse(
-                        uuid, response, otel_ctx,
-                    ))
-                })
+                self.peeks
+                    .remove(&uuid)
+                    .map(|_| ActiveReplicationResponse::PeekResponse(uuid, response, otel_ctx))
             }
             ComputeResponse::FrontierUppers(list) => {
                 let mut new_uppers = Vec::new();
 
                 for (id, new_upper) in list {
                     if let Some(reported) = self.uppers.get_mut(&id) {
+                        if reported.update(replica_id, new_upper) {
+                            new_uppers.push((id, reported.bounds.clone()));
+                        }
+                    } else if let Some(reported) = self.log_uppers.get_mut(&id) {
                         if PartialOrder::less_than(reported, &new_upper) {
                             reported.clone_from(&new_upper);
-                            new_uppers.push((id, new_upper));
+                            new_uppers.push((
+                                id,
+                                FrontierBounds {
+                                    lower: new_upper.clone(),
+                                    upper: new_upper,
+                                },
+                            ));
                         }
                     }
                 }
                 if !new_uppers.is_empty() {
-                    Some(ActiveReplicationResponse::ComputeResponse(
-                        ComputeResponse::FrontierUppers(new_uppers),
-                    ))
+                    Some(ActiveReplicationResponse::FrontierUppers(new_uppers))
                 } else {
                     None
                 }
             }
             ComputeResponse::SubscribeResponse(id, response) => {
-                match response {
-                    SubscribeResponse::Batch(SubscribeBatch {
-                        lower: _,
-                        upper,
-                        mut updates,
-                    }) => {
-                        // It is sufficient to compare `upper` against the last reported frontier for `id`,
-                        // and if `upper` is not less or equal to that frontier, some progress has happened.
-                        // If so, we retain only the updates greater or equal to that last reported frontier,
-                        // and announce a batch from that frontier to its join with `upper`.
+                if let Some(entry) = self.uppers.get_mut(&id) {
+                    match response {
+                        SubscribeResponse::Batch(SubscribeBatch {
+                            lower: _,
+                            upper,
+                            mut updates,
+                        }) => {
+                            // We track both the upper and the lower bound of all upper frontiers
+                            // reported by all replicas.
+                            //  * If the upper bound advances, we can emit all updates at times greater
+                            //    or equal to the last reported upper bound (to avoid emitting duplicate
+                            //    updates) as a `SubscribeResponse`.
+                            //  * If either the upper or the lower bound advances, we emit this
+                            //    information as a `FrontierUppers` response.
 
-                        // Ensure that we have a recorded frontier ready to go.
-                        let entry = self
-                            .tails
-                            .entry(id)
-                            .or_insert_with(|| Antichain::from_elem(T::minimum()));
-                        // If the upper frontier has changed, we have a statement to make.
-                        // This happens if there is any element of `entry` not greater or
-                        // equal to some element of `upper`.
-                        let new_upper = entry.join(&upper);
-                        if &new_upper != entry {
-                            let new_lower = entry.clone();
-                            entry.clone_from(&new_upper);
-                            updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
-                            Some(ActiveReplicationResponse::ComputeResponse(
-                                ComputeResponse::SubscribeResponse(
-                                    id,
-                                    SubscribeResponse::Batch(SubscribeBatch {
-                                        lower: new_lower,
-                                        upper: new_upper,
-                                        updates,
-                                    }),
-                                ),
-                            ))
-                        } else {
-                            None
+                            let old_upper_bound = entry.bounds.upper.clone();
+
+                            if entry.update(replica_id, upper) {
+                                if PartialOrder::less_than(&old_upper_bound, &entry.bounds.upper) {
+                                    let new_lower = old_upper_bound;
+                                    updates
+                                        .retain(|(time, _data, _diff)| new_lower.less_equal(time));
+                                    self.pending_response.push_back(
+                                        ActiveReplicationResponse::SubscribeResponse(
+                                            id,
+                                            SubscribeResponse::Batch(SubscribeBatch {
+                                                lower: new_lower,
+                                                upper: entry.bounds.upper.clone(),
+                                                updates,
+                                            }),
+                                        ),
+                                    )
+                                }
+
+                                let frontier_updates = vec![(id, entry.bounds.clone())];
+                                self.pending_response.push_back(
+                                    ActiveReplicationResponse::FrontierUppers(frontier_updates),
+                                );
+                            }
+                        }
+                        SubscribeResponse::DroppedAt(frontier) => {
+                            // Advance the subscribe upper to the empty frontier, to suppress all
+                            // future `SubscribeResponse`s. We still need to keep tracking this
+                            // subscribe, to ensure its inputs don't get compacted as long as slower
+                            // replicas might still be reading from them.
+
+                            // Pass on only the first `DroppedAt` response we see for a subscribe.
+                            if !entry.bounds.upper.is_empty() {
+                                self.pending_response.push_back(
+                                    ActiveReplicationResponse::SubscribeResponse(
+                                        id,
+                                        SubscribeResponse::DroppedAt(frontier),
+                                    ),
+                                );
+                            }
+
+                            if entry.update(replica_id, Antichain::new()) {
+                                let frontier_updates = vec![(id, entry.bounds.clone())];
+                                self.pending_response.push_back(
+                                    ActiveReplicationResponse::FrontierUppers(frontier_updates),
+                                );
+                            }
                         }
                     }
-                    SubscribeResponse::DroppedAt(frontier) => {
-                        // Introduce a new terminal frontier to suppress all future responses.
-                        // We cannot simply remove the entry, as we currently create new entries in response
-                        // to observed responses; if we pre-load the entries in response to commands we can
-                        // clean up the state here.
-                        self.tails.insert(id, Antichain::new());
-                        Some(ActiveReplicationResponse::ComputeResponse(
-                            ComputeResponse::SubscribeResponse(
-                                id,
-                                SubscribeResponse::DroppedAt(frontier),
-                            ),
-                        ))
-                    }
                 }
+
+                self.pending_response.pop_front()
             }
         }
     }
@@ -348,9 +501,10 @@ impl<T> ActiveReplication<T> {
             build_info,
             replicas: Default::default(),
             state: ActiveReplicationState {
+                replica_ids: Default::default(),
                 peeks: Default::default(),
-                tails: Default::default(),
                 uppers: Default::default(),
+                log_uppers: Default::default(),
                 history: Default::default(),
                 pending_response: Default::default(),
             },
@@ -375,8 +529,8 @@ struct ReplicaState<T> {
     _task: AbortOnDropHandle<()>,
     /// The network addresses of the processes that make up the replica.
     addrs: Vec<String>,
-    /// Where to persist introspection sources
-    persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+    /// The logging config specific to this replica.
+    logging_config: Option<LoggingConfig>,
     /// The communication config specific to this replica.
     communication_config: CommunicationConfig,
 }
@@ -389,18 +543,8 @@ impl<T> ReplicaState<T> {
     fn specialize_command(&self, command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
         // Set new replica ID and obtain set the sinked logs specific to this replica
         if let ComputeCommand::CreateInstance(config) = command {
-            // Set sink_logs
-            if let Some(logging) = &mut config.logging {
-                logging.sink_logs = self.persisted_logs.clone();
-                tracing::debug!(
-                    "Enabling sink_logs at replica {:?}: {:?}",
-                    replica_id,
-                    &logging.sink_logs
-                );
-            };
-
-            // Set replica id
             config.replica_id = replica_id;
+            config.logging = self.logging_config.clone();
         }
 
         if let ComputeCommand::CreateTimely(comm_config) = command {
@@ -421,7 +565,7 @@ where
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
-        persisted_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+        logging_config: Option<LoggingConfig>,
         communication_config: CommunicationConfig,
     ) {
         // Launch a task to handle communication with the replica
@@ -449,7 +593,7 @@ where
             response_rx,
             _task: task.abort_on_drop(),
             addrs,
-            persisted_logs,
+            logging_config,
             communication_config,
         };
 
@@ -457,21 +601,26 @@ where
         for command in self.state.history.iter() {
             let mut command = command.clone();
             replica_state.specialize_command(&mut command, id);
-            replica_state
-                .command_tx
-                .send(command)
-                .expect("Channel to client has gone away!")
+            if replica_state.command_tx.send(command).is_err() {
+                // We swallow the error here. On the next send, we will fail again, and
+                // restart the connection as well as this rehydration.
+                tracing::warn!("Replica {:?} connection terminated during rehydration", id);
+                break;
+            }
         }
 
-        // Start tracking frontiers of persisted_logs collections.
-        for (id, _) in replica_state.persisted_logs.values() {
-            let frontier = Antichain::from_elem(Timestamp::minimum());
-            let previous = self.state.uppers.insert(*id, frontier);
-            assert!(previous.is_none());
+        // Start tracking frontiers of persisted log collections.
+        if let Some(logging) = &replica_state.logging_config {
+            for (id, _) in logging.sink_logs.values() {
+                let frontier = Antichain::from_elem(Timestamp::minimum());
+                let previous = self.state.log_uppers.insert(*id, frontier);
+                assert!(previous.is_none());
+            }
         }
 
         // Add replica to tracked state.
         self.replicas.insert(id, replica_state);
+        self.state.add_replica(id);
     }
 
     /// Returns an iterator over the IDs of the replicas.
@@ -481,21 +630,24 @@ where
 
     /// Remove a replica by its identifier.
     pub(super) fn remove_replica(&mut self, id: ReplicaId) {
+        self.state.remove_replica(id);
         let replica_state = self.replicas.remove(&id).expect("replica not found");
 
         // Cease tracking frontiers of persisted_logs collections.
-        for (id, _) in replica_state.persisted_logs.values() {
-            let previous = self.state.uppers.remove(id);
-            assert!(previous.is_some());
+        if let Some(logging) = &replica_state.logging_config {
+            for (id, _) in logging.sink_logs.values() {
+                let previous = self.state.log_uppers.remove(id);
+                assert!(previous.is_some());
+            }
         }
     }
 
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let addrs = self.replicas[&id].addrs.clone();
-        let persisted_logs = self.replicas[&id].persisted_logs.clone();
+        let logging_config = self.replicas[&id].logging_config.clone();
         let communication_config = self.replicas[&id].communication_config.clone();
         self.remove_replica(id);
-        self.add_replica(id, addrs, persisted_logs, communication_config);
+        self.add_replica(id, addrs, logging_config, communication_config);
     }
 
     // We avoid implementing `GenericClient` here, because the protocol between
@@ -564,14 +716,93 @@ where
     }
 }
 
-/// A response from the ActiveReplication client:
-/// either a deduplicated compute response, or a notification
-/// that we heard from a given replica and should update its recency status.
+/// A response from the ActiveReplication client.
 #[derive(Debug, Clone)]
 pub(super) enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
-    /// A response from the underlying compute replica.
-    ComputeResponse(ComputeResponse<T>),
+    /// A list of identifiers of traces, with new lower and upper bounds of upper frontiers.
+    FrontierUppers(Vec<(GlobalId, FrontierBounds<T>)>),
+    /// The compute instance's response to the specified peek.
+    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    /// The compute instance's next response to the specified subscribe.
+    SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct FrontierBounds<T> {
+    #[allow(dead_code)]
+    pub lower: Antichain<T>,
+    pub upper: Antichain<T>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    macro_rules! assert_bounds {
+        ($uppers:expr, ($lower:expr, $upper:expr)) => {
+            assert_eq!(
+                $uppers.bounds.lower,
+                Antichain::from_elem($lower),
+                "lower mismatch"
+            );
+            assert_eq!(
+                $uppers.bounds.upper,
+                Antichain::from_elem($upper),
+                "upper mismatch"
+            );
+        };
+    }
+
+    #[test]
+    fn reported_uppers() {
+        let mut uppers = ReportedUppers::<u64>::new(&[1, 2].into());
+        assert_bounds!(uppers, (0, 0));
+
+        let changed = uppers.update(1, Antichain::from_elem(1));
+        assert!(changed);
+        assert_bounds!(uppers, (0, 1));
+
+        let changed = uppers.update(2, Antichain::from_elem(2));
+        assert!(changed);
+        assert_bounds!(uppers, (1, 2));
+
+        // Frontiers can only advance.
+        let changed = uppers.update(2, Antichain::from_elem(1));
+        assert!(!changed);
+        assert_bounds!(uppers, (1, 2));
+        assert_eq!(uppers.per_replica[&2], Antichain::from_elem(2));
+
+        // Adding a replica doesn't affect current bounds.
+        uppers.add_replica(3);
+        assert_bounds!(uppers, (1, 2));
+
+        let changed = uppers.update(3, Antichain::from_elem(3));
+        assert!(changed);
+        assert_bounds!(uppers, (1, 3));
+
+        // Removing the slowest replica advances the lower bound.
+        let changed = uppers.remove_replica(1);
+        assert!(changed);
+        assert_bounds!(uppers, (2, 3));
+
+        // Removing the fastest replica doesn't affect bounds.
+        let changed = uppers.remove_replica(3);
+        assert!(!changed);
+        assert_bounds!(uppers, (2, 3));
+
+        // Removing the last replica advances the lower bound to the upper.
+        let changed = uppers.remove_replica(2);
+        assert!(changed);
+        assert_bounds!(uppers, (3, 3));
+
+        // Bounds tracking resumes correctly with new replicas.
+        uppers.add_replica(4);
+        uppers.add_replica(5);
+        uppers.update(5, Antichain::from_elem(5));
+        uppers.update(4, Antichain::from_elem(4));
+        assert_bounds!(uppers, (4, 5));
+    }
 }

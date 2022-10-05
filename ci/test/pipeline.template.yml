@@ -197,7 +197,7 @@ steps:
   - id: replica-isolation
     label: Replica isolation
     depends_on: build-x86_64
-    timeout_in_minutes: 10
+    timeout_in_minutes: 20
     inputs: [test/replica-isolation]
     plugins:
       - ./ci/plugins/mzcompose:
@@ -382,18 +382,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pg-cdc-resumption
-    agents:
-      queue: linux-x86_64
-
-  - id: kafka-avro-ccsr
-    label: Tests of certain Avro sources with a schema registry
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/kafka-avro-ccsr]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-avro-ccsr
     agents:
       queue: linux-x86_64
 

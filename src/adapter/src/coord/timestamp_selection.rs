@@ -53,7 +53,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
 
-        let since = self.least_valid_read(&id_bundle);
+        let since = self.least_valid_read(id_bundle);
 
         // Initialize candidate to the minimum correct time.
         let mut candidate = Timestamp::minimum();
@@ -78,7 +78,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 candidate.advance_by(since.borrow());
             }
             if when.advance_to_upper() {
-                let upper = self.largest_not_in_advance_of_upper(&id_bundle);
+                let upper = self.largest_not_in_advance_of_upper(id_bundle);
                 candidate.join_assign(&upper);
             }
         }
@@ -121,7 +121,7 @@ impl<S: Append + 'static> Coordinator<S> {
             for (instance, compute_ids) in &id_bundle.compute_ids {
                 for id in compute_ids.iter() {
                     let collection = self.controller.compute.collection(*instance, *id).unwrap();
-                    since.join_assign(&collection.read_capability())
+                    since.join_assign(collection.read_capability())
                 }
             }
         }
@@ -169,7 +169,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         id_bundle: &CollectionIdBundle,
     ) -> mz_repr::Timestamp {
-        let upper = self.least_valid_write(&id_bundle);
+        let upper = self.least_valid_write(id_bundle);
 
         // We peek at the largest element not in advance of `upper`, which
         // involves a subtraction. If `upper` contains a zero timestamp there
@@ -195,11 +195,11 @@ impl<S: Append + 'static> Coordinator<S> {
         prep_scalar_expr(self.catalog.state(), &mut timestamp, ExprPrepStyle::AsOf)?;
         let evaled = timestamp.eval(&[], &temp_storage)?;
         if evaled.is_null() {
-            coord_bail!("can't use {} as a mztimestamp for AS OF", evaled);
+            coord_bail!("can't use {} as a mz_timestamp for AS OF", evaled);
         }
         let ty = timestamp.typ(&[]);
         Ok(match ty.scalar_type {
-            ScalarType::MzTimestamp => evaled.unwrap_mztimestamp(),
+            ScalarType::MzTimestamp => evaled.unwrap_mz_timestamp(),
             ScalarType::Numeric { .. } => {
                 let n = evaled.unwrap_numeric().0;
                 n.try_into()?
@@ -213,7 +213,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
             ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
             _ => coord_bail!(
-                "can't use {} as a mztimestamp for AS OF",
+                "can't use {} as a mz_timestamp for AS OF",
                 self.catalog.for_session(session).humanize_column_type(&ty)
             ),
         })

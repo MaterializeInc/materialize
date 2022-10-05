@@ -175,7 +175,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 }
 
                 self.read_capability.insert(*id, read_capability);
-                compute_policy_updates.push((*id, self.read_capability[&id].policy()));
+                compute_policy_updates.push((*id, self.read_capability[id].policy()));
             }
             self.controller
                 .active_compute()
@@ -218,7 +218,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             }
 
             self.read_capability.insert(*id, read_capability);
-            storage_policy_updates.push((*id, self.read_capability[&id].policy()));
+            storage_policy_updates.push((*id, self.read_capability[id].policy()));
         }
         self.controller
             .storage

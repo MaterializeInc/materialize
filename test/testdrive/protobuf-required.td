@@ -16,7 +16,7 @@ message Required {
   required int32 f = 1;
 }
 
-$ protobuf-compile-descriptors inputs=required.proto output=required.pb
+$ protobuf-compile-descriptors inputs=required.proto output=required.pb set-var=required-schema
 
 $ kafka-create-topic topic=required partitions=1
 
@@ -27,7 +27,7 @@ $ kafka-ingest topic=required format=protobuf descriptor-file=required.pb messag
 
 > CREATE SOURCE required FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-required-${testdrive.seed}')
-  FORMAT PROTOBUF MESSAGE '.Required' USING SCHEMA FILE '${testdrive.temp-dir}/required.pb'
+  FORMAT PROTOBUF MESSAGE '.Required' USING SCHEMA '${required-schema}'
 
 > SELECT * FROM required
 f

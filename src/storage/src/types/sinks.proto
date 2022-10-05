@@ -41,7 +41,7 @@ message ProtoStorageSinkConnection {
     }
 }
 
-message ProtoKafkaSinkConsistencyConnection {
+message ProtoKafkaSinkProgressConnection {
     string topic = 1;
     // int32 schema_id = 2;
     reserved 2;
@@ -74,7 +74,7 @@ message ProtoKafkaSinkConnection {
     optional ProtoRelationKeyIndicesVec relation_key_indices = 5;
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 6;
     optional ProtoPublishedSchemaInfo published_schema_info = 7;
-    ProtoKafkaSinkConsistencyConnection consistency = 8;
+    ProtoKafkaSinkProgressConnection progress = 8;
     bool exactly_once = 9;
     uint64 fuel = 11;
     map<string, mz_storage.types.connections.ProtoStringOrSecret> options = 12;

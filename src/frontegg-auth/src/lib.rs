@@ -90,7 +90,7 @@ impl FronteggAuthentication {
                         warn!("frontegg timeout, attempt {}: {}", state.i, err);
                         Err(FronteggError::from(err))
                     }
-                    v @ _ => Ok(v),
+                    v => Ok(v),
                 }
             })
             .await?
@@ -173,7 +173,7 @@ impl FronteggAuthentication {
         token: &str,
         expected_email: Option<&str>,
     ) -> Result<Claims, FronteggError> {
-        let msg = decode::<Claims>(&token, &self.decoding_key, &self.validation)?;
+        let msg = decode::<Claims>(token, &self.decoding_key, &self.validation)?;
         if msg.claims.exp < self.now.as_secs() {
             return Err(FronteggError::TokenExpired);
         }

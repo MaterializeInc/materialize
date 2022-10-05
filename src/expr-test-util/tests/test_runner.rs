@@ -58,7 +58,7 @@ mod test {
     /// figures out the catalog commands required to create the relation from a
     /// blank catalog.
     fn roundtrip_with_catalog(orig_spec: &str, orig_catalog: &TestCatalog) -> Result<(), String> {
-        let orig_rel = build_rel(orig_spec, &orig_catalog)?;
+        let orig_rel = build_rel(orig_spec, orig_catalog)?;
         let json = serde_json::to_value(orig_rel.clone()).map_err_to_string()?;
         let mut new_catalog = TestCatalog::default();
         let (new_spec, source_defs) = json_to_spec(&json.to_string(), &new_catalog);

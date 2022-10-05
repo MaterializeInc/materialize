@@ -474,11 +474,13 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `"stdrive.aws-endpoint`
 
+#### `testdrive.materialize-internal-http-addr`
+
 #### `testdrive.materialize-http-addr`
 
 #### `testdrive.materialize-sql-addr`
 
-#### `testdrive.materialize-sql-addr-internal`
+#### `testdrive.materialize-internal-sql-addr`
 
 #### `testdrive.materialize-user`
 
@@ -704,6 +706,18 @@ Set the starting value of the `${kafka-ingest.iteration}` variable.
 #### `partition=N`
 
 Send the data to the specified partition.
+
+### set-schema-id-var=VAR
+
+Sets the variable named VAR to the ID of the schema with which data was written.
+The variable is only set if the format of the key was Confluent Avro or
+Protobuf.
+
+### set-key-schema-id-var=VAR
+
+Sets the variable named VAR to the ID of the key schema with which data was
+written. The variable is only set if the format of the key was Confluent Avro
+or Protobuf.
 
 #### `kafka-verify format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize]`
 

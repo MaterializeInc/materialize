@@ -303,7 +303,7 @@ impl<T: AstInfo> AstDisplay for CopyStatement<T> {
                 f.write_node(name);
                 if !columns.is_empty() {
                     f.write_str("(");
-                    f.write_node(&display::comma_separated(&columns));
+                    f.write_node(&display::comma_separated(columns));
                     f.write_str(")");
                 }
             }
@@ -687,7 +687,7 @@ impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
         f.write_node(&self.source);
         if let Some(targets) = &self.targets {
             f.write_str(" (");
-            f.write_node(&display::comma_separated(&targets));
+            f.write_node(&display::comma_separated(targets));
             f.write_str(")");
         }
     }
@@ -954,14 +954,14 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
                 f.write_str(&self.as_type);
                 f.write_str("( ");
                 if !with_options.is_empty() {
-                    f.write_node(&display::comma_separated(&with_options));
+                    f.write_node(&display::comma_separated(with_options));
                 }
                 f.write_str(" )");
             }
             CreateTypeAs::Record { column_defs } => {
                 f.write_str("( ");
                 if !column_defs.is_empty() {
-                    f.write_node(&display::comma_separated(&column_defs));
+                    f.write_node(&display::comma_separated(column_defs));
                 }
                 f.write_str(" )");
             }
@@ -994,10 +994,6 @@ impl_display_t!(CreateClusterStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClusterOption<T: AstInfo> {
-    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
-    IntrospectionInterval(WithOptionValue<T>),
-    /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
-    IntrospectionDebugging(WithOptionValue<T>),
     /// The `REPLICAS` option.
     Replicas(Vec<ReplicaDefinition<T>>),
 }
@@ -1005,17 +1001,9 @@ pub enum ClusterOption<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterOption::IntrospectionInterval(interval) => {
-                f.write_str("INTROSPECTION INTERVAL ");
-                f.write_node(interval);
-            }
-            ClusterOption::IntrospectionDebugging(debugging) => {
-                f.write_str("INTROSPECTION DEBUGGING ");
-                f.write_node(debugging);
-            }
             ClusterOption::Replicas(replicas) => {
                 f.write_str("REPLICAS (");
-                f.write_node(&display::comma_separated(&replicas));
+                f.write_node(&display::comma_separated(replicas));
                 f.write_str(")");
             }
         }
@@ -1075,6 +1063,10 @@ pub enum ReplicaOptionName {
     Workers,
     /// The `COMPUTE [<host> [, <host> ...]]` option.
     Compute,
+    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
+    IntrospectionInterval,
+    /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
+    IntrospectionDebugging,
 }
 
 impl AstDisplay for ReplicaOptionName {
@@ -1085,6 +1077,8 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
             ReplicaOptionName::Workers => f.write_str("WORKERS"),
             ReplicaOptionName::Compute => f.write_str("COMPUTE"),
+            ReplicaOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
+            ReplicaOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
         }
     }
 }
@@ -1175,12 +1169,12 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
         match &self.action {
             AlterIndexAction::SetOptions(options) => {
                 f.write_str("SET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
             AlterIndexAction::ResetOptions(options) => {
                 f.write_str("RESET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
         }
@@ -1214,12 +1208,12 @@ impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
         match &self.action {
             AlterSourceAction::SetOptions(options) => {
                 f.write_str("SET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
             AlterSourceAction::ResetOptions(options) => {
                 f.write_str("RESET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
         }

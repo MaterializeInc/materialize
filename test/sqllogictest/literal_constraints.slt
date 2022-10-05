@@ -494,7 +494,8 @@ query T multiline
 EXPLAIN SELECT a FROM t1
 WHERE (
     (a = 1 AND b like 'nope') OR
-    (a = 2)
+    (a = 2) OR
+    (a = 1 AND a = 2)
 ) AND
 (b like 'l%' OR b like 'aaa')
 ----
@@ -547,6 +548,23 @@ WHERE a IN (1,2) AND a IN (2,3,4)
 | ReadExistingIndex materialize.public.idx_t1_a
 | | Lookup value (2)
 | Project (#0)
+
+EOF
+
+# Inlining complex expressions in `inline_literal_constraints`.
+# The important thing in this query is the `(a = 2 AND a = 3)` appearing twice. The other stuff is just to make it
+# impossible for `undistribute_and_or` to factor out the `(a = 2 AND a = 3)`, so that MFP CSE can kick in, and then we
+# can test that `inline_literal_constraints` inlines it back.
+
+query T multiline
+EXPLAIN SELECT a FROM t1
+WHERE
+(b = 'bbb' OR b = 'y') AND
+((a = 2 AND a = 3) OR b = 'x' OR b = 'y') AND
+((a = 2 AND a = 3) OR b = 'z')
+----
+%0 =
+| Constant
 
 EOF
 

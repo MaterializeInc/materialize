@@ -29,11 +29,12 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
@@ -56,12 +57,12 @@ use crate::command::{
     ReplicaId, SourceInstanceDesc,
 };
 use crate::logging::{LogVariant, LogView, LoggingConfig};
-use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
+use crate::response::{PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 
 use self::orchestrator::ComputeOrchestrator;
-use self::replicated::{ActiveReplication, ActiveReplicationResponse};
+use self::replicated::{ActiveReplication, ActiveReplicationResponse, FrontierBounds};
 
 mod orchestrator;
 mod replicated;
@@ -83,9 +84,9 @@ pub struct ComputeInstanceEvent {
 
 /// Responses from the compute controller.
 pub enum ComputeControllerResponse<T> {
-    /// See [`ComputeResponse::PeekResponse`].
+    /// See [`ComputeResponse::PeekResponse`](crate::response::ComputeResponse::PeekResponse).
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// See [`ComputeResponse::SubscribeResponse`].
+    /// See [`ComputeResponse::SubscribeResponse`](crate::response::ComputeResponse::SubscribeResponse).
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// A notification that we heard a response from the given replica at the
     /// given time.
@@ -170,14 +171,14 @@ impl From<anyhow::Error> for ComputeError {
 
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ConcreteComputeInstanceReplicaConfig {
-    pub location: ConcreteComputeInstanceReplicaLocation,
-    pub persisted_logs: ConcreteComputeInstanceReplicaLogging,
+pub struct ComputeInstanceReplicaConfig {
+    pub location: ComputeInstanceReplicaLocation,
+    pub logging: ComputeInstanceReplicaLogging,
 }
 
 /// Size or location of a replica
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ConcreteComputeInstanceReplicaLocation {
+pub enum ComputeInstanceReplicaLocation {
     /// Out-of-process replica
     Remote {
         /// The network addresses of the processes in the replica.
@@ -202,11 +203,11 @@ pub enum ConcreteComputeInstanceReplicaLocation {
     },
 }
 
-impl ConcreteComputeInstanceReplicaLocation {
+impl ComputeInstanceReplicaLocation {
     pub fn get_az(&self) -> Option<&str> {
         match self {
-            ConcreteComputeInstanceReplicaLocation::Remote { .. } => None,
-            ConcreteComputeInstanceReplicaLocation::Managed {
+            ComputeInstanceReplicaLocation::Remote { .. } => None,
+            ComputeInstanceReplicaLocation::Managed {
                 availability_zone, ..
             } => Some(availability_zone),
         }
@@ -233,46 +234,39 @@ impl ComputeInstanceReplicaAllocation {
 }
 
 /// Logging configuration of a replica.
-/// Changing this type requires a catalog storage migration!
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ConcreteComputeInstanceReplicaLogging {
-    /// Instantiate default logging configuration upon system start.
-    /// To configure a replica without logging, ConcreteViews(vec![],vec![]) should be used.
-    Default,
-    /// Logging sources and views have been built for this replica.
-    ConcreteViews(Vec<(LogVariant, GlobalId)>, Vec<(LogView, GlobalId)>),
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ComputeInstanceReplicaLogging {
+    /// Whether to enable logging for the logging dataflows.
+    pub log_logging: bool,
+    /// The interval at which to log.
+    ///
+    /// A `None` value indicates that logging is disabled.
+    pub interval: Option<Duration>,
+    /// Log sources of this replica.
+    pub sources: Vec<(LogVariant, GlobalId)>,
+    /// Log views of this replica.
+    pub views: Vec<(LogView, GlobalId)>,
 }
 
-impl ConcreteComputeInstanceReplicaLogging {
-    /// Return all persisted introspection sources contained.
-    pub fn get_sources(&self) -> &[(LogVariant, GlobalId)] {
-        match self {
-            ConcreteComputeInstanceReplicaLogging::Default => &[],
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(logs, _) => logs,
-        }
-    }
-
-    /// Return all persisted introspection views contained.
-    pub fn get_views(&self) -> &[(LogView, GlobalId)] {
-        match self {
-            ConcreteComputeInstanceReplicaLogging::Default => &[],
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(_, views) => views,
-        }
+impl ComputeInstanceReplicaLogging {
+    /// Return whether logging is enabled.
+    pub fn enabled(&self) -> bool {
+        self.interval.is_some()
     }
 
     /// Return all ids of the persisted introspection views contained.
-    pub fn get_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.get_views().into_iter().map(|(_, id)| *id)
+    pub fn view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.views.iter().map(|(_, id)| *id)
     }
 
     /// Return all ids of the persisted introspection sources contained.
-    pub fn get_source_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.get_sources().into_iter().map(|(_, id)| *id)
+    pub fn source_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.sources.iter().map(|(_, id)| *id)
     }
 
     /// Return all ids of the persisted introspection sources and logs contained.
-    pub fn get_source_and_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.get_source_ids().chain(self.get_view_ids())
+    pub fn source_and_view_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.source_ids().chain(self.view_ids())
     }
 }
 
@@ -362,15 +356,17 @@ where
     pub fn create_instance(
         &mut self,
         id: ComputeInstanceId,
-        logging: Option<LoggingConfig>,
+        arranged_logs: BTreeMap<LogVariant, GlobalId>,
         max_result_size: u32,
     ) -> Result<(), ComputeError> {
         if self.instances.contains_key(&id) {
             return Err(ComputeError::InstanceExists(id));
         }
 
-        self.instances
-            .insert(id, Instance::new(self.build_info, logging, max_result_size));
+        self.instances.insert(
+            id,
+            Instance::new(self.build_info, arranged_logs, max_result_size),
+        );
 
         if self.initialized {
             self.instances
@@ -480,34 +476,23 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        config: ConcreteComputeInstanceReplicaConfig,
+        config: ComputeInstanceReplicaConfig,
     ) -> Result<(), ComputeError> {
-        let persisted_logs = config
-            .persisted_logs
-            .get_sources()
-            .iter()
-            .cloned()
-            .collect();
-
-        // Add replicas backing that instance.
-        match config.location {
-            ConcreteComputeInstanceReplicaLocation::Remote {
+        let (addrs, communication_config) = match config.location {
+            ComputeInstanceReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
             } => {
-                self.instance(instance_id)?.add_replica(
-                    replica_id,
-                    addrs.into_iter().collect(),
-                    persisted_logs,
-                    CommunicationConfig {
-                        workers: workers.get(),
-                        process: 0,
-                        addresses: compute_addrs.into_iter().collect(),
-                    },
-                );
+                let addrs = addrs.into_iter().collect();
+                let comm = CommunicationConfig {
+                    workers: workers.get(),
+                    process: 0,
+                    addresses: compute_addrs.into_iter().collect(),
+                };
+                (addrs, comm)
             }
-            ConcreteComputeInstanceReplicaLocation::Managed {
+            ComputeInstanceReplicaLocation::Managed {
                 allocation,
                 availability_zone,
                 ..
@@ -518,20 +503,22 @@ where
                     .ensure_replica(instance_id, replica_id, allocation, availability_zone)
                     .await?;
 
-                self.instance(instance_id)?.add_replica(
-                    replica_id,
-                    service.addresses("controller"),
-                    persisted_logs,
-                    CommunicationConfig {
-                        workers: allocation.workers.get(),
-                        process: 0,
-                        addresses: service.addresses("compute"),
-                    },
-                );
+                let addrs = service.addresses("controller");
+                let comm = CommunicationConfig {
+                    workers: allocation.workers.get(),
+                    process: 0,
+                    addresses: service.addresses("compute"),
+                };
+                (addrs, comm)
             }
-        }
+        };
 
-        Ok(())
+        self.instance(instance_id)?.add_replica(
+            replica_id,
+            addrs,
+            config.logging,
+            communication_config,
+        )
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
@@ -539,9 +526,9 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        config: ConcreteComputeInstanceReplicaConfig,
+        config: ComputeInstanceReplicaConfig,
     ) -> Result<(), ComputeError> {
-        if let ConcreteComputeInstanceReplicaLocation::Managed { .. } = config.location {
+        if let ComputeInstanceReplicaLocation::Managed { .. } = config.location {
             self.compute
                 .orchestrator
                 .drop_replica(instance_id, replica_id)
@@ -662,28 +649,19 @@ where
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     pub async fn process(&mut self) -> Result<Option<ComputeControllerResponse<T>>, ComputeError> {
-        let (instance_id, ar_response) = match self.compute.stashed_response.take() {
+        let (instance_id, response) = match self.compute.stashed_response.take() {
             Some(resp) => resp,
             None => return Ok(None),
-        };
-
-        let response = match ar_response {
-            ActiveReplicationResponse::ComputeResponse(resp) => resp,
-            ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when) => {
-                return Ok(Some(ComputeControllerResponse::ReplicaHeartbeat(
-                    replica_id, when,
-                )))
-            }
         };
 
         let mut instance = self.instance(instance_id)?;
 
         match response {
-            ComputeResponse::FrontierUppers(updates) => {
+            ActiveReplicationResponse::FrontierUppers(updates) => {
                 instance.update_write_frontiers(&updates).await?;
                 Ok(None)
             }
-            ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+            ActiveReplicationResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 instance.remove_peeks(&[uuid].into()).await?;
                 Ok(Some(ComputeControllerResponse::PeekResponse(
                     uuid,
@@ -691,28 +669,22 @@ where
                     otel_ctx,
                 )))
             }
-            ComputeResponse::SubscribeResponse(global_id, response) => {
-                let new_upper = match &response {
-                    SubscribeResponse::Batch(SubscribeBatch { lower, upper, .. }) => {
-                        // Ensure there are no gaps in the subscribe stream we receive.
-                        assert_eq!(
-                            lower,
-                            &instance.compute.collections[&global_id].write_frontier
-                        );
-
-                        upper.clone()
-                    }
-                    // The subscribe will not be written to again, but we should not confuse that
-                    // with the source of the SUBSCRIBE being complete through this time.
-                    SubscribeResponse::DroppedAt(_) => Antichain::new(),
+            ActiveReplicationResponse::SubscribeResponse(global_id, response) => {
+                if let SubscribeResponse::Batch(SubscribeBatch { lower, .. }) = &response {
+                    // Ensure there are no gaps in the subscribe stream we receive.
+                    assert_eq!(
+                        lower,
+                        &instance.compute.collections[&global_id].write_frontier_upper,
+                    );
                 };
-                instance
-                    .update_write_frontiers(&[(global_id, new_upper)])
-                    .await?;
+
                 Ok(Some(ComputeControllerResponse::SubscribeResponse(
                     global_id, response,
                 )))
             }
+            ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when) => Ok(Some(
+                ComputeControllerResponse::ReplicaHeartbeat(replica_id, when),
+            )),
         }
     }
 }
@@ -724,6 +696,8 @@ struct Instance<T> {
     replicas: ActiveReplication<T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
+    /// IDs of arranged log sources maintained by this compute instance.
+    arranged_logs: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks: identifiers and timestamps.
     peeks: BTreeMap<Uuid, (GlobalId, T)>,
 }
@@ -762,34 +736,34 @@ where
 {
     fn new(
         build_info: &'static BuildInfo,
-        logging: Option<LoggingConfig>,
+        arranged_logs: BTreeMap<LogVariant, GlobalId>,
         max_result_size: u32,
     ) -> Self {
-        let mut collections = BTreeMap::default();
-        if let Some(logging_config) = logging.as_ref() {
-            for id in logging_config.log_identifiers() {
-                collections.insert(
-                    id,
-                    CollectionState::new(
-                        Antichain::from_elem(T::minimum()),
-                        Vec::new(),
-                        Vec::new(),
-                    ),
+        let collections = arranged_logs
+            .iter()
+            .map(|(_, id)| {
+                let state = CollectionState::new(
+                    Antichain::from_elem(T::minimum()),
+                    Vec::new(),
+                    Vec::new(),
                 );
-            }
-        }
+                (*id, state)
+            })
+            .collect();
+
         let mut replicas = ActiveReplication::new(build_info);
         // These commands will be modified by ActiveReplication
         replicas.send(ComputeCommand::CreateTimely(Default::default()));
         replicas.send(ComputeCommand::CreateInstance(InstanceConfig {
             replica_id: Default::default(),
-            logging,
+            logging: None,
             max_result_size,
         }));
 
         Self {
             replicas,
             collections,
+            arranged_logs,
             peeks: Default::default(),
         }
     }
@@ -831,35 +805,48 @@ where
         &mut self,
         id: ReplicaId,
         addrs: Vec<String>,
-        persisted_logs: HashMap<LogVariant, GlobalId>,
+        logging: ComputeInstanceReplicaLogging,
         communication_config: CommunicationConfig,
-    ) {
-        // Create ComputeState entries in Instance
-        for id in persisted_logs.values() {
-            self.compute.collections.insert(
-                *id,
-                CollectionState::new(Antichain::from_elem(T::minimum()), Vec::new(), Vec::new()),
-            );
-        }
+    ) -> Result<(), ComputeError> {
+        let logging_config = if let Some(interval) = logging.interval {
+            // Initialize state for per-replica log sources.
+            let mut sink_logs = BTreeMap::new();
+            for (variant, id) in logging.sources {
+                self.compute.collections.insert(
+                    id,
+                    CollectionState::new(
+                        Antichain::from_elem(T::minimum()),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                );
 
-        // Enrich log collections with metadata such that they can be sent over to computed
-        let persisted_logs = persisted_logs
-            .into_iter()
-            .map(|(variant, id)| {
-                let meta = self
+                let storage_meta = self
                     .storage_controller
-                    .collection(id)
-                    .expect("cannot get collection metadata")
+                    .collection(id)?
                     .collection_metadata
                     .clone();
-                (variant, (id, meta))
+                sink_logs.insert(variant, (id, storage_meta));
+            }
+
+            Some(LoggingConfig {
+                interval_ns: interval.as_nanos(),
+                active_logs: self.compute.arranged_logs.clone(),
+                log_logging: logging.log_logging,
+                sink_logs,
             })
-            .collect();
+        } else {
+            None
+        };
+
+        // Initialize collection state for per-replica log collections.
 
         // Add the replica
         self.compute
             .replicas
-            .add_replica(id, addrs, persisted_logs, communication_config);
+            .add_replica(id, addrs, logging_config, communication_config);
+
+        Ok(())
     }
 
     /// Remove an existing instance replica, by ID.
@@ -1102,7 +1089,8 @@ where
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.compute.collection_mut(id) {
-                let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
+                let mut new_read_capability =
+                    policy.frontier(collection.write_frontier_lower.borrow());
 
                 if timely::order::PartialOrder::less_equal(
                     &collection.implied_capability,
@@ -1148,7 +1136,7 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     async fn update_write_frontiers(
         &mut self,
-        updates: &[(GlobalId, Antichain<T>)],
+        updates: &[(GlobalId, FrontierBounds<T>)],
     ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, new_upper) in updates.iter() {
@@ -1157,11 +1145,16 @@ where
                 .collection_mut(*id)
                 .expect("Reference to absent collection");
 
-            collection.write_frontier.join_assign(new_upper);
+            collection
+                .write_frontier_upper
+                .join_assign(&new_upper.upper);
+            collection
+                .write_frontier_lower
+                .join_assign(&new_upper.lower);
 
             let mut new_read_capability = collection
                 .read_policy
-                .frontier(collection.write_frontier.borrow());
+                .frontier(collection.write_frontier_lower.borrow());
             if timely::order::PartialOrder::less_equal(
                 &collection.implied_capability,
                 &new_read_capability,
@@ -1188,7 +1181,7 @@ where
         let storage_updates: Vec<_> = updates
             .iter()
             .filter(|(id, _)| self.storage_controller.collection(*id).is_ok())
-            .cloned()
+            .map(|(id, bounds)| (*id, bounds.upper.clone()))
             .collect();
         self.storage_controller
             .update_write_frontiers(&storage_updates)
@@ -1270,7 +1263,7 @@ where
             .flat_map(|uuid| {
                 self.compute
                     .peeks
-                    .remove(&uuid)
+                    .remove(uuid)
                     .map(|(id, time)| (id, ChangeBatch::new_from(time, -1)))
             })
             .collect();
@@ -1333,8 +1326,14 @@ pub struct CollectionState<T> {
     /// Compute identifiers on which this collection depends.
     compute_dependencies: Vec<GlobalId>,
 
-    /// Reported write frontier.
-    write_frontier: Antichain<T>,
+    /// Upper bound of write frontiers reported by all replicas.
+    ///
+    /// Used to determine valid times at which the collection can be read.
+    write_frontier_upper: Antichain<T>,
+    /// Lower bound of write frontiers reported by all replicas.
+    ///
+    /// Used to determine times that can be compacted.
+    write_frontier_lower: Antichain<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -1352,7 +1351,8 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
-            write_frontier: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier_upper: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier_lower: Antichain::from_elem(Timestamp::minimum()),
         }
     }
 
@@ -1368,6 +1368,6 @@ impl<T: Timestamp> CollectionState<T> {
 
     /// Reports the current write frontier.
     pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier.borrow()
+        self.write_frontier_upper.borrow()
     }
 }

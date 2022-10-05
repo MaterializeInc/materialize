@@ -142,7 +142,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 // Drop the introspection sources
                 for replica in instance.replicas_by_id.values() {
-                    sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
+                    sources_to_drop.extend(replica.config.logging.source_ids());
                 }
 
                 // Drop timelines
@@ -150,10 +150,10 @@ impl<S: Append + 'static> Coordinator<S> {
             } else if let catalog::Op::DropComputeInstanceReplica { name, compute_name } = op {
                 let compute_instance = self.catalog.resolve_compute_instance(compute_name)?;
                 let replica_id = &compute_instance.replica_id_by_name[name];
-                let replica = &compute_instance.replicas_by_id[&replica_id];
+                let replica = &compute_instance.replicas_by_id[replica_id];
 
                 // Drop the introspection sources
-                sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
+                sources_to_drop.extend(replica.config.logging.source_ids());
             }
         }
 
@@ -268,9 +268,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     event_type,
                     json!({
                         "event_source": "environmentd",
-                        "organization_id": user_metadata.group_id,
                         "details": event.event_details.as_json(),
                     }),
+                    Some(json!({
+                        "groupId": user_metadata.group_id,
+                    })),
                 );
             }
         }

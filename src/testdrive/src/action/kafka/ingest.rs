@@ -12,7 +12,6 @@ use std::io::{BufRead, Read};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use async_trait::async_trait;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::{FuturesUnordered, StreamExt};
 use maplit::hashmap;
@@ -23,7 +22,7 @@ use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
 use tokio::fs;
 
-use crate::action::{self, Action, ControlFlow, State};
+use crate::action::{self, ControlFlow, State};
 use crate::format::avro::{self, Schema};
 use crate::format::bytes;
 use crate::parser::BuiltinCommand;
@@ -42,21 +41,8 @@ pub struct IngestAction {
     headers: Option<Vec<(String, Option<String>)>>,
     omit_key: bool,
     omit_value: bool,
-}
-
-impl IngestAction {
-    /// Whether the action causes a schema to be published
-    /// to CSR
-    pub fn publish(&self) -> bool {
-        match &self.format {
-            Format::Avro {
-                confluent_wire_format,
-                ..
-            } => *confluent_wire_format,
-            Format::Protobuf { .. } => false,
-            Format::Bytes { .. } => false,
-        }
-    }
+    key_schema_id_var: Option<String>,
+    schema_id_var: Option<String>,
 }
 
 #[derive(Clone)]
@@ -126,7 +112,7 @@ impl Transcoder {
                     // https://docs.confluent.io/3.3.0/schema-registry/docs/serializer-formatter.html#wire-format
                     out.write_u8(0).unwrap();
                     out.write_i32::<NetworkEndian>(*schema_id).unwrap();
-                    out.extend(avro::to_avro_datum(&schema, val)?);
+                    out.extend(avro::to_avro_datum(schema, val)?);
                     Ok(Some(out))
                 } else {
                     Ok(None)
@@ -136,7 +122,7 @@ impl Transcoder {
                 if let Some(val) = Self::decode_json(row)? {
                     let val = avro::from_json(&val, schema.top_node())?;
                     let mut out = vec![];
-                    out.extend(avro::to_avro_datum(&schema, val)?);
+                    out.extend(avro::to_avro_datum(schema, val)?);
                     Ok(Some(out))
                 } else {
                     Ok(None)
@@ -174,7 +160,7 @@ impl Transcoder {
                 match terminator {
                     Some(t) => {
                         row.read_until(*t, &mut out)?;
-                        if out.last() == Some(&t) {
+                        if out.last() == Some(t) {
                             out.pop();
                         }
                     }
@@ -192,13 +178,23 @@ impl Transcoder {
     }
 }
 
-pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Error> {
+pub async fn run_ingest(
+    cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let ingest_action = build_ingest_action(cmd)?;
+    run_ingest_action(ingest_action, state).await
+}
+
+pub fn build_ingest_action(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Error> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let partition = cmd.args.opt_parse::<i32>("partition")?;
     let start_iteration = cmd.args.opt_parse::<isize>("start-iteration")?.unwrap_or(0);
     let repeat = cmd.args.opt_parse::<isize>("repeat")?.unwrap_or(1);
     let omit_key = cmd.args.opt_bool("omit-key")?.unwrap_or(false);
     let omit_value = cmd.args.opt_bool("omit-value")?.unwrap_or(false);
+    let schema_id_var = cmd.args.opt_parse("set-schema-id-var")?;
+    let key_schema_id_var = cmd.args.opt_parse("set-key-schema-id-var")?;
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro {
             schema: cmd.args.string("schema")?,
@@ -329,176 +325,175 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
         headers,
         omit_key,
         omit_value,
+        schema_id_var,
+        key_schema_id_var,
     })
 }
 
-#[async_trait]
-impl Action for IngestAction {
-    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
-        if self.publish() {
-            let subjects = state
-                .ccsr_client
-                .list_subjects()
-                .await
-                .context("listing schema registry subjects")?;
+pub async fn run_ingest_action(
+    action: IngestAction,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let topic_name = &format!("{}-{}", action.topic_prefix, state.seed);
+    println!(
+        "Ingesting data into Kafka topic {} with repeat {}",
+        topic_name, action.repeat
+    );
 
-            let stale_subjects: Vec<_> = subjects
-                .iter()
-                .filter(|s| s.starts_with(&self.topic_prefix))
-                .collect();
-
-            for subject in stale_subjects {
-                println!("Deleting stale schema registry subject {}", subject);
-                match state.ccsr_client.delete_subject(&subject).await {
-                    Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
-                    Err(e) => return Err(e.into()),
-                }
-            }
+    let set_schema_id_var = |state: &mut State, schema_id_var, transcoder| match transcoder {
+        &Transcoder::ConfluentAvro { schema_id, .. } | &Transcoder::Protobuf { schema_id, .. } => {
+            state.cmd_vars.insert(schema_id_var, schema_id.to_string());
         }
+        _ => (),
+    };
 
-        Ok(())
+    let value_transcoder = make_transcoder(
+        state,
+        action.format.clone(),
+        format!("{}-value", topic_name),
+    )
+    .await?;
+    if let Some(var) = action.schema_id_var {
+        set_schema_id_var(state, var, &value_transcoder);
     }
 
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let topic_name = &format!("{}-{}", self.topic_prefix, state.seed);
-        println!(
-            "Ingesting data into Kafka topic {} with repeat {}",
-            topic_name, self.repeat
-        );
-
-        let ccsr_client = &state.ccsr_client;
-        let temp_path = &state.temp_path;
-        let make_transcoder = |format, typ| async move {
-            let ccsr_subject = format!("{}-{}", topic_name, typ);
-            match format {
-                Format::Avro {
-                    schema,
-                    confluent_wire_format,
-                } => {
-                    if confluent_wire_format {
-                        let schema_id = ccsr_client
-                            .publish_schema(&ccsr_subject, &schema, mz_ccsr::SchemaType::Avro, &[])
-                            .await
-                            .context("publishing to schema registry")?;
-                        let schema = avro::parse_schema(&schema)
-                            .with_context(|| format!("parsing avro schema: {}", schema))?;
-                        Ok::<_, anyhow::Error>(Transcoder::ConfluentAvro { schema, schema_id })
-                    } else {
-                        let schema = avro::parse_schema(&schema)
-                            .with_context(|| format!("parsing avro schema: {}", schema))?;
-                        Ok(Transcoder::PlainAvro { schema })
-                    }
-                }
-                Format::Protobuf {
-                    descriptor_file,
-                    message,
-                    confluent_wire_format,
-                    schema_id_subject,
-                    schema_message_id,
-                } => {
-                    let schema_id = if confluent_wire_format {
-                        ccsr_client
-                            .get_schema_by_subject(
-                                schema_id_subject.as_deref().unwrap_or(&ccsr_subject),
-                            )
-                            .await
-                            .context("fetching schema from registry")?
-                            .id
-                    } else {
-                        0
-                    };
-
-                    let bytes = fs::read(temp_path.join(descriptor_file))
-                        .await
-                        .context("reading protobuf descriptor file")?;
-                    let fd = DescriptorPool::decode(&*bytes)
-                        .context("parsing protobuf descriptor file")?;
-                    let message = fd
-                        .get_message_by_name(&message)
-                        .ok_or_else(|| anyhow!("unknown message name {}", message))?;
-                    Ok(Transcoder::Protobuf {
-                        message,
-                        confluent_wire_format,
-                        schema_id,
-                        schema_message_id,
-                    })
-                }
-                Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),
+    let key_transcoder = match action.key_format.clone() {
+        None => None,
+        Some(f) => {
+            let transcoder = make_transcoder(state, f, format!("{}-key", topic_name)).await?;
+            if let Some(var) = action.key_schema_id_var {
+                set_schema_id_var(state, var, &transcoder);
             }
-        };
+            Some(transcoder)
+        }
+    };
 
-        let value_transcoder = make_transcoder(self.format.clone(), "value").await?;
-        let key_transcoder = match self.key_format.clone() {
-            None => None,
-            Some(f) => Some(make_transcoder(f, "key").await?),
-        };
+    let mut futs = FuturesUnordered::new();
 
-        let mut futs = FuturesUnordered::new();
+    for iteration in action.start_iteration..(action.start_iteration + action.repeat) {
+        let iter = &mut action.rows.iter().peekable();
 
-        for iteration in self.start_iteration..(self.start_iteration + self.repeat) {
-            let iter = &mut self.rows.iter().peekable();
+        for row in iter {
+            let row = action::substitute_vars(
+                row,
+                &hashmap! { "kafka-ingest.iteration".into() => iteration.to_string() },
+                &None,
+                false,
+            )?;
+            let mut row = row.as_bytes();
+            let key = match (action.omit_key, &key_transcoder) {
+                (true, _) => None,
+                (false, None) => None,
+                (false, Some(kt)) => kt.transcode(&mut row)?,
+            };
+            let value = if action.omit_value {
+                None
+            } else {
+                value_transcoder
+                    .transcode(&mut row)
+                    .with_context(|| format!("parsing row: {}", String::from_utf8_lossy(row)))?
+            };
+            let producer = &state.kafka_producer;
+            let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
+            let headers = action.headers.clone();
+            futs.push(async move {
+                let mut record: FutureRecord<_, _> = FutureRecord::to(topic_name);
 
-            for row in iter {
-                let row = action::substitute_vars(
-                    row,
-                    &hashmap! { "kafka-ingest.iteration".into() => iteration.to_string() },
-                    &None,
-                    false,
-                )?;
-                let mut row = row.as_bytes();
-                let key = match (self.omit_key, &key_transcoder) {
-                    (true, _) => None,
-                    (false, None) => None,
-                    (false, Some(kt)) => kt.transcode(&mut row)?,
-                };
-                let value = if self.omit_value {
-                    None
-                } else {
-                    value_transcoder
-                        .transcode(&mut row)
-                        .with_context(|| format!("parsing row: {}", String::from_utf8_lossy(row)))?
-                };
-                let producer = &state.kafka_producer;
-                let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
-                let headers = self.headers.clone();
-                futs.push(async move {
-                    let mut record: FutureRecord<_, _> = FutureRecord::to(topic_name);
-
-                    if let Some(partition) = self.partition {
-                        record = record.partition(partition);
-                    }
-                    if let Some(key) = &key {
-                        record = record.key(key);
-                    }
-                    if let Some(value) = &value {
-                        record = record.payload(value);
-                    }
-                    if let Some(timestamp) = self.timestamp {
-                        record = record.timestamp(timestamp);
-                    }
-                    if let Some(headers) = headers {
-                        let mut rd_meta = OwnedHeaders::new();
-                        for (k, v) in &headers {
-                            rd_meta = rd_meta.insert(Header {
-                                key: k,
-                                value: v.as_deref(),
-                            });
-                        }
-                        record = record.headers(rd_meta);
-                    }
-                    producer.send(record, timeout).await
-                });
-            }
-
-            // Reap the futures thus produced periodically or after the last iteration
-            if iteration % INGEST_BATCH_SIZE == 0
-                || iteration == (self.start_iteration + self.repeat - 1)
-            {
-                while let Some(res) = futs.next().await {
-                    res.map_err(|(e, _message)| e)?;
+                if let Some(partition) = action.partition {
+                    record = record.partition(partition);
                 }
+                if let Some(key) = &key {
+                    record = record.key(key);
+                }
+                if let Some(value) = &value {
+                    record = record.payload(value);
+                }
+                if let Some(timestamp) = action.timestamp {
+                    record = record.timestamp(timestamp);
+                }
+                if let Some(headers) = headers {
+                    let mut rd_meta = OwnedHeaders::new();
+                    for (k, v) in &headers {
+                        rd_meta = rd_meta.insert(Header {
+                            key: k,
+                            value: v.as_deref(),
+                        });
+                    }
+                    record = record.headers(rd_meta);
+                }
+                producer.send(record, timeout).await
+            });
+        }
+
+        // Reap the futures thus produced periodically or after the last iteration
+        if iteration % INGEST_BATCH_SIZE == 0
+            || iteration == (action.start_iteration + action.repeat - 1)
+        {
+            while let Some(res) = futs.next().await {
+                res.map_err(|(e, _message)| e)?;
             }
         }
-        Ok(ControlFlow::Continue)
+    }
+    Ok(ControlFlow::Continue)
+}
+
+async fn make_transcoder(
+    state: &mut State,
+    format: Format,
+    ccsr_subject: String,
+) -> Result<Transcoder, anyhow::Error> {
+    match format {
+        Format::Avro {
+            schema,
+            confluent_wire_format,
+        } => {
+            if confluent_wire_format {
+                let schema_id = state
+                    .ccsr_client
+                    .publish_schema(&ccsr_subject, &schema, mz_ccsr::SchemaType::Avro, &[])
+                    .await
+                    .context("publishing to schema registry")?;
+                let schema = avro::parse_schema(&schema)
+                    .with_context(|| format!("parsing avro schema: {}", schema))?;
+                Ok::<_, anyhow::Error>(Transcoder::ConfluentAvro { schema, schema_id })
+            } else {
+                let schema = avro::parse_schema(&schema)
+                    .with_context(|| format!("parsing avro schema: {}", schema))?;
+                Ok(Transcoder::PlainAvro { schema })
+            }
+        }
+        Format::Protobuf {
+            descriptor_file,
+            message,
+            confluent_wire_format,
+            schema_id_subject,
+            schema_message_id,
+        } => {
+            let schema_id = if confluent_wire_format {
+                state
+                    .ccsr_client
+                    .get_schema_by_subject(schema_id_subject.as_deref().unwrap_or(&ccsr_subject))
+                    .await
+                    .context("fetching schema from registry")?
+                    .id
+            } else {
+                0
+            };
+
+            let bytes = fs::read(state.temp_path.join(descriptor_file))
+                .await
+                .context("reading protobuf descriptor file")?;
+            let fd = DescriptorPool::decode(&*bytes).context("parsing protobuf descriptor file")?;
+            let message = fd
+                .get_message_by_name(&message)
+                .ok_or_else(|| anyhow!("unknown message name {}", message))?;
+            Ok(Transcoder::Protobuf {
+                message,
+                confluent_wire_format,
+                schema_id,
+                schema_message_id,
+            })
+        }
+        Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),
     }
 }

@@ -15,10 +15,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import time
 from typing import TYPE_CHECKING, List, Optional, Type
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Computed
+from materialize.mzcompose.services import Computed, Materialized
 
 if TYPE_CHECKING:
     from materialize.checks.checks import Check
@@ -29,9 +30,35 @@ class Action:
         assert False
 
 
-class StartMz(Action):
+class Sleep(Action):
+    def __init__(self, interval: float) -> None:
+        self.interval = interval
+
     def execute(self, c: Composition) -> None:
-        c.up("materialized")
+        print(f"Sleeping for {self.interval} seconds")
+        time.sleep(self.interval)
+
+
+class StartMz(Action):
+    DEFAULT_MZ_OPTIONS = " ".join(
+        [
+            "--persist-consensus-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=consensus",
+            "--storage-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=storage",
+            "--adapter-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=adapter",
+        ]
+    )
+
+    def __init__(self, tag: Optional[str] = None) -> None:
+        self.tag = tag
+
+    def execute(self, c: Composition) -> None:
+        image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
+        print(f"Starting Mz using image {image}")
+        mz = Materialized(image=image, options=StartMz.DEFAULT_MZ_OPTIONS)
+
+        with c.override(mz):
+            c.up("materialized")
+
         c.wait_for_materialized()
 
         for config_param in ["max_tables", "max_sources"]:
@@ -40,6 +67,11 @@ class StartMz(Action):
                 user="mz_system",
                 port=6877,
             )
+
+
+class KillMz(Action):
+    def execute(self, c: Composition) -> None:
+        c.kill("materialized")
 
 
 class UseComputed(Action):
@@ -62,16 +94,20 @@ class KillComputed(Action):
 
 
 class StartComputed(Action):
+    def __init__(self, tag: Optional[str] = None) -> None:
+        self.tag = tag
+
     def execute(self, c: Composition) -> None:
-        with c.override(Computed(name="computed_1")):
+        image = f"materialize/computed:{self.tag}" if self.tag is not None else None
+        print(f"Starting Computed using image {image}")
+
+        computed = Computed(
+            name="computed_1",
+            image=image,
+        )
+
+        with c.override(computed):
             c.up("computed_1")
-
-
-class RestartMz(Action):
-    def execute(self, c: Composition) -> None:
-        c.kill("materialized")
-        c.up("materialized")
-        c.wait_for_materialized()
 
 
 class RestartPostgresBackend(Action):

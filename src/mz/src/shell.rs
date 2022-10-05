@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::regions::get_provider_region_environment;
+use crate::region::get_provider_region_environment;
 use crate::utils::CloudProviderRegion;
-use crate::{Environment, Profile, ValidProfile};
+use crate::{Environment, ValidProfile};
 use anyhow::{Context, Result};
 use reqwest::Client;
 use subprocess::Exec;
@@ -42,7 +42,7 @@ fn run_psql_shell(valid_profile: ValidProfile, environment: &Environment) {
         .arg("-p")
         .arg(port)
         .arg("materialize")
-        .env("PGPASSWORD", password_from_profile(valid_profile.profile))
+        .env("PGPASSWORD", valid_profile.profile.app_password)
         .join()
         .expect("failed to execute process");
 
@@ -64,7 +64,7 @@ pub(crate) fn check_environment_health(
         .arg(host)
         .arg("-p")
         .arg(port)
-        .env("PGPASSWORD", password_from_profile(valid_profile.profile))
+        .env("PGPASSWORD", valid_profile.profile.app_password)
         .arg("-d")
         .arg("materialize")
         .arg("-q")
@@ -72,11 +72,6 @@ pub(crate) fn check_environment_health(
         .unwrap();
 
     output.success()
-}
-
-/// Turn a profile into a Materialize cloud instance password
-fn password_from_profile(profile: Profile) -> String {
-    "mzp_".to_owned() + &profile.client_id + &profile.secret
 }
 
 /// Command to run a shell (psql) on a Materialize cloud instance

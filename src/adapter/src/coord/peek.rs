@@ -348,7 +348,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
             }
         }
     }
-    return Ok(None);
+    Ok(None)
 }
 
 impl<S: Append + 'static> crate::coord::Coordinator<S> {

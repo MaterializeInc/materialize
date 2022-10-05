@@ -121,7 +121,8 @@ where
 /// Effectively the same as `source`, but the core logic expects a
 /// never-ending future, not a tick closure. Additionally, this
 /// operator also contains an input, primarily to inspect the
-/// frontier of an upstream operator.
+/// frontier of an upstream operator. This input
+/// does not participate in progress tracking.
 ///
 /// Note that this means the input and capabilities are communicated
 /// to the future by value, not by &mut reference.
@@ -158,9 +159,9 @@ where
     let (data_output, data_stream) = builder.new_output();
 
     let remap_input = builder.new_input_connection(
-        &input,
+        input,
         Pipeline,
-        // As documented, the optional input does not
+        // As documented, the input does not
         // participate in progress tracking.
         vec![Antichain::new()],
     );

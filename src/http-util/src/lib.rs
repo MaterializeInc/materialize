@@ -95,7 +95,7 @@ macro_rules! make_handle_static {
 /// Serves a basic liveness check response
 #[allow(clippy::unused_async)]
 pub async fn handle_liveness_check() -> impl IntoResponse {
-    return (StatusCode::OK, "Liveness check successful!");
+    (StatusCode::OK, "Liveness check successful!")
 }
 
 /// Serves metrics from the selected metrics registry variant.
@@ -122,7 +122,7 @@ pub async fn handle_modify_filter_target(
 ) -> impl IntoResponse {
     match cfg.targets.parse::<Targets>() {
         Ok(targets) => match callback.call(targets) {
-            Ok(()) => (StatusCode::OK, format!("{}", cfg.targets)),
+            Ok(()) => (StatusCode::OK, cfg.targets.to_string()),
             Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
         },
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),

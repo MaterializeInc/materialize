@@ -32,7 +32,7 @@ fn bench_transact(c: &mut Criterion) {
             let (client, connection) = tokio_postgres::connect(&postgres_url, tls.clone())
                 .await
                 .unwrap();
-            spawn(|| format!("postgres connection"), async move {
+            spawn(|| "postgres connection".to_string(), async move {
                 connection.await.unwrap();
             });
             client

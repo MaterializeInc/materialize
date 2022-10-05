@@ -285,7 +285,7 @@ impl PredicatePushdown {
                                         if input_mapper.try_localize_to_input_with_bound_expr(
                                             &mut localized,
                                             index,
-                                            &equivalences,
+                                            equivalences,
                                         ) {
                                             push_down.push(localized);
                                             pushed = true;

@@ -33,7 +33,7 @@ pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode
         .ok_or_else(|| anyhow!("record not found: {:?}", data_name))?
         .piece;
     Ok(SchemaNode {
-        root: &schema,
+        root: schema,
         inner: data_schema,
         name: None,
     })

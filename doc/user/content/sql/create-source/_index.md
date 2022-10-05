@@ -122,7 +122,7 @@ As long as the `.proto` schema definition changes in a [compatible way](https://
 
 ##### Supported types
 
-Materialize supports all [well-known](https://developers.google.com/protocol-buffers/docs/reference/google.protobuf) Protobuf types from the `proto2` and `proto3` specs, _except for_ recursive `Struct` values {{% gh 5803 %}}.
+Materialize supports all [well-known](https://developers.google.com/protocol-buffers/docs/reference/google.protobuf) Protobuf types from the `proto2` and `proto3` specs, _except for_ recursive `Struct` values {{% gh 5803 %}} and map types.
 
 ##### Multiple message schemas
 
@@ -189,9 +189,6 @@ The upsert envelope treats all records as having a **key** and a **value**, and 
 
 - If the key matches a preexisting record and the value is _null_, Materialize deletes the record.
 
-The upsert envelope has slower data ingestion and is **more memory intensive** than other envelopes. In most cases, Materialize must maintain state proportional to the number of
-unique rows in the source, and perform extra work to handle retractions based on that state.
-
 ### Debezium envelope
 
 <p style="font-size:14px"><b>Syntax:</b> <code>ENVELOPE DEBEZIUM</code></p>
@@ -232,10 +229,11 @@ By default, Materialize provisions sources using the smallest size (`3xsmall`). 
     faster, as there is more CPU available to read and decode data from the
     upstream external system.
 
-  * You are using the [upsert envelope](#upsert-envelope), and your source
-    contains **many unique keys**. This envelope must keep in-memory state
-    proportional to the number of unique keys in the upstream external system.
-    Larger sizes can store more unique keys.
+  * You are using the [upsert envelope](#upsert-envelope) or [debezium
+    envelope](#debezium-envelope), and your source contains **many unique
+    keys**. These envelopes must keep in-memory state proportional to the number
+    of unique keys in the upstream external system. Larger sizes can store more
+    unique keys.
 
 ## Related pages
 

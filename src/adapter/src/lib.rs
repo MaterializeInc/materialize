@@ -36,7 +36,6 @@ mod command;
 mod coord;
 mod error;
 mod explain_new;
-mod sink_connection;
 mod subscribe;
 mod util;
 

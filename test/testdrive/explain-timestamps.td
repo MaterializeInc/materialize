@@ -16,9 +16,9 @@ $ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true
 # Strict serializable doesn't look at every object in the same time domain
 > SET TRANSACTION_ISOLATION = 'STRICT SERIALIZABLE';
 > EXPLAIN TIMESTAMP FOR SELECT * FROM t1
-"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[<> <>]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.t1 (<>, storage):\n read frontier:[<> <>]\nwrite frontier:[<> <>]\n"
+"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[<> <>]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.t1 (<>, storage):\n            read frontier:[<> <>]\n           write frontier:[<> <>]\n"
 
 # Serializable does look at every object in the same time domain
 > SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
 > EXPLAIN TIMESTAMP FOR SELECT * FROM t1
-"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[<> <>]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.t1 (<>, storage):\n read frontier:[<> <>]\nwrite frontier:[<> <>]\n\nsource materialize.public.t2 (<>, storage):\n read frontier:[<> <>]\nwrite frontier:[<> <>]\n"
+"          query timestamp: <> <>\n                    since:[<> <>]\n                    upper:[<> <>]\n         global timestamp: <> <>\n  can respond immediately: <>\n\nsource materialize.public.t1 (<>, storage):\n            read frontier:[<> <>]\n           write frontier:[<> <>]\n\nsource materialize.public.t2 (<>, storage):\n            read frontier:[<> <>]\n           write frontier:[<> <>]\n"

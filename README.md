@@ -4,25 +4,23 @@
 
 [<img src="https://user-images.githubusercontent.com/23521087/168297221-5d346edc-3a55-4055-b355-281b4bd76963.png" width=55%>](https://materialize.com)
 
-Materialize is a streaming database for real-time applications.
+Materialize is a streaming database powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow), purpose-built for low-latency applications. It lets you ask complex questions about your data using SQL, and maintains the results of these SQL queries incrementally up-to-date as the underlying data changes.
 
-## Get started
+## Sign up for Early Access
 
-Check out [our getting started guide](https://materialize.com/docs/get-started/).
+We are rolling out Early Access to the new, cloud-native version of Materialize. [Sign up](https://materialize.com/register/) to get on the list! 🚀
 
 ## About
 
-Materialize lets you ask questions of your live data, which it answers and then maintains for you as your data continue to change. The moment you need a refreshed answer, you can get it in milliseconds. Materialize is designed to help you interactively explore your streaming data, perform data warehousing analytics against live relational data, or just increase the freshness *and* reduce the load of your dashboard and monitoring tasks.
+Materialize is designed to help you interactively explore your streaming data, perform analytics against live relational data, or just increase the freshness *and* reduce the load of your dashboard and monitoring tasks. The moment you need a refreshed answer, you can get it in milliseconds.
 
-Materialize focuses on providing correct and consistent answers with minimal latency. It does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL92 queries as *dataflows*, which can react efficiently to changes in your data as they happen. Materialize is powered by [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow), which connects the times at which your inputs change with the times of answers reported back to you.
+It focuses on providing correct and [consistent](https://materialize.com/docs/overview/isolation-level/) answers with minimal latency, and does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL queries as *dataflows*, which can react efficiently to changes in your data as they happen.
 
-We support a large fraction of  PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
+We support a large fraction of PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
 
 ## Get data in
 
-Materialize reads Avro, Protobuf, JSON, and newline-delimited text. Need something else? [Just ask](https://github.com/MaterializeInc/materialize/issues/new/choose).
-
-Materialize can read data from Kafka topics, Kinesis streams (in preview), or tail local files.
+Materialize can read data from [Kafka](https://materialize.com/docs/sql/create-source/kafka/) and [Redpanda](https://materialize.com/docs/integrations/redpanda/), as well as directly from a [PostgreSQL](https://materialize.com/docs/sql/create-source/postgres/) replication stream. It also supports regular database tables to which you can insert, update, and delete rows.
 
 ## Transform, manipulate, and read your data
 
@@ -60,7 +58,9 @@ CREATE VIEW revenue (supplier_no, total_revenue) AS
     GROUP BY
         l_suppkey;
 
--- Materialized views are maintained automatically, and can depend on non-materialized views.
+-- The MATERIALIZED keyword is the trigger to begin
+-- eagerly, consistently, and incrementally maintaining
+-- results that are stored directly in durable storage.
 CREATE MATERIALIZED VIEW tpch_q15 AS
   SELECT
     s_suppkey,
@@ -80,7 +80,12 @@ WHERE
             revenue
     )
 ORDER BY
-    s_suppkey
+    s_suppkey;
+
+-- Creating an index keeps results always up to date and in memory.
+-- In this example, the index will allow for fast point lookups of
+-- individual supply keys.
+CREATE INDEX tpch_q15_idx ON tpch_q15 (s_suppkey);
 ```
 
 Stream inserts, updates, and deletes on the underlying tables (`lineitem` and `supplier`), and Materialize keeps the materialized view incrementally updated. You can type `SELECT * FROM tpch_q15` and expect to see the current results immediately!
@@ -89,7 +94,7 @@ Stream inserts, updates, and deletes on the underlying tables (`lineitem` and `s
 
 **Pull based**: Use any PostgreSQL-compatible driver in any language/environment to make `SELECT` queries against your views. Tell them they're talking to a PostgreSQL database, they don't ever need to know otherwise.
 
-**Push based**: Or configure Materialize to stream results to a Kafka topic as soon as the views change.
+**Push based**: Listen to changes directly using `SUBSCRIBE` or configure Materialize to stream results to a Kafka topic as soon as the views change.
 
 If you want to use an ORM, [chat with us](https://github.com/MaterializeInc/materialize/issues/new/choose). They're surprisingly tricky.
 
@@ -103,13 +108,9 @@ Materialize is source-available and [licensed](LICENSE) under the BSL 1.1, conve
 
 Materialize is also available as [a paid cloud service](https://materialize.com/pricing/) with additional features such as high availability via multi-active replication.
 
-## How does it work?
-
-Materialize is built on top of [differential dataflow](https://github.com/TimelyDataflow/differential-dataflow) and [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow), and builds on a decade of cutting-edge stream processing research.
-
 ## For developers
 
-Materialize is written entirely in Rust.
+Materialize is primarily written in Rust.
 
 Developers can find docs at [doc/developer](doc/developer), and Rust API documentation is hosted at <https://dev.materialize.com/api/rust/>. The Materialize development roadmap is divided up into roughly month-long milestones, and [managed in GitHub](https://github.com/MaterializeInc/materialize/milestones?direction=asc&sort=due_date&state=open).
 

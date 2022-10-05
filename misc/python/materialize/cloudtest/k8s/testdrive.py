@@ -17,12 +17,12 @@ from materialize.cloudtest.wait import wait
 
 
 class Testdrive(K8sPod):
-    def __init__(self) -> None:
+    def __init__(self, release_mode: bool) -> None:
         metadata = V1ObjectMeta(name="testdrive")
 
         container = V1Container(
             name="testdrive",
-            image=self.image("testdrive"),
+            image=self.image("testdrive", release_mode),
             command=["sleep", "infinity"],
         )
 
@@ -48,7 +48,7 @@ class Testdrive(K8sPod):
                 "--",
                 "testdrive",
                 "--materialize-url=postgres://materialize:materialize@environmentd:6875/materialize",
-                "--materialize-url-internal=postgres://materialize:materialize@environmentd:6877/materialize",
+                "--materialize-internal-url=postgres://materialize:materialize@environmentd:6877/materialize",
                 "--kafka-addr=redpanda:9092",
                 "--schema-registry-url=http://redpanda:8081",
                 "--default-timeout=300s",

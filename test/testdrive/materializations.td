@@ -335,10 +335,10 @@ a  b
 1  2
 
 > SHOW SOURCES
-name     type
---------------
-data     kafka
-mat_data kafka
+name     type    size
+---------------------
+data     kafka   1
+mat_data kafka   1
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

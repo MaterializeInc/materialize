@@ -35,6 +35,7 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics};
 use crate::internal::paths::{PartId, PartialBatchKey};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
+use crate::write::WriterEnrichedHollowBatch;
 use crate::{PersistConfig, ShardId, WriterId};
 
 /// A handle to a batch of updates that has been written to blob storage but
@@ -47,17 +48,17 @@ pub struct Batch<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    shard_id: ShardId,
+    pub(crate) shard_id: ShardId,
 
     /// A handle to the data represented by this batch.
     pub(crate) batch: HollowBatch<T>,
 
     /// Handle to the [Blob] that the blobs of this batch were uploaded to.
-    _blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) _blob: Arc<dyn Blob + Send + Sync>,
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
-    _phantom: PhantomData<(K, V, T, D)>,
+    pub(crate) _phantom: PhantomData<(K, V, T, D)>,
 }
 
 impl<K, V, T, D> Drop for Batch<K, V, T, D>
@@ -144,6 +145,23 @@ where
     #[cfg(test)]
     pub fn into_hollow_batch(mut self) -> HollowBatch<T> {
         let ret = self.batch.clone();
+        self.mark_consumed();
+        ret
+    }
+
+    /// Turns this [`Batch`] into a [`WriterEnrichedHollowBatch`], which can be
+    /// used to transfer this batch across process boundaries, for example when
+    /// exchanging data between timely workers.
+    ///
+    /// **NOTE**: If this batch is not eventually appended to a shard or
+    /// dropped, the data that it represents will have leaked. The caller is
+    /// responsible for turning this back into a [`Batch`] using
+    /// [`WriteHandle::batch_from_hollow_batch`](crate::write::WriteHandle::batch_from_hollow_batch).
+    pub fn into_writer_hollow_batch(mut self) -> WriterEnrichedHollowBatch<T> {
+        let ret = WriterEnrichedHollowBatch {
+            shard_id: self.shard_id,
+            batch: self.batch.clone(),
+        };
         self.mark_consumed();
         ret
     }
@@ -511,7 +529,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
             append_upper: truncate.upper().clone(),
         });
     }
-    return Ok(());
+    Ok(())
 }
 
 #[cfg(test)]

@@ -281,6 +281,20 @@ reduce
 ----
 ((#0) IS NULL OR ((#1) IS NULL AND (#2) IS NULL))
 
+# undistribute_and_or -- If there are multiple overlapping undistribution opportunities, and one of them leads to an
+# absorption, then we should pick that one.
+# Here, we could undistribute either #1 or #2, but #2 leads to an absorption.
+
+reduce
+(call_variadic or [
+    (call_variadic and [#0 #1])
+    (call_variadic and [#1 #2])
+    (call_variadic and [#2])
+])
+[int32 int32 int32]
+----
+(#2 OR (#0 AND #1))
+
 # flatten_associative + undistribute_and_or
 # ((#0 OR #1) OR (#2 > 2)) AND (#0 OR ((#2 < 3) OR #1))
 reduce

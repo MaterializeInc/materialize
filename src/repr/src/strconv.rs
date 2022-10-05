@@ -213,15 +213,15 @@ where
     Nestable::Yes
 }
 
-/// Parses an `mztimestamp` from `s`.
-pub fn parse_mztimestamp(s: &str) -> Result<crate::Timestamp, ParseError> {
+/// Parses an `mz_timestamp` from `s`.
+pub fn parse_mz_timestamp(s: &str) -> Result<crate::Timestamp, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::invalid_input_syntax("mztimestamp", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("mz_timestamp", s).with_details(e))
 }
 
-/// Writes an `mztimestamp` to `buf`.
-pub fn format_mztimestamp<F>(buf: &mut F, u: crate::Timestamp) -> Nestable
+/// Writes an `mz_timestamp` to `buf`.
+pub fn format_mz_timestamp<F>(buf: &mut F, u: crate::Timestamp) -> Nestable
 where
     F: FormatBuffer,
 {
@@ -383,7 +383,7 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, datetime::Ti
 
     let (ts_string, tz_string) = datetime::split_timestamp_string(s);
 
-    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(&ts_string)?;
+    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(ts_string)?;
     let d: NaiveDate = pdt.compute_date()?;
     let t: NaiveTime = pdt.compute_time()?;
 
@@ -426,7 +426,7 @@ where
 ///     [ <period> [ <seconds fraction> ] ]
 /// ```
 pub fn parse_time(s: &str) -> Result<NaiveTime, ParseError> {
-    ParsedDateTime::build_parsed_datetime_time(&s)
+    ParsedDateTime::build_parsed_datetime_time(s)
         .and_then(|pdt| pdt.compute_time())
         .map_err(|e| ParseError::invalid_input_syntax("time", s).with_details(e))
 }
@@ -538,7 +538,7 @@ pub fn parse_interval_w_disambiguator(
     leading_time_precision: Option<DateTimeField>,
     d: DateTimeField,
 ) -> Result<Interval, ParseError> {
-    ParsedDateTime::build_parsed_datetime_interval(&s, leading_time_precision, d)
+    ParsedDateTime::build_parsed_datetime_interval(s, leading_time_precision, d)
         .and_then(|pdt| pdt.compute_interval())
         .map_err(|e| ParseError::invalid_input_syntax("interval", s).with_details(e))
 }

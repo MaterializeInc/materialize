@@ -57,7 +57,7 @@ use mz_stash::{self, StashError, TypedCollection};
 
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::protocol::client::{
-    ExportSinkCommand, IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
+    CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
     StorageCommand, StorageResponse, Update,
 };
 use crate::types::errors::DataflowError;
@@ -779,7 +779,7 @@ impl fmt::Display for StorageError {
                     id.iter().map(|id| id.to_string()).join(", ")
                 )
             }
-            Self::ClientError(err) => write!(f, "underlying client error: {err}"),
+            Self::ClientError(err) => write!(f, "underlying client error: {:#}", err),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
             Self::DataflowError(err) => write!(f, "dataflow failed to process request: {err}"),
         }
@@ -944,7 +944,7 @@ where
 
             // Advance the collection's `since` as requested.
             if let Some(since) = &description.since {
-                read.downgrade_since(&since).await;
+                read.downgrade_since(since).await;
             }
 
             let collection_state =
@@ -974,7 +974,7 @@ where
                     .storage_metadata
                     .get_resume_upper(&persist_client, &desc.desc.envelope)
                     .await;
-                let augmented_ingestion = IngestSourceCommand {
+                let augmented_ingestion = CreateSourceCommand {
                     id,
                     description: desc,
                     resume_upper,
@@ -990,7 +990,7 @@ where
                         ),
                     )
                     .await?;
-                client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
+                client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
             }
         }
 
@@ -1072,7 +1072,7 @@ where
                 .initial_as_of
                 .maybe_fast_forward(&from_since);
 
-            let cmd = ExportSinkCommand {
+            let cmd = CreateSinkCommand {
                 id,
                 description: StorageSinkDesc {
                     from,
@@ -1095,7 +1095,7 @@ where
             // Provision a storage host for the ingestion.
             let client = self.hosts.provision(id, host_config).await?;
 
-            client.send(StorageCommand::ExportSinks(vec![cmd]));
+            client.send(StorageCommand::CreateSinks(vec![cmd]));
         }
         Ok(())
     }
@@ -1162,7 +1162,7 @@ where
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates, batch_upper) in commands.iter() {
             for update in updates.iter() {
-                if !update.timestamp.less_than(&batch_upper) {
+                if !update.timestamp.less_than(batch_upper) {
                     return Err(StorageError::UpdateBeyondUpper(*id));
                 }
             }

@@ -153,9 +153,8 @@ impl<S: Append + 'static> Coordinator<S> {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         task::spawn(|| "storage_usage_collection", async move {
             tokio::time::sleep(next_collection_interval).await;
-            // If sending fails, the main thread has shutdown.
             if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
-                return;
+                // If sending fails, the main thread has shutdown.
             }
         });
     }
@@ -181,6 +180,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let remove = pending_subscribes.process_response(response);
                     if remove {
                         self.pending_subscribes.remove(&sink_id);
+                        self.metrics.active_subscribes.dec();
                     }
                 }
             }

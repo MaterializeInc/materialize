@@ -176,7 +176,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     *source_id,
                     Arc::clone(&compute_state.persist_clients),
                     source.storage_metadata.clone(),
-                    dataflow.as_of.clone().unwrap(),
+                    dataflow.as_of.clone(),
                     dataflow.until.clone(),
                     mfp.as_mut(),
                     // Copy the logic in DeltaJoin/Get/Join to start.
@@ -377,7 +377,7 @@ where
         let mut needed_tokens = Vec::new();
         for import_id in import_ids {
             if let Some(token) = tokens.get(&import_id) {
-                needed_tokens.push(Rc::clone(&token));
+                needed_tokens.push(Rc::clone(token));
             }
         }
         let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {

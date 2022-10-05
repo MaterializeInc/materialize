@@ -53,7 +53,7 @@ pub enum AdapterError {
     IdExhaustionError,
     /// Unexpected internal state was encountered.
     Internal(String),
-    /// Attempted to read from log sources on a cluster with disabled introspection.
+    /// Attempted to read from log sources of a replica with disabled introspection.
     IntrospectionDisabled {
         log_names: Vec<String>,
     },
@@ -307,7 +307,7 @@ impl fmt::Display for AdapterError {
             AdapterError::Internal(e) => write!(f, "internal error: {}", e),
             AdapterError::IntrospectionDisabled { .. } => write!(
                 f,
-                "cannot read log sources on cluster with disabled introspection"
+                "cannot read log sources of replica with disabled introspection"
             ),
             AdapterError::InvalidLogDependency { object_type, .. } => {
                 write!(f, "{object_type} objects cannot depend on log sources")

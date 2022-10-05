@@ -398,7 +398,7 @@ pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
         assert_eq!(c.len(), 16);
         // essentially d << 128
         cx.mul(&mut d, D::u128_splitter());
-        let i = twos_complement_be_to_u128(&c);
+        let i = twos_complement_be_to_u128(c);
         let i = cx.from_u128(i);
         cx.add(&mut d, &i);
     }
@@ -456,9 +456,9 @@ fn test_twos_comp_numeric_primitive() {
         P: Into<Numeric> + TryFrom<Numeric> + Eq + PartialEq + std::fmt::Debug + Copy,
     {
         let mut e = [0; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH];
-        e[Numeric::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()..].copy_from_slice(&i_be_bytes);
+        e[Numeric::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()..].copy_from_slice(i_be_bytes);
         let mut w = [0; NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH];
-        w[NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()..].copy_from_slice(&i_be_bytes);
+        w[NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH - i_be_bytes.len()..].copy_from_slice(i_be_bytes);
 
         let d: Numeric = i.into();
 

@@ -23,45 +23,42 @@ Sink source type | Description
 
 ## Syntax
 
-{{< diagram "create-sink.svg" >}}
+{{< diagram "create-sink-kafka.svg" >}}
 
-#### `sink_kafka_connector`
+#### `kafka_sink_connection`
 
-{{< diagram "sink-kafka-connector.svg" >}}
+{{< diagram "kafka-sink-connection.svg" >}}
 
 #### `sink_format_spec`
 
 {{< diagram "sink-format-spec.svg" >}}
 
-#### `consistency_format_spec`
+#### `csr_connection`
 
-{{< diagram "consistency-format-spec.svg" >}}
+{{< diagram "csr-connection.svg" >}}
 
 Field | Use
 ------|-----
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a sink of the same name already exists. <br/><br/>If _not_ specified, throw an error if a sink of the same name already exists. _(Default)_
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
-**KAFKA CONNECTION** _conn_ | The Kafka [connection](../create-connection) where you want to sink data.
-**TOPIC** _topic&lowbar;prefix_ | The prefix used to generate the Kafka topic name to create and write to.
+**CONNECTION** _connection_name_ | The name of the connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](../create-connection) documentation page.
 **KEY (** _key&lowbar;column_ **)** | An optional list of columns to use for the Kafka key. If unspecified, the Kafka key is left unset.
-_sink&lowbar;with&lowbar;options_ | Options affecting sink creation. For more detail, see [`WITH` options](#with-options).
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope-details) to capture changes in the input view or source.
 **ENVELOPE UPSERT** | The sink emits data with upsert semantics: updates and inserts for the given key are expressed as a value, and deletes are expressed as a null value payload in Kafka. For more detail, see [Handling upserts](/sql/create-source/kafka/#handling-upserts).
 
-### `WITH` options
-
-The following options are valid within the `WITH` clause.
+### `CONNECTION` options
 
 Field                | Value type | Description
 ---------------------|------------|------------
-`partition_count`    | `int`      | Set the sink Kafka topic's partition count. This defaults to -1 (use the broker default).
-`replication_factor` | `int`      | Set the sink Kafka topic's replication factor. This defaults to -1 (use the broker default).
-`acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
-`retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default.
-`retention_bytes`    | `long`     | Sets the maximum size a Kafka partition can grow before removing old logs.  Accepts values [-1, ...]. `-1` specifics no size limit.  If not set, uses the broker default.
-`avro_key_fullname`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `avro_value_fullname`. The default fullname is `row`.
-`avro_value_fullname`| `text`     | Sets the Avro fullname on the generated value schema. When `KEY` is specified, `avro_key_fullname` must additionally be specified. The default fullname is `envelope`.
+`TOPIC`              | `text`     | The prefix used to generate the Kafka topic name to create and write to.
+
+### CSR `CONNECTION` options
+
+Field                | Value type | Description
+---------------------|------------|------------
+`AVRO KEY FULLNAME`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`. The default fullname is `row`.
+`AVRO VALUE FULLNAME`| `text`     | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
 
 ### `WITH SNAPSHOT` or `WITHOUT SNAPSHOT`
 
@@ -72,8 +69,8 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 ## Detail
 
 - Materialize currently only supports Avro or JSON-formatted sinks that write to a Kafka topic.
-- Materialize stores information about the sink's topic name in the [`mz_kafka_sinks`](/sql/system-catalog/#mz_kafka_sinks) system table. See the [examples](#examples) below for more details.
-- For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink. If needed, the fullnames for these schemas can be specified with the `avro_key_fullname` and `avro_value_fullname` options.
+- Materialize stores information about the sink's topic name in the [`mz_kafka_sinks`](/sql/system-catalog/mz_catalog#mz_kafka_sinks) system table. See the [examples](#examples) below for more details.
+- For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink. If needed, the fullnames for these schemas can be specified with the `AVRO KEY FULLNAME` and `AVRO VALUE FULLNAME` options.
 
 ### Debezium envelope details
 
@@ -134,7 +131,7 @@ If the topic does not exist, Materialize will use the Kafka Admin API to create 
 
 For Avro-encoded sinks, Materialize will publish the sink's Avro schema to the Confluent Schema Registry. Materialize will not publish schemas for JSON-encoded sinks.
 
-You can find the topic name and other metadata for each Kafka sink by querying [`mz_kafka_sinks`](/sql/system-catalog/#mz_kafka_sinks).
+You can find the topic name and other metadata for each Kafka sink by querying [`mz_kafka_sinks`](/sql/system-catalog/mz_catalog#mz_kafka_sinks).
 
 {{< note >}}
 {{% kafka-sink-drop  %}}
@@ -239,8 +236,7 @@ FORMAT JSON
 ENVELOPE DEBEZIUM;
 ```
 
-
 ## Related pages
 
-- [`SHOW SINK`](../show-sinks)
+- [`SHOW SINKS`](../show-sinks)
 - [`DROP SINK`](../drop-sink)

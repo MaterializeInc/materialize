@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeInstanceStatus, ConcreteComputeInstanceReplicaLocation,
+    ComputeInstanceId, ComputeInstanceReplicaLocation, ComputeInstanceStatus,
 };
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
@@ -25,6 +25,7 @@ use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage::types::connections::KafkaConnection;
+use mz_storage::types::hosts::StorageHostConfig;
 use mz_storage::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
@@ -98,7 +99,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&role.id.to_string()),
                 Datum::UInt32(role.oid),
-                Datum::String(&name),
+                Datum::String(name),
             ]),
             diff,
         }
@@ -112,7 +113,7 @@ impl CatalogState {
         let id = self.compute_instances_by_name[name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[Datum::UInt64(id), Datum::String(&name)]),
+            row: Row::pack_slice(&[Datum::UInt64(id), Datum::String(name)]),
             diff,
         }
     }
@@ -128,13 +129,13 @@ impl CatalogState {
         let replica = &instance.replicas_by_id[&id];
 
         let (size, az) = match &replica.config.location {
-            ConcreteComputeInstanceReplicaLocation::Managed {
+            ComputeInstanceReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified: _,
                 allocation: _,
             } => (Some(&**size), Some(availability_zone.as_str())),
-            ConcreteComputeInstanceReplicaLocation::Remote { .. } => (None, None),
+            ComputeInstanceReplicaLocation::Remote { .. } => (None, None),
         };
 
         BuiltinTableUpdate {
@@ -142,7 +143,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::UInt64(compute_instance_id),
                 Datum::UInt64(id),
-                Datum::String(&name),
+                Datum::String(name),
                 Datum::from(size),
                 Datum::from(az),
             ]),
@@ -193,7 +194,7 @@ impl CatalogState {
         let name = &entry.name().item;
         let mut updates = match entry.item() {
             CatalogItem::Log(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "log", None, diff)
+                self.pack_source_update(id, oid, schema_id, name, "log", None, None, diff)
             }
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
@@ -204,6 +205,10 @@ impl CatalogState {
                 name,
                 source.source_desc.name(),
                 source.connection_id,
+                match &source.host_config {
+                    StorageHostConfig::Remote { .. } => None,
+                    StorageHostConfig::Managed { size, .. } => Some(size),
+                },
                 diff,
             ),
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
@@ -217,9 +222,16 @@ impl CatalogState {
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
-            CatalogItem::StorageCollection(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "storage collection", None, diff)
-            }
+            CatalogItem::StorageCollection(_) => self.pack_source_update(
+                id,
+                oid,
+                schema_id,
+                name,
+                "storage collection",
+                None,
+                None,
+                diff,
+            ),
         };
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
@@ -281,6 +293,7 @@ impl CatalogState {
         name: &str,
         source_desc_name: &str,
         connection_id: Option<GlobalId>,
+        size: Option<&str>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -292,6 +305,7 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(source_desc_name),
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
+                Datum::from(size),
             ]),
             diff,
         }]
@@ -360,8 +374,8 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(name),
-                Datum::String(&public_key_primary),
-                Datum::String(&public_key_secondary),
+                Datum::String(public_key_primary),
+                Datum::String(public_key_secondary),
             ]),
             diff,
         }]
@@ -375,7 +389,7 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let progress_topic_holder;
         let progress_topic = match kafka.progress_topic {
-            Some(ref topic) => Datum::String(&topic),
+            Some(ref topic) => Datum::String(topic),
             None => {
                 progress_topic_holder = self.config.default_kafka_sink_progress_topic(id);
                 Datum::String(&progress_topic_holder)
@@ -388,7 +402,7 @@ impl CatalogState {
                     lower_bound: 1,
                     length: kafka.brokers.len(),
                 }],
-                kafka.brokers.iter().map(|id| Datum::String(&id)),
+                kafka.brokers.iter().map(|id| Datum::String(id)),
             )
             .unwrap();
         let brokers = row.unpack_first();
@@ -663,7 +677,7 @@ impl CatalogState {
                         lower_bound: 1,
                         length: func_impl_details.arg_typs.len(),
                     }],
-                    arg_ids.iter().map(|id| Datum::String(&id)),
+                    arg_ids.iter().map(|id| Datum::String(id)),
                 )
                 .unwrap();
             let arg_ids = row.unpack_first();

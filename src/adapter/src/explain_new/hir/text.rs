@@ -51,7 +51,7 @@ impl<'a> Displayable<'a, HirRelationExpr> {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
     ) -> fmt::Result {
-        if let Some(Except { all, lhs, rhs }) = Hir::un_except(&self.0) {
+        if let Some(Except { all, lhs, rhs }) = Hir::un_except(self.0) {
             if all {
                 writeln!(f, "{}ExceptAll", ctx.indent)?;
             } else {
@@ -105,21 +105,15 @@ impl<'a> Displayable<'a, HirRelationExpr> {
                     head = body.as_ref();
                 }
 
-                // The body comes first in the text output format in order to
-                // align with the format convention the dataflow is rendered
-                // top to bottom
-                writeln!(f, "{}Let", ctx.indent)?;
+                writeln!(f, "{}Return", ctx.indent)?;
+                ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                writeln!(f, "{}Where", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    Displayable::from(head).fmt_text(f, ctx)?;
-                    writeln!(f, "{}Where", ctx.indent)?;
-                    ctx.indented(|ctx| {
-                        for (id, value) in bindings.iter().rev() {
-                            // TODO: print the name and not the id
-                            writeln!(f, "{}{} =", ctx.indent, *id)?;
-                            ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
-                        }
-                        Ok(())
-                    })?;
+                    for (id, value) in bindings.iter().rev() {
+                        // TODO: print the name and not the id
+                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                    }
                     Ok(())
                 })?;
             }

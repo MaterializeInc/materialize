@@ -100,11 +100,11 @@ use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, AlterSourceItem, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, ComputeInstanceIntrospectionConfig,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, ComputeInstanceReplicaConfig,
+    ComputeInstanceReplicaIntrospectionConfig, CreateComputeInstancePlan,
+    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
     DropRolesPlan, DropSchemaPlan, Index, MaterializedView, Params, Plan, RotateKeysPlan, Secret,
     Sink, Source, StorageHostConfig, Table, Type, View,
@@ -210,7 +210,7 @@ pub fn plan_create_table(
 
     for (i, c) in columns.into_iter().enumerate() {
         let aug_data_type = &c.data_type;
-        let ty = query::scalar_type_from_sql(scx, &aug_data_type)?;
+        let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
         for option in &c.options {
@@ -288,7 +288,7 @@ pub fn plan_create_table(
     };
     let desc = RelationDesc::new(typ, names);
 
-    let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
     let table = Table {
         create_sql,
         desc,
@@ -342,7 +342,7 @@ pub fn plan_create_source(
     let legacy_with_options_original = legacy_with_options;
     let mut legacy_with_options = normalize::options(legacy_with_options_original)?;
 
-    const SAFE_WITH_OPTIONS: &'static [CreateSourceOptionName] = &[CreateSourceOptionName::Size];
+    const SAFE_WITH_OPTIONS: &[CreateSourceOptionName] = &[CreateSourceOptionName::Size];
 
     if !legacy_with_options.is_empty()
         || with_options
@@ -376,7 +376,7 @@ pub fn plan_create_source(
                 },
             key: _,
         }) => {
-            let item = scx.get_item_by_resolved_name(&connection_name)?;
+            let item = scx.get_item_by_resolved_name(connection_name)?;
             let kafka_connection = match item.connection()? {
                 Connection::Kafka(connection) => connection.clone(),
                 _ => sql_bail!("{} is not a kafka connection", item.name()),
@@ -393,7 +393,7 @@ pub fn plan_create_source(
             }
 
             kafka_util::validate_options_for_context(
-                &options,
+                options,
                 kafka_util::KafkaOptionCheckContext::Source,
             )?;
 
@@ -512,7 +512,7 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| sql_err!("Provided ARN does not include an AWS region"))?;
 
-            let item = scx.get_item_by_resolved_name(&aws_connection)?;
+            let item = scx.get_item_by_resolved_name(aws_connection)?;
             let aws_connection = match item.connection()? {
                 Connection::Aws(connection) => connection.clone(),
                 _ => sql_bail!("{} is not an AWS connection", item.name()),
@@ -523,7 +523,7 @@ pub fn plan_create_source(
                 Some(region.into()),
                 aws_connection,
             )?;
-            let encoding = get_encoding(scx, format, &envelope, &connection)?;
+            let encoding = get_encoding(scx, format, &envelope, connection)?;
             let connection =
                 SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
             (connection, Some(item.id()), encoding)
@@ -536,7 +536,7 @@ pub fn plan_create_source(
         } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
 
-            let item = scx.get_item_by_resolved_name(&aws_connection)?;
+            let item = scx.get_item_by_resolved_name(aws_connection)?;
             let aws_connection = match item.connection()? {
                 Connection::Aws(connection) => connection.clone(),
                 _ => sql_bail!("{} is not an AWS connection", item.name()),
@@ -559,7 +559,7 @@ pub fn plan_create_source(
                 };
                 converted_sources.push(dtks);
             }
-            let encoding = get_encoding(scx, format, &envelope, &connection)?;
+            let encoding = get_encoding(scx, format, &envelope, connection)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 sql_bail!("S3 sources do not support key decoding");
             }
@@ -587,7 +587,7 @@ pub fn plan_create_source(
             connection,
             options,
         } => {
-            let item = scx.get_item_by_resolved_name(&connection)?;
+            let item = scx.get_item_by_resolved_name(connection)?;
             let connection = match item.connection()? {
                 Connection::Postgres(connection) => connection.clone(),
                 _ => sql_bail!("{} is not a postgres connection", item.name()),
@@ -704,7 +704,7 @@ pub fn plan_create_source(
         desc = desc.without_keys();
     }
 
-    plan_utils::maybe_rename_columns(format!("source {}", name), &mut desc, &col_names)?;
+    plan_utils::maybe_rename_columns(format!("source {}", name), &mut desc, col_names)?;
 
     let names: Vec<_> = desc.iter_names().cloned().collect();
     if let Some(dup) = names.iter().duplicates().next() {
@@ -762,7 +762,7 @@ pub fn plan_create_source(
 
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
-    let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
     // Allow users to specify a timeline. If they do not, determine a default
     // timeline for the source.
@@ -887,7 +887,7 @@ fn get_encoding_inner(
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
                 AvroSchema::InlineSchema {
-                    schema: mz_sql_parser::ast::Schema::Inline(schema),
+                    schema: mz_sql_parser::ast::Schema { schema },
                     with_options,
                 } => {
                     let AvroSchemaOptionExtracted {
@@ -901,12 +901,6 @@ fn get_encoding_inner(
                         csr_connection: None,
                         confluent_wire_format,
                     }
-                }
-                AvroSchema::InlineSchema {
-                    schema: mz_sql_parser::ast::Schema::File(_),
-                    ..
-                } => {
-                    unreachable!("File schema should already have been inlined")
                 }
                 AvroSchema::Csr {
                     csr_connection:
@@ -972,7 +966,7 @@ fn get_encoding_inner(
                     },
             } => {
                 if let Some(CsrSeedProtobuf { key, value }) = seed {
-                    let item = scx.get_item_by_resolved_name(&connection)?;
+                    let item = scx.get_item_by_resolved_name(connection)?;
                     let _ = match item.connection()? {
                         Connection::Csr(connection) => connection,
                         _ => {
@@ -1006,14 +1000,9 @@ fn get_encoding_inner(
             }
             ProtobufSchema::InlineSchema {
                 message_name,
-                schema,
+                schema: mz_sql_parser::ast::Schema { schema },
             } => {
-                let descriptors = match schema {
-                    mz_sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
-                    mz_sql_parser::ast::Schema::File(_) => {
-                        unreachable!("File schema should already have been inlined")
-                    }
-                };
+                let descriptors = strconv::parse_bytes(schema)?;
 
                 DataEncodingInner::Protobuf(ProtobufEncoding {
                     descriptors,
@@ -1023,7 +1012,7 @@ fn get_encoding_inner(
             }
         },
         Format::Regex(regex) => {
-            let regex = Regex::new(&regex).map_err(|e| sql_err!("parsing regex: {e}"))?;
+            let regex = Regex::new(regex).map_err(|e| sql_err!("parsing regex: {e}"))?;
             DataEncodingInner::Regex(RegexEncoding {
                 regex: mz_repr::adt::regex::Regex(regex),
             })
@@ -1146,7 +1135,7 @@ pub fn plan_view(
         finishing,
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
 
-    expr.bind_parameters(&params)?;
+    expr.bind_parameters(params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     expr.finish(finishing);
     let relation_expr = expr.optimize_and_lower(&scx.into())?;
@@ -1157,7 +1146,7 @@ pub fn plan_view(
         scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?
     };
 
-    plan_utils::maybe_rename_columns(format!("view {}", name), &mut desc, &columns)?;
+    plan_utils::maybe_rename_columns(format!("view {}", name), &mut desc, columns)?;
     let names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     if let Some(dup) = names.iter().duplicates().next() {
@@ -1428,7 +1417,7 @@ pub fn plan_create_views(
                 if_not_exists: if_exists == IfExistsBehavior::Skip,
             }))
         }
-        connection @ _ => sql_bail!("cannot generate views from {} sources", connection.name()),
+        connection => sql_bail!("cannot generate views from {} sources", connection.name()),
     }
 }
 
@@ -1886,7 +1875,7 @@ pub fn plan_create_index(
         with_options,
         if_not_exists,
     } = &mut stmt;
-    let on = scx.get_item_by_resolved_name(&on_name)?;
+    let on = scx.get_item_by_resolved_name(on_name)?;
 
     if CatalogItemType::View != on.item_type()
         && CatalogItemType::MaterializedView != on.item_type()
@@ -2024,7 +2013,7 @@ pub fn plan_create_type(
                         full_name
                     );
                 }
-                scx.catalog.get_item(&id)
+                scx.catalog.get_item(id)
             }
             d => sql_bail!(
                 "CREATE TYPE ... AS {}option {} can only use named data types, but \
@@ -2058,7 +2047,7 @@ pub fn plan_create_type(
     let mut record_fields = vec![];
     match &as_type {
         CreateTypeAs::List { with_options } | CreateTypeAs::Map { with_options } => {
-            let mut with_options = normalize::option_objects(&with_options);
+            let mut with_options = normalize::option_objects(with_options);
             let option_keys = match as_type {
                 CreateTypeAs::List { .. } => vec!["element_type"],
                 CreateTypeAs::Map { .. } => vec!["key_type", "value_type"],
@@ -2193,30 +2182,9 @@ pub fn plan_create_cluster(
     CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let mut replicas_definitions = None;
-    let mut introspection_debugging = None;
-    let mut introspection_interval: Option<Option<Interval>> = None;
 
     for option in options {
         match option {
-            ClusterOption::IntrospectionDebugging(enabled) => {
-                if introspection_debugging.is_some() {
-                    sql_bail!("INTROSPECTION DEBUGGING specified more than once");
-                }
-                introspection_debugging = Some(
-                    bool::try_from_value(enabled)
-                        .map_err(|e| sql_err!("invalid INTROSPECTION DEBUGGING: {}", e))?,
-                );
-            }
-            ClusterOption::IntrospectionInterval(interval) => {
-                if introspection_interval.is_some() {
-                    sql_bail!("INTROSPECTION INTERVAL specified more than once");
-                }
-                introspection_interval = Some(
-                    OptionalInterval::try_from_value(interval)
-                        .map_err(|e| sql_err!("invalid INTROSPECTION INTERVAL: {}", e))?
-                        .0,
-                );
-            }
             ClusterOption::Replicas(replicas) => {
                 if replicas_definitions.is_some() {
                     sql_bail!("REPLICAS specified more than once");
@@ -2236,22 +2204,8 @@ pub fn plan_create_cluster(
         None => bail_unsupported!("CLUSTER without REPLICAS option"),
     };
 
-    let introspection_interval =
-        introspection_interval.unwrap_or(Some(DEFAULT_INTROSPECTION_INTERVAL));
-
-    let config = match (introspection_debugging, introspection_interval) {
-        (None | Some(false), None) => None,
-        (debugging, Some(interval)) => Some(ComputeInstanceIntrospectionConfig {
-            debugging: debugging.unwrap_or(false),
-            interval: interval.duration()?,
-        }),
-        (Some(true), None) => {
-            sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
-        }
-    };
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
         name: normalize::ident(name),
-        config,
         replicas,
     }))
 }
@@ -2268,7 +2222,9 @@ generate_extracted_config!(
     (Size, String),
     (Remote, Vec<String>),
     (Compute, Vec<String>),
-    (Workers, u16)
+    (Workers, u16),
+    (IntrospectionInterval, OptionalInterval),
+    (IntrospectionDebugging, bool)
 );
 
 fn plan_replica_config(
@@ -2281,6 +2237,8 @@ fn plan_replica_config(
         remote,
         workers,
         compute,
+        introspection_interval,
+        introspection_debugging,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
@@ -2293,6 +2251,20 @@ fn plan_replica_config(
     if workers.is_some() {
         scx.require_unsafe_mode("WORKERS cluster replica option")?;
     }
+
+    let introspection_interval = introspection_interval
+        .map(|OptionalInterval(i)| i)
+        .unwrap_or(Some(DEFAULT_INTROSPECTION_INTERVAL));
+    let introspection = match introspection_interval {
+        Some(interval) => Some(ComputeInstanceReplicaIntrospectionConfig {
+            interval: interval.duration()?,
+            debugging: introspection_debugging.unwrap_or(false),
+        }),
+        None if introspection_debugging == Some(true) => {
+            sql_bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION INTERVAL")
+        }
+        None => None,
+    };
 
     match (size, remote) {
         (None, Some(remote)) => {
@@ -2325,6 +2297,7 @@ fn plan_replica_config(
                 addrs: remote_addrs,
                 compute_addrs,
                 workers,
+                introspection,
             })
         }
         (Some(size), None) => {
@@ -2338,6 +2311,7 @@ fn plan_replica_config(
             Ok(ComputeInstanceReplicaConfig::Managed {
                 size,
                 availability_zone,
+                introspection,
             })
         }
         (_, _) => {
@@ -2391,7 +2365,7 @@ pub fn plan_create_secret(
     } = &stmt;
 
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?;
-    let create_sql = normalize::create_statement(&scx, Statement::CreateSecret(stmt.clone()))?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateSecret(stmt.clone()))?;
     let secret_as = query::plan_secret_as(scx, value.clone())?;
 
     let secret = Secret {
@@ -2697,7 +2671,7 @@ pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let create_sql = normalize::create_statement(&scx, Statement::CreateConnection(stmt.clone()))?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateConnection(stmt.clone()))?;
     let CreateConnectionStatement {
         name,
         connection,
@@ -3271,7 +3245,6 @@ pub fn plan_alter_source(
     scx: &StatementContext,
     stmt: AlterSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_unsafe_mode("ALTER SOURCE")?;
     let AlterSourceStatement {
         source_name,
         if_exists,

@@ -21,7 +21,7 @@ message Message {
 $ file-append path=evolution.proto
 \${schema}
 
-$ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb
+$ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb set-var=evolution-schema
 
 $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value schema-type=protobuf
 \${schema}
@@ -62,7 +62,7 @@ $ file-delete path=evolution.proto
 $ file-append path=evolution.proto
 \${schema}
 
-$ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb
+$ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb set-var=evolution-schema
 
 $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value schema-type=protobuf
 \${schema}
@@ -90,7 +90,7 @@ $ file-delete path=evolution.proto
 $ file-append path=evolution.proto
 \${schema}
 
-$ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb
+$ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb set-var=evolution-schema
 
 $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value schema-type=protobuf
 \${schema}
@@ -123,7 +123,7 @@ $ file-delete path=evolution.proto
 $ file-append path=evolution.proto
 \${schema}
 
-$ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb
+$ protobuf-compile-descriptors inputs=evolution.proto output=evolution.pb set-var=evolution-schema
 
 $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value schema-type=protobuf
 \${schema}

@@ -22,33 +22,20 @@
 //! (commonly referred to as Data Definition Language, or DDL)
 
 use std::fmt;
-use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Schema {
-    File(PathBuf),
-    Inline(String),
+pub struct Schema {
+    pub schema: String,
 }
 
 impl AstDisplay for Schema {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::File(path) => {
-                f.write_str("SCHEMA FILE '");
-                f.write_node(&display::escape_single_quote_string(
-                    &path.display().to_string(),
-                ));
-                f.write_str("'");
-            }
-            Self::Inline(inner) => {
-                f.write_str("SCHEMA '");
-                f.write_node(&display::escape_single_quote_string(inner));
-                f.write_str("'");
-            }
-        }
+        f.write_str("SCHEMA '");
+        f.write_node(&display::escape_single_quote_string(&self.schema));
+        f.write_str("'");
     }
 }
 impl_display!(Schema);
@@ -374,7 +361,7 @@ impl AstDisplay for CsvColumns {
                 f.write_str("HEADER");
                 if !names.is_empty() {
                     f.write_str(" (");
-                    f.write_node(&display::comma_separated(&names));
+                    f.write_node(&display::comma_separated(names));
                     f.write_str(")");
                 }
             }
@@ -794,23 +781,23 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
         match self {
             Self::Kafka { with_options } => {
                 f.write_str("KAFKA ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Csr { with_options } => {
                 f.write_str("CONFLUENT SCHEMA REGISTRY ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Postgres { with_options } => {
                 f.write_str("POSTGRES ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Aws { with_options } => {
                 f.write_str("AWS ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
             Self::Ssh { with_options } => {
                 f.write_str("SSH TUNNEL ");
-                f.write_node(&display::comma_separated(&with_options));
+                f.write_node(&display::comma_separated(with_options));
             }
         }
     }
@@ -821,7 +808,6 @@ impl_display_t!(CreateConnection);
 pub enum KafkaConfigOptionName {
     Acks,
     ClientId,
-    EnableAutoCommit,
     EnableIdempotence,
     FetchMessageMaxBytes,
     GroupIdPrefix,
@@ -843,7 +829,6 @@ impl AstDisplay for KafkaConfigOptionName {
         f.write_str(match self {
             KafkaConfigOptionName::Acks => "ACKS",
             KafkaConfigOptionName::ClientId => "CLIENT ID",
-            KafkaConfigOptionName::EnableAutoCommit => "ENABLE AUTO COMMIT",
             KafkaConfigOptionName::EnableIdempotence => "ENABLE IDEMPOTENCE",
             KafkaConfigOptionName::FetchMessageMaxBytes => "FETCH MESSAGE MAX BYTES",
             KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
@@ -980,7 +965,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 f.write_node(connection);
                 if let Some(key) = key.as_ref() {
                     f.write_str(" KEY (");
-                    f.write_node(&display::comma_separated(&key));
+                    f.write_node(&display::comma_separated(key));
                     f.write_str(")");
                 }
             }
@@ -1026,8 +1011,9 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 f.write_str("LOAD GENERATOR ");
                 f.write_node(generator);
                 if !options.is_empty() {
-                    f.write_str(" ");
-                    f.write_node(&display::comma_separated(&options));
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
                 }
             }
         }

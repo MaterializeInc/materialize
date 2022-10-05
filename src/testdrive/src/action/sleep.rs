@@ -13,46 +13,28 @@ use std::time::Duration;
 use anyhow::Context;
 use rand::Rng;
 
-use crate::action::{ControlFlow, State, SyncAction};
+use crate::action::ControlFlow;
 use crate::parser::BuiltinCommand;
 
-pub struct SleepAction {
-    duration: Duration,
-    random: bool,
+pub fn run_sleep(cmd: BuiltinCommand) -> Result<ControlFlow, anyhow::Error> {
+    run_sleep_inner(cmd, false)
 }
 
-pub fn build_random_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, anyhow::Error> {
+pub fn run_random_sleep(cmd: BuiltinCommand) -> Result<ControlFlow, anyhow::Error> {
+    run_sleep_inner(cmd, true)
+}
+
+fn run_sleep_inner(mut cmd: BuiltinCommand, random: bool) -> Result<ControlFlow, anyhow::Error> {
     let arg = cmd.args.string("duration")?;
+    cmd.args.done()?;
     let duration = mz_repr::util::parse_duration(&arg).context("parsing duration")?;
-    Ok(SleepAction {
-        duration,
-        random: true,
-    })
-}
-
-pub fn build_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, anyhow::Error> {
-    let arg = cmd.args.string("duration")?;
-    let duration = mz_repr::util::parse_duration(&arg).context("parsing duration")?;
-    Ok(SleepAction {
-        duration,
-        random: false,
-    })
-}
-
-impl SyncAction for SleepAction {
-    fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    fn redo(&self, _: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let sleep = if self.random {
-            let mut rng = rand::thread_rng();
-            rng.gen_range(Duration::from_secs(0)..self.duration)
-        } else {
-            self.duration
-        };
-        println!("Sleeping for {:?}", sleep);
-        thread::sleep(sleep);
-        Ok(ControlFlow::Continue)
-    }
+    let sleep = if random {
+        let mut rng = rand::thread_rng();
+        rng.gen_range(Duration::from_secs(0)..duration)
+    } else {
+        duration
+    };
+    println!("Sleeping for {:?}", sleep);
+    thread::sleep(sleep);
+    Ok(ControlFlow::Continue)
 }

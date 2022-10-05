@@ -96,7 +96,7 @@ pub async fn query_materialized_view_until(
     let query = format!("SELECT * FROM {view_name};", view_name = view_name);
     info!("querying view=> {}", query);
 
-    let row = mz_client::try_query_one(&client, &*query, Duration::from_secs(1)).await?;
+    let row = mz_client::try_query_one(client, &*query, Duration::from_secs(1)).await?;
     let count: i64 = row.get("count");
     if count as u64 == expected_total_records {
         info!(

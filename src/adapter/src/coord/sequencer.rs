@@ -23,7 +23,7 @@ use mz_compute_client::command::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, ReplicaId,
 };
 use mz_compute_client::controller::{
-    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ConcreteComputeInstanceReplicaLogging,
+    ComputeInstanceId, ComputeInstanceReplicaConfig, ComputeInstanceReplicaLogging,
 };
 use mz_compute_client::explain::{
     DataflowGraphFormatter, Explanation, JsonViewFormatter, TimestampExplanation, TimestampSource,
@@ -46,16 +46,15 @@ use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan,
-    ComputeInstanceReplicaConfig, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld,
-    FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MaterializedView, MutationKind,
-    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SubscribeFrom, SubscribePlan, View,
+    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan,
+    DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    ExecutePlan, ExplainPlan, ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr,
+    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
+    PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
 };
 use mz_stash::Append;
 use mz_storage::controller::{CollectionDescription, ReadPolicy, StorageError};
@@ -82,7 +81,7 @@ use crate::session::{
 };
 use crate::subscribe::PendingSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
-use crate::{guard_write_critical_section, session, sink_connection, PeekResponseUnary};
+use crate::{guard_write_critical_section, session, PeekResponseUnary};
 
 impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -650,26 +649,23 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn sequence_create_compute_instance(
         &mut self,
         session: &Session,
-        CreateComputeInstancePlan {
-            name,
-            config: compute_instance_config,
-            replicas,
-        }: CreateComputeInstancePlan,
+        CreateComputeInstancePlan { name, replicas }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_compute_instance");
-        let arranged_introspection_sources = if compute_instance_config.is_some() {
-            self.catalog.allocate_arranged_introspection_sources().await
-        } else {
-            Vec::new()
-        };
+
+        // The catalog items for the arranged introspection sources are shared between all replicas
+        // of a compute instance, so we create them unconditionally during instance creation.
+        // Whether a replica actually maintains introspection arrangements is determined by the
+        // per-replica introspection configuration.
+        let arranged_introspection_sources =
+            self.catalog.allocate_arranged_introspection_sources().await;
         let arranged_introspection_source_ids: Vec<_> = arranged_introspection_sources
             .iter()
             .map(|(_, id)| *id)
             .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
-            config: compute_instance_config.clone(),
-            arranged_introspection_sources,
+            arranged_introspection_sources: arranged_introspection_sources.clone(),
         }];
 
         let azs = self.catalog.state().availability_zones();
@@ -695,19 +691,24 @@ impl<S: Append + 'static> Coordinator<S> {
         for (replica_name, replica_config) in replicas.into_iter() {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
-            let location = match replica_config {
-                ComputeInstanceReplicaConfig::Remote {
+            let (location, introspection) = match replica_config {
+                mz_sql::plan::ComputeInstanceReplicaConfig::Remote {
                     addrs,
                     compute_addrs,
                     workers,
-                } => SerializedComputeInstanceReplicaLocation::Remote {
-                    addrs,
-                    compute_addrs,
-                    workers,
-                },
-                ComputeInstanceReplicaConfig::Managed {
+                    introspection,
+                } => {
+                    let location = SerializedComputeInstanceReplicaLocation::Remote {
+                        addrs,
+                        compute_addrs,
+                        workers,
+                    };
+                    (location, introspection)
+                }
+                mz_sql::plan::ComputeInstanceReplicaConfig::Managed {
                     size,
                     availability_zone,
+                    introspection,
                 } => {
                     let (availability_zone, user_specified) =
                         availability_zone.map(|az| (az, true)).unwrap_or_else(|| {
@@ -715,30 +716,41 @@ impl<S: Append + 'static> Coordinator<S> {
                             *n_replicas_per_az.get_mut(&az).unwrap() += 1;
                             (az, false)
                         });
-                    SerializedComputeInstanceReplicaLocation::Managed {
+                    let location = SerializedComputeInstanceReplicaLocation::Managed {
                         size,
                         availability_zone,
                         az_user_specified: user_specified,
-                    }
+                    };
+                    (location, introspection)
                 }
             };
-            // These are the persisted, per replica persisted logs
-            let persisted_logs = if compute_instance_config.is_some() {
-                self.catalog.allocate_persisted_introspection_items().await
+
+            let logging = if let Some(config) = introspection {
+                let sources = self
+                    .catalog
+                    .allocate_persisted_introspection_sources()
+                    .await;
+                let views = self.catalog.allocate_persisted_introspection_views().await;
+                ComputeInstanceReplicaLogging {
+                    log_logging: config.debugging,
+                    interval: Some(config.interval),
+                    sources,
+                    views,
+                }
             } else {
-                ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
+                ComputeInstanceReplicaLogging::default()
             };
 
             persisted_introspection_sources.extend(
-                persisted_logs
-                    .get_sources()
+                logging
+                    .sources
                     .iter()
                     .map(|(variant, id)| (*id, variant.desc().into())),
             );
 
-            let config = ConcreteComputeInstanceReplicaConfig {
+            let config = ComputeInstanceReplicaConfig {
                 location: self.catalog.concretize_replica_location(location)?,
-                persisted_logs,
+                logging,
             };
 
             ops.push(catalog::Op::CreateComputeInstanceReplica {
@@ -766,9 +778,13 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
+        let arranged_logs = arranged_introspection_sources
+            .into_iter()
+            .map(|(log, id)| (log.variant.clone(), id))
+            .collect();
         self.controller.compute.create_instance(
             instance.id,
-            instance.logging.clone(),
+            arranged_logs,
             self.catalog.system_config().max_result_size(),
         )?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
@@ -808,35 +824,25 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
         }: CreateComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
-
-        let persisted_logs = if instance.logging.is_some() {
-            self.catalog.allocate_persisted_introspection_items().await
-        } else {
-            ConcreteComputeInstanceReplicaLogging::ConcreteViews(Vec::new(), Vec::new())
-        };
-
-        let persisted_source_ids = persisted_logs.get_source_ids().collect();
-        let persisted_sources = persisted_logs
-            .get_sources()
-            .iter()
-            .map(|(variant, id)| (*id, variant.desc().into()))
-            .collect();
-
         // Choose default AZ if necessary
-        let location = match config {
-            ComputeInstanceReplicaConfig::Remote {
+        let (location, introspection) = match config {
+            mz_sql::plan::ComputeInstanceReplicaConfig::Remote {
                 addrs,
                 compute_addrs,
                 workers,
-            } => SerializedComputeInstanceReplicaLocation::Remote {
-                addrs,
-                compute_addrs,
-                workers,
-            },
-            ComputeInstanceReplicaConfig::Managed {
+                introspection,
+            } => {
+                let location = SerializedComputeInstanceReplicaLocation::Remote {
+                    addrs,
+                    compute_addrs,
+                    workers,
+                };
+                (location, introspection)
+            }
+            mz_sql::plan::ComputeInstanceReplicaConfig::Managed {
                 size,
                 availability_zone,
+                introspection,
             } => {
                 let (availability_zone, user_specified) = match availability_zone {
                     Some(az) => {
@@ -869,17 +875,41 @@ impl<S: Append + 'static> Coordinator<S> {
                         (az, false)
                     }
                 };
-                SerializedComputeInstanceReplicaLocation::Managed {
+                let location = SerializedComputeInstanceReplicaLocation::Managed {
                     size,
                     availability_zone,
                     az_user_specified: user_specified,
-                }
+                };
+                (location, introspection)
             }
         };
 
-        let config = ConcreteComputeInstanceReplicaConfig {
+        let logging = if let Some(config) = introspection {
+            let sources = self
+                .catalog
+                .allocate_persisted_introspection_sources()
+                .await;
+            let views = self.catalog.allocate_persisted_introspection_views().await;
+            ComputeInstanceReplicaLogging {
+                log_logging: config.debugging,
+                interval: Some(config.interval),
+                sources,
+                views,
+            }
+        } else {
+            ComputeInstanceReplicaLogging::default()
+        };
+
+        let log_source_ids: Vec<_> = logging.source_ids().collect();
+        let log_source_collections = logging
+            .sources
+            .iter()
+            .map(|(variant, id)| (*id, variant.desc().into()))
+            .collect();
+
+        let config = ComputeInstanceReplicaConfig {
             location: self.catalog.concretize_replica_location(location)?,
-            persisted_logs,
+            logging,
         };
 
         let op = catalog::Op::CreateComputeInstanceReplica {
@@ -897,7 +927,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.controller
             .storage
-            .create_collections(persisted_sources)
+            .create_collections(log_source_collections)
             .await
             .unwrap();
 
@@ -905,9 +935,9 @@ impl<S: Append + 'static> Coordinator<S> {
         let instance_id = instance.id;
         let replica_id = instance.replica_id_by_name[&name];
 
-        if instance.logging.is_some() {
+        if !log_source_ids.is_empty() {
             self.initialize_storage_read_policies(
-                persisted_source_ids,
+                log_source_ids,
                 DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
             )
             .await;
@@ -1157,8 +1187,12 @@ impl<S: Append + 'static> Coordinator<S> {
                         tx,
                         id,
                         oid,
-                        result: sink_connection::build(connection_builder, connection_context)
-                            .await,
+                        result: mz_storage::sink::build_sink_connection(
+                            connection_builder,
+                            connection_context,
+                        )
+                        .await
+                        .map_err(Into::into),
                     }));
                 if let Err(e) = result {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -1518,9 +1552,9 @@ impl<S: Append + 'static> Coordinator<S> {
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
             for replica in instance.replicas_by_id.values() {
-                let persisted_logs = replica.config.persisted_logs.clone();
-                let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-                let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
+                let logging = &replica.config.logging;
+                let log_and_view_ids = logging.source_and_view_ids();
+                let view_ids: HashSet<_> = logging.view_ids().collect();
                 for log_id in log_and_view_ids {
                     // We consider the dependencies of both views and logs, but remove the
                     // views itself. The views are included as they depend on the source,
@@ -1576,16 +1610,15 @@ impl<S: Append + 'static> Coordinator<S> {
             // Determine from the replica which additional items to drop. This is the set
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeInstanceReplica.
-            let persisted_logs = instance
+            let logging = &instance
                 .replicas_by_id
                 .get(&replica_id)
                 .unwrap()
                 .config
-                .persisted_logs
-                .clone();
+                .logging;
 
-            let log_and_view_ids = persisted_logs.get_source_and_view_ids();
-            let view_ids: HashSet<_> = persisted_logs.get_view_ids().collect();
+            let log_and_view_ids = logging.source_and_view_ids();
+            let view_ids: HashSet<_> = logging.view_ids().collect();
 
             for log_id in log_and_view_ids {
                 // We consider the dependencies of both views and logs, but remove the
@@ -1626,7 +1659,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-        replica_config: ConcreteComputeInstanceReplicaConfig,
+        replica_config: ComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
             let retraction = self
@@ -1810,7 +1843,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 if let TransactionOps::Writes(writes) = &mut ops {
                     for WriteOp { id, .. } in &mut writes.iter() {
                         // Re-verify this id exists.
-                        let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
+                        let _ = self.catalog.try_get_entry(id).ok_or_else(|| {
                             AdapterError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
                         })?;
                     }
@@ -1854,13 +1887,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 return Ok(());
             }
 
-            // If logging is not initialized for the cluster, no indexes are set
-            // up for log sources. This check ensures that we don't try to read
-            // from the raw sources, which is not supported.
-            if compute_instance.logging.is_none() {
-                return Err(AdapterError::IntrospectionDisabled { log_names });
-            }
-
             // Reading from log sources on replicated compute instances is only
             // allowed if a target replica is selected. Otherwise, we have no
             // way of knowing which replica we read the introspection data from.
@@ -1872,6 +1898,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     return Err(AdapterError::UntargetedLogRead { log_names });
                 }
             }
+
+            // Ensure that logging is initialized for the target replica, lest
+            // we try to peek a non-existing arrangement.
+            let replica_id = target_replica.unwrap();
+            let replica = &compute_instance.replicas_by_id[&replica_id];
+            if !replica.config.logging.enabled() {
+                return Err(AdapterError::IntrospectionDisabled { log_names });
+            }
+
             Ok(())
         }
 
@@ -2205,6 +2240,7 @@ impl<S: Append + 'static> Coordinator<S> {
         });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
+        self.metrics.active_subscribes.inc();
         self.pending_subscribes
             .insert(*sink_id, PendingSubscribe::new(tx, emit_progress, arity));
         self.ship_dataflow(dataflow, compute_instance).await;
@@ -2278,7 +2314,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = tracing::span!(Level::INFO, "local").in_scope(
                     || -> Result<_, AdapterError> {
                         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-                        let mut dataflow = DataflowDesc::new(format!("explanation"));
+                        let mut dataflow = DataflowDesc::new("explanation".to_string());
                         self.dataflow_builder(compute_instance)
                             .import_view_into_dataflow(
                                 // TODO: If explaining a view, pipe the actual id of the view.
@@ -2448,7 +2484,7 @@ impl<S: Append + 'static> Coordinator<S> {
              -> Result<DataflowDescription<OptimizedMirRelationExpr>, AdapterError> {
                 let start = Instant::now();
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"));
+                let mut dataflow = DataflowDesc::new("explanation".to_string());
                 coord
                     .dataflow_builder(compute_instance)
                     .import_view_into_dataflow(&view_id, &optimized_plan, &mut dataflow)?;
@@ -2559,7 +2595,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // so explaining a plan involving tables has side effects. Removing those side
                 // effects would be good.
                 let timestamp = self.determine_timestamp(
-                    &session,
+                    session,
                     &id_bundle,
                     &QueryWhen::Immediately,
                     compute_instance,
@@ -2863,7 +2899,7 @@ impl<S: Append + 'static> Coordinator<S> {
         rows: Vec<Row>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog.for_session(session);
-        let values = mz_sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
+        let values = mz_sql::plan::plan_copy_from(session.pcx(), &catalog, id, columns, rows)?;
         let values = self.view_optimizer.optimize(values.lower())?;
         // Copied rows must always be constants.
         self.sequence_insert_constant(session, id, values.into_inner())
@@ -3229,12 +3265,12 @@ impl<S: Append + 'static> Coordinator<S> {
     fn extract_secret(
         &mut self,
         session: &Session,
-        mut secret_as: &mut MirScalarExpr,
+        secret_as: &mut MirScalarExpr,
     ) -> Result<Vec<u8>, AdapterError> {
         let temp_storage = RowArena::new();
         prep_scalar_expr(
             self.catalog.state(),
-            &mut secret_as,
+            secret_as,
             ExprPrepStyle::OneShot {
                 logical_time: None,
                 session,
@@ -3265,7 +3301,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // If you want to remove this line, verify that no caller of
         // `SecretsReader::read_string` will panic if the secret contains
         // invalid UTF-8.
-        if std::str::from_utf8(&payload).is_err() {
+        if std::str::from_utf8(payload).is_err() {
             // Intentionally produce a vague error message (rather than
             // including the invalid bytes, for example), to avoid including
             // secret material in the error message, which might end up in a log
@@ -3273,7 +3309,7 @@ impl<S: Append + 'static> Coordinator<S> {
             coord_bail!("secret value must be valid UTF-8");
         }
 
-        return Ok(Vec::from(payload));
+        Ok(Vec::from(payload))
     }
 
     async fn sequence_alter_system_set(

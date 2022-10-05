@@ -1625,7 +1625,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET or [OR REPLACE] [TEMPORARY] VIEW or VIEWS after CREATE",
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW or VIEWS, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
                     self.peek_token(),
                 )
             }
@@ -1704,7 +1704,10 @@ impl<'a> Parser<'a> {
             AvroSchema::Csr { csr_connection }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
-            let schema = self.parse_schema()?;
+            self.expect_keyword(SCHEMA)?;
+            let schema = Schema {
+                schema: self.parse_literal_string()?,
+            };
             let with_options = if self.consume_token(&Token::LParen) {
                 let with_options = self.parse_comma_separated(Parser::parse_avro_schema_option)?;
                 self.expect_token(&Token::RParen)?;
@@ -1742,17 +1745,20 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(MESSAGE) {
             let message_name = self.parse_literal_string()?;
             self.expect_keyword(USING)?;
-            let schema = self.parse_schema()?;
+            self.expect_keyword(SCHEMA)?;
+            let schema = Schema {
+                schema: self.parse_literal_string()?,
+            };
             Ok(ProtobufSchema::InlineSchema {
                 message_name,
                 schema,
             })
         } else {
-            return self.expected(
+            self.expected(
                 self.peek_pos(),
                 "CONFLUENT SCHEMA REGISTRY or MESSAGE",
                 self.peek_token(),
-            );
+            )
         }
     }
 
@@ -1881,16 +1887,6 @@ impl<'a> Parser<'a> {
         };
 
         Ok(CsrConnectionProtobuf { connection, seed })
-    }
-
-    fn parse_schema(&mut self) -> Result<Schema, ParserError> {
-        self.expect_keyword(SCHEMA)?;
-        let schema = if self.parse_keyword(FILE) {
-            Schema::File(self.parse_literal_string()?.into())
-        } else {
-            Schema::Inline(self.parse_literal_string()?)
-        };
-        Ok(schema)
     }
 
     fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
@@ -2042,14 +2038,10 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(ID)?;
                 KafkaConfigOptionName::ClientId
             }
-            ENABLE => match self.expect_one_of_keywords(&[AUTO, IDEMPOTENCE])? {
-                AUTO => {
-                    self.expect_keyword(COMMIT)?;
-                    KafkaConfigOptionName::EnableAutoCommit
-                }
-                IDEMPOTENCE => KafkaConfigOptionName::EnableIdempotence,
-                _ => unreachable!(),
-            },
+            ENABLE => {
+                self.expect_keyword(IDEMPOTENCE)?;
+                KafkaConfigOptionName::EnableIdempotence
+            }
             FETCH => {
                 self.expect_keywords(&[MESSAGE, crate::keywords::MAX, BYTES])?;
                 KafkaConfigOptionName::FetchMessageMaxBytes
@@ -2485,10 +2477,13 @@ impl<'a> Parser<'a> {
                     AUCTION => LoadGenerator::Auction,
                     _ => unreachable!(),
                 };
-                let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
-                    vec![]
+                let options = if self.consume_token(&Token::LParen) {
+                    let options =
+                        self.parse_comma_separated(Parser::parse_load_generator_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
                 } else {
-                    self.parse_comma_separated(Parser::parse_load_generator_option)?
+                    vec![]
                 };
                 Ok(CreateSourceConnection::LoadGenerator { generator, options })
             }
@@ -2838,71 +2833,58 @@ impl<'a> Parser<'a> {
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
 
-        let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
-            vec![]
-        } else {
-            self.parse_comma_separated(Parser::parse_cluster_option)?
-        };
+        let mut options = Vec::new();
+        if self.parse_keyword(REPLICAS) {
+            self.expect_token(&Token::LParen)?;
+
+            let replicas = if self.peek_token() == Some(Token::RParen) {
+                vec![]
+            } else {
+                self.parse_comma_separated(|parser| {
+                    let name = parser.parse_identifier()?;
+                    parser.expect_token(&Token::LParen)?;
+                    let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
+                    parser.expect_token(&Token::RParen)?;
+                    Ok(ReplicaDefinition { name, options })
+                })?
+            };
+
+            self.expect_token(&Token::RParen)?;
+            options.push(ClusterOption::Replicas(replicas));
+        }
 
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
         }))
     }
+
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
-        let name =
-            match self.expect_one_of_keywords(&[AVAILABILITY, COMPUTE, REMOTE, SIZE, WORKERS])? {
-                AVAILABILITY => {
-                    self.expect_keyword(ZONE)?;
-                    ReplicaOptionName::AvailabilityZone
-                }
-                COMPUTE => ReplicaOptionName::Compute,
-                REMOTE => ReplicaOptionName::Remote,
-                SIZE => ReplicaOptionName::Size,
-                WORKERS => ReplicaOptionName::Workers,
-                _ => unreachable!(),
-            };
-        let value = self.parse_opt_with_option_value(false)?;
-        Ok(ReplicaOption { name, value })
-    }
-
-    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[REPLICAS, INTROSPECTION])? {
-            REPLICAS => {
-                self.expect_token(&Token::LParen)?;
-
-                let replicas = if self.peek_token() == Some(Token::RParen) {
-                    vec![]
-                } else {
-                    self.parse_comma_separated(|parser| {
-                        let name = parser.parse_identifier()?;
-                        parser.expect_token(&Token::LParen)?;
-                        let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
-                        parser.expect_token(&Token::RParen)?;
-                        Ok(ReplicaDefinition { name, options })
-                    })?
-                };
-
-                self.expect_token(&Token::RParen)?;
-                Ok(ClusterOption::Replicas(replicas))
+        let name = match self.expect_one_of_keywords(&[
+            AVAILABILITY,
+            COMPUTE,
+            INTROSPECTION,
+            REMOTE,
+            SIZE,
+            WORKERS,
+        ])? {
+            AVAILABILITY => {
+                self.expect_keyword(ZONE)?;
+                ReplicaOptionName::AvailabilityZone
             }
+            COMPUTE => ReplicaOptionName::Compute,
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
-                DEBUGGING => {
-                    let _ = self.consume_token(&Token::Eq);
-                    Ok(ClusterOption::IntrospectionDebugging(
-                        self.parse_with_option_value()?,
-                    ))
-                }
-                INTERVAL => {
-                    let _ = self.consume_token(&Token::Eq);
-                    Ok(ClusterOption::IntrospectionInterval(
-                        self.parse_with_option_value()?,
-                    ))
-                }
+                DEBUGGING => ReplicaOptionName::IntrospectionDebugging,
+                INTERVAL => ReplicaOptionName::IntrospectionInterval,
                 _ => unreachable!(),
             },
+            REMOTE => ReplicaOptionName::Remote,
+            SIZE => ReplicaOptionName::Size,
+            WORKERS => ReplicaOptionName::Workers,
             _ => unreachable!(),
-        }
+        };
+        let value = self.parse_opt_with_option_value(false)?;
+        Ok(ReplicaOption { name, value })
     }
 
     fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3068,11 +3050,11 @@ impl<'a> Parser<'a> {
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
             Some(CASCADE),
         );
-        return Ok(Statement::DropClusters(DropClustersStatement {
+        Ok(Statement::DropClusters(DropClustersStatement {
             if_exists,
             names,
             cascade,
-        }));
+        }))
     }
 
     fn parse_drop_cluster_replicas(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3361,7 +3343,7 @@ impl<'a> Parser<'a> {
         } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
             Ok(WithOptionValue::Ident(ident))
         } else {
-            return self.expected(self.peek_pos(), "option value", self.peek_token());
+            self.expected(self.peek_pos(), "option value", self.peek_token())
         }
     }
 
@@ -3369,7 +3351,7 @@ impl<'a> Parser<'a> {
         if let Some(obj) = self.maybe_parse(Parser::parse_raw_name) {
             Ok(WithOptionValue::Object(obj))
         } else {
-            return self.expected(self.peek_pos(), "object", self.peek_token());
+            self.expected(self.peek_pos(), "object", self.peek_token())
         }
     }
 
@@ -3659,11 +3641,11 @@ impl<'a> Parser<'a> {
                 Token::Keyword(FALSE) => Ok(Value::Boolean(false)),
                 Token::Keyword(NULL) => Ok(Value::Null),
                 Token::Keyword(kw) => {
-                    return parser_err!(
+                    parser_err!(
                         self,
                         self.peek_prev_pos(),
                         format!("No value parser for keyword {}", kw)
-                    );
+                    )
                 }
                 Token::Op(ref op) if op == "-" => match self.next_token() {
                     Some(Token::Number(n)) => Ok(Value::Number(format!("-{}", n))),
@@ -4813,7 +4795,7 @@ impl<'a> Parser<'a> {
             if self.consume_token(&Token::LParen) {
                 return self.parse_derived_table_factor(Lateral);
             } else if self.parse_keywords(&[ROWS, FROM]) {
-                return Ok(self.parse_rows_from()?);
+                return self.parse_rows_from();
             } else {
                 let name = self.parse_object_name()?;
                 self.expect_token(&Token::LParen)?;
