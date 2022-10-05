@@ -354,6 +354,7 @@ pub struct CreateSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
+    pub host_config: StorageHostConfig,
 }
 
 #[derive(Debug)]
