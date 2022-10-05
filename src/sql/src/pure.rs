@@ -76,7 +76,7 @@ pub async fn purify_create_source(
     // Disallow manually targetting subsources, this syntax is reserved for purification only
     if let Some(CreateSourceSubsources::Subset(subsources)) = requested_subsources {
         for subsource in subsources {
-            if matches!(subsource, CreateSourceSubsource::Targeted(_, _)) {
+            if matches!(subsource, CreateSourceSubsource::Resolved(_, _)) {
                 bail!("Cannot alias subsource using `INTO`, use `AS` instead");
             }
         }

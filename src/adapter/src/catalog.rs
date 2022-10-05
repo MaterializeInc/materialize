@@ -1364,8 +1364,13 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    /// The ingestion description of this source. If set, it will correspond to an ingestion that
-    /// will insert data in this source and maybe other, dependent subsources.
+    /// The ingestion description of this source.
+    ///
+    /// If Some, it will correspond to an ingestion that will insert data in this source and maybe
+    /// other, dependent subsources.
+    ///
+    /// If None, it represents a source that is being written to by the ingestion associated with
+    /// some other, parent source.
     pub ingestion: Option<Ingestion>,
     pub desc: RelationDesc,
     pub timeline: Timeline,

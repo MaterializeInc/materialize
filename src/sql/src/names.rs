@@ -1143,6 +1143,18 @@ where
 }
 
 #[derive(Debug)]
+/// An AST visitor that transforms an AST that contains temporary GlobalId references to one where
+/// every temporary GlobalId has been replaced by its final allocated id, as dictated by the
+/// provided `allocation`
+///
+/// This is useful when trying to create multiple objects in a single DDL transaction and the
+/// objects that are about to be don't have allocated GlobalIds yet. What we can do in that case is
+/// for the planner to assign temporary `GlobalId::Transient` identifiers to all the objects that
+/// it wants to create and use those for any interelationships.
+///
+/// Then, when the coordinator receives the list of plans to be executed it can batch allocate
+/// the final `GlobalIds` and use this TransientResolver to walk through all the ASTs and make them
+/// refer to the final GlobalIds of the objects.
 pub struct TransientResolver<'a> {
     /// A HashMap mapping each transient global id to its final non-transient global id
     allocation: &'a HashMap<GlobalId, GlobalId>,

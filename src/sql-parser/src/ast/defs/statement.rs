@@ -521,7 +521,7 @@ pub enum CreateSourceSubsource<T: AstInfo> {
     /// An subbsource aliased to a different name
     Aliased(UnresolvedObjectName, UnresolvedObjectName),
     /// An subbsource fully resolved to the target catalog object it will be written to
-    Targeted(UnresolvedObjectName, T::ObjectName),
+    Resolved(UnresolvedObjectName, T::ObjectName),
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
@@ -533,7 +533,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceSubsource<T> {
                 f.write_str(" AS ");
                 f.write_node(alias);
             }
-            Self::Targeted(name, target) => {
+            Self::Resolved(name, target) => {
                 f.write_node(name);
                 f.write_str(" INTO ");
                 f.write_node(target);

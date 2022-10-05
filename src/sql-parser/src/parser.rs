@@ -2248,7 +2248,7 @@ impl<'a> Parser<'a> {
             let subsources = self.parse_comma_separated(|parser| {
                 let name = parser.parse_object_name()?;
                 let subsource = if parser.parse_keyword(INTO) {
-                    CreateSourceSubsource::Targeted(name, parser.parse_raw_name()?)
+                    CreateSourceSubsource::Resolved(name, parser.parse_raw_name()?)
                 } else if parser.parse_keyword(AS) {
                     CreateSourceSubsource::Aliased(name, parser.parse_object_name()?)
                 } else {

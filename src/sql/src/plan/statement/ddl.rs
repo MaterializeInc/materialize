@@ -764,7 +764,7 @@ pub fn plan_create_source(
             let mut requested_subsources = vec![];
             for subsource in subsources {
                 let (name, target) = match subsource {
-                    CreateSourceSubsource::Targeted(name, target) => (name, target),
+                    CreateSourceSubsource::Resolved(name, target) => (name, target),
                     CreateSourceSubsource::Aliased(_, _) | CreateSourceSubsource::Bare(_) => {
                         sql_bail!(
                             "[internal error] subsources should be resolved during purification"
