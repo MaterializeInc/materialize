@@ -595,12 +595,16 @@ impl_display_t!(CreateSubsourceStatement);
 /// An option in a `CREATE SINK` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSinkOptionName {
+    Size,
     Snapshot,
 }
 
 impl AstDisplay for CreateSinkOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            CreateSinkOptionName::Size => {
+                f.write_str("SIZE");
+            }
             CreateSinkOptionName::Snapshot => {
                 f.write_str("SNAPSHOT");
             }

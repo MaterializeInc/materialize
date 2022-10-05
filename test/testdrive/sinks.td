@@ -46,7 +46,7 @@ goofus,gallant
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   WITH (badoption=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Expected one of SNAPSHOT
+contains:Expected one of SIZE or SNAPSHOT
 
 > SHOW SINKS
 name

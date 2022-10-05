@@ -1662,7 +1662,11 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(CreateSinkOption, (Snapshot, bool, Default(true)));
+generate_extracted_config!(
+    CreateSinkOption,
+    (Size, String),
+    (Snapshot, bool, Default(true))
+);
 
 pub fn plan_create_sink(
     scx: &StatementContext,
@@ -1768,7 +1772,11 @@ pub fn plan_create_sink(
         )?,
     };
 
-    let CreateSinkOptionExtracted { snapshot, seen: _ } = with_options.try_into()?;
+    let CreateSinkOptionExtracted {
+        size: _size,
+        snapshot,
+        seen: _,
+    } = with_options.try_into()?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,

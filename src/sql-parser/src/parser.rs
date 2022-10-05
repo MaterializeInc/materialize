@@ -2388,7 +2388,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_sink_option(&mut self) -> Result<CreateSinkOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SNAPSHOT])? {
+        let name = match self.expect_one_of_keywords(&[SIZE, SNAPSHOT])? {
+            SIZE => CreateSinkOptionName::Size,
             SNAPSHOT => CreateSinkOptionName::Snapshot,
             _ => unreachable!(),
         };
