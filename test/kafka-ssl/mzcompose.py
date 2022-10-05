@@ -112,7 +112,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "files",
         nargs="*",
-        default=["*.td"],
+        default=["smoketest.td"],
         help="run against the specified files",
     )
     args = parser.parse_args()
