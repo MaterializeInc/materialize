@@ -1059,6 +1059,7 @@ impl<S: Append + 'static> Coordinator<S> {
             sink,
             with_snapshot,
             if_not_exists,
+            host_config: _host_config,
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.

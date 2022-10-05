@@ -1619,10 +1619,15 @@ pub fn plan_create_sink(
     };
 
     let CreateSinkOptionExtracted {
-        size: _size,
+        size,
         snapshot,
         seen: _,
     } = with_options.try_into()?;
+
+    let host_config = match size {
+        None => StorageHostConfig::Undefined,
+        Some(size) => StorageHostConfig::Managed { size },
+    };
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
@@ -1635,6 +1640,7 @@ pub fn plan_create_sink(
         },
         with_snapshot: snapshot,
         if_not_exists,
+        host_config,
     }))
 }
 
