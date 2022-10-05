@@ -212,13 +212,11 @@ impl ReclockFollower {
     }
 
     /// Compacts the internal state
-    #[allow(dead_code)]
     pub fn compact(&self, new_since: Antichain<Timestamp>) {
         self.inner.borrow_mut().compact(new_since)
     }
 
     /// Invert the `DestTime` frontier into a `SourceTime` frontier.
-    #[allow(dead_code)]
     pub fn source_upper_at_frontier(
         &self,
         ts_upper: AntichainRef<Timestamp>,
@@ -227,7 +225,6 @@ impl ReclockFollower {
     }
 
     /// Create a shallow copy of this struct that shares the underlying trace.
-    #[allow(dead_code)]
     pub fn share(&self) -> Self {
         Self {
             inner: Rc::clone(&self.inner),
@@ -294,7 +291,6 @@ impl ReclockFollowerInner {
     /// an _upper_, as opposed to a specific timestamp.
     ///
     /// `ts_upper` must represent a frontier for a totally ordered time.
-    #[allow(dead_code)]
     pub fn source_upper_at_frontier(
         &self,
         ts_upper: AntichainRef<Timestamp>,
@@ -448,7 +444,6 @@ impl ReclockOperator {
     }
 
     /// Compacts the internal state
-    #[allow(dead_code)]
     pub async fn compact(&mut self, new_since: Antichain<Timestamp>) {
         assert!(PartialOrder::less_equal(&self.since, &new_since));
         for bindings in self.remap_trace.values_mut() {
