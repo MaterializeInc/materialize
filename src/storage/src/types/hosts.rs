@@ -11,7 +11,6 @@
 
 use std::num::NonZeroUsize;
 
-use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 
 use mz_orchestrator::{CpuLimit, MemoryLimit};
@@ -28,17 +27,6 @@ pub struct StorageHostResourceAllocation {
     pub cpu_limit: Option<CpuLimit>,
     /// The number of worker threads in the replica.
     pub workers: NonZeroUsize,
-}
-
-impl StorageHostResourceAllocation {
-    /// Temporary default size used for sinks, should be updated after #13889
-    pub fn temp_default_for_sinks() -> Self {
-        StorageHostResourceAllocation {
-            memory_limit: Some(MemoryLimit(ByteSize::gib(8))),
-            cpu_limit: Some(CpuLimit::from_millicpus(1000)),
-            workers: NonZeroUsize::new(1).unwrap(),
-        }
-    }
 }
 
 /// Size or address of a storage instance
