@@ -526,7 +526,12 @@ pub fn prep_relation_expr(
                         MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
                     match mfp.into_plan() {
                         Err(e) => coord_bail!("{:?}", e),
-                        Ok(_) => Ok(()),
+                        Ok(mut mfp) => {
+                            for s in mfp.iter_nontemporal_exprs() {
+                                prep_scalar_expr(catalog, s, style)?;
+                            }
+                            Ok(())
+                        }
                     }
                 } else {
                     e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(catalog, s, style))
