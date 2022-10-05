@@ -127,6 +127,7 @@ use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter};
+use crate::AdapterNotice;
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
@@ -266,6 +267,9 @@ struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+
+    /// Channel on which to send notices to a session.
+    notice_tx: mpsc::UnboundedSender<AdapterNotice>,
 }
 
 struct TxnReads {

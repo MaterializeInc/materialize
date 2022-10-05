@@ -423,6 +423,7 @@ impl ErrorResponse {
                 SqlState::NO_ACTIVE_SQL_TRANSACTION
             }
             AdapterNotice::UserRequested { .. } => SqlState::WARNING,
+            AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -569,6 +570,7 @@ impl Severity {
                 NoticeSeverity::Notice => Severity::Notice,
                 NoticeSeverity::Warning => Severity::Warning,
             },
+            AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
         }
     }
 }

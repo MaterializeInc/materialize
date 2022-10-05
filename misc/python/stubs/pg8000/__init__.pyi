@@ -8,11 +8,14 @@
 # by the Apache License, Version 2.0.
 
 from types import TracebackType
-from typing import Any, ContextManager, Optional, Sequence
+from typing import IO, Any, AnyStr, ContextManager, Deque, Optional, Sequence
 
 class Connection:
     autocommit: bool
+    notices: Deque
     def cursor(self) -> Cursor: ...
+    def close(self) -> None: ...
+    def run(self, sql: str, stream: Optional[IO[AnyStr]]) -> None: ...
 
 class Cursor(ContextManager):
     rowcount: int

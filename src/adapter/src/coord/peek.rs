@@ -36,7 +36,7 @@ use mz_stash::Append;
 use crate::client::ConnectionId;
 use crate::explain_new::Displayable;
 use crate::util::send_immediate_rows;
-use crate::AdapterError;
+use crate::{AdapterError, AdapterNotice};
 
 pub(crate) struct PendingPeek {
     pub(crate) sender: oneshot::Sender<PeekResponse>,
@@ -535,6 +535,13 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     /// Clean up a peek's state.
     pub(crate) fn remove_pending_peek(&mut self, uuid: &Uuid) -> Option<PendingPeek> {
         self.pending_peeks.remove(uuid)
+    }
+
+    /// Publishes a notice message to all sessions.
+    pub(crate) fn broadcast_notice(&mut self, notice: AdapterNotice) {
+        for meta in self.active_conns.values() {
+            let _ = meta.notice_tx.send(notice.clone());
+        }
     }
 }
 
