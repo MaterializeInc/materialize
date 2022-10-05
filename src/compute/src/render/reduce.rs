@@ -704,7 +704,7 @@ where
 ///
 /// The float accumulator performs accumulation in fixed point arithmetic. The fixed
 /// point representation has less precision than a double. It is entirely possible
-/// that the values of the accumulator overflows, thus we have to use wrapping arithmetic
+/// that the values of the accumulator overflow, thus we have to use wrapping arithmetic
 /// to preserve group guarantees.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum AccumInner {
