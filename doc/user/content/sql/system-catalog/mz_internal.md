@@ -300,7 +300,7 @@ corresponding [dataflow] frontiers.
 Field       | Type          | Meaning
 ------------|---------------|--------
 `export_id` | [`text`]      | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
-`import_id` | [`text`]      | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](#mz_sources) or [`mz_tables.id`](#mz_tables) or [`mz_materialized_views.id`](#mz_materialized_views).
+`import_id` | [`text`]      | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](../mz_catalog#mz_sources) or [`mz_tables.id`](../mz_catalog#mz_tables) or [`mz_materialized_views.id`](../mz_catalog#mz_materialized_views).
 `worker_id` | [`bigint`]    | The ID of the worker thread hosting the dataflow.
 `delay`     | [`interval`]  | The upper bound of the bucket as an interval.
 `count`     | [`bigint`]    | The (noncumulative) count of delay measurements in this bucket.
