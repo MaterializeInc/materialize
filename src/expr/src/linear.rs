@@ -1385,8 +1385,8 @@ pub mod util {
 }
 
 pub mod plan {
-
     use std::collections::HashMap;
+    use std::iter;
 
     use proptest::prelude::*;
     use proptest_derive::Arbitrary;
@@ -1701,6 +1701,18 @@ pub mod plan {
             } else {
                 Err(self)
             }
+        }
+
+        /// Returns an iterator over mutable references to all non-temporal
+        /// scalar expressions in the plan.
+        ///
+        /// The order of iteration is unspecified.
+        pub fn iter_nontemporal_exprs(&mut self) -> impl Iterator<Item = &mut MirScalarExpr> {
+            iter::empty()
+                .chain(self.mfp.mfp.predicates.iter_mut().map(|(_, expr)| expr))
+                .chain(&mut self.mfp.mfp.expressions)
+                .chain(&mut self.lower_bounds)
+                .chain(&mut self.upper_bounds)
         }
 
         /// Evaluate the predicates, temporal and non-, and return times and differences for `data`.
