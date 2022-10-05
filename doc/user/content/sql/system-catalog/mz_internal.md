@@ -178,7 +178,7 @@ Field         | Type       | Meaning
 ### `mz_peek_durations`
 
 The `mz_peek_durations` source describes a histogram of the duration
-(as an interval) of read queries ("peeks")s in the dataflow layer.
+(as an interval) of read queries ("peeks") in the dataflow layer.
 
 Field         | Type          | Meaning
 --------------|---------------|--------
