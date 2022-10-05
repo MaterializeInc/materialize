@@ -1165,10 +1165,6 @@ where
                         )
                     });
 
-                    // TODO: We should not emit the non-definite errors as
-                    // DataflowErrors, which will make them end up on the persist
-                    // shard for this source. Instead they should be reported to the
-                    // Healthchecker. But that's future work.
                     if !untimestamped_batch.source_errors.is_empty() {
                         // If there are errors, it means that someone must also have
                         // given us a capability because a batch/batch-summary was
