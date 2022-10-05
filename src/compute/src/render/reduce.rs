@@ -700,7 +700,7 @@ where
 ///
 /// We assume that there are not more than 2^32 elements for the aggregation.
 /// Thus we can perform a summation over i32 in an i64 accumulator
-/// and not worry about exceeding it's bounds.
+/// and not worry about exceeding its bounds.
 ///
 /// The float accumulator performs accumulation in fixed point arithmetic. The fixed
 /// point representation has less precision than a double. It is entirely possible
