@@ -262,6 +262,8 @@ struct ActiveReplicationState<T> {
     replica_ids: BTreeSet<ReplicaId>,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashMap<uuid::Uuid, PendingPeek>,
+    /// IDs of in-progress subscribes, to guide responses (and which to suppress).
+    subscribes: BTreeSet<GlobalId>,
     /// Reported upper frontiers for replicated collections and in-progress subscribes.
     uppers: HashMap<GlobalId, ReportedUppers<T>>,
     /// Reported upper frontiers for log collections.
@@ -310,7 +312,7 @@ where
 
     #[tracing::instrument(level = "debug", skip(self))]
     fn handle_command(&mut self, cmd: &ComputeCommand<T>) {
-        // Update our tracking of peek commands.
+        // Update our tracking of peek and subscribe commands.
         match &cmd {
             ComputeCommand::Peek(Peek { uuid, otel_ctx, .. }) => {
                 self.peeks.insert(
@@ -337,6 +339,10 @@ where
                     ActiveReplicationResponse::PeekResponse(*uuid, PeekResponse::Canceled, otel_ctx)
                 }));
             }
+            ComputeCommand::CreateDataflows(dataflows) => {
+                let subscribe_ids = dataflows.iter().flat_map(|df| df.subscribe_ids());
+                self.subscribes.extend(subscribe_ids);
+            }
             _ => {}
         }
 
@@ -345,17 +351,33 @@ where
         let mut cease = Vec::new();
         cmd.frontier_tracking(&mut start, &mut cease);
         for id in start.into_iter() {
-            let uppers = ReportedUppers::new(&self.replica_ids);
-            let previous = self.uppers.insert(id, uppers);
-            assert!(previous.is_none());
+            self.start_frontier_tracking(id);
         }
         for id in cease.into_iter() {
-            let previous = self.uppers.remove(&id);
-            assert!(previous.is_some());
+            self.cease_frontier_tracking(id);
         }
 
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
+    }
+
+    fn start_frontier_tracking(&mut self, id: GlobalId) {
+        let uppers = ReportedUppers::new(&self.replica_ids);
+        let previous = self.uppers.insert(id, uppers);
+        assert!(previous.is_none());
+    }
+
+    fn cease_frontier_tracking(&mut self, id: GlobalId) {
+        let previous = self.uppers.remove(&id).expect("untracked frontier");
+
+        // If we cease tracking an in-progress subscribe, we should emit a `DroppedAt` response.
+        if self.subscribes.remove(&id) {
+            self.pending_response
+                .push_back(ActiveReplicationResponse::SubscribeResponse(
+                    id,
+                    SubscribeResponse::DroppedAt(previous.bounds.upper),
+                ));
+        }
     }
 
     fn handle_response(
@@ -447,12 +469,15 @@ where
                 //    information as a `FrontierUppers` response.
 
                 let old_upper_bound = entry.bounds.upper.clone();
-                if !entry.update(replica_id, upper) {
+                if !entry.update(replica_id, upper.clone()) {
                     // There are no new updates to report.
                     return None;
                 }
 
                 if PartialOrder::less_than(&old_upper_bound, &entry.bounds.upper) {
+                    // When we get here, the subscribe must still be in progress.
+                    assert!(self.subscribes.get(&subscribe_id).is_some());
+
                     let new_lower = old_upper_bound;
                     updates.retain(|(time, _data, _diff)| new_lower.less_equal(time));
                     self.pending_response
@@ -469,27 +494,20 @@ where
                 let frontier_updates = vec![(subscribe_id, entry.bounds.clone())];
                 self.pending_response
                     .push_back(ActiveReplicationResponse::FrontierUppers(frontier_updates));
+
+                if upper.is_empty() {
+                    // This subscribe has finished producing all its data. Remove it from the
+                    // in-progress subscribes, so we don't emit a `DroppedAt` for it.
+                    self.subscribes.remove(&subscribe_id);
+                }
             }
-            SubscribeResponse::DroppedAt(frontier) => {
-                // Advance the subscribe upper to the empty frontier, to suppress all
-                // future `SubscribeResponse`s. We still need to keep tracking this
-                // subscribe, to ensure its inputs don't get compacted as long as slower
-                // replicas might still be reading from them.
-
-                // Pass on only the first `DroppedAt` response we see for a subscribe.
-                if !entry.bounds.upper.is_empty() {
-                    self.pending_response
-                        .push_back(ActiveReplicationResponse::SubscribeResponse(
-                            subscribe_id,
-                            SubscribeResponse::DroppedAt(frontier),
-                        ));
-                }
-
-                if entry.update(replica_id, Antichain::new()) {
-                    let frontier_updates = vec![(subscribe_id, entry.bounds.clone())];
-                    self.pending_response
-                        .push_back(ActiveReplicationResponse::FrontierUppers(frontier_updates));
-                }
+            SubscribeResponse::DroppedAt(_) => {
+                // We should never get here. A replica emits `DroppedAt` only in response to a
+                // subscribe being dropped by its client (via `AllowCompaction`). When we handle
+                // the `AllowCompaction` command, we cease tracking the subscribe's frontier. And
+                // without a tracked frontier, we return immediately at the beginning of this
+                // method.
+                tracing::error!("unexpected `DroppedAt` received for subscribe {subscribe_id}");
             }
         }
 
@@ -516,6 +534,7 @@ impl<T> ActiveReplication<T> {
             state: ActiveReplicationState {
                 replica_ids: Default::default(),
                 peeks: Default::default(),
+                subscribes: Default::default(),
                 uppers: Default::default(),
                 log_uppers: Default::default(),
                 history: Default::default(),
