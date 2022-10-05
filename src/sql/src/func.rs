@@ -369,7 +369,7 @@ fn sql_impl_func(expr: &'static str) -> Operation<HirScalarExpr> {
     let invoke = sql_impl(expr);
     Operation::variadic(move |ecx, args| {
         let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
-        let mut out = invoke(&ecx.qcx, types)?;
+        let mut out = invoke(ecx.qcx, types)?;
         out.splice_parameters(&args, 0);
         Ok(out)
     })
@@ -423,7 +423,7 @@ fn sql_impl_table_func_inner(
             ecx.require_unsafe_mode(feature_name)?;
         }
         let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
-        let (mut expr, scope) = invoke(&ecx.qcx, types)?;
+        let (mut expr, scope) = invoke(ecx.qcx, types)?;
         expr.splice_parameters(&args, 0);
         Ok(TableFuncPlan {
             expr,
@@ -564,7 +564,7 @@ impl ParamList {
 
         // Ensure a polymorphic solution exists (non-polymorphic functions have
         // trivial polymorphic solutions that evaluate to `None`).
-        PolymorphicSolution::new(ecx, typs, &self).is_some()
+        PolymorphicSolution::new(ecx, typs, self).is_some()
     }
 
     /// Validates that the number of input elements are viable for `self`.
@@ -642,7 +642,7 @@ impl std::ops::Index<usize> for ParamList {
     fn index(&self, i: usize) -> &Self::Output {
         match self {
             Self::Exact(p) => &p[i],
-            Self::Variadic(p) => &p,
+            Self::Variadic(p) => p,
         }
     }
 }
@@ -915,7 +915,7 @@ impl GetReturnType for HirScalarExpr {
             .contrive_coercible_exprs()
             .into_iter()
             .map(|c| {
-                let expr = c.type_as_any(&ecx).expect("c is typed NULL");
+                let expr = c.type_as_any(ecx).expect("c is typed NULL");
                 ecx.column_type(&expr)
             })
             .collect();
@@ -1113,7 +1113,7 @@ fn find_match<'a, R: std::fmt::Debug>(
             .collect();
 
         if matching_impls.len() == 1 {
-            return Ok(&matching_impls[0]);
+            return Ok(matching_impls[0]);
         }
     }
 
@@ -3616,7 +3616,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
 /// Resolves the operator to a set of function implementations.
 pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], PlanError> {
     match OP_IMPLS.get(op) {
-        Some(Func::Scalar(impls)) => Ok(&impls),
+        Some(Func::Scalar(impls)) => Ok(impls),
         Some(_) => unreachable!("all operators must be scalar functions"),
         // TODO: these require sql arrays
         // JsonContainsAnyFields

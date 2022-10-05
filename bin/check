@@ -92,9 +92,16 @@ extra_lints=(
 
     # Purely redundant tokens
     clippy::borrowed_box
+    clippy::deref_addrof
     clippy::double_must_use
     clippy::double_parens
     clippy::extra_unused_lifetimes
+    clippy::needless_borrow
+    clippy::needless_question_mark
+    clippy::needless_return
+    clippy::redundant_pattern
+    clippy::redundant_slicing
+    clippy::redundant_static_lifetimes
     clippy::single_component_path_imports
     clippy::unnecessary_cast
     clippy::useless_asref
@@ -140,8 +147,10 @@ extra_lints=(
 
     # Legit performance impact
     clippy::mut_mutex_lock
+    clippy::needless_collect
     clippy::print_literal
     clippy::same_item_push
+    clippy::useless_format
     clippy::write_literal
 
     # Extra closures slow down compiles

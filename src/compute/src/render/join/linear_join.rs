@@ -202,7 +202,7 @@ where
             });
 
             errors.push(errs);
-            let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
+            let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>("JoinStage");
             joined = JoinedFlavor::Local(arranged);
         }
 

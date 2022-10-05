@@ -41,6 +41,7 @@ class Materialized(Service):
         ports: Optional[List[str]] = None,
         extra_ports: List[int] = [],
         memory: Optional[str] = None,
+        persist_blob_url: Optional[str] = None,
         data_directory: str = "/mzdata",
         workers: Optional[int] = None,
         options: Optional[Union[str, List[str]]] = "",
@@ -52,12 +53,15 @@ class Materialized(Service):
         depends_on: Optional[List[str]] = None,
         allow_host_ports: bool = False,
     ) -> None:
+        if persist_blob_url is None:
+            persist_blob_url = f"file://{data_directory}/persist/blob"
+
         if environment is None:
             environment = [
                 "MZ_SOFT_ASSERTIONS=1",
                 "MZ_UNSAFE_MODE=1",
                 "MZ_EXPERIMENTAL=1",
-                f"MZ_PERSIST_BLOB_URL=file://{data_directory}/persist/blob",
+                f"MZ_PERSIST_BLOB_URL={persist_blob_url}",
                 f"MZ_ORCHESTRATOR_PROCESSDATA_DIRECTORY={data_directory}",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
@@ -579,6 +583,34 @@ class Localstack(Service):
         )
 
 
+class Minio(Service):
+    def __init__(
+        self,
+        name: str = "minio",
+        image: str = f"minio/minio:RELEASE.2022-09-25T15-44-53Z.fips",
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "command": "minio server /data --console-address :9001",
+                "image": image,
+                "ports": [9000, 9001],
+            },
+        )
+
+
+class MinioMc(Service):
+    def __init__(
+        self,
+        name: str = "minio_mc",
+        image: str = f"minio/mc:RELEASE.2022-09-16T09-16-47Z",
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={"image": image},
+        )
+
+
 class Testdrive(Service):
     def __init__(
         self,
@@ -634,7 +666,7 @@ class Testdrive(Service):
                 f"--kafka-addr={kafka_url}",
                 "--schema-registry-url=http://schema-registry:8081",
                 f"--materialize-url={materialize_url}",
-                f"--materialize-url-internal={materialize_url_internal}",
+                f"--materialize-internal-url={materialize_url_internal}",
             ]
 
         if aws_region:

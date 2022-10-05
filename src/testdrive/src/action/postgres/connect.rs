@@ -8,18 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::bail;
-use async_trait::async_trait;
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use crate::util::postgres::postgres_client;
 
-pub struct ConnectAction {
-    name: String,
-    url: String,
-}
-
-pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, anyhow::Error> {
+pub async fn run_connect(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
     let name = cmd.args.string("name")?;
     if name.starts_with("postgres://") {
         bail!("connection name can not be url");
@@ -27,18 +24,8 @@ pub fn build_connect(mut cmd: BuiltinCommand) -> Result<ConnectAction, anyhow::E
 
     let url = cmd.args.string("url")?;
     cmd.args.done()?;
-    Ok(ConnectAction { name, url })
-}
 
-#[async_trait]
-impl Action for ConnectAction {
-    async fn undo(&self, _: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let (client, _) = postgres_client(&self.url).await?;
-        state.postgres_clients.insert(self.name.clone(), client);
-        Ok(ControlFlow::Continue)
-    }
+    let (client, _) = postgres_client(&url).await?;
+    state.postgres_clients.insert(name.clone(), client);
+    Ok(ControlFlow::Continue)
 }

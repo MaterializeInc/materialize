@@ -17,7 +17,7 @@ message Message {
 $ file-append path=message.proto
 \${schema}
 
-$ protobuf-compile-descriptors inputs=message.proto output=message.pb
+$ protobuf-compile-descriptors inputs=message.proto output=message.pb set-var=message-schema
 
 $ kafka-create-topic topic=upgrade-proto-source-${arg.upgrade-from-version}
 

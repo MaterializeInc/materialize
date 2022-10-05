@@ -14,7 +14,6 @@ use std::io::{self, Write};
 use std::time::SystemTime;
 
 use anyhow::{bail, Context};
-use async_trait::async_trait;
 use md5::{Digest, Md5};
 use postgres_array::Array;
 use regex::Regex;
@@ -26,13 +25,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
-use mz_sql_parser::ast::{
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionStatement,
-    CreateDatabaseStatement, CreateSchemaStatement, CreateSecretStatement, CreateSourceStatement,
-    CreateTableStatement, CreateViewStatement, Raw, ReplicaDefinition, Statement, ViewDefinition,
-};
+use mz_sql_parser::ast::{Raw, Statement};
 
-use crate::action::{Action, ControlFlow, State};
+use crate::action::{ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
 
 pub struct SqlAction {
@@ -40,7 +35,11 @@ pub struct SqlAction {
     stmt: Statement<Raw>,
 }
 
-pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
+pub async fn run_sql(cmd: SqlCommand, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    build_sql(cmd)?.run(state).await
+}
+
+fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
     if stmts.len() != 1 {
@@ -56,106 +55,12 @@ pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
     })
 }
 
-#[async_trait]
-impl Action for SqlAction {
-    async fn undo(&self, state: &mut State) -> Result<(), anyhow::Error> {
-        match &self.stmt {
-            Statement::CreateDatabase(CreateDatabaseStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP DATABASE IF EXISTS {}", name),
-                )
-                .await
-            }
-            Statement::CreateSchema(CreateSchemaStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP SCHEMA IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateSource(CreateSourceStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP SOURCE IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateView(CreateViewStatement {
-                definition: ViewDefinition { name, .. },
-                ..
-            }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP VIEW IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateTable(CreateTableStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP TABLE IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateCluster(CreateClusterStatement { name, .. }) => {
-                // Modifying the default cluster causes an enormous headache in
-                // isolating tests from one another, so testdrive won't let you.
-                assert_ne!(
-                    name,
-                    &mz_sql::ast::Ident::from("default"),
-                    "testdrive cannot create default cluster"
-                );
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP CLUSTER IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateClusterReplica(CreateClusterReplicaStatement {
-                definition: ReplicaDefinition { name, .. },
-                of_cluster,
-                ..
-            }) => {
-                // Modifying the default cluster causes an enormous headache in
-                // isolating tests from one another, so testdrive won't let you.
-                assert_ne!(
-                    of_cluster.to_string(),
-                    "default",
-                    "testdrive cannot create default cluster replicas"
-                );
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!(
-                        "DROP CLUSTER REPLICA IF EXISTS {} FROM {}",
-                        name, of_cluster
-                    ),
-                )
-                .await
-            }
-            Statement::CreateSecret(CreateSecretStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP SECRET IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            Statement::CreateConnection(CreateConnectionStatement { name, .. }) => {
-                self.try_drop(
-                    &mut state.pgclient,
-                    &format!("DROP CONNECTION IF EXISTS {} CASCADE", name),
-                )
-                .await
-            }
-            _ => Ok(()),
-        }
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+impl SqlAction {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::*;
 
         let query = &self.cmd.query;
-        print_query(&query);
+        print_query(query);
 
         let should_retry = match &self.stmt {
             // Do not retry FETCH statements as subsequent executions are likely
@@ -196,7 +101,7 @@ impl Action for SqlAction {
             false => Retry::default().max_duration(state.timeout).max_tries(1),
         }
         .retry_async_canceling(|retry_state| async move {
-            match self.try_redo(state, &query).await {
+            match self.try_run(state, query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();
@@ -244,8 +149,8 @@ impl Action for SqlAction {
                     .await?;
                 if let Some(disk_state) = disk_state {
                     let mem_state = reqwest::get(&format!(
-                        "http://{}/api/internal/catalog",
-                        state.materialize_http_addr,
+                        "http://{}/api/catalog",
+                        state.materialize_internal_http_addr,
                     ))
                     .await?
                     .text()
@@ -253,8 +158,8 @@ impl Action for SqlAction {
                     if disk_state != mem_state {
                         bail!(
                             "the on-disk state of the catalog does not match its in-memory state\n\
-                             disk:{}\n\
-                             mem:{}",
+                         disk:{}\n\
+                         mem:{}",
                             disk_state,
                             mem_state
                         );
@@ -266,20 +171,7 @@ impl Action for SqlAction {
 
         Ok(ControlFlow::Continue)
     }
-}
-
-impl SqlAction {
-    async fn try_drop(
-        &self,
-        pgclient: &mut tokio_postgres::Client,
-        query: &str,
-    ) -> Result<(), anyhow::Error> {
-        print_query(&query);
-        pgclient.query(query, &[]).await?;
-        Ok(())
-    }
-
-    async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
+    async fn try_run(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
         let stmt = state
             .pgclient
             .prepare(query)
@@ -411,7 +303,10 @@ impl fmt::Display for ErrorMatcher {
     }
 }
 
-pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, anyhow::Error> {
+pub async fn run_fail_sql(
+    cmd: FailSqlCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
 
@@ -434,24 +329,21 @@ pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, anyhow::Erro
         SqlExpectedError::Timeout => ErrorMatcher::Timeout,
     };
 
-    Ok(FailSqlAction {
+    FailSqlAction {
         query: cmd.query,
         expected_error,
         stmt,
-    })
+    }
+    .run(state)
+    .await
 }
 
-#[async_trait]
-impl Action for FailSqlAction {
-    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+impl FailSqlAction {
+    async fn run(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         use Statement::{Commit, Rollback};
 
         let query = &self.query;
-        print_query(&query);
+        print_query(query);
 
         let should_retry = match &self.stmt {
             // Do not retry statements that could not be parsed
@@ -472,7 +364,7 @@ impl Action for FailSqlAction {
                 .max_tries(state.max_tries),
             false => Retry::default().max_duration(state.timeout).max_tries(1),
         }.retry_async_canceling(|retry_state| async move {
-            match self.try_redo(state, &query).await {
+            match self.try_run(state, query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
                         println!();
@@ -515,7 +407,7 @@ impl Action for FailSqlAction {
 }
 
 impl FailSqlAction {
-    async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
+    async fn try_run(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
         match state.pgclient.query(query, &[]).await {
             Ok(_) => bail!("query succeeded, but expected {}", self.expected_error),
             Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
@@ -667,7 +559,7 @@ impl<'a> FromSql<'a> for Uint4 {
     }
 
     fn accepts(ty: &Type) -> bool {
-        ty.oid() == mz_pgrepr::oid::TYPE_UINT8_OID
+        ty.oid() == mz_pgrepr::oid::TYPE_UINT4_OID
     }
 }
 

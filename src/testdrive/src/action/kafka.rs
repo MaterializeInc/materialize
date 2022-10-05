@@ -13,9 +13,9 @@ mod create_topic;
 mod ingest;
 mod verify;
 
-pub use add_partitions::build_add_partitions;
-pub use commit::build_verify_commit;
-pub use create_topic::build_create_topic;
-pub use ingest::build_ingest;
-pub use verify::build_verify;
-pub use verify::build_verify_schema;
+pub use add_partitions::run_add_partitions;
+pub use commit::run_verify_commit;
+pub use create_topic::run_create_topic;
+pub use ingest::run_ingest;
+pub use verify::run_verify;
+pub use verify::run_verify_schema;

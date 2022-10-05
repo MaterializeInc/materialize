@@ -60,7 +60,7 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
 
 # Increase table and source limit because the Postgres test tends to create a lot of tables and sources
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-sql-addr-internal}
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET max_tables = 1000
 ALTER SYSTEM SET max_sources = 1000
 

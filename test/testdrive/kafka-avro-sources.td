@@ -126,8 +126,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 contains:unexpected parameters for CREATE SOURCE: badoption
 
 > SHOW SOURCES
-name    type
-------------
+name    type   size
+-------------------
 
 # [btv] uncomment if we bring back classic debezium mode
 # ! CREATE SOURCE fast_forwarded

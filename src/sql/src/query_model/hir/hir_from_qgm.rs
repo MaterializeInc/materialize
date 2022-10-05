@@ -99,7 +99,7 @@ impl FromModel {
     /// `self.common_subgraphs`. Otherwise, it will be pushed to `self.converted`.
     fn convert_subgraph(&mut self, model: &Model, box_id: &BoxId) -> Result<(), QGMError> {
         let r#box = model.get_box(*box_id);
-        if self.common_subgraphs.get(&box_id).is_some() {
+        if self.common_subgraphs.get(box_id).is_some() {
             // Subgraph has already been converted.
             return Ok(());
         }

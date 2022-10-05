@@ -183,7 +183,7 @@ where
     tx_ok
         .inner
         .binary_frontier(
-            &input,
+            input,
             Exchange::new(tx_dist),
             Exchange::new(data_dist),
             "envelope-debezium-tx",

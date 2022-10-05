@@ -162,7 +162,7 @@ where
         // TODO: Do we even need to track self.upper on WriteHandle or could
         // WriteHandle::upper just get the one out of machine?
         let fresh_upper = self.machine.fetch_upper().await;
-        self.upper.clone_from(&fresh_upper);
+        self.upper.clone_from(fresh_upper);
         fresh_upper
     }
 
@@ -280,7 +280,7 @@ where
             .await
         {
             ok @ Ok(Ok(Ok(()))) => ok,
-            err @ _ => {
+            err => {
                 // We cannot delete the batch in compare_and_append_batch()
                 // because the caller owns the batch and might want to retry
                 // with a different `expected_upper`. In this function, we

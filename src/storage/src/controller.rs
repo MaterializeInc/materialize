@@ -944,7 +944,7 @@ where
 
             // Advance the collection's `since` as requested.
             if let Some(since) = &description.since {
-                read.downgrade_since(&since).await;
+                read.downgrade_since(since).await;
             }
 
             let collection_state =
@@ -1162,7 +1162,7 @@ where
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates, batch_upper) in commands.iter() {
             for update in updates.iter() {
-                if !update.timestamp.less_than(&batch_upper) {
+                if !update.timestamp.less_than(batch_upper) {
                     return Err(StorageError::UpdateBeyondUpper(*id));
                 }
             }

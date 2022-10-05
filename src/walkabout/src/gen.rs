@@ -85,7 +85,7 @@ pub fn gen_fold_root(ir: &Ir) -> String {
     buf.write_block(
         format!("pub trait FoldNode<{trait_generics_and_bounds}>"),
         |buf| {
-            buf.writeln(format!("type Folded;"));
+            buf.writeln("type Folded;");
             buf.writeln(format!(
                 "fn fold<F: Fold<{trait_generics}>>(self, folder: &mut F) -> Self::Folded;"
             ));
@@ -117,7 +117,7 @@ pub fn gen_fold_root(ir: &Ir) -> String {
         buf.writeln(format!(
             "pub fn {fn_name}<F, {trait_generics_and_bounds}>(folder: &mut F, node: {name}{generics}) -> {name}{generics2}"
         ));
-        buf.writeln(format!("where"));
+        buf.writeln("where");
         buf.writeln(format!("    F: Fold<{trait_generics}> + ?Sized,"));
         buf.write_block("", |buf| match item {
             Item::Struct(s) => {
@@ -257,7 +257,7 @@ fn gen_visit_root(c: &VisitConfig, ir: &Ir) -> String {
         buf.writeln(format!(
             "pub fn {fn_name}<'ast, V, {trait_generics_and_bounds}>(visitor: &mut V, node: &'ast {muta}{name}{generics})"
         ));
-        buf.writeln(format!("where"));
+        buf.writeln("where");
         buf.writeln(format!(
             "    V: {trait_name}<'ast, {trait_generics}> + ?Sized,"
         ));

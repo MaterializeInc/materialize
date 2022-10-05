@@ -280,7 +280,7 @@ impl CatalogState {
             .uses()
             .iter()
             .filter(|id| !self.is_stable(**id))
-            .map(|id| self.get_entry(&id).name().item.clone())
+            .map(|id| self.get_entry(id).name().item.clone())
             .collect();
 
         if unstable_dependencies.is_empty() {
@@ -459,7 +459,7 @@ impl CatalogState {
     /// context.
     pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
         let session_catalog = ConnCatalog {
-            state: Cow::Borrowed(&self),
+            state: Cow::Borrowed(self),
             conn_id: SYSTEM_CONN_ID,
             compute_instance: "default".into(),
             database: self
@@ -557,7 +557,7 @@ impl CatalogState {
             used_by: Vec::new(),
         };
         for u in entry.uses() {
-            match self.entry_by_id.get_mut(&u) {
+            match self.entry_by_id.get_mut(u) {
                 Some(metadata) => metadata.used_by.push(entry.id),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
@@ -600,7 +600,7 @@ impl CatalogState {
             );
         }
         for u in metadata.uses() {
-            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
+            if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.id)
             }
         }
@@ -676,7 +676,7 @@ impl CatalogState {
                     // Preallocating OIDs for each logging index is eminently
                     // doable, but annoying enough that we don't bother now.
                     let oid = self.allocate_oid().expect("cannot return error here");
-                    let log_id = self.resolve_builtin_log(&log);
+                    let log_id = self.resolve_builtin_log(log);
                     self.insert_item(
                         index_id,
                         oid,
@@ -1037,7 +1037,7 @@ impl CatalogState {
                 .items
                 .get(&name.item)
             {
-                Some(id) => return Ok(&self.get_entry(id)),
+                Some(id) => return Ok(self.get_entry(id)),
                 None => search_path.to_vec(),
             },
         };
@@ -1825,7 +1825,7 @@ impl CatalogItemRebuilder {
             let create_sql = entry.create_sql().to_string();
             assert_ne!(create_sql.to_lowercase(), CREATE_SQL_TODO.to_lowercase());
             let mut create_stmt = mz_sql::parse::parse(&create_sql).unwrap().into_element();
-            mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, &ancestor_ids);
+            mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
             Self::Object(create_stmt.to_ast_string_stable())
         }
     }
@@ -2315,7 +2315,7 @@ impl<S: Append> Catalog<S> {
             for (replica_name, _replica_id) in &instance.replica_id_by_name {
                 builtin_table_updates.push(catalog.state.pack_compute_instance_replica_update(
                     *id,
-                    &replica_name,
+                    replica_name,
                     1,
                 ));
             }
@@ -2557,7 +2557,7 @@ impl<S: Append> Catalog<S> {
 
             // Add children to queue.
             for dependant in &entry.used_by {
-                if !visited_set.contains(&dependant) {
+                if !visited_set.contains(dependant) {
                     object_queue.push_back(*dependant);
                     visited_set.insert(*dependant);
                 } else {
@@ -2642,7 +2642,7 @@ impl<S: Append> Catalog<S> {
             self.state.drop_item(id);
         }
         for (id, oid, name, item_rebuilder) in migration_metadata.all_create_ops.drain(..) {
-            let item = item_rebuilder.build(&self);
+            let item = item_rebuilder.build(self);
             self.state.insert_item(id, oid, name, item);
         }
         for (compute_instance, updates) in migration_metadata
@@ -5141,7 +5141,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
-        &self.state.config()
+        self.state.config()
     }
 
     fn now(&self) -> EpochMillis {
@@ -5223,15 +5223,15 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        Ok(self.desc(name)?)
+        self.desc(name)
     }
 
     fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
-        Ok(self.func()?)
+        self.func()
     }
 
     fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
-        Ok(self.source_desc()?)
+        self.source_desc()
     }
 
     fn connection(&self) -> Result<&mz_storage::types::connections::Connection, SqlCatalogError> {

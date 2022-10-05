@@ -245,7 +245,7 @@ pub async fn create_consumer(
             .create_with_context(KafkaErrCheckContext::default())
             .map_err(|e| sql_err!("{}", e))?,
     );
-    let context = Arc::clone(&consumer.context());
+    let context = Arc::clone(consumer.context());
     let owned_topic = String::from(topic);
     // Wait for a metadata request for up to one second. This greatly
     // increases the probability that we'll see a connection error if

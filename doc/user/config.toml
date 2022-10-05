@@ -25,11 +25,6 @@ name = "Reference"
 weight= 15
 
 [[menu.main]]
-identifier = "ops"
-name = "Operating Materialize"
-weight= 20
-
-[[menu.main]]
 identifier = "integrations"
 name = "Tools and integrations"
 weight= 25

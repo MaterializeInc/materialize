@@ -775,7 +775,7 @@ impl RustType<proto_plan::ProtoRowDiffVec> for Vec<(Row, mz_repr::Timestamp, i64
     }
 
     fn from_proto(proto: proto_plan::ProtoRowDiffVec) -> Result<Self, TryFromProtoError> {
-        Ok(proto.rows.into_rust()?)
+        proto.rows.into_rust()
     }
 }
 

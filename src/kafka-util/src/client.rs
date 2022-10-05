@@ -68,7 +68,7 @@ pub fn get_partitions<C: ClientContext>(
     topic: &str,
     timeout: Duration,
 ) -> Result<Vec<i32>, anyhow::Error> {
-    let meta = client.fetch_metadata(Some(&topic), timeout)?;
+    let meta = client.fetch_metadata(Some(topic), timeout)?;
     if meta.topics().len() != 1 {
         bail!(
             "topic {} has {} metadata entries; expected 1",

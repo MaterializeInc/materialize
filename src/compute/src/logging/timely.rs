@@ -362,7 +362,7 @@ pub fn construct<A: Allocate>(
                 Row::pack_slice(&[
                     Datum::UInt64(u64::cast_from(*id)),
                     Datum::UInt64(u64::cast_from(*worker)),
-                    Datum::String(&name),
+                    Datum::String(name),
                 ])
             });
 

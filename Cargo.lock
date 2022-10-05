@@ -3007,6 +3007,7 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "uuid",
 ]
 
 [[package]]
@@ -3049,6 +3050,7 @@ dependencies = [
  "mz-storage",
  "mz-transform",
  "once_cell",
+ "prometheus",
  "prost",
  "rand",
  "rdkafka",
@@ -4305,6 +4307,7 @@ dependencies = [
  "flate2",
  "futures",
  "globset",
+ "hex",
  "http",
  "itertools",
  "junit-report",

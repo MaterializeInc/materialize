@@ -186,7 +186,7 @@ fn evaluate(
     let arena = RowArena::new();
     // Each predicate is tested in order.
     for predicate in predicates.iter() {
-        if predicate.eval(&datums[..], &arena)? != Datum::True {
+        if predicate.eval(datums, &arena)? != Datum::True {
             return Ok(None);
         }
     }
@@ -606,7 +606,7 @@ fn process_pending_values_batch(
                                 )
                                 .map_or(Ok(None), |mut datums| {
                                     datums.extend(data.metadata.iter());
-                                    evaluate(&datums, &predicates, &position_or, row_packer)
+                                    evaluate(&datums, predicates, position_or, row_packer)
                                         .map_err(Into::into)
                                 })
                             })
@@ -632,14 +632,14 @@ fn process_pending_values_batch(
                 // key columns, cloning when need-be
                 let thinned_value = new_value
                     .as_ref()
-                    .map(|full_row| thin(key_indices_sorted, &full_row, row_packer))
+                    .map(|full_row| thin(key_indices_sorted, full_row, row_packer))
                     .map_err(|e| e.clone());
                 current_values
                     .insert(decoded_key.clone(), thinned_value)
                     .map(|res| {
                         res.map(|v| {
                             rehydrate(
-                                &key_indices_map,
+                                key_indices_map,
                                 // The value is never `Ok`
                                 // unless the key is also
                                 decoded_key.as_ref().unwrap(),

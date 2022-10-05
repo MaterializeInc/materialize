@@ -318,10 +318,9 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 }),
                 ScalarType::Timestamp => Value::Timestamp(datum.unwrap_timestamp()),
                 ScalarType::TimestampTz => Value::Timestamp(datum.unwrap_timestamptz().naive_utc()),
-                // This feature isn't actually supported by the Avro Java
-                // client (https://issues.apache.org/jira/browse/AVRO-2123),
-                // so no one is likely to be using it, so we're just using
-                // our own very convenient format.
+                // SQL intervals and Avro durations differ quite a lot (signed
+                // vs unsigned, different int sizes), so SQL intervals are their
+                // own bespoke type.
                 ScalarType::Interval => Value::Fixed(16, {
                     let iv = datum.unwrap_interval();
                     let mut buf = Vec::with_capacity(16);

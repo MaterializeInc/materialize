@@ -435,7 +435,6 @@ where
             batch_runs.retain_mut(|(_, iter)| iter.inner.peek().is_some());
         }
 
-        assert_eq!(total_number_of_runs, ordered_runs.len());
         ordered_runs
     }
 
@@ -474,7 +473,7 @@ where
             if let Some(part) = parts.next() {
                 let start = Instant::now();
                 let mut part = fetch_batch_part(
-                    &shard_id,
+                    shard_id,
                     blob.as_ref(),
                     &metrics,
                     &metrics.read.compaction,
@@ -508,7 +507,7 @@ where
                 if let Some(part) = parts.next() {
                     let start = Instant::now();
                     let mut part = fetch_batch_part(
-                        &shard_id,
+                        shard_id,
                         blob.as_ref(),
                         &metrics,
                         &metrics.read.compaction,
@@ -746,6 +745,10 @@ impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
     type Item = &'a [HollowBatchPart];
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.batch.parts.is_empty() {
+            return None;
+        }
+
         if !self.emitted_implicit {
             self.emitted_implicit = true;
             return Some(match self.inner.peek() {

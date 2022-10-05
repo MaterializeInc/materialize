@@ -1258,7 +1258,7 @@ mod render {
 
             let open_timestamps = all_bindings
                 .iter()
-                .filter(|(_to, from)| source_frontier.less_than(&from))
+                .filter(|(_to, from)| source_frontier.less_than(from))
                 .map(|(to, _from)| *to);
 
             let mut target_upper = Antichain::new();

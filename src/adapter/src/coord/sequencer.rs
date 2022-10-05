@@ -1809,7 +1809,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 if let TransactionOps::Writes(writes) = &mut ops {
                     for WriteOp { id, .. } in &mut writes.iter() {
                         // Re-verify this id exists.
-                        let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
+                        let _ = self.catalog.try_get_entry(id).ok_or_else(|| {
                             AdapterError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
                         })?;
                     }
@@ -2204,6 +2204,7 @@ impl<S: Append + 'static> Coordinator<S> {
         });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
+        self.metrics.active_subscribes.inc();
         self.pending_subscribes
             .insert(*sink_id, PendingSubscribe::new(tx, emit_progress, arity));
         self.ship_dataflow(dataflow, compute_instance).await;
@@ -2277,7 +2278,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = tracing::span!(Level::INFO, "local").in_scope(
                     || -> Result<_, AdapterError> {
                         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-                        let mut dataflow = DataflowDesc::new(format!("explanation"));
+                        let mut dataflow = DataflowDesc::new("explanation".to_string());
                         self.dataflow_builder(compute_instance)
                             .import_view_into_dataflow(
                                 // TODO: If explaining a view, pipe the actual id of the view.
@@ -2447,7 +2448,7 @@ impl<S: Append + 'static> Coordinator<S> {
              -> Result<DataflowDescription<OptimizedMirRelationExpr>, AdapterError> {
                 let start = Instant::now();
                 let optimized_plan = coord.view_optimizer.optimize(decorrelated_plan)?;
-                let mut dataflow = DataflowDesc::new(format!("explanation"));
+                let mut dataflow = DataflowDesc::new("explanation".to_string());
                 coord
                     .dataflow_builder(compute_instance)
                     .import_view_into_dataflow(&view_id, &optimized_plan, &mut dataflow)?;
@@ -2558,7 +2559,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // so explaining a plan involving tables has side effects. Removing those side
                 // effects would be good.
                 let timestamp = self.determine_timestamp(
-                    &session,
+                    session,
                     &id_bundle,
                     &QueryWhen::Immediately,
                     compute_instance,
@@ -2862,7 +2863,7 @@ impl<S: Append + 'static> Coordinator<S> {
         rows: Vec<Row>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog.for_session(session);
-        let values = mz_sql::plan::plan_copy_from(&session.pcx(), &catalog, id, columns, rows)?;
+        let values = mz_sql::plan::plan_copy_from(session.pcx(), &catalog, id, columns, rows)?;
         let values = self.view_optimizer.optimize(values.lower())?;
         // Copied rows must always be constants.
         self.sequence_insert_constant(session, id, values.into_inner())
@@ -3228,12 +3229,12 @@ impl<S: Append + 'static> Coordinator<S> {
     fn extract_secret(
         &mut self,
         session: &Session,
-        mut secret_as: &mut MirScalarExpr,
+        secret_as: &mut MirScalarExpr,
     ) -> Result<Vec<u8>, AdapterError> {
         let temp_storage = RowArena::new();
         prep_scalar_expr(
             self.catalog.state(),
-            &mut secret_as,
+            secret_as,
             ExprPrepStyle::OneShot {
                 logical_time: None,
                 session,
@@ -3264,7 +3265,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // If you want to remove this line, verify that no caller of
         // `SecretsReader::read_string` will panic if the secret contains
         // invalid UTF-8.
-        if std::str::from_utf8(&payload).is_err() {
+        if std::str::from_utf8(payload).is_err() {
             // Intentionally produce a vague error message (rather than
             // including the invalid bytes, for example), to avoid including
             // secret material in the error message, which might end up in a log
@@ -3272,7 +3273,7 @@ impl<S: Append + 'static> Coordinator<S> {
             coord_bail!("secret value must be valid UTF-8");
         }
 
-        return Ok(Vec::from(payload));
+        Ok(Vec::from(payload))
     }
 
     async fn sequence_alter_system_set(

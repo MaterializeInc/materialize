@@ -550,7 +550,7 @@ impl FullName {
         if self.namespace.is_empty() {
             return self.name.clone();
         }
-        return format!("{}.{}", self.namespace, self.name);
+        format!("{}.{}", self.namespace, self.name)
     }
     /// Get the shortest unambiguous synonym of this name
     /// at a given point in the schema graph. If this name
@@ -932,7 +932,7 @@ impl SchemaParser {
                 }
             }),
             Some(&Value::Object(ref data)) => match data.get("type") {
-                Some(ref value) => self.parse_inner(default_namespace, value),
+                Some(value) => self.parse_inner(default_namespace, value),
                 None => Err(
                     ParseSchemaError::new(format!("Unknown complex type: {:?}", complex)).into(),
                 ),

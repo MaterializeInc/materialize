@@ -69,7 +69,7 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
         }
     };
     async fn connect(connstr: &str, tls: MakeTlsConnector, clear: bool) -> Postgres {
-        let (client, connection) = tokio_postgres::connect(&connstr, tokio_postgres::NoTls)
+        let (client, connection) = tokio_postgres::connect(connstr, tokio_postgres::NoTls)
             .await
             .unwrap();
         mz_ore::task::spawn(|| "postgres connection", async move {

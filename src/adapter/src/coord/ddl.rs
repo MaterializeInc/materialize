@@ -150,7 +150,7 @@ impl<S: Append + 'static> Coordinator<S> {
             } else if let catalog::Op::DropComputeInstanceReplica { name, compute_name } = op {
                 let compute_instance = self.catalog.resolve_compute_instance(compute_name)?;
                 let replica_id = &compute_instance.replica_id_by_name[name];
-                let replica = &compute_instance.replicas_by_id[&replica_id];
+                let replica = &compute_instance.replicas_by_id[replica_id];
 
                 // Drop the introspection sources
                 sources_to_drop.extend(replica.config.persisted_logs.get_source_ids());
@@ -463,33 +463,39 @@ impl<S: Append + 'static> Coordinator<S> {
             ..sink.clone()
         };
 
-        let ops = vec![
-            catalog::Op::DropItem(id),
-            catalog::Op::CreateItem {
-                id,
-                oid,
-                name,
-                item: CatalogItem::Sink(sink.clone()),
-            },
-        ];
+        // We always need to drop the already existing item: either because we fail to create it or we're replacing it.
+        let mut ops = vec![catalog::Op::DropItem(id)];
 
-        let () = self.catalog_transact(session, ops, move |_| Ok(())).await?;
-        // TODO(#14220): should this happen in the same task where we build the connection?  Or should it need to happen
-        // after we update the catalog?
+        // Speculatively create the storage export before confirming in the catalog.  We chose this order of operations
+        // for the following reasons:
+        // - We want to avoid ever putting into the catalog a sink in `StorageSinkConnectionState::Ready`
+        //   if we're not able to actually create the sink for some reason
+        // - Dropping the sink will either succeed (or panic) so it's easier to reason about rolling that change back
+        //   than it is rolling back a catalog change.
         match self.create_storage_export(id, &sink, connection).await {
-            Ok(()) => Ok(()),
-            Err(storage_error) =>
-            // TODO: catalog_transact that can take async function to actually make the `CreateItem` above transactional.
-            {
-                match self
-                    .catalog_transact(session, vec![catalog::Op::DropItem(id)], move |_| Ok(()))
-                    .await
-                {
-                    Ok(()) => Err(storage_error),
-                    Err(e) => Err(e),
+            Ok(()) => {
+                ops.push(catalog::Op::CreateItem {
+                    id,
+                    oid,
+                    name,
+                    item: CatalogItem::Sink(sink.clone()),
+                });
+                match self.catalog_transact(session, ops, move |_| Ok(())).await {
+                    Ok(()) => (),
+                    catalog_err @ Err(_) => {
+                        let () = self.drop_storage_sinks(vec![id]).await;
+                        catalog_err?
+                    }
                 }
             }
-        }
+            storage_err @ Err(_) => {
+                match self.catalog_transact(session, ops, move |_| Ok(())).await {
+                    Ok(()) => storage_err?,
+                    catalog_err @ Err(_) => catalog_err?,
+                }
+            }
+        };
+        Ok(())
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is

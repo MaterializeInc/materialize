@@ -42,7 +42,7 @@ pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<
         Some(x) => x,
         None => return Err(format!("invalid {} {}: incorrect prefix", id_type, encoded)),
     };
-    let uuid = Uuid::parse_str(&uuid_encoded)
+    let uuid = Uuid::parse_str(uuid_encoded)
         .map_err(|err| format!("invalid {} {}: {}", id_type, encoded, err))?;
     Ok(*uuid.as_bytes())
 }

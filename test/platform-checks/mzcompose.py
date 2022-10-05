@@ -54,6 +54,7 @@ from materialize.checks.text_bytea_types import *  # noqa: F401 F403
 from materialize.checks.threshold import *  # noqa: F401 F403
 from materialize.checks.top_k import *  # noqa: F401 F403
 from materialize.checks.update import *  # noqa: F401 F403
+from materialize.checks.upgrade_scenarios import *  # noqa: F401 F403
 from materialize.checks.upsert import *  # noqa: F401 F403
 from materialize.checks.users import *  # noqa: F401 F403
 from materialize.checks.window_functions import *  # noqa: F401 F403
@@ -75,15 +76,7 @@ SERVICES = [
     Computed(
         name="computed_1"
     ),  # Started by some Scenarios, defined here only for the teardown
-    Materialized(
-        options=" ".join(
-            [
-                "--persist-consensus-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=consensus",
-                "--storage-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=storage",
-                "--adapter-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=adapter",
-            ]
-        )
-    ),
+    Materialized(),
     TestdriveService(default_timeout="300s", no_reset=True, seed=1),
 ]
 

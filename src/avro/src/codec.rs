@@ -98,7 +98,7 @@ impl Codec {
 
                 let crc = {
                     let mut hasher = crc32fast::Hasher::new();
-                    hasher.update(&stream);
+                    hasher.update(stream);
                     hasher.finalize()
                 };
                 byteorder::BigEndian::write_u32(&mut encoded[compressed_size..], crc);

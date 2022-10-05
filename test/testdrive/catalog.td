@@ -449,8 +449,8 @@ d2
 # Check default sources, tables, and views in mz_catalog.
 
 > SHOW SOURCES FROM mz_catalog
-name                                          type
---------------------------------------------------
+name  type  size
+----------------
 
 > SHOW TABLES FROM mz_catalog
 name
@@ -501,46 +501,46 @@ $ skip-if
 SELECT ${arg.replicas} > 1 OR ${arg.replica-size} > 1;
 
 > SHOW SOURCES FROM mz_internal
-name                                           type
----------------------------------------------------
-mz_arrangement_batches_internal                 log
-mz_arrangement_batches_internal_1               log
-mz_arrangement_records_internal                 log
-mz_arrangement_records_internal_1               log
-mz_arrangement_sharing_internal                 log
-mz_arrangement_sharing_internal_1               log
-mz_dataflow_channels                            log
-mz_dataflow_channels_1                          log
-mz_dataflow_addresses                           log
-mz_dataflow_addresses_1                         log
-mz_dataflow_operator_reachability_internal      log
-mz_dataflow_operator_reachability_internal_1    log
-mz_dataflow_operators                           log
-mz_dataflow_operators_1                         log
-mz_worker_compute_dependencies                  log
-mz_worker_compute_dependencies_1                log
-mz_compute_exports                              log
-mz_compute_exports_1                            log
-mz_message_counts_received_internal             log
-mz_message_counts_received_internal_1           log
-mz_message_counts_sent_internal                 log
-mz_message_counts_sent_internal_1               log
-mz_peek_active                                  log
-mz_peek_active_1                                log
-mz_raw_peek_durations                           log
-mz_raw_peek_durations_1                         log
-mz_raw_worker_compute_delays                    log
-mz_raw_worker_compute_delays_1                  log
-mz_scheduling_elapsed_internal                  log
-mz_scheduling_elapsed_internal_1                log
-mz_raw_compute_operator_durations_internal      log
-mz_raw_compute_operator_durations_internal_1    log
-mz_scheduling_parks_internal                    log
-mz_scheduling_parks_internal_1                  log
-mz_worker_compute_frontiers                     log
-mz_worker_compute_frontiers_1                   log
-mz_worker_compute_import_frontiers              log
-mz_worker_compute_import_frontiers_1            log
+name                                           type   size
+------------------------------------------------------------
+mz_arrangement_batches_internal                 log   <null>
+mz_arrangement_batches_internal_1               log   <null>
+mz_arrangement_records_internal                 log   <null>
+mz_arrangement_records_internal_1               log   <null>
+mz_arrangement_sharing_internal                 log   <null>
+mz_arrangement_sharing_internal_1               log   <null>
+mz_dataflow_channels                            log   <null>
+mz_dataflow_channels_1                          log   <null>
+mz_dataflow_addresses                           log   <null>
+mz_dataflow_addresses_1                         log   <null>
+mz_dataflow_operator_reachability_internal      log   <null>
+mz_dataflow_operator_reachability_internal_1    log   <null>
+mz_dataflow_operators                           log   <null>
+mz_dataflow_operators_1                         log   <null>
+mz_worker_compute_dependencies                  log   <null>
+mz_worker_compute_dependencies_1                log   <null>
+mz_compute_exports                              log   <null>
+mz_compute_exports_1                            log   <null>
+mz_message_counts_received_internal             log   <null>
+mz_message_counts_received_internal_1           log   <null>
+mz_message_counts_sent_internal                 log   <null>
+mz_message_counts_sent_internal_1               log   <null>
+mz_peek_active                                  log   <null>
+mz_peek_active_1                                log   <null>
+mz_raw_peek_durations                           log   <null>
+mz_raw_peek_durations_1                         log   <null>
+mz_raw_worker_compute_delays                    log   <null>
+mz_raw_worker_compute_delays_1                  log   <null>
+mz_scheduling_elapsed_internal                  log   <null>
+mz_scheduling_elapsed_internal_1                log   <null>
+mz_raw_compute_operator_durations_internal      log   <null>
+mz_raw_compute_operator_durations_internal_1    log   <null>
+mz_scheduling_parks_internal                    log   <null>
+mz_scheduling_parks_internal_1                  log   <null>
+mz_worker_compute_frontiers                     log   <null>
+mz_worker_compute_frontiers_1                   log   <null>
+mz_worker_compute_import_frontiers              log   <null>
+mz_worker_compute_import_frontiers_1            log   <null>
 
 > SHOW TABLES FROM mz_internal
 name

@@ -256,8 +256,8 @@ impl DeltaJoinPlan {
             // This state will evolves as we build the join dataflow.
             let mut join_build_state = JoinBuildState::new(
                 input_mapper.global_columns(source_relation),
-                &equivalences,
-                &map_filter_project,
+                equivalences,
+                map_filter_project,
             );
 
             let source_key = &source_keys[source_relation];

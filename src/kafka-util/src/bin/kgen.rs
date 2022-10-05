@@ -721,7 +721,7 @@ async fn main() -> anyhow::Result<()> {
                         key_buf.extend(u64::cast_from(i).to_be_bytes().iter())
                     };
 
-                    let mut rec = BaseRecord::to(&topic).key(&key_buf).payload(&value_buf);
+                    let mut rec = BaseRecord::to(topic).key(&key_buf).payload(&value_buf);
                     if args.partitions_round_robin != 0 {
                         rec = rec.partition((i % args.partitions_round_robin) as i32);
                     }

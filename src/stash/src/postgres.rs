@@ -454,7 +454,7 @@ impl Postgres {
                     None => Self::upper_tx(stmts, tx, collection_id).await?,
                 };
                 for ((_key, _value), time, _diff) in entries {
-                    if !upper.less_equal(&time) {
+                    if !upper.less_equal(time) {
                         return Err(StashError::from(format!(
                             "entry time {} is less than the current upper frontier {}",
                             time,

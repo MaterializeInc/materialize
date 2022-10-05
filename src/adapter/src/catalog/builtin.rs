@@ -20,7 +20,7 @@
 //! definitions of existing builtins!
 //!
 //! More information about builtin system tables and types can be found in
-//! <https://materialize.com/docs/sql/system-tables/>.
+//! <https://materialize.com/docs/sql/system-catalog/>.
 
 use std::hash::Hash;
 
@@ -1192,7 +1192,8 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
-        .with_column("connection_id", ScalarType::String.nullable(true)),
+        .with_column("connection_id", ScalarType::String.nullable(true))
+        .with_column("size", ScalarType::String.nullable(true)),
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
@@ -2446,7 +2447,7 @@ pub mod BUILTINS {
                 return Some(x);
             }
         }
-        return None;
+        None
     }
 
     pub fn types() -> impl Iterator<Item = &'static BuiltinType<NameReference>> {

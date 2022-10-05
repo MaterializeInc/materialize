@@ -337,9 +337,7 @@ fn try_push_reduce_through_join(
         .map(|(idx, col)| new_join_mapper.map_column_to_global(col, idx))
         .collect::<Vec<_>>();
 
-    return Some(
-        MirRelationExpr::join_scalars(new_inputs, new_equivalences).project(new_projection),
-    );
+    Some(MirRelationExpr::join_scalars(new_inputs, new_equivalences).project(new_projection))
 }
 
 /// Returns None if `expr` does not belong to exactly one component.
