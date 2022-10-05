@@ -20,7 +20,7 @@
 //! definitions of existing builtins!
 //!
 //! More information about builtin system tables and types can be found in
-//! <https://materialize.com/docs/sql/system-tables/>.
+//! <https://materialize.com/docs/sql/system-catalog/>.
 
 use std::hash::Hash;
 
@@ -29,8 +29,10 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
-use mz_repr::{RelationDesc, ScalarType};
-use mz_sql::catalog::{CatalogType, CatalogTypeDetails, NameReference, TypeReference};
+use mz_repr::{RelationDesc, RelationType, ScalarType};
+use mz_sql::catalog::{
+    CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
+};
 
 use crate::catalog::SYSTEM_USER;
 
@@ -69,6 +71,17 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
             Builtin::StorageCollection(coll) => coll.schema,
+        }
+    }
+
+    pub fn catalog_item_type(&self) -> CatalogItemType {
+        match self {
+            Builtin::Log(_) => CatalogItemType::Source,
+            Builtin::Table(_) => CatalogItemType::Table,
+            Builtin::View(_) => CatalogItemType::View,
+            Builtin::Type(_) => CatalogItemType::Type,
+            Builtin::Func(_) => CatalogItemType::Func,
+            Builtin::StorageCollection(_) => CatalogItemType::Source,
         }
     }
 }
@@ -124,6 +137,7 @@ pub struct BuiltinRole {
     pub name: &'static str,
 }
 
+/// Uniquely identifies the definition of a builtin object.
 pub trait Fingerprint {
     fn fingerprint(&self) -> u64;
 }
@@ -149,13 +163,25 @@ impl Fingerprint for BuiltinFunc {
 impl<T: TypeReference> Fingerprint for &Builtin<T> {
     fn fingerprint(&self) -> u64 {
         match self {
-            Builtin::Log(log) => log.fingerprint(),
-            Builtin::Table(table) => table.fingerprint(),
-            Builtin::View(view) => view.fingerprint(),
+            Builtin::Log(log) => log.variant.desc().fingerprint(),
+            Builtin::Table(table) => table.desc.fingerprint(),
+            Builtin::View(view) => view.sql.hashed(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
-            Builtin::StorageCollection(coll) => coll.fingerprint(),
+            Builtin::StorageCollection(coll) => coll.desc.fingerprint(),
         }
+    }
+}
+
+impl Fingerprint for RelationDesc {
+    fn fingerprint(&self) -> u64 {
+        self.typ().fingerprint()
+    }
+}
+
+impl Fingerprint for RelationType {
+    fn fingerprint(&self) -> u64 {
+        self.hashed()
     }
 }
 
@@ -904,23 +930,23 @@ pub const TYPE_UINT8_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
-pub const TYPE_MZTIMESTAMP: BuiltinType<NameReference> = BuiltinType {
-    name: "mztimestamp",
+pub const TYPE_MZ_TIMESTAMP: BuiltinType<NameReference> = BuiltinType {
+    name: "mz_timestamp",
     schema: MZ_CATALOG_SCHEMA,
-    oid: mz_pgrepr::oid::TYPE_MZTIMESTAMP_OID,
+    oid: mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::MzTimestamp,
         array_id: None,
     },
 };
 
-pub const TYPE_MZTIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
-    name: "_mztimestamp",
+pub const TYPE_MZ_TIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_mz_timestamp",
     schema: MZ_CATALOG_SCHEMA,
-    oid: mz_pgrepr::oid::TYPE_MZTIMESTAMP_ARRAY_OID,
+    oid: mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
-            element_reference: TYPE_MZTIMESTAMP.name,
+            element_reference: TYPE_MZ_TIMESTAMP.name,
         },
         array_id: None,
     },
@@ -1065,10 +1091,20 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sinks",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("sink_id", ScalarType::String.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("topic", ScalarType::String.nullable(false))
-        .with_column("progress_topic", ScalarType::String.nullable(true))
         .with_key(vec![0]),
+});
+pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_kafka_connections",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column(
+            "brokers",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
@@ -1155,7 +1191,9 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false)),
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("connection_id", ScalarType::String.nullable(true))
+        .with_column("size", ScalarType::String.nullable(true)),
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
@@ -1165,7 +1203,8 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("type", ScalarType::String.nullable(false)),
+        .with_column("type", ScalarType::String.nullable(false))
+        .with_column("connection_id", ScalarType::String.nullable(true)),
 });
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_views",
@@ -2162,6 +2201,7 @@ pub static MZ_SYSTEM: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*SYSTEM_USER.name,
 });
 
+/// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
     let mut builtins = vec![
         Builtin::Type(&TYPE_ANY),
@@ -2231,8 +2271,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_UINT4_ARRAY),
         Builtin::Type(&TYPE_UINT8),
         Builtin::Type(&TYPE_UINT8_ARRAY),
-        Builtin::Type(&TYPE_MZTIMESTAMP),
-        Builtin::Type(&TYPE_MZTIMESTAMP_ARRAY),
+        Builtin::Type(&TYPE_MZ_TIMESTAMP),
+        Builtin::Type(&TYPE_MZ_TIMESTAMP_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -2274,6 +2314,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_VIEW_KEYS),
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),
+        Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
@@ -2370,7 +2411,7 @@ pub mod BUILTINS {
                 return Some(x);
             }
         }
-        return None;
+        None
     }
 
     pub fn types() -> impl Iterator<Item = &'static BuiltinType<NameReference>> {

@@ -1052,8 +1052,8 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
   can respond immediately: <BOOL>
 
 source materialize.public.t1 (u1, storage):
- read frontier:[<TIMESTAMP>]
-write frontier:[<TIMESTAMP>]\n";
+            read frontier:[<TIMESTAMP>]
+           write frontier:[<TIMESTAMP>]\n";
 
     let row = client
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
@@ -1326,8 +1326,8 @@ fn test_timeline_read_holds() -> Result<(), Box<dyn Error>> {
     )?;
 
     // Create user table in Materialize.
-    mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
-    mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
+    mz_client.batch_execute("DROP TABLE IF EXISTS t;")?;
+    mz_client.batch_execute("CREATE TABLE t (a INT);")?;
     insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now))?;
 
     // Insert data into source.
@@ -1391,16 +1391,16 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     // than queries that involve the user table. However, we prevent this when in strict
     // serializable mode.
 
-    mz_client.batch_execute(&"SET transaction_isolation = serializable")?;
+    mz_client.batch_execute("SET transaction_isolation = serializable")?;
     let view_ts = get_explain_timestamp(view_name, &mut mz_client);
     // Create user table in Materialize.
-    mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
-    mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
+    mz_client.batch_execute("DROP TABLE IF EXISTS t;")?;
+    mz_client.batch_execute("CREATE TABLE t (a INT);")?;
     let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // In serializable transaction isolation, read timestamps can go backwards.
     assert!(join_ts < view_ts);
 
-    mz_client.batch_execute(&"SET transaction_isolation = 'strict serializable'")?;
+    mz_client.batch_execute("SET transaction_isolation = 'strict serializable'")?;
     let view_ts = get_explain_timestamp(view_name, &mut mz_client);
     let join_ts = get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // Since the query on the join was done after the query on the view, it should have a higher or
@@ -1429,6 +1429,11 @@ fn test_system_user() -> Result<(), Box<dyn Error>> {
         .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)
         .is_ok());
+    assert!(server
+        .pg_config_internal()
+        .user("mz_something_else")
+        .connect(postgres::NoTls)
+        .is_err());
 
     Ok(())
 }
@@ -1503,15 +1508,15 @@ fn test_alter_system_invalid_param() -> Result<(), Box<dyn Error>> {
         .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)?;
 
-    mz_client.batch_execute(&"ALTER SYSTEM SET max_tables TO 2")?;
+    mz_client.batch_execute("ALTER SYSTEM SET max_tables TO 2")?;
     let res = mz_client
-        .batch_execute(&"ALTER SYSTEM SET invalid_param TO 42")
+        .batch_execute("ALTER SYSTEM SET invalid_param TO 42")
         .unwrap_err();
     assert!(res
         .to_string()
         .contains("unrecognized configuration parameter \"invalid_param\""));
     let res = mz_client
-        .batch_execute(&"ALTER SYSTEM RESET invalid_param")
+        .batch_execute("ALTER SYSTEM RESET invalid_param")
         .unwrap_err();
     assert!(res
         .to_string()
@@ -1700,7 +1705,7 @@ fn create_postgres_source_with_table(
         "CREATE SOURCE {source_name}
             FROM POSTGRES
             CONNECTION pgconn
-            PUBLICATION '{source_name}';"
+            (PUBLICATION '{source_name}');"
     ))?;
     mz_client.batch_execute(&format!(
         "CREATE VIEWS FROM SOURCE {source_name} ({table_name});"
@@ -1713,7 +1718,7 @@ fn create_postgres_source_with_table(
         move |mz_client: &mut postgres::Client, pg_client: &mut Client, runtime: &Arc<Runtime>| {
             mz_client.batch_execute(&format!("DROP VIEW {table_name};"))?;
             mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
-            mz_client.batch_execute(&"DROP CONNECTION pgconn;")?;
+            mz_client.batch_execute("DROP CONNECTION pgconn;")?;
 
             let _ = runtime
                 .block_on(pg_client.execute(&format!("DROP PUBLICATION {source_name};"), &[]))?;
@@ -1756,7 +1761,7 @@ fn test_load_generator() -> Result<(), Box<dyn Error>> {
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client
-        .batch_execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER TICK INTERVAL '1ms'")
+        .batch_execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1ms')")
         .unwrap();
 
     let row = client

@@ -147,6 +147,7 @@ a  b
 ! CREATE SINK not_mat_sink2 FROM data_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-view2-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 contains:data_view is a view, which cannot be exported as a sink
 
 # Can create indexed view from unmaterialized view.
@@ -158,6 +159,7 @@ contains:data_view is a view, which cannot be exported as a sink
 ! CREATE SINK not_mat_sink2 FROM test5
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-view2-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 contains:test5 is a view, which cannot be exported as a sink
 
 $ set-regex match=(\s\(u\d+\)|\n) replacement=
@@ -333,10 +335,10 @@ a  b
 1  2
 
 > SHOW SOURCES
-name     type
---------------
-data     kafka
-mat_data kafka
+name     type    size
+---------------------
+data     kafka   1
+mat_data kafka   1
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

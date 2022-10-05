@@ -715,11 +715,11 @@ fn to_metadata_row(
                                 for (k, v) in headers {
                                     match v {
                                         Some(v) => r.push_list_with(|record_row| {
-                                            record_row.push(Datum::String(&k));
-                                            record_row.push(Datum::Bytes(&v));
+                                            record_row.push(Datum::String(k));
+                                            record_row.push(Datum::Bytes(v));
                                         }),
                                         None => r.push_list_with(|record_row| {
-                                            record_row.push(Datum::String(&k));
+                                            record_row.push(Datum::String(k));
                                             record_row.push(Datum::Null);
                                         }),
                                     }

@@ -47,20 +47,20 @@ mode cockroach
 
 # Test constant error.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT 1 / 0
 ----
-Explained Query (fast path)
+Explained Query (fast path):
   Error "division by zero"
 
 EOF
 
 # Test constant with two elements.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
-Explained Query (fast path)
+Explained Query (fast path):
   Constant
     - ((1, 2) x 2)
     - (3, 4)
@@ -69,10 +69,10 @@ EOF
 
 # Test basic linear chains (fast path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
 ----
-Explained Query (fast path)
+Explained Query (fast path):
   Project (#3, #2)
     Filter (#0 > 0) AND (#1 < 0) AND (#2 > 0)
       Map ((#0 + #1), 1)
@@ -85,14 +85,14 @@ EOF
 
 # Test basic linear chains (slow path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
 ----
-Explained Query
-  Project (#3, #2) // { non_negative: true }
-    Filter (#1 < 0) AND (#0 > 0) AND (#2 > 0) // { non_negative: true }
-      Map ((#0 + #1), 1) // { non_negative: true }
-        Get materialize.public.mv // { non_negative: true }
+Explained Query:
+  Project (#3, #2)
+    Filter (#1 < 0) AND (#0 > 0) AND (#2 > 0)
+      Map ((#0 + #1), 1)
+        Get materialize.public.mv
 
 Source materialize.public.mv
   filter=((#0 > 0) AND (#1 < 0) AND ((#0 + #1) > 0))
@@ -101,13 +101,13 @@ EOF
 
 # Test table functions in the select clause (FlatMap).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT generate_series(a, b) from t
 ----
-Explained Query
-  Project (#2) // { non_negative: true }
-    FlatMap generate_series(#0, #1, 1) // { non_negative: true }
-      Get materialize.public.t // { non_negative: true }
+Explained Query:
+  Project (#2)
+    FlatMap generate_series(#0, #1, 1)
+      Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -116,19 +116,19 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
-Explained Query
-  Threshold // { non_negative: true }
-    Union // { non_negative: false }
-      Distinct group_by=[#0] // { non_negative: true }
-        Project (#0) // { non_negative: true }
-          Get materialize.public.t // { non_negative: true }
-      Negate // { non_negative: false }
-        Distinct group_by=[#0] // { non_negative: true }
-          Project (#1) // { non_negative: true }
-            Get materialize.public.mv // { non_negative: true }
+Explained Query:
+  Threshold
+    Union
+      Distinct group_by=[#0]
+        Project (#0)
+          Get materialize.public.t
+      Negate
+        Distinct group_by=[#0]
+          Project (#1)
+            Get materialize.public.mv
 
 Source materialize.public.mv
   project=(#2, #1)
@@ -141,17 +141,17 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a FROM t EXCEPT ALL SELECT b FROM mv
 ----
-Explained Query
-  Threshold // { non_negative: true }
-    Union // { non_negative: false }
-      Project (#0) // { non_negative: true }
-        Get materialize.public.t // { non_negative: true }
-      Negate // { non_negative: false }
-        Project (#1) // { non_negative: true }
-          Get materialize.public.mv // { non_negative: true }
+Explained Query:
+  Threshold
+    Union
+      Project (#0)
+        Get materialize.public.t
+      Negate
+        Project (#1)
+          Get materialize.public.mv
 
 Source materialize.public.mv
   project=(#2, #1)
@@ -164,12 +164,12 @@ EOF
 
 # Test TopK.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 VIEW ov
 ----
-Explained Query
-  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 monotonic=false // { non_negative: true }
-    Get materialize.public.t // { non_negative: true }
+Explained Query:
+  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 monotonic=false
+    Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -178,10 +178,10 @@ EOF
 
 # Test Finish.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
-Explained Query (fast path)
+Explained Query (fast path):
   Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
     ReadExistingIndex materialize.public.t_a_idx
 
@@ -192,27 +192,27 @@ EOF
 
 # Test Reduce (global).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
-Explained Query
-  Let // { non_negative: false }
-    Project (#2) // { non_negative: false }
-      Map (abs((#0 - #1))) // { non_negative: false }
-        Union // { non_negative: false }
-          Get l0 // { non_negative: true }
-          Map (null, null) // { non_negative: false }
-            Union // { non_negative: false }
-              Negate // { non_negative: false }
-                Project () // { non_negative: true }
-                  Get l0 // { non_negative: true }
-              Constant // { non_negative: true }
+Explained Query:
+  Return
+    Project (#2)
+      Map (abs((#0 - #1)))
+        Union
+          Get l0
+          Map (null, null)
+            Union
+              Negate
+                Project ()
+                  Get l0
+              Constant
                 - ()
-    Where
-      l0 =
-        Reduce aggregates=[min(#0), max(#0)] // { non_negative: true }
-          Project (#0) // { non_negative: true }
-            Get materialize.public.t // { non_negative: true }
+  With
+    cte l0 =
+      Reduce aggregates=[min(#0), max(#0)]
+        Project (#0)
+          Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -221,14 +221,14 @@ EOF
 
 # Test Reduce (local).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
-Explained Query
-  Project (#3) // { non_negative: true }
-    Map (abs((#1 - #2))) // { non_negative: true }
-      Reduce group_by=[#1] aggregates=[min(#0), max(#0)] // { non_negative: true }
-        Get materialize.public.t // { non_negative: true }
+Explained Query:
+  Project (#3)
+    Map (abs((#1 - #2)))
+      Reduce group_by=[#1] aggregates=[min(#0), max(#0)]
+        Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -237,44 +237,42 @@ EOF
 
 # Test EXISTS subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
-Explained Query
-  Let // { non_negative: true }
-    Project (#0, #1) // { non_negative: true }
-      Join on=(#1 = #2) type=differential // { non_negative: true }
-        Get l0 // { non_negative: true }
-        ArrangeBy keys=[[#0]] // { non_negative: true }
-          Distinct group_by=[#0] // { non_negative: true }
-            Project (#0) // { non_negative: true }
-              Filter (#0 > #1) // { non_negative: true }
-                CrossJoin type=differential // { non_negative: true }
-                  ArrangeBy keys=[[]] // { non_negative: true }
-                    Distinct group_by=[#0] // { non_negative: true }
-                      Project (#1) // { non_negative: true }
-                        Get l0 // { non_negative: true }
-                  Project (#1) // { non_negative: true }
-                    Get materialize.public.mv // { non_negative: true }
-    Where
-      l0 =
-        Project (#0, #1) // { non_negative: true }
-          Join on=(#0 = #2) type=delta // { non_negative: true }
-            ArrangeBy keys=[[#0]] // { non_negative: true }
-              Get materialize.public.t // { non_negative: true }
-            ArrangeBy keys=[[#0]] // { non_negative: true }
-              Distinct group_by=[#0] // { non_negative: true }
-                Project (#0) // { non_negative: true }
-                  Filter (#0 < #1) // { non_negative: true }
-                    CrossJoin type=differential // { non_negative: true }
-                      ArrangeBy keys=[[]] // { non_negative: true }
-                        Distinct group_by=[#0] // { non_negative: true }
-                          Project (#0) // { non_negative: true }
-                            Get materialize.public.t // { non_negative: true }
-                      Project (#0) // { non_negative: true }
-                        Get materialize.public.mv // { non_negative: true }
-
-Source materialize.public.mv
+Explained Query:
+  Return
+    Project (#0, #1)
+      Join on=(#1 = #2) type=differential
+        Get l0
+        ArrangeBy keys=[[#0]]
+          Distinct group_by=[#0]
+            Project (#0)
+              Filter (#0 > #1)
+                CrossJoin type=differential
+                  ArrangeBy keys=[[]]
+                    Distinct group_by=[#0]
+                      Project (#1)
+                        Get l0
+                  Project (#1)
+                    Get materialize.public.mv
+  With
+    cte l0 =
+      Project (#0, #1)
+        Join on=(#0 = #2) type=delta
+          ArrangeBy keys=[[#0]]
+            Get materialize.public.t
+          ArrangeBy keys=[[#0]]
+            Distinct group_by=[#0]
+              Project (#0)
+                Filter (#0 < #1)
+                  CrossJoin type=differential
+                    ArrangeBy keys=[[]]
+                      Distinct group_by=[#0]
+                        Project (#0)
+                          Get materialize.public.t
+                    Project (#0)
+                      Get materialize.public.mv
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -283,56 +281,56 @@ EOF
 
 # Test SELECT subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
-Explained Query
-  Let // { non_negative: false }
-    Project (#2, #4) // { non_negative: false }
-      Join on=(eq(#0, #1, #3)) type=differential // { non_negative: false }
-        Get l0 // { non_negative: true }
-        ArrangeBy keys=[[#0]] // { non_negative: false }
-          Union // { non_negative: false }
-            Get l3 // { non_negative: true }
-            Map (null) // { non_negative: false }
-              Union // { non_negative: false }
-                Negate // { non_negative: false }
-                  Project (#0) // { non_negative: true }
-                    Get l3 // { non_negative: true }
-                Get l1 // { non_negative: true }
-        ArrangeBy keys=[[#0]] // { non_negative: false }
-          Union // { non_negative: false }
-            Get l4 // { non_negative: true }
-            Map (null) // { non_negative: false }
-              Union // { non_negative: false }
-                Negate // { non_negative: false }
-                  Project (#0) // { non_negative: true }
-                    Get l4 // { non_negative: true }
-                Get l1 // { non_negative: true }
-    Where
-      l4 =
-        TopK group_by=[#0] limit=1 monotonic=false // { non_negative: true }
-          Project (#0, #1) // { non_negative: true }
-            Join on=(#0 = #2) type=differential // { non_negative: true }
-              Get l2 // { non_negative: true }
-              Filter (#1) IS NOT NULL // { non_negative: true }
-                Get materialize.public.mv // { non_negative: true }
-      l3 =
-        TopK group_by=[#0] limit=1 monotonic=false // { non_negative: true }
-          Project (#0, #1) // { non_negative: true }
-            Join on=(#0 = #2) type=differential // { non_negative: true }
-              Get l2 // { non_negative: true }
-              Filter (#1) IS NOT NULL // { non_negative: true }
-                Get materialize.public.iv // { non_negative: true }
-      l2 =
-        ArrangeBy keys=[[#0]] // { non_negative: true }
-          Get l1 // { non_negative: true }
-      l1 =
-        Distinct group_by=[#0] // { non_negative: true }
-          Get l0 // { non_negative: true }
-      l0 =
-        Project (#1) // { non_negative: true }
-          Get materialize.public.t // { non_negative: true }
+Explained Query:
+  Return
+    Project (#2, #4)
+      Join on=(eq(#0, #1, #3)) type=differential
+        Get l0
+        ArrangeBy keys=[[#0]]
+          Union
+            Get l3
+            Map (null)
+              Union
+                Negate
+                  Project (#0)
+                    Get l3
+                Get l1
+        ArrangeBy keys=[[#0]]
+          Union
+            Get l4
+            Map (null)
+              Union
+                Negate
+                  Project (#0)
+                    Get l4
+                Get l1
+  With
+    cte l4 =
+      TopK group_by=[#0] limit=1 monotonic=false
+        Project (#0, #1)
+          Join on=(#0 = #2) type=differential
+            Get l2
+            Filter (#1) IS NOT NULL
+              Get materialize.public.mv
+    cte l3 =
+      TopK group_by=[#0] limit=1 monotonic=false
+        Project (#0, #1)
+          Join on=(#0 = #2) type=differential
+            Get l2
+            Filter (#1) IS NOT NULL
+              Get materialize.public.iv
+    cte l2 =
+      ArrangeBy keys=[[#0]]
+        Get l1
+    cte l1 =
+      Distinct group_by=[#0]
+        Get l0
+    cte l0 =
+      Project (#1)
+        Get materialize.public.t
 
 Source materialize.public.mv
   filter=((#1) IS NOT NULL)
@@ -345,44 +343,44 @@ EOF
 
 # Test outer joins (ON syntax).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT t1.a, t2.a
 FROM t as t1
 LEFT JOIN t as t2 ON t1.b = t2.b
 RIGHT JOIN t as t3 ON t2.b = t3.b
 ----
-Explained Query
-  Let // { non_negative: false }
-    Union // { non_negative: false }
-      Map (null, null) // { non_negative: false }
-        Union // { non_negative: false }
-          Negate // { non_negative: false }
-            Project () // { non_negative: true }
-              Join on=(#0 = #1) type=differential // { non_negative: true }
-                Project (#1) // { non_negative: true }
-                  Get materialize.public.t // { non_negative: true }
-                ArrangeBy keys=[[#0]] // { non_negative: true }
-                  Distinct group_by=[#0] // { non_negative: true }
-                    Project (#1) // { non_negative: true }
-                      Get l2 // { non_negative: true }
-          Project () // { non_negative: true }
-            Get materialize.public.t // { non_negative: true }
-      Project (#0, #2) // { non_negative: true }
-        Get l2 // { non_negative: true }
-    Where
-      l2 =
-        Project (#0..=#2) // { non_negative: true }
-          Join on=(eq(#1, #3, #4)) type=differential // { non_negative: true }
-            Get l1 // { non_negative: true }
-            Get l1 // { non_negative: true }
-            Project (#1) // { non_negative: true }
-              Get l0 // { non_negative: true }
-      l1 =
-        ArrangeBy keys=[[#1]] // { non_negative: true }
-          Get l0 // { non_negative: true }
-      l0 =
-        Filter (#1) IS NOT NULL // { non_negative: true }
-          Get materialize.public.t // { non_negative: true }
+Explained Query:
+  Return
+    Union
+      Map (null, null)
+        Union
+          Negate
+            Project ()
+              Join on=(#0 = #1) type=differential
+                Project (#1)
+                  Get materialize.public.t
+                ArrangeBy keys=[[#0]]
+                  Distinct group_by=[#0]
+                    Project (#1)
+                      Get l2
+          Project ()
+            Get materialize.public.t
+      Project (#0, #2)
+        Get l2
+  With
+    cte l2 =
+      Project (#0..=#2)
+        Join on=(eq(#1, #3, #4)) type=differential
+          Get l1
+          Get l1
+          Project (#1)
+            Get l0
+    cte l1 =
+      ArrangeBy keys=[[#1]]
+        Get l0
+    cte l0 =
+      Filter (#1) IS NOT NULL
+        Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -391,22 +389,22 @@ EOF
 
 # Test a single CTE.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
 ----
-Explained Query
-  Let // { non_negative: true }
-    Project (#2) // { non_negative: true }
-      Map ((#0 + #1)) // { non_negative: true }
-        CrossJoin type=differential // { non_negative: true }
-          ArrangeBy keys=[[]] // { non_negative: true }
-            Get l0 // { non_negative: true }
-          Get l0 // { non_negative: true }
-    Where
-      l0 =
-        Project (#2) // { non_negative: true }
-          Map ((#0 * #1)) // { non_negative: true }
-            Get materialize.public.t // { non_negative: true }
+Explained Query:
+  Return
+    Project (#2)
+      Map ((#0 + #1))
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l0
+          Get l0
+  With
+    cte l0 =
+      Project (#2)
+        Map ((#0 * #1))
+          Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -416,7 +414,7 @@ EOF
 # Test multiple CTEs: a case where we cannot pull the let statement up through
 # the join because the local l0 is correlated against the lhs of the enclosing join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT
   *
 FROM
@@ -436,37 +434,37 @@ FROM
     SELECT * FROM r4 WHERE r4.m != r1.a OR (r4.m IS NOT NULL AND r1.a IS NULL)
   ) as r5;
 ----
-Explained Query
-  Let // { non_negative: true }
-    Project (#0..=#2, #4) // { non_negative: true }
-      Filter ((#0 != #4) OR ((#4) IS NOT NULL AND (#0) IS NULL)) // { non_negative: true }
-        Join on=(#0 = #3) type=differential // { non_negative: true }
-          Get l1 // { non_negative: true }
-          ArrangeBy keys=[[#0]] // { non_negative: true }
-            Reduce group_by=[#0] aggregates=[max((#0 * #1))] // { non_negative: true }
-              CrossJoin type=differential // { non_negative: true }
-                ArrangeBy keys=[[]] // { non_negative: true }
-                  Distinct group_by=[#0] // { non_negative: true }
-                    Project (#0) // { non_negative: true }
-                      Get l1 // { non_negative: true }
-                Get l0 // { non_negative: true }
-    Where
-      l1 =
-        Project (#0, #1, #3) // { non_negative: true }
-          Filter (#0 != #3) // { non_negative: true }
-            Join on=(#0 = #2) type=delta // { non_negative: true }
-              ArrangeBy keys=[[#0]] // { non_negative: true }
-                Get materialize.public.t // { non_negative: true }
-              ArrangeBy keys=[[#0]] // { non_negative: true }
-                Reduce group_by=[#0] aggregates=[max((#0 * #1))] // { non_negative: true }
-                  CrossJoin type=differential // { non_negative: true }
-                    ArrangeBy keys=[[]] // { non_negative: true }
-                      Distinct group_by=[#0] // { non_negative: true }
-                        Get l0 // { non_negative: true }
-                    Get l0 // { non_negative: true }
-      l0 =
-        Project (#0) // { non_negative: true }
-          Get materialize.public.t // { non_negative: true }
+Explained Query:
+  Return
+    Project (#0..=#2, #4)
+      Filter ((#0 != #4) OR ((#4) IS NOT NULL AND (#0) IS NULL))
+        Join on=(#0 = #3) type=differential
+          Get l1
+          ArrangeBy keys=[[#0]]
+            Reduce group_by=[#0] aggregates=[max((#0 * #1))]
+              CrossJoin type=differential
+                ArrangeBy keys=[[]]
+                  Distinct group_by=[#0]
+                    Project (#0)
+                      Get l1
+                Get l0
+  With
+    cte l1 =
+      Project (#0, #1, #3)
+        Filter (#0 != #3)
+          Join on=(#0 = #2) type=delta
+            ArrangeBy keys=[[#0]]
+              Get materialize.public.t
+            ArrangeBy keys=[[#0]]
+              Reduce group_by=[#0] aggregates=[max((#0 * #1))]
+                CrossJoin type=differential
+                  ArrangeBy keys=[[]]
+                    Distinct group_by=[#0]
+                      Get l0
+                  Get l0
+    cte l0 =
+      Project (#0)
+        Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -475,19 +473,19 @@ EOF
 
 # Test cross join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT t1.a, t2.a FROM t as t1, t as t2
 ----
-Explained Query
-  Let // { non_negative: true }
-    CrossJoin type=differential // { non_negative: true }
-      ArrangeBy keys=[[]] // { non_negative: true }
-        Get l0 // { non_negative: true }
-      Get l0 // { non_negative: true }
-    Where
-      l0 =
-        Project (#0) // { non_negative: true }
-          Get materialize.public.t // { non_negative: true }
+Explained Query:
+  Return
+    CrossJoin type=differential
+      ArrangeBy keys=[[]]
+        Get l0
+      Get l0
+  With
+    cte l0 =
+      Project (#0)
+        Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -496,7 +494,7 @@ EOF
 
 # Test cyclic join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT t1.a, t2.a
 FROM
   t as t1,
@@ -504,21 +502,21 @@ FROM
   t as t3
 WHERE t1.b = t2.b AND t2.b = t3.b
 ----
-Explained Query
-  Let // { non_negative: true }
-    Project (#0, #2) // { non_negative: true }
-      Join on=(eq(#1, #3, #4)) type=differential // { non_negative: true }
-        Get l1 // { non_negative: true }
-        Get l1 // { non_negative: true }
-        Project (#1) // { non_negative: true }
-          Get l0 // { non_negative: true }
-    Where
-      l1 =
-        ArrangeBy keys=[[#1]] // { non_negative: true }
-          Get l0 // { non_negative: true }
-      l0 =
-        Filter (#1) IS NOT NULL // { non_negative: true }
-          Get materialize.public.t // { non_negative: true }
+Explained Query:
+  Return
+    Project (#0, #2)
+      Join on=(eq(#1, #3, #4)) type=differential
+        Get l1
+        Get l1
+        Project (#1)
+          Get l0
+  With
+    cte l1 =
+      ArrangeBy keys=[[#1]]
+        Get l0
+    cte l0 =
+      Filter (#1) IS NOT NULL
+        Get materialize.public.t
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -538,22 +536,22 @@ CREATE INDEX v_e_idx ON V(e);
 
 # Test a differential join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
-Explained Query
-  Project (#0, #1, #0, #3, #3, #1) // { non_negative: true }
-    Filter (#0) IS NOT NULL // { non_negative: true }
-      Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential // { non_negative: true }
-        ArrangeBy keys=[[#0]] // { non_negative: true }
-          Get materialize.public.t // { non_negative: true }
-        ArrangeBy keys=[[#0]] // { non_negative: true }
-          Get materialize.public.u // { non_negative: true }
-        ArrangeBy keys=[[#0, #1]] // { non_negative: true }
-          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { non_negative: true }
-            Get materialize.public.v // { non_negative: true }
+Explained Query:
+  Project (#0, #1, #0, #3, #3, #1)
+    Filter (#0) IS NOT NULL
+      Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
+        ArrangeBy keys=[[#0]]
+          Get materialize.public.t
+        ArrangeBy keys=[[#0]]
+          Get materialize.public.u
+        ArrangeBy keys=[[#0, #1]]
+          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+            Get materialize.public.v
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -564,24 +562,24 @@ EOF
 
 # Test a differential join WITH(join_impls).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join_impls, non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join_impls) AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
-Explained Query
-  Project (#0, #1, #0, #3, #3, #1) // { non_negative: true }
-    Filter (#0) IS NOT NULL // { non_negative: true }
-      Filter #0 = #2 AND #1 = #5 AND #3 = #4 // { non_negative: true }
-        LinearJoin using=[#0, #1]
-          ArrangeBy keys=[[#0, #1]] // { non_negative: true }
-            Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { non_negative: true }
-              Get materialize.public.v // { non_negative: true }
-          LinearJoin using=[#0]
-            ArrangeBy keys=[[#0]] // { non_negative: true }
-              Get materialize.public.t // { non_negative: true }
-            ArrangeBy keys=[[#0]] // { non_negative: true }
-              Get materialize.public.u // { non_negative: true }
+Explained Query:
+  Project (#0, #1, #0, #3, #3, #1)
+    Filter (#0) IS NOT NULL
+      Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
+        implementation
+          %1 » %0[#0] » %2[#0, #1]
+        ArrangeBy keys=[[#0]]
+          Get materialize.public.t
+        ArrangeBy keys=[[#0]]
+          Get materialize.public.u
+        ArrangeBy keys=[[#0, #1]]
+          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+            Get materialize.public.v
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -597,21 +595,21 @@ CREATE INDEX t_b_idx ON T(b);
 
 # Test a delta join WITH(join_impls).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE b = c and d = e
 ----
-Explained Query
-  Project (#0, #1, #1, #3, #3, #5) // { non_negative: true }
-    Filter (#1) IS NOT NULL AND (#3) IS NOT NULL // { non_negative: true }
-      Join on=(#1 = #2 AND #3 = #4) type=delta // { non_negative: true }
-        ArrangeBy keys=[[#1]] // { non_negative: true }
-          Get materialize.public.t // { non_negative: true }
-        ArrangeBy keys=[[#0], [#1]] // { non_negative: true }
-          Get materialize.public.u // { non_negative: true }
-        ArrangeBy keys=[[#0]] // { non_negative: true }
-          Get materialize.public.v // { non_negative: true }
+Explained Query:
+  Project (#0, #1, #1, #3, #3, #5)
+    Filter (#1) IS NOT NULL AND (#3) IS NOT NULL
+      Join on=(#1 = #2 AND #3 = #4) type=delta
+        ArrangeBy keys=[[#1]]
+          Get materialize.public.t
+        ArrangeBy keys=[[#0], [#1]]
+          Get materialize.public.u
+        ArrangeBy keys=[[#0]]
+          Get materialize.public.v
 
 Used Indexes:
   - materialize.public.u_c_idx
@@ -623,40 +621,25 @@ EOF
 
 # Test a delta join WITH(join_impls).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join_impls, non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join_impls) AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE b = c and d = e
 ----
-Explained Query
-  Project (#0, #1, #1, #3, #3, #5) // { non_negative: true }
-    Filter (#1) IS NOT NULL AND (#3) IS NOT NULL // { non_negative: true }
-      Filter #1 = #2 AND #3 = #4 // { non_negative: true }
-        Union
-          HalfJoin using=[#0]
-            ArrangeBy keys=[[#0]] // { non_negative: true }
-              Get materialize.public.v // { non_negative: true }
-            HalfJoin using=[#0]
-              ArrangeBy keys=[[#0], [#1]] // { non_negative: true }
-                Get materialize.public.u // { non_negative: true }
-              ArrangeBy keys=[[#1]] // { non_negative: true }
-                Get materialize.public.t // { non_negative: true }
-          HalfJoin using=[#0]
-            ArrangeBy keys=[[#0]] // { non_negative: true }
-              Get materialize.public.v // { non_negative: true }
-            HalfJoin using=[#1]
-              ArrangeBy keys=[[#1]] // { non_negative: true }
-                Get materialize.public.t // { non_negative: true }
-              ArrangeBy keys=[[#0], [#1]] // { non_negative: true }
-                Get materialize.public.u // { non_negative: true }
-          HalfJoin using=[#1]
-            ArrangeBy keys=[[#1]] // { non_negative: true }
-              Get materialize.public.t // { non_negative: true }
-            HalfJoin using=[#1]
-              ArrangeBy keys=[[#0], [#1]] // { non_negative: true }
-                Get materialize.public.u // { non_negative: true }
-              ArrangeBy keys=[[#0]] // { non_negative: true }
-                Get materialize.public.v // { non_negative: true }
+Explained Query:
+  Project (#0, #1, #1, #3, #3, #5)
+    Filter (#1) IS NOT NULL AND (#3) IS NOT NULL
+      Join on=(#1 = #2 AND #3 = #4) type=delta
+        implementation
+          %0 » %1[#0] » %2[#0]
+          %1 » %0[#1] » %2[#0]
+          %2 » %1[#1] » %0[#1]
+        ArrangeBy keys=[[#1]]
+          Get materialize.public.t
+        ArrangeBy keys=[[#0], [#1]]
+          Get materialize.public.u
+        ArrangeBy keys=[[#0]]
+          Get materialize.public.v
 
 Used Indexes:
   - materialize.public.u_c_idx
@@ -668,21 +651,21 @@ EOF
 
 # Test an IndexedFilter join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE a = 0
 GROUP BY a
 ----
-Explained Query
-  Project (#1, #0) // { non_negative: true }
-    Map (0) // { non_negative: true }
-      Reduce aggregates=[max(#0)] // { non_negative: true }
-        Project (#1) // { non_negative: true }
-          Join on=(#0 = #2) type=indexed_filter // { non_negative: true }
-            ArrangeBy keys=[[#0]] // { non_negative: true }
-              Get materialize.public.t // { non_negative: true }
-            Constant // { non_negative: true }
+Explained Query:
+  Project (#1, #0)
+    Map (0)
+      Reduce aggregates=[max(#0)]
+        Project (#1)
+          Join on=(#0 = #2) type=indexed_filter
+            ArrangeBy keys=[[#0]]
+              Get materialize.public.t
+            Constant
               - (0)
 
 Used Indexes:
@@ -697,18 +680,22 @@ CREATE INDEX t_a_b_idx ON T(a,b)
 
 # Test an IndexedFilter join WITH(join_impls).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join_impls, non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join_impls) AS TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
 GROUP BY a
 ----
-Explained Query
-  Reduce group_by=[#0] aggregates=[max(#1)] // { non_negative: true }
-    Project (#0, #1) // { non_negative: true }
-      Lookup (#0 = 0 AND #1 = 1) OR (#0 = 3 AND #1 = 4) OR (#0 = 7 AND #1 = 8)
-        ArrangeBy keys=[[#0, #1]] // { non_negative: true }
-          Get materialize.public.t // { non_negative: true }
+Explained Query:
+  Reduce group_by=[#0] aggregates=[max(#1)]
+    Project (#0, #1)
+      Join on=(#0 = #2 AND #1 = #3) type=indexed_filter
+        ArrangeBy keys=[[#0, #1]]
+          Get materialize.public.t
+        Constant
+          - (0, 1)
+          - (3, 4)
+          - (7, 8)
 
 Used Indexes:
   - materialize.public.t_a_b_idx
@@ -717,12 +704,12 @@ EOF
 
 # Test an IndexedFilter join on fast path WITH(join_impls).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join_impls, non_negative) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join_impls) AS TEXT FOR
 SELECT *
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
 ----
-Explained Query (fast path)
+Explained Query (fast path):
   Project (#0, #1)
     ReadExistingIndex materialize.public.t_a_b_idx lookup values [(0, 1); (3, 4); (7, 8)]
 

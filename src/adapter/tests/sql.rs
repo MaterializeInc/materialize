@@ -20,6 +20,8 @@
 
 use std::sync::Arc;
 
+use tokio::sync::Mutex;
+
 use mz_adapter::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
 use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
@@ -29,7 +31,6 @@ use mz_sql::catalog::CatalogDatabase;
 use mz_sql::names::{self, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 use mz_sql::DEFAULT_SCHEMA;
-use tokio::sync::Mutex;
 
 // This morally tests the name resolution stuff, but we need access to a
 // catalog.

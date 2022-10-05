@@ -201,6 +201,7 @@ A
 > CREATE SINK sink1 FROM v1mat
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sink=materialize.public.sink1 sort-messages=true
 {"before": null, "after": {"row":{"c1": 3}}}

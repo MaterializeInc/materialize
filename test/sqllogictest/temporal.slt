@@ -12,7 +12,7 @@
 mode cockroach
 
 # Two columns here represent a validity interval [a, b].
-# These values must be castable to mztimestamp, otherwise the BETWEEN will error.
+# These values must be castable to mz_timestamp, otherwise the BETWEEN will error.
 statement ok
 CREATE VIEW intervals (a, b) AS VALUES (1, 10), (1, 2), (2, 13), (3, 1), (0, 10), (5, 18446744073709551614)
 
@@ -68,7 +68,7 @@ SELECT *
 FROM intervals_max
 WHERE mz_now() BETWEEN a AND b
 
-query error step mztimestamp overflow
+query error step mz_timestamp overflow
 select * from valid_max AS OF 0
 
 #

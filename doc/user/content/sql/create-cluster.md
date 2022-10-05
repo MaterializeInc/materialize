@@ -7,8 +7,15 @@ menu:
     parent: commands
 ---
 
-`CREATE CLUSTER` creates a logical [cluster](/overview/key-concepts#clusters), which
-contains indexes.
+`CREATE CLUSTER` creates a logical [cluster](/overview/key-concepts#clusters),
+which contains indexes. By default, a cluster named `default` with a single
+cluster replica will exist in every environment.
+
+To switch your active cluster, use the `SET` command:
+
+```sql
+SET cluster = other_cluster;
+```
 
 ## Conceptual framework
 

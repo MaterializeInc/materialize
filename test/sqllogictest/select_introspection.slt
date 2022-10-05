@@ -67,13 +67,8 @@ RESET cluster_replica
 query error log source reads must target a replica
 SELECT * FROM mz_internal.mz_compute_exports
 
-statement ok
-CREATE VIEW introspection_view AS SELECT * FROM mz_internal.mz_compute_exports
-
-query error log source reads must target a replica
-SELECT * FROM introspection_view
-
 # Verify that the logic does not apply to persisted logs
+
 statement ok
 SELECT * FROM mz_internal.mz_active_peeks_1
 
@@ -85,9 +80,6 @@ DROP CLUSTER REPLICA test.replica_b;
 
 statement ok
 SELECT * FROM mz_internal.mz_compute_exports
-
-statement ok
-SELECT * FROM introspection_view
 
 # Verify that querying introspection data is disallowed on clusters with
 # introspection disabled.

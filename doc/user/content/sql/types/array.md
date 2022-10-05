@@ -11,7 +11,7 @@ Arrays are a multidimensional sequence of any non-array type.
 {{< warning >}}
 We do not recommend using arrays, which exist in Materialize primarily to
 facilitate compatibility with PostgreSQL. Specifically, many of the PostgreSQL
-compatibility views in the [system catalog](/sql/system-tables/) must expose
+compatibility views in the [system catalog](/sql/system-catalog/) must expose
 array types. Unfortunately, PostgreSQL arrays have odd semantics and do not
 interoperate well with modern data formats like JSON and Avro.
 

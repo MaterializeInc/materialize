@@ -210,19 +210,19 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkConsistencyConnection {
+pub struct KafkaSinkProgressConnection {
     pub topic: String,
 }
 
-impl RustType<ProtoKafkaSinkConsistencyConnection> for KafkaSinkConsistencyConnection {
-    fn into_proto(&self) -> ProtoKafkaSinkConsistencyConnection {
-        ProtoKafkaSinkConsistencyConnection {
+impl RustType<ProtoKafkaSinkProgressConnection> for KafkaSinkProgressConnection {
+    fn into_proto(&self) -> ProtoKafkaSinkProgressConnection {
+        ProtoKafkaSinkProgressConnection {
             topic: self.topic.clone(),
         }
     }
 
-    fn from_proto(proto: ProtoKafkaSinkConsistencyConnection) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaSinkConsistencyConnection { topic: proto.topic })
+    fn from_proto(proto: ProtoKafkaSinkProgressConnection) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaSinkProgressConnection { topic: proto.topic })
     }
 }
 
@@ -235,7 +235,7 @@ pub struct KafkaSinkConnection {
     pub relation_key_indices: Option<Vec<usize>>,
     pub value_desc: RelationDesc,
     pub published_schema_info: Option<PublishedSchemaInfo>,
-    pub consistency: KafkaSinkConsistencyConnection,
+    pub progress: KafkaSinkProgressConnection,
     pub exactly_once: bool,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
@@ -263,7 +263,7 @@ proptest::prop_compose! {
         relation_key_indices in any::<Option<Vec<usize>>>(),
         value_desc in any::<RelationDesc>(),
         published_schema_info in any::<Option<PublishedSchemaInfo>>(),
-        consistency in any::<KafkaSinkConsistencyConnection>(),
+        progress in any::<KafkaSinkProgressConnection>(),
         exactly_once in any::<bool>(),
         fuel in any::<usize>(),
     ) -> KafkaSinkConnection {
@@ -275,7 +275,7 @@ proptest::prop_compose! {
             relation_key_indices,
             value_desc,
             published_schema_info,
-            consistency,
+            progress,
             exactly_once,
             fuel,
         }
@@ -339,7 +339,7 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             relation_key_indices: self.relation_key_indices.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
             published_schema_info: self.published_schema_info.into_proto(),
-            consistency: Some(self.consistency.into_proto()),
+            progress: Some(self.progress.into_proto()),
             exactly_once: self.exactly_once,
             fuel: self.fuel.into_proto(),
         }
@@ -364,9 +364,9 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
                 .value_desc
                 .into_rust_if_some("ProtoKafkaSinkConnection::addrs")?,
             published_schema_info: proto.published_schema_info.into_rust()?,
-            consistency: proto
-                .consistency
-                .into_rust_if_some("ProtoKafkaSinkConnection::topic")?,
+            progress: proto
+                .progress
+                .into_rust_if_some("ProtoKafkaSinkConnection::progress")?,
             exactly_once: proto.exactly_once,
             fuel: proto.fuel.into_rust()?,
         })

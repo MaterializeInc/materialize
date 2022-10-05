@@ -135,7 +135,7 @@ the resultant state.
 ## Examples
 
 ```bash
-curl https://`https://<MZ host address>/api/sql/api/sql \
+curl https://<MZ host address>/api/sql \
     --header "Content-Type: application/json" \
     --user <username>:<passsword> \
     --data '{
@@ -167,7 +167,7 @@ curl https://`https://<MZ host address>/api/sql/api/sql \
 ```
 
 ```bash
-curl https://`https://<MZ host address>/api/sql/api/sql \
+curl https://<MZ host address>/api/sql \
     --header "Content-Type: application/json" \
     --user <username>:<passsword> \
     --data '{

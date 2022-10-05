@@ -214,8 +214,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         connection_context: ConnectionContext::for_tests(
             (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
         ),
-        otel_enable_callback: mz_ore::tracing::OpenTelemetryEnableCallback::none(),
-        stderr_filter_callback: mz_ore::tracing::StderrFilterCallback::none(),
+        tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: None,
     }))?;

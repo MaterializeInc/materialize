@@ -46,7 +46,7 @@ query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
 SELECT 1 / 0
 ----
-Explained Query
+Explained Query:
   Error "division by zero"
 
 EOF
@@ -56,7 +56,7 @@ query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
-Explained Query
+Explained Query:
   Constant
     - ((1, 2) x 2)
     - (3, 4)
@@ -71,7 +71,7 @@ query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
 SELECT * FROM t
 ----
-Explained Query
+Explained Query:
   Get::PassArrangements materialize.public.t
     raw=false
     arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
@@ -86,11 +86,9 @@ query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
 SELECT * FROM u
 ----
-Explained Query
+Explained Query:
   Get::PassArrangements materialize.public.u
     raw=true
-
-Source materialize.public.u
 
 EOF
 
@@ -99,7 +97,7 @@ query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
 SELECT a + b, 1 FROM t
 ----
-Explained Query
+Explained Query:
   Get::Arrangement materialize.public.t
     project=(#2, #3)
     map=((#0 + #1), 1)
@@ -117,7 +115,7 @@ query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
 SELECT c + d, 1 FROM u
 ----
-Explained Query
+Explained Query:
   Get::Collection materialize.public.u
     raw=true
 
@@ -132,7 +130,7 @@ query T multiline
 EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS TEXT FOR
 SELECT * FROM ov
 ----
-Explained Query
+Explained Query:
   TopK::Basic order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
     ArrangeBy
       input_key=[#0]
@@ -151,7 +149,7 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT a FROM t EXCEPT ALL SELECT b FROM mv
 ----
-Explained Query
+Explained Query:
   Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
     ArrangeBy
       raw=false
@@ -180,8 +178,8 @@ EXPLAIN PHYSICAL PLAN AS TEXT FOR
 WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
 (SELECT x + 1 FROM cte UNION ALL SELECT x - 1 FROM cte)
 ----
-Explained Query
-  Let
+Explained Query:
+  Return
     Union
       Get::Arrangement l0
         project=(#1)
@@ -195,21 +193,21 @@ Explained Query
         key=#0
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
-    Where
-      l0 =
-        Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
-          ArrangeBy
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=() }
-            Union
-              Get::Arrangement materialize.public.t
-                project=(#0)
-                key=#0
-                raw=false
-                arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-              Negate
-                Get::Collection materialize.public.mv
-                  raw=true
+  Where
+    cte l0 =
+      Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+        ArrangeBy
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=() }
+          Union
+            Get::Arrangement materialize.public.t
+              project=(#0)
+              key=#0
+              raw=false
+              arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+            Negate
+              Get::Collection materialize.public.mv
+                raw=true
 
 Source materialize.public.mv
   project=(#1)
@@ -225,7 +223,7 @@ EXPLAIN PHYSICAL PLAN AS TEXT FOR
 WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
 SELECT x * 5 FROM cte WHERE x = 5
 ----
-Explained Query
+Explained Query:
   Mfp
     project=(#1)
     filter=((#0 = 5))
@@ -259,7 +257,7 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT generate_series(a, b) from t
 ----
-Explained Query
+Explained Query:
   FlatMap generate_series(#0, #1, 1)
     project=(#2)
     input_key=#0
@@ -277,7 +275,7 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT DISTINCT a, b FROM t
 ----
-Explained Query
+Explained Query:
   Reduce::Distinct
     val_plan
       project=()
@@ -302,7 +300,7 @@ SELECT
 FROM t
 GROUP BY a
 ----
-Explained Query
+Explained Query:
   Reduce::Accumulable
     simple_aggrs[0]=(0, 0, sum(#1))
     distinct_aggrs[0]=(1, 1, count(distinct #1))
@@ -328,8 +326,8 @@ SELECT
   COUNT(DISTINCT b)
 FROM t
 ----
-Explained Query
-  Let
+Explained Query:
+  Return
     Union
       ArrangeBy
         input_key=[]
@@ -349,20 +347,20 @@ Explained Query
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-    Where
-      l0 =
-        Reduce::Accumulable
-          simple_aggrs[0]=(0, 0, sum(#0))
-          distinct_aggrs[0]=(1, 1, count(distinct #0))
-          val_plan
-            project=(#0, #0)
-          key_plan
-            project=()
-          Get::Arrangement materialize.public.t
-            project=(#1)
-            key=#0
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+  Where
+    cte l0 =
+      Reduce::Accumulable
+        simple_aggrs[0]=(0, 0, sum(#0))
+        distinct_aggrs[0]=(1, 1, count(distinct #0))
+        val_plan
+          project=(#0, #0)
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#1)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -379,7 +377,7 @@ SELECT
 FROM t
 GROUP BY a
 ----
-Explained Query
+Explained Query:
   Reduce::Hierarchical
     aggr_funcs=[min, max]
     skips=[0, 0]
@@ -406,8 +404,8 @@ SELECT
   MAX(DISTINCT b)
 FROM t
 ----
-Explained Query
-  Let
+Explained Query:
+  Return
     Union
       ArrangeBy
         input_key=[]
@@ -427,21 +425,21 @@ Explained Query
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-    Where
-      l0 =
-        Reduce::Hierarchical
-          aggr_funcs=[min, max]
-          skips=[0, 0]
-          buckets=[0, 0]
-          val_plan
-            project=(#0, #0)
-          key_plan
-            project=()
-          Get::Arrangement materialize.public.t
-            project=(#1)
-            key=#0
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+  Where
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        skips=[0, 0]
+        buckets=[0, 0]
+        val_plan
+          project=(#0, #0)
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#1)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -458,7 +456,7 @@ SELECT
 FROM t
 GROUP BY a
 ----
-Explained Query
+Explained Query:
   Reduce::Basic
     aggrs[0]=(0, string_agg(row(row((integer_to_text(#1) || "1"), ","))))
     aggrs[1]=(1, string_agg(row(row((integer_to_text(#1) || "2"), ","))))
@@ -485,8 +483,8 @@ SELECT
   STRING_AGG(b::text || '2',  ',')
 FROM t
 ----
-Explained Query
-  Let
+Explained Query:
+  Return
     Union
       ArrangeBy
         input_key=[]
@@ -506,21 +504,21 @@ Explained Query
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-    Where
-      l0 =
-        Reduce::Basic
-          aggrs[0]=(0, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
-          aggrs[1]=(1, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
-          val_plan
-            project=(#2, #3)
-            map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
-          key_plan
-            project=()
-          Get::Arrangement materialize.public.t
-            project=(#1)
-            key=#0
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+  Where
+    cte l0 =
+      Reduce::Basic
+        aggrs[0]=(0, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
+        aggrs[1]=(1, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
+        val_plan
+          project=(#2, #3)
+          map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#1)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -541,7 +539,7 @@ SELECT
 FROM t
 GROUP BY a
 ----
-Explained Query
+Explained Query:
   Reduce::Collation
     aggregate_types=[a, b, h, h, a, b]
     accumulable
@@ -581,8 +579,8 @@ SELECT
   STRING_AGG(b::text || '2',  ',')
 FROM t
 ----
-Explained Query
-  Let
+Explained Query:
+  Return
     Union
       ArrangeBy
         input_key=[]
@@ -602,30 +600,30 @@ Explained Query
               arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
           Constant
             - ()
-    Where
-      l0 =
-        Reduce::Collation
-          aggregate_types=[a, b, h, h, a, b]
-          accumulable
-            simple_aggrs[0]=(1, 4, sum(#0))
-            distinct_aggrs[0]=(0, 0, count(distinct #0))
-          hierarchical
-            aggr_funcs=[min, max]
-            skips=[2, 0]
-            buckets=[2, 0]
-          basic
-            aggrs[0]=(1, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
-            aggrs[1]=(5, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
-          val_plan
-            project=(#0, #2, #0, #0, #0, #3)
-            map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
-          key_plan
-            project=()
-          Get::Arrangement materialize.public.t
-            project=(#1)
-            key=#0
-            raw=false
-            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+  Where
+    cte l0 =
+      Reduce::Collation
+        aggregate_types=[a, b, h, h, a, b]
+        accumulable
+          simple_aggrs[0]=(1, 4, sum(#0))
+          distinct_aggrs[0]=(0, 0, count(distinct #0))
+        hierarchical
+          aggr_funcs=[min, max]
+          skips=[2, 0]
+          buckets=[2, 0]
+        basic
+          aggrs[0]=(1, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
+          aggrs[1]=(5, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
+        val_plan
+          project=(#0, #2, #0, #0, #0, #3)
+          map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#1)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
 
 Used Indexes:
   - materialize.public.t_a_idx
@@ -639,7 +637,7 @@ SELECT b + d, c + e, a + e
 FROM t, u, v
 WHERE a = c AND d = e AND b + d > 42
 ----
-Explained Query
+Explained Query:
   Join::Linear
     final_closure
       project=(#0, #1, #1)
@@ -700,7 +698,7 @@ SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c AND d = e AND f = a
 ----
-Explained Query
+Explained Query:
   Join::Linear
     final_closure
       project=(#0, #1, #0, #2, #2, #0)
@@ -750,7 +748,7 @@ SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and a = e
 ----
-Explained Query
+Explained Query:
   Join::Delta
     plan_path[0]
       final_closure

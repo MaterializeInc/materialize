@@ -21,13 +21,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
-use tracing::error;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
@@ -37,18 +33,18 @@ use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
-use mz_ore::tracing::{OpenTelemetryEnableCallback, StderrFilterCallback};
+use mz_ore::tracing::TracingTargetCallbacks;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_storage::types::connections::ConnectionContext;
 
-use crate::tcp_connection::ConnectionHandler;
+use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
+use crate::server::ListenerHandle;
 
-pub mod http;
-pub mod tcp_connection;
+mod http;
+mod server;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
-// TODO: should storage usage default go here?
 
 /// Configuration for an `environmentd` server.
 #[derive(Debug, Clone)]
@@ -113,10 +109,8 @@ pub struct Config {
     // === Tracing options. ===
     /// The metrics registry to use.
     pub metrics_registry: MetricsRegistry,
-    /// A callback to enable or disable the OpenTelemetry tracing collector.
-    pub otel_enable_callback: OpenTelemetryEnableCallback,
-    /// A callback to modify the stderr log filter
-    pub stderr_filter_callback: StderrFilterCallback,
+    /// Callbacks used to modify tracing/logging filters
+    pub tracing_target_callbacks: TracingTargetCallbacks,
 
     // === Testing options. ===
     /// A now generation function for mocking time.
@@ -202,32 +196,31 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     };
 
     // Initialize network listeners.
-    let sql_listener = TcpListener::bind(&config.sql_listen_addr).await?;
-    let http_listener = TcpListener::bind(&config.http_listen_addr).await?;
-    let internal_sql_listener = TcpListener::bind(&config.internal_sql_listen_addr).await?;
-    let sql_local_addr = sql_listener.local_addr()?;
-    let http_local_addr = http_listener.local_addr()?;
-    let internal_sql_local_addr = internal_sql_listener.local_addr()?;
+    //
+    // We do this as early as possible during initialization so that the OS will
+    // start queueing incoming connections for when we're ready.
+    let (sql_listener, sql_conns) = server::listen(config.sql_listen_addr).await?;
+    let (http_listener, http_conns) = server::listen(config.http_listen_addr).await?;
+    let (internal_sql_listener, internal_sql_conns) =
+        server::listen(config.internal_sql_listen_addr).await?;
+    let (internal_http_listener, internal_http_conns) =
+        server::listen(config.internal_http_listen_addr).await?;
 
-    // Listen on the internal HTTP API port.
-    let internal_http_local_addr = {
-        let metrics_registry = config.metrics_registry.clone();
-        let server = http::InternalServer::new(
-            metrics_registry,
-            config.otel_enable_callback,
-            config.stderr_filter_callback,
-        );
-        let bound_server = server.bind(config.internal_http_listen_addr);
-        let internal_http_local_addr = bound_server.local_addr();
-        task::spawn(|| "internal_http_server", {
-            async move {
-                if let Err(err) = bound_server.await {
-                    error!("error serving metrics endpoint: {}", err);
-                }
-            }
+    // Start the internal HTTP server.
+    //
+    // We start this server before we've completed initialization so that
+    // metrics are accessible during initialization. Some internal HTTP
+    // endpoints require the adapter to be initialized; requests to those
+    // endpoints block until the adapter client is installed.
+    let (internal_http_adapter_client_tx, internal_http_adapter_client_rx) = oneshot::channel();
+    task::spawn(|| "internal_http_server", {
+        let internal_http_server = InternalHttpServer::new(InternalHttpConfig {
+            metrics_registry: config.metrics_registry.clone(),
+            tracing_target_callbacks: config.tracing_target_callbacks,
+            adapter_client_rx: internal_http_adapter_client_rx,
         });
-        internal_http_local_addr
-    };
+        server::serve(internal_http_conns, internal_http_server)
+    });
 
     // Load the adapter catalog from disk.
     if !config
@@ -286,109 +279,77 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     })
     .await?;
 
-    // TODO(benesch): replace both `TCPListenerStream`s below with
-    // `<type>_listener.incoming()` if that is
-    // restored when the `Stream` trait stabilizes.
+    // Install an adapter client in the internal HTTP server.
+    internal_http_adapter_client_tx
+        .send(adapter_client.clone())
+        .expect("internal HTTP server should not drop first");
 
-    // Launch task to serve connections.
-    //
-    // The lifetime of this task is controlled by a trigger that activates on
-    // drop. Draining marks the beginning of the server shutdown process and
-    // indicates that new user connections (i.e., pgwire and HTTP connections)
-    // should be rejected. Once all existing user connections have gracefully
-    // terminated, this task exits.
-    let (sql_drain_trigger, sql_drain_tripwire) = oneshot::channel();
-    task::spawn(|| "pgwire_server", {
-        let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
+    // Launch SQL server.
+    task::spawn(|| "sql_server", {
+        let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
             adapter_client: adapter_client.clone(),
             frontegg: config.frontegg.clone(),
             internal: false,
         });
-
-        async move {
-            let mut incoming = TcpListenerStream::new(sql_listener);
-            pgwire_server
-                .serve(incoming.by_ref().take_until(sql_drain_tripwire))
-                .await;
-        }
+        server::serve(sql_conns, sql_server)
     });
 
-    // Listen on the internal SQL port.
-    let (internal_sql_drain_trigger, internal_sql_local_addr) = {
-        let (internal_sql_drain_trigger, internal_sql_drain_tripwire) = oneshot::channel();
-        task::spawn(|| "internal_pgwire_server", {
-            let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
-                tls: None,
-                adapter_client: adapter_client.clone(),
-                frontegg: None,
-                internal: true,
-            });
-            let mut incoming = TcpListenerStream::new(internal_sql_listener);
-            async move {
-                internal_pgwire_server
-                    .serve(incoming.by_ref().take_until(internal_sql_drain_tripwire))
-                    .await
-            }
+    // Launch internal SQL server.
+    task::spawn(|| "internal_sql_server", {
+        let internal_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
+            tls: None,
+            adapter_client: adapter_client.clone(),
+            frontegg: None,
+            internal: true,
         });
-        (internal_sql_drain_trigger, internal_sql_local_addr)
-    };
+        server::serve(internal_sql_conns, internal_sql_server)
+    });
 
-    let (http_drain_trigger, http_drain_tripwire) = oneshot::channel();
+    // Launch HTTP server.
     task::spawn(|| "http_server", {
-        async move {
-            let http_server = http::Server::new(http::Config {
-                tls: http_tls,
-                frontegg: config.frontegg,
-                adapter_client,
-                allowed_origin: config.cors_allowed_origin,
-            });
-            let mut incoming = TcpListenerStream::new(http_listener);
-            http_server
-                .serve(incoming.by_ref().take_until(http_drain_tripwire))
-                .await;
-        }
+        let http_server = HttpServer::new(HttpConfig {
+            tls: http_tls,
+            frontegg: config.frontegg,
+            adapter_client,
+            allowed_origin: config.cors_allowed_origin,
+        });
+        server::serve(http_conns, http_server)
     });
 
     Ok(Server {
-        sql_local_addr,
-        http_local_addr,
-        internal_sql_local_addr,
-        internal_http_local_addr,
-        _internal_sql_drain_trigger: internal_sql_drain_trigger,
-        _http_drain_trigger: http_drain_trigger,
-        _sql_drain_trigger: sql_drain_trigger,
+        sql_listener,
+        http_listener,
+        internal_sql_listener,
+        internal_http_listener,
         _adapter_handle: adapter_handle,
     })
 }
 
 /// A running `environmentd` server.
 pub struct Server {
-    sql_local_addr: SocketAddr,
-    http_local_addr: SocketAddr,
-    internal_sql_local_addr: SocketAddr,
-    internal_http_local_addr: SocketAddr,
     // Drop order matters for these fields.
-    _internal_sql_drain_trigger: oneshot::Sender<()>,
-    _http_drain_trigger: oneshot::Sender<()>,
-    _sql_drain_trigger: oneshot::Sender<()>,
+    sql_listener: ListenerHandle,
+    http_listener: ListenerHandle,
+    internal_sql_listener: ListenerHandle,
+    internal_http_listener: ListenerHandle,
     _adapter_handle: mz_adapter::Handle,
 }
 
 impl Server {
     pub fn sql_local_addr(&self) -> SocketAddr {
-        self.sql_local_addr
+        self.sql_listener.local_addr()
     }
 
     pub fn http_local_addr(&self) -> SocketAddr {
-        self.http_local_addr
+        self.http_listener.local_addr()
     }
 
     pub fn internal_sql_local_addr(&self) -> SocketAddr {
-        self.internal_sql_local_addr
+        self.internal_sql_listener.local_addr()
     }
 
     pub fn internal_http_local_addr(&self) -> SocketAddr {
-        self.internal_http_local_addr
+        self.internal_http_listener.local_addr()
     }
 }

@@ -96,6 +96,7 @@ $ kafka-create-topic topic=input
 > CREATE SINK output FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=input schema=${schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}

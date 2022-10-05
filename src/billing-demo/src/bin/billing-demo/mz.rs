@@ -38,7 +38,7 @@ pub async fn create_proto_source(
 
     debug!("creating kafka connection=> {}", query);
 
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     let query = format!(
         "CREATE SOURCE {source} FROM KAFKA CONNECTION kafka_conn (TOPIC '{topic}') \
@@ -52,7 +52,7 @@ pub async fn create_proto_source(
 
     debug!("creating source=> {}", query);
 
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
     Ok(())
 }
 
@@ -62,7 +62,7 @@ pub async fn create_kafka_sink(
     sink_topic_name: &str,
     sink_name: &str,
     schema_registry_url: &str,
-) -> Result<String> {
+) -> Result<()> {
     let query = format!(
         "CREATE CONNECTION IF NOT EXISTS {sink}_kafka_conn
             FOR KAFKA BROKER '{kafka_url}'",
@@ -71,7 +71,7 @@ pub async fn create_kafka_sink(
     );
 
     debug!("creating kafka connection=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     let query = format!(
         "CREATE CONNECTION IF NOT EXISTS {sink}_csr_conn
@@ -82,27 +82,20 @@ pub async fn create_kafka_sink(
     );
 
     debug!("creating confluent schema registry connection=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     let query = format!(
             "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA CONNECTION {sink}_kafka_conn (TOPIC '{topic}') \
-             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {sink}_csr_conn",
+             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {sink}_csr_conn
+             ENVELOPE DEBEZIUM",
              sink = sink_name,
              topic = sink_topic_name,
          );
 
     debug!("creating sink=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
-    // Get the topic for the newly-created sink.
-    let row = mz_client
-        .query_one(
-            "SELECT topic FROM mz_kafka_sinks JOIN mz_sinks ON mz_kafka_sinks.sink_id = mz_sinks.id \
-                 WHERE name = $1",
-            &[&sink_name],
-        )
-        .await?;
-    Ok(row.get("topic"))
+    Ok(())
 }
 
 pub async fn create_price_table(
@@ -117,14 +110,14 @@ pub async fn create_price_table(
     );
 
     debug!("creating price table=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     use rand::{Rng, SeedableRng};
     let rng = &mut rand::rngs::StdRng::seed_from_u64(seed);
     debug!("filling price table");
     for i in 1..num_clients {
         mz_client::execute(
-            &mz_client,
+            mz_client,
             &format!(
                 "INSERT into {} VALUES ('{}', '{}', '{}')",
                 source_name,
@@ -154,12 +147,12 @@ pub async fn reingest_sink(
     );
 
     debug!("creating confluent schema registry connection=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     let query =
         format!("CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '{kafka_url}'");
     debug!("creating kafka connection=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     let query = format!(
         "
@@ -172,7 +165,7 @@ pub async fn reingest_sink(
     );
 
     debug!("creating source to reingest sink=> {}", query);
-    mz_client::execute(&mz_client, &query).await?;
+    mz_client::execute(mz_client, &query).await?;
 
     Ok(())
 }
@@ -335,7 +328,7 @@ pub async fn init_views(
     ];
 
     for v in views.iter() {
-        mz_client::execute(&client, v).await?;
+        mz_client::execute(client, v).await?;
     }
 
     Ok(())
@@ -378,7 +371,7 @@ WHERE
     ];
 
     for v in views.iter() {
-        mz_client::execute(&client, v).await?;
+        mz_client::execute(client, v).await?;
     }
 
     Ok(())

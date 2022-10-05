@@ -1,10 +1,6 @@
 ---
 title: "Optimization"
 description: "Recommendations for memory settings"
-menu:
-  main:
-    parent: ops
-    weight: 70
 aliases:
   - /ops/deployment/
   - /ops/memory/

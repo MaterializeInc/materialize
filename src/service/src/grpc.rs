@@ -264,7 +264,7 @@ where
                         let command = match command.into_rust() {
                             Ok(command) => command,
                             Err(e) => {
-                                error!("error converting command to protobuf: {}", e);
+                                error!("error converting command from protobuf: {}", e);
                                 break;
                             }
                         };

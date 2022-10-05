@@ -17,7 +17,7 @@ use mz_ore::collections::CollectionExt;
 use mz_storage::types::connections::{ConnectionContext, PopulateClientConfig};
 use mz_storage::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
-    KafkaSinkConnectionRetention, KafkaSinkConsistencyConnection, PublishedSchemaInfo,
+    KafkaSinkConnectionRetention, KafkaSinkProgressConnection, PublishedSchemaInfo,
     StorageSinkConnection, StorageSinkConnectionBuilder,
 };
 
@@ -122,7 +122,7 @@ async fn ensure_kafka_topic(
     }
 
     let mut kafka_topic = NewTopic::new(
-        &topic,
+        topic,
         partition_count,
         TopicReplication::Fixed(replication_factor),
     );
@@ -237,7 +237,7 @@ async fn build_kafka(
         mz_storage::types::sinks::KafkaSinkFormat::Json => None,
     };
 
-    let consistency = match builder.consistency_config {
+    let progress = match builder.consistency_config {
         KafkaConsistencyConfig::Progress { topic } => {
             ensure_kafka_topic(
                 &client,
@@ -249,7 +249,7 @@ async fn build_kafka(
             .await
             .context("error registering kafka consistency topic for sink")?;
 
-            KafkaSinkConsistencyConnection { topic }
+            KafkaSinkProgressConnection { topic }
         }
     };
 
@@ -261,7 +261,7 @@ async fn build_kafka(
         key_desc_and_indices: builder.key_desc_and_indices,
         value_desc: builder.value_desc,
         published_schema_info,
-        consistency,
+        progress,
         exactly_once: true,
         fuel: builder.fuel,
     }))

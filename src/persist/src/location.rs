@@ -58,7 +58,7 @@ impl std::str::FromStr for SeqNo {
             None => return Err(format!("invalid SeqNo {}: incorrect prefix", encoded)),
         };
         let seqno =
-            u64::from_str(&encoded).map_err(|err| format!("invalid SeqNo {}: {}", encoded, err))?;
+            u64::from_str(encoded).map_err(|err| format!("invalid SeqNo {}: {}", encoded, err))?;
         Ok(SeqNo(seqno))
     }
 }
@@ -472,8 +472,8 @@ pub mod tests {
         let k0 = "foo/bar/k0";
 
         // Empty key is empty.
-        assert_eq!(blob0.get(&k0).await?, None);
-        assert_eq!(blob1.get(&k0).await?, None);
+        assert_eq!(blob0.get(k0).await?, None);
+        assert_eq!(blob1.get(k0).await?, None);
 
         // Empty list keys is empty.
         let empty_keys = get_keys(&blob0).await?;
@@ -483,10 +483,10 @@ pub mod tests {
 
         // Set a key with AllowNonAtomic and get it back.
         blob0
-            .set(&k0, values[0].clone().into(), AllowNonAtomic)
+            .set(k0, values[0].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob0.get(&k0).await?, Some(values[0].clone()));
-        assert_eq!(blob1.get(&k0).await?, Some(values[0].clone()));
+        assert_eq!(blob0.get(k0).await?, Some(values[0].clone()));
+        assert_eq!(blob1.get(k0).await?, Some(values[0].clone()));
 
         // Set a key with RequireAtomic and get it back.
         blob0
@@ -498,17 +498,17 @@ pub mod tests {
         // Blob contains the key we just inserted.
         let mut blob_keys = get_keys(&blob0).await?;
         blob_keys.sort();
-        assert_eq!(blob_keys, keys(&empty_keys, &[&k0, "k0a"]));
+        assert_eq!(blob_keys, keys(&empty_keys, &[k0, "k0a"]));
         let mut blob_keys = get_keys(&blob1).await?;
         blob_keys.sort();
-        assert_eq!(blob_keys, keys(&empty_keys, &[&k0, "k0a"]));
+        assert_eq!(blob_keys, keys(&empty_keys, &[k0, "k0a"]));
 
         // Can overwrite a key with AllowNonAtomic.
         blob0
-            .set(&k0, values[1].clone().into(), AllowNonAtomic)
+            .set(k0, values[1].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob0.get(&k0).await?, Some(values[1].clone()));
-        assert_eq!(blob1.get(&k0).await?, Some(values[1].clone()));
+        assert_eq!(blob0.get(k0).await?, Some(values[1].clone()));
+        assert_eq!(blob1.get(k0).await?, Some(values[1].clone()));
         // Can overwrite a key with RequireAtomic.
         blob0
             .set("k0a", values[1].clone().into(), RequireAtomic)
@@ -517,17 +517,17 @@ pub mod tests {
         assert_eq!(blob1.get("k0a").await?, Some(values[1].clone()));
 
         // Can delete a key.
-        assert_eq!(blob0.delete(&k0).await, Ok(Some(2)));
+        assert_eq!(blob0.delete(k0).await, Ok(Some(2)));
         // Can no longer get a deleted key.
-        assert_eq!(blob0.get(&k0).await?, None);
-        assert_eq!(blob1.get(&k0).await?, None);
+        assert_eq!(blob0.get(k0).await?, None);
+        assert_eq!(blob1.get(k0).await?, None);
         // Double deleting a key succeeds but indicates that it did no work.
-        assert_eq!(blob0.delete(&k0).await, Ok(None));
+        assert_eq!(blob0.delete(k0).await, Ok(None));
         // Deleting a key that does not exist succeeds.
         assert_eq!(blob0.delete("nope").await, Ok(None));
         // Deleting a key with an empty value indicates it did work but deleted
         // no bytes.
-        blob0.set(&"empty", Bytes::new(), AllowNonAtomic).await?;
+        blob0.set("empty", Bytes::new(), AllowNonAtomic).await?;
         assert_eq!(blob0.delete("empty").await, Ok(Some(0)));
 
         // Empty blob contains no keys.
@@ -540,10 +540,10 @@ pub mod tests {
         assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
         blob0
-            .set(&k0, values[1].clone().into(), AllowNonAtomic)
+            .set(k0, values[1].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob1.get(&k0).await?, Some(values[1].clone()));
-        assert_eq!(blob0.get(&k0).await?, Some(values[1].clone()));
+        assert_eq!(blob1.get(k0).await?, Some(values[1].clone()));
+        assert_eq!(blob0.get(k0).await?, Some(values[1].clone()));
 
         // Insert multiple keys back to back and validate that we can list
         // them all out.
@@ -559,10 +559,10 @@ pub mod tests {
         // Blob contains the key we just inserted.
         let mut blob_keys = get_keys(&blob0).await?;
         blob_keys.sort();
-        assert_eq!(blob_keys, keys(&expected_keys, &[&k0]));
+        assert_eq!(blob_keys, keys(&expected_keys, &[k0]));
         let mut blob_keys = get_keys(&blob1).await?;
         blob_keys.sort();
-        assert_eq!(blob_keys, keys(&expected_keys, &[&k0]));
+        assert_eq!(blob_keys, keys(&expected_keys, &[k0]));
 
         // Insert multiple keys with a different prefix and validate that we can
         // list out keys by their prefix
@@ -585,7 +585,7 @@ pub mod tests {
 
         // We can open a new blob to the same path and use it.
         let blob3 = new_fn("path0").await?;
-        assert_eq!(blob3.get(&k0).await?, Some(values[1].clone()));
+        assert_eq!(blob3.get(k0).await?, Some(values[1].clone()));
 
         Ok(())
     }

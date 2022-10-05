@@ -3007,6 +3007,7 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "uuid",
 ]
 
 [[package]]
@@ -3049,6 +3050,7 @@ dependencies = [
  "mz-storage",
  "mz-transform",
  "once_cell",
+ "prometheus",
  "prost",
  "rand",
  "rdkafka",
@@ -3063,6 +3065,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tracing",
+ "tracing-subscriber",
  "uncased",
  "uuid",
 ]
@@ -3163,7 +3166,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.27.0-alpha.22.post"
+version = "0.27.0-alpha.23.post"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3260,7 +3263,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.27.0-alpha.22.post"
+version = "0.27.0-alpha.23.post"
 dependencies = [
  "anyhow",
  "askama",
@@ -3961,6 +3964,8 @@ dependencies = [
  "smallvec",
  "thiserror",
  "timely",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]
@@ -4243,7 +4248,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storaged"
-version = "0.27.0-alpha.22.post"
+version = "0.27.0-alpha.23.post"
 dependencies = [
  "anyhow",
  "axum",
@@ -4302,6 +4307,7 @@ dependencies = [
  "flate2",
  "futures",
  "globset",
+ "hex",
  "http",
  "itertools",
  "junit-report",
@@ -5775,8 +5781,9 @@ dependencies = [
 
 [[package]]
 name = "segment"
-version = "0.2.0"
-source = "git+https://github.com/MaterializeInc/segment.git#d8ad043a0f4ef907293a2e4a4c9c312e26092fa6"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24fc91c898e0487ff3e471d0849bbaf7d38a00ff5e3531009d386b0bab9b6b12"
 dependencies = [
  "async-trait",
  "reqwest",

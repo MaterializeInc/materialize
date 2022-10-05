@@ -51,7 +51,7 @@ pub fn persist_source<G, YFn>(
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
-    as_of: Antichain<Timestamp>,
+    as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
@@ -92,7 +92,7 @@ pub fn persist_source_core<G, YFn>(
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
     metadata: CollectionMetadata,
-    as_of: Antichain<Timestamp>,
+    as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
@@ -164,6 +164,22 @@ where
             .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(data_shard)
             .await
             .expect("could not open persist shard");
+
+        let as_of_stream = as_of_stream.unwrap_or_else(|| read.since().clone());
+
+        // Eagerly yield the initial as_of. This makes sure that the output
+        // frontier of the `persist_source` closely tracks the `upper` frontier
+        // of the persist shard. It might be that the snapshot for `as_of` is
+        // not initially available yet, but this makes sure we already downgrade
+        // to it.
+        //
+        // Downstream consumers might rely on close frontier tracking for making
+        // progress. For example, the `persist_sink` needs to know the
+        // up-to-date uppper of the output shard to make progress because it
+        // will only write out new data once it knows that earlier writes went
+        // through, including the initial downgrade of the shard upper to the
+        // `as_of`.
+        yield (Vec::new(), as_of_stream.clone());
 
         let mut subscription = read
             .subscribe(as_of_stream.clone())

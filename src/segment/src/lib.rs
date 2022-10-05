@@ -62,8 +62,13 @@ impl Client {
     /// logged but not returned.
     ///
     /// [track event]: https://segment.com/docs/connections/spec/track/
-    pub fn track<S>(&self, user_id: Uuid, event: S, properties: serde_json::Value)
-    where
+    pub fn track<S>(
+        &self,
+        user_id: Uuid,
+        event: S,
+        properties: serde_json::Value,
+        context: Option<serde_json::Value>,
+    ) where
         S: Into<String>,
     {
         let message = BatchMessage::Track(Track {
@@ -72,6 +77,7 @@ impl Client {
             },
             event: event.into(),
             properties,
+            context,
             ..Default::default()
         });
         match self.tx.try_send(message) {

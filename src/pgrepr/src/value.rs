@@ -152,8 +152,8 @@ impl Value {
                 Some(Value::Array { dims, elements })
             }
             (Datum::Array(array), ScalarType::Int2Vector) => {
-                let dims: Vec<_> = array.dims().into_iter().collect();
-                assert!(dims.len() == 1, "int2vector must be 1 dimensional");
+                let dims = array.dims().into_iter();
+                assert!(dims.count() == 1, "int2vector must be 1 dimensional");
                 let elements = array
                     .elements()
                     .iter()
@@ -221,7 +221,7 @@ impl Value {
                 };
                 buf.make_datum(|packer| {
                     packer.push_list(elems.into_iter().map(|elem| match elem {
-                        Some(elem) => elem.into_datum(buf, &elem_pg_type),
+                        Some(elem) => elem.into_datum(buf, elem_pg_type),
                         None => Datum::Null,
                     }));
                 })
@@ -236,7 +236,7 @@ impl Value {
                         for (k, v) in map {
                             row.push(Datum::String(&k));
                             row.push(match v {
-                                Some(elem) => elem.into_datum(buf, &elem_pg_type),
+                                Some(elem) => elem.into_datum(buf, elem_pg_type),
                                 None => Datum::Null,
                             });
                         }
@@ -333,7 +333,7 @@ impl Value {
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
             Value::Numeric(d) => strconv::format_numeric(buf, &d.0),
-            Value::MzTimestamp(t) => strconv::format_mztimestamp(buf, *t),
+            Value::MzTimestamp(t) => strconv::format_mz_timestamp(buf, *t),
         }
     }
 
@@ -520,7 +520,7 @@ impl Value {
             Type::Timestamp { .. } => Value::Timestamp(strconv::parse_timestamp(s)?),
             Type::TimestampTz { .. } => Value::TimestampTz(strconv::parse_timestamptz(s)?),
             Type::Uuid => Value::Uuid(Uuid::parse_str(s)?),
-            Type::MzTimestamp => Value::MzTimestamp(strconv::parse_mztimestamp(s)?),
+            Type::MzTimestamp => Value::MzTimestamp(strconv::parse_mz_timestamp(s)?),
         })
     }
 
@@ -563,7 +563,7 @@ impl Value {
                 Ok(Value::UInt8(v))
             }
             Type::Interval { .. } => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
-            Type::Json => return Err("input of json types is not implemented".into()),
+            Type::Json => Err("input of json types is not implemented".into()),
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::List(_) => Err("binary decoding of list types is not implemented".into()),
             Type::Map { .. } => Err("binary decoding of map types is not implemented".into()),
@@ -576,7 +576,7 @@ impl Value {
             Type::BpChar { .. } => String::from_sql(ty.inner(), raw).map(Value::BpChar),
             Type::VarChar { .. } => String::from_sql(ty.inner(), raw).map(Value::VarChar),
             Type::Time { .. } => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
-            Type::TimeTz { .. } => return Err("input of timetz types is not implemented".into()),
+            Type::TimeTz { .. } => Err("input of timetz types is not implemented".into()),
             Type::Timestamp { .. } => {
                 NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp)
             }

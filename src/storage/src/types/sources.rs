@@ -1495,7 +1495,7 @@ pub struct LoadGeneratorSourceConnection {
 
 impl crate::source::types::SourceConnection for LoadGeneratorSourceConnection {
     fn name(&self) -> &'static str {
-        "loadgen"
+        "load-generator"
     }
 }
 

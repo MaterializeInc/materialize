@@ -22,14 +22,14 @@
 > CREATE SOURCE mz_source
   FROM POSTGRES
   CONNECTION pg
-  PUBLICATION 'mz_source'
+  (PUBLICATION 'mz_source')
 
 > DROP SOURCE IF EXISTS mz_source_alter CASCADE;
 
 > CREATE SOURCE mz_source_alter
   FROM POSTGRES
   CONNECTION pg
-  PUBLICATION 'mz_source_alter'
+  (PUBLICATION 'mz_source_alter')
 
 > CREATE VIEWS FROM SOURCE mz_source;
 

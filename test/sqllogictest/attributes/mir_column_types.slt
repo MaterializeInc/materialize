@@ -31,14 +31,12 @@ CREATE TABLE v (
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR (SELECT * FROM v WHERE f) UNION ALL (SELECT * FROM v WHERE e IS NOT NULL)
 ----
-Explained Query
+Explained Query:
   Union // { types: "(double precision?, boolean?)" }
     Filter #1 // { types: "(double precision?, boolean)" }
       Get materialize.public.v // { types: "(double precision?, boolean?)" }
     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
       Get materialize.public.v // { types: "(double precision?, boolean?)" }
-
-Source materialize.public.v
 
 EOF
 
@@ -46,14 +44,12 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR (SELECT * FROM v WHERE e = 1.25) UNION ALL (SELECT * FROM v WHERE e IS NOT NULL)
 ----
-Explained Query
+Explained Query:
   Union // { types: "(double precision, boolean?)" }
     Filter (#0 = 1.25) // { types: "(double precision, boolean?)" }
       Get materialize.public.v // { types: "(double precision?, boolean?)" }
     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
       Get materialize.public.v // { types: "(double precision?, boolean?)" }
-
-Source materialize.public.v
 
 EOF
 
@@ -64,7 +60,7 @@ EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR
 EXCEPT
 (SELECT sum(a) as a, max(b) as b, c FROM t GROUP BY c)
 ----
-Explained Query
+Explained Query:
   Threshold // { types: "(bigint?, text?, date?)" }
     Union // { types: "(bigint?, text?, date?)" }
       Negate // { types: "(bigint?, text?, date?)" }
@@ -74,8 +70,6 @@ Explained Query
       Constant // { types: "(bigint?, text?, date?)" }
         - (1, "hello", null)
 
-Source materialize.public.t
-
 EOF
 
 #### Correct column scalar type ####
@@ -84,8 +78,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR
 SELECT t.* FROM u LEFT OUTER JOIN t on t.a = u.d
 ----
-Explained Query
-  Let // { types: "(integer?, text?, date?)" }
+Explained Query:
+  Return // { types: "(integer?, text?, date?)" }
     Union // { types: "(integer?, text?, date?)" }
       Map (null, null, null) // { types: "(integer?, text?, date?)" }
         Union // { types: "()" }
@@ -100,19 +94,18 @@ Explained Query
           Project () // { types: "()" }
             Get materialize.public.u // { types: "(integer?)" }
       Get l0 // { types: "(integer, text?, date?)" }
-    Where
-      l0 =
-        Project (#0, #2, #3) // { types: "(integer, text?, date?)" }
-          Join on=(#0 = #1) type=differential // { types: "(integer, integer, text?, date?)" }
-            ArrangeBy keys=[[#0]] // { types: "(integer)" }
-              Filter (#0) IS NOT NULL // { types: "(integer)" }
-                Get materialize.public.u // { types: "(integer?)" }
-            Filter (#0) IS NOT NULL // { types: "(integer, text?, date?)" }
-              Get materialize.public.t // { types: "(integer?, text?, date?)" }
+  With
+    cte l0 =
+      Project (#0, #2, #3) // { types: "(integer, text?, date?)" }
+        Join on=(#0 = #1) type=differential // { types: "(integer, integer, text?, date?)" }
+          ArrangeBy keys=[[#0]] // { types: "(integer)" }
+            Filter (#0) IS NOT NULL // { types: "(integer)" }
+              Get materialize.public.u // { types: "(integer?)" }
+          Filter (#0) IS NOT NULL // { types: "(integer, text?, date?)" }
+            Get materialize.public.t // { types: "(integer?, text?, date?)" }
 
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
-Source materialize.public.u
 
 EOF
 
@@ -120,7 +113,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR
 (SELECT null::boolean as f1, 10 as f2) EXCEPT (SELECT min(f), count(*) FROM v WHERE (select d::double FROM u) = v.e GROUP BY e LIMIT 1)
 ----
-Explained Query
+Explained Query:
   Threshold // { types: "(boolean?, bigint)" }
     Union // { types: "(boolean?, bigint)" }
       Negate // { types: "(boolean?, bigint)" }
@@ -146,7 +139,6 @@ Explained Query
       Constant // { types: "(boolean?, bigint)" }
         - (null, 10)
 
-Source materialize.public.u
 Source materialize.public.v
   filter=((#0) IS NOT NULL)
 

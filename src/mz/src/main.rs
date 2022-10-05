@@ -16,15 +16,18 @@
 extern crate core;
 
 mod login;
+mod password;
 mod profiles;
-mod regions;
+mod region;
 mod shell;
 mod utils;
 
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use regions::{
+use login::generate_api_token;
+use password::list_passwords;
+use region::{
     get_provider_by_region_name, get_provider_region_environment, get_region_environment,
     print_environment_status, print_region_enabled,
 };
@@ -33,11 +36,13 @@ use serde::{Deserialize, Serialize};
 use clap::{Args, Parser, Subcommand};
 use reqwest::Client;
 use shell::check_environment_health;
-use utils::{exit_with_fail_message, run_loading_spinner, CloudProviderRegion};
+use utils::{
+    exit_with_fail_message, run_loading_spinner, AppPassword, CloudProviderRegion, FromTos,
+};
 
 use crate::login::{login_with_browser, login_with_console};
 use crate::profiles::validate_profile;
-use crate::regions::{enable_region_environment, list_cloud_providers, list_regions};
+use crate::region::{enable_region_environment, list_cloud_providers, list_regions};
 use crate::shell::shell;
 
 /// Command-line interface for Materialize.
@@ -47,13 +52,15 @@ use crate::shell::shell;
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
-    /// Specify a particular profile
+    /// Identify using a particular profile
     #[clap(short, long, env = "MZ_PROFILE", default_value = "default")]
     profile: String,
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Show commands to interact with passwords
+    AppPassword(AppPasswordCommand),
     /// Open the docs
     Docs,
     /// Open the web login
@@ -62,8 +69,11 @@ enum Commands {
         #[clap(short, long)]
         interactive: bool,
     },
-    /// Show commands for interaction with the region
-    Regions(Regions),
+    /// Show commands to interact with regions
+    Region {
+        #[clap(subcommand)]
+        command: RegionCommand,
+    },
     /// Connect to a region using a SQL shell
     Shell {
         #[clap(possible_values = CloudProviderRegion::variants())]
@@ -72,13 +82,24 @@ enum Commands {
 }
 
 #[derive(Debug, Args)]
-struct Regions {
+struct AppPasswordCommand {
     #[clap(subcommand)]
-    command: RegionsCommands,
+    command: AppPasswordSubommand,
 }
 
 #[derive(Debug, Subcommand)]
-enum RegionsCommands {
+enum AppPasswordSubommand {
+    /// Create a password.
+    Create {
+        /// Name for the password.
+        name: String,
+    },
+    /// List all enabled passwords.
+    List,
+}
+
+#[derive(Debug, Subcommand)]
+enum RegionCommand {
     /// Enable a region.
     Enable {
         #[clap(possible_values = CloudProviderRegion::variants())]
@@ -115,15 +136,9 @@ struct CloudProvider {
     provider: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FronteggAuthUser {
-    access_token: String,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct FronteggAuthMachine {
+struct FronteggAuth {
     access_token: String,
 }
 
@@ -132,6 +147,13 @@ struct FronteggAuthMachine {
 struct FronteggAPIToken {
     client_id: String,
     secret: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FronteggAppPassword {
+    description: String,
+    created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,15 +169,15 @@ struct BrowserAPIToken {
 struct Profile {
     name: String,
     email: String,
-    client_id: String,
-    secret: String,
+    #[serde(rename(serialize = "app-password", deserialize = "app-password"))]
+    app_password: AppPassword,
     region: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct ValidProfile {
     profile: Profile,
-    frontegg_auth_machine: FronteggAuthMachine,
+    frontegg_auth: FronteggAuth,
 }
 
 struct CloudProviderAndRegion {
@@ -175,6 +197,8 @@ const PROFILES_FILE_NAME: &str = "profiles.toml";
 const CLOUD_PROVIDERS_URL: &str = "https://cloud.materialize.com/api/cloud-providers";
 const API_TOKEN_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/identity/resources/users/api-tokens/v1";
+const API_FRONTEGG_TOKEN_AUTH_URL: &str =
+    "https://admin.cloud.materialize.com/frontegg/identity/resources/users/api-tokens/v1";
 const USER_AUTH_URL: &str =
     "https://admin.cloud.materialize.com/frontegg/identity/resources/auth/v1/user";
 const MACHINE_AUTH_URL: &str =
@@ -186,8 +210,9 @@ const PROFILES_PREFIX: &str = "profiles";
 const ERROR_OPENING_PROFILES_MESSAGE: &str = "Error opening the profiles file";
 const ERROR_PARSING_PROFILES_MESSAGE: &str = "Error parsing the profiles";
 const ERROR_AUTHENTICATING_PROFILE_MESSAGE: &str = "Error authenticating profile";
-const PROFILE_NOT_FOUND_MESSAGE: &str =
+const ERROR_PROFILE_NOT_FOUND_MESSAGE: &str =
     "Profile not found. Please, add one or login using `mz login`.";
+const ERROR_INCORRECT_PROFILE_PASSWORD_MESSAGE: &str = "Invalid app-password.";
 const ERROR_UNKNOWN_REGION: &str = "Unknown region";
 
 #[tokio::main]
@@ -196,6 +221,43 @@ async fn main() -> Result<()> {
     let profile_name = args.profile;
 
     match args.command {
+        Commands::AppPassword(password_cmd) => {
+            let client = Client::new();
+            let valid_profile = validate_profile(profile_name, &client)
+                .await
+                .with_context(|| "Validating profile.")?;
+
+            match password_cmd.command {
+                AppPasswordSubommand::Create { name } => {
+                    let api_token = generate_api_token(&client, valid_profile.frontegg_auth, &name)
+                        .await
+                        .with_context(|| "Generating password.")?;
+
+                    let app_password: AppPassword = AppPassword::from_api_token(api_token);
+                    println!("{}", app_password)
+                }
+                AppPasswordSubommand::List => {
+                    let app_passwords = list_passwords(&client, &valid_profile)
+                        .await
+                        .with_context(|| "Listing passwords.")?;
+
+                    println!("{0: <24} | {1: <24} ", "Name", "Created At");
+                    println!("----------------------------------------------------");
+
+                    app_passwords.iter().for_each(|app_password| {
+                        let mut name = app_password.description.clone();
+
+                        if name.len() > 20 {
+                            let short_name = name[..20].to_string();
+                            name = format!("{:}...", short_name);
+                        }
+
+                        println!("{0: <24} | {1: <24}", name, app_password.created_at);
+                    })
+                }
+            }
+        }
+
         Commands::Docs => {
             // Open the browser docs
             open::that(WEB_DOCS_URL).with_context(|| "Opening the browser.")?
@@ -209,11 +271,11 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Regions(regions_cmd) => {
+        Commands::Region { command } => {
             let client = Client::new();
 
-            match regions_cmd.command {
-                RegionsCommands::Enable {
+            match command {
+                RegionCommand::Enable {
                     cloud_provider_region,
                 } => match CloudProviderRegion::from_str(&cloud_provider_region) {
                     Ok(cloud_provider_region) => {
@@ -249,7 +311,7 @@ async fn main() -> Result<()> {
                     Err(_) => exit_with_fail_message(ExitMessage::Str(ERROR_UNKNOWN_REGION)),
                 },
 
-                RegionsCommands::List => {
+                RegionCommand::List => {
                     let valid_profile = validate_profile(profile_name, &client)
                         .await
                         .with_context(|| "Authenticating profile.")?;
@@ -267,7 +329,7 @@ async fn main() -> Result<()> {
                         });
                 }
 
-                RegionsCommands::Status {
+                RegionCommand::Status {
                     cloud_provider_region,
                 } => match CloudProviderRegion::from_str(&cloud_provider_region) {
                     Ok(cloud_provider_region) => {

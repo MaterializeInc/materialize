@@ -125,7 +125,7 @@ where
             };
 
             let service = Arc::clone(&self.service);
-            let _ = mz_ore::task::spawn(|| format!("maelstrom::handle"), async move {
+            let _ = mz_ore::task::spawn(|| "maelstrom::handle".to_string(), async move {
                 let service = service.get().await;
                 let () = service.eval(handle, msg.src, body).await;
             });
@@ -164,7 +164,7 @@ where
                 // the AsyncInitOnceWaitable nonsense.
                 let args = self.args.clone();
                 let service_init = Arc::clone(&self.service);
-                let _ = mz_ore::task::spawn(|| format!("maelstrom::init"), async move {
+                let _ = mz_ore::task::spawn(|| "maelstrom::init".to_string(), async move {
                     let service = match S::init(&args, &handle).await {
                         Ok(x) => x,
                         Err(err) => {

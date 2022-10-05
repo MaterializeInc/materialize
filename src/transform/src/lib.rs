@@ -146,6 +146,12 @@ pub struct Fixpoint {
 }
 
 impl Transform for Fixpoint {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "fixpoint")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -161,18 +167,31 @@ impl Transform for Fixpoint {
         loop {
             let mut original_count = 0;
             relation.try_visit_post::<_, TransformError>(&mut |_| Ok(original_count += 1))?;
-            for _ in 0..self.limit {
+            for i in 0..self.limit {
                 let original = relation.clone();
-                for transform in self.transforms.iter() {
-                    transform.transform(
-                        relation,
-                        TransformArgs {
-                            id_gen: args.id_gen,
-                            indexes: args.indexes,
-                        },
-                    )?;
-                }
+
+                let span = tracing::span!(
+                    tracing::Level::TRACE,
+                    "iteration",
+                    target = "optimizer",
+                    path.segment = format!("{:04}", i)
+                );
+                span.in_scope(|| -> Result<(), TransformError> {
+                    for transform in self.transforms.iter() {
+                        transform.transform(
+                            relation,
+                            TransformArgs {
+                                id_gen: args.id_gen,
+                                indexes: args.indexes,
+                            },
+                        )?;
+                    }
+                    mz_repr::explain_new::trace_plan(relation);
+                    Ok(())
+                })?;
+
                 if *relation == original {
+                    mz_repr::explain_new::trace_plan(relation);
                     return Ok(());
                 }
             }
@@ -254,6 +273,12 @@ impl Default for FuseAndCollapse {
 }
 
 impl Transform for FuseAndCollapse {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "fuse_and_collapse")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -268,6 +293,7 @@ impl Transform for FuseAndCollapse {
                 },
             )?;
         }
+        mz_repr::explain_new::trace_plan(&*relation);
         Ok(())
     }
 }
@@ -344,7 +370,7 @@ impl Optimizer {
             }),
         ];
         Self {
-            name: "mir_logical_optimizer",
+            name: "logical",
             transforms,
         }
     }
@@ -384,7 +410,7 @@ impl Optimizer {
             Box::new(crate::threshold_elision::ThresholdElision),
         ];
         Self {
-            name: "mir_physical_optimizer",
+            name: "physical",
             transforms,
         }
     }
@@ -416,7 +442,7 @@ impl Optimizer {
             }),
         ];
         Self {
-            name: "mir_logical_cleanup_pass",
+            name: "logical_cleanup",
             transforms,
         }
     }
@@ -425,13 +451,22 @@ impl Optimizer {
     ///
     /// These optimizations are performed with no information about available arrangements,
     /// which makes them suitable for pre-optimization before dataflow deployment.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = self.name)
+    )]
     pub fn optimize(
         &mut self,
         mut relation: MirRelationExpr,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
         let transform_result = self.transform(&mut relation, &EmptyIndexOracle);
         match transform_result {
-            Ok(_) => Ok(mz_expr::OptimizedMirRelationExpr(relation)),
+            Ok(_) => {
+                mz_repr::explain_new::trace_plan(&relation);
+                Ok(mz_expr::OptimizedMirRelationExpr(relation))
+            }
             Err(e) => {
                 // Without this, the dropping of `relation` (which happens automatically when
                 // returning from this function) might run into a stack overflow, see
@@ -447,13 +482,6 @@ impl Optimizer {
     ///
     /// This method should only be called with non-empty `indexes` when optimizing a dataflow,
     /// as the optimizations may lock in the use of arrangements that may cease to exist.
-    #[tracing::instrument(
-        target = "optimizer",
-        level = "trace",
-        name = "mir_optimize",
-        skip_all,
-        fields(optimize.pipeline = %self.name)
-    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -469,6 +497,7 @@ impl Optimizer {
                 },
             )?;
         }
+
         Ok(())
     }
 }

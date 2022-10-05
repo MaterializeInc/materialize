@@ -16,56 +16,40 @@ SELECT ${arg.replicas} > 1
 
 $ set-regex match=s\d+ replacement=SID
 
-> CREATE VIEW count_operates AS SELECT count(*) FROM mz_internal.mz_dataflow_operators;
-> SELECT count(*) FROM count_operates;
+> SELECT count(*) FROM (SELECT count(*) FROM mz_internal.mz_dataflow_operators);
 1
 
-> CREATE VIEW count_channels AS SELECT count(*) FROM mz_internal.mz_dataflow_channels;
-> SELECT count(*) FROM count_channels;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_scheduling_elapsed);
 1
 
-> CREATE VIEW count_elapsed AS SELECT count(*) FROM mz_internal.mz_scheduling_elapsed;
-> SELECT count(*) FROM count_elapsed;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_scheduling_histogram);
 1
 
-> CREATE VIEW count_histogram AS SELECT count(*) FROM mz_internal.mz_scheduling_histogram;
-> SELECT count(*) FROM count_histogram;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_arrangement_sizes);
 1
 
-> CREATE VIEW count_arrangement AS SELECT count(*) FROM mz_internal.mz_arrangement_sizes;
-> SELECT count(*) FROM count_arrangement;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_exports);
 1
 
-> CREATE VIEW count_materializations AS SELECT count(*) FROM mz_internal.mz_compute_exports;
-> SELECT count(*) FROM count_materializations;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_frontiers);
 1
 
-> CREATE VIEW count_frontiers AS SELECT count(*) FROM mz_internal.mz_compute_frontiers;
-> SELECT count(*) FROM count_frontiers;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_import_frontiers);
 1
 
-> CREATE VIEW count_source_frontiers AS SELECT count(*) FROM mz_internal.mz_compute_import_frontiers;
-> SELECT count(*) FROM count_source_frontiers;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_worker_compute_delays);
 1
 
-> CREATE VIEW count_frontier_delays AS SELECT count(*) FROM mz_internal.mz_worker_compute_delays;
-> SELECT count(*) FROM count_frontier_delays;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_worker_compute_dependencies);
 1
 
-> CREATE VIEW count_dependencies AS SELECT count(*) FROM mz_internal.mz_worker_compute_dependencies;
-> SELECT count(*) FROM count_dependencies;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_active_peeks);
 1
 
-> CREATE VIEW count_peeks AS SELECT count(*) FROM mz_internal.mz_active_peeks;
-> SELECT count(*) FROM count_peeks;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_peek_durations);
 1
 
-> CREATE VIEW count_peek_durations AS SELECT count(*) FROM mz_internal.mz_peek_durations;
-> SELECT count(*) FROM count_peek_durations;
-1
-
-> CREATE VIEW count_messages AS SELECT count(*) FROM mz_internal.mz_message_counts;
-> SELECT count(*) FROM count_messages;
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_message_counts);
 1
 
 ! DROP SCHEMA mz_internal
@@ -176,4 +160,4 @@ id      name        position    type
 SID   export_id   1           text
 SID   import_id   2           text
 SID   worker_id   3           uint8
-SID   time        4           mztimestamp
+SID   time        4           mz_timestamp

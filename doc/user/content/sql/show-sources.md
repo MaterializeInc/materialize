@@ -24,15 +24,16 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 `SHOW SOURCES`'s output is a table, with this structure:
 
 ```nofmt
- name  | type
--------+------
- ...   | ...
+ name  | type | size
+-------+------+-----
+ ...   | ...  + ....
 ```
 
 Field | Meaning
 ------|--------
 **name** | The name of the source
-**type** | The type of the source:  `kafka` or `postgres`
+**type** | The type of the source: `kafka`, `postgres`, or `load-generator`
+**size** | The [size](/sql/create-source/#sizing-a-source) of the source.
 
 ### Internal statistic sources
 

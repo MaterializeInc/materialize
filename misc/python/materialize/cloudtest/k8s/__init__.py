@@ -61,8 +61,8 @@ class K8sResource:
     def create(self) -> None:
         assert False
 
-    def image(self, service: str) -> str:
-        repo = mzbuild.Repository(ROOT)
+    def image(self, service: str, release_mode: bool) -> str:
+        repo = mzbuild.Repository(ROOT, release_mode=release_mode)
         deps = repo.resolve_dependencies([repo.images[service]])
         rimage = deps[service]
         return rimage.spec()
@@ -77,6 +77,14 @@ class K8sPod(K8sResource):
     def create(self) -> None:
         core_v1_api = self.api()
         core_v1_api.create_namespaced_pod(body=self.pod, namespace=self.namespace())
+
+    def name(self) -> str:
+        assert self.pod.metadata is not None
+        assert self.pod.metadata.name is not None
+        return self.pod.metadata.name
+
+    def copy(self, source: str, destination: str) -> None:
+        self.kubectl("cp", source, f"{self.name()}:{destination}")
 
 
 class K8sService(K8sResource):

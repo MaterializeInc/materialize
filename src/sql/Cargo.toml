@@ -27,7 +27,7 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr" }
+mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage = { path = "../storage" }

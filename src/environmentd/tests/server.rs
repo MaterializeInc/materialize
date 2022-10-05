@@ -61,9 +61,6 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         )?;
         client.batch_execute("CREATE VIEW constant AS SELECT 1")?;
         client.batch_execute(
-            "CREATE VIEW logging_derived AS SELECT * FROM mz_internal.mz_arrangement_sizes",
-        )?;
-        client.batch_execute(
             "CREATE VIEW mat (a, a_data, c, c_data) AS SELECT 'a', data, 'c' AS c, data FROM src",
         )?;
         client.batch_execute("CREATE DEFAULT INDEX ON mat")?;
@@ -80,7 +77,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             .into_iter()
             .map(|row| row.get(0))
             .collect::<Vec<String>>(),
-        &["constant", "logging_derived", "mat"]
+        &["constant", "mat"]
     );
     assert_eq!(
         client
@@ -107,7 +104,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             .into_iter()
             .map(|row| row.get(0))
             .collect::<Vec<String>>(),
-        vec!["u1", "u2", "u3", "u4", "u5", "u6", "u7"]
+        vec!["u1", "u2", "u3", "u4", "u5", "u6"]
     );
 
     Ok(())
@@ -531,15 +528,15 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
     for tc in extended_test_cases {
         let mut queries = vec![];
         for (query, params) in tc.requests.into_iter() {
-            queries.push(mz_environmentd::http::ExtendedRequest {
-                query: query.to_string(),
-                params: params
+            queries.push(json!({
+                "query": query.to_string(),
+                "params": params
                     .iter()
                     .map(|p| p.map(str::to_string))
                     .collect::<Vec<_>>(),
-            });
+            }));
         }
-        let req = mz_environmentd::http::HttpSqlRequest::Extended { queries };
+        let req = json!({ "queries": queries });
         let res = Client::new().post(url.clone()).json(&req).send()?;
         assert_eq!(res.status(), tc.status, "{:?}: {:?}", req, res.text());
         assert_eq!(res.text()?, tc.body, "{:?}", req);
@@ -623,7 +620,7 @@ fn test_cancel_dataflow_removal() -> Result<(), Box<dyn Error>> {
         cancel_token.cancel_query(postgres::NoTls).unwrap();
     });
 
-    match client1.simple_query("SELECT * FROM t AS OF 18446744073709551615") {
+    match client1.simple_query("SELECT * FROM t AS OF 9223372036854775807") {
         Err(e) if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {}
         Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {:?}", e),
         Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
@@ -660,17 +657,15 @@ fn test_storage_usage_collection_interval() -> Result<(), Box<dyn Error>> {
 
     // Retry because it may take some time for the initial snapshot to be taken.
     let initial_storage: i64 = Retry::default().retry(|_| {
-        Ok::<i64, String>(
-            client
-                .query_one("SELECT SUM(size_bytes)::int8 FROM mz_storage_usage;", &[])
-                .map_err(|e| e.to_string())?
-                .try_get::<_, i64>(0)
-                .map_err(|e| e.to_string())?,
-        )
+        client
+            .query_one("SELECT SUM(size_bytes)::int8 FROM mz_storage_usage;", &[])
+            .map_err(|e| e.to_string())?
+            .try_get::<_, i64>(0)
+            .map_err(|e| e.to_string())
     })?;
 
-    client.batch_execute(&"CREATE TABLE t (a INT)")?;
-    client.batch_execute(&"INSERT INTO t VALUES (1), (2)")?;
+    client.batch_execute("CREATE TABLE t (a INT)")?;
+    client.batch_execute("INSERT INTO t VALUES (1), (2)")?;
 
     // Retry until storage usage is updated.
     Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
@@ -706,16 +701,14 @@ fn test_storage_usage_updates_between_restarts() -> Result<(), Box<dyn Error>> {
         let mut client = server.connect(postgres::NoTls)?;
         // Retry because it may take some time for the initial snapshot to be taken.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
-            Ok::<f64, String>(
-                client
+            client
                     .query_one(
                         "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_storage_usage;",
                         &[],
                     )
                     .map_err(|e| e.to_string())?
                     .try_get::<_, f64>(0)
-                    .map_err(|e| e.to_string())?,
-            )
+                    .map_err(|e| e.to_string())
         })?
     };
 
@@ -761,16 +754,14 @@ fn test_storage_usage_doesnt_update_between_restarts() -> Result<(), Box<dyn Err
         let mut client = server.connect(postgres::NoTls)?;
         // Retry because it may take some time for the initial snapshot to be taken.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
-            Ok::<f64, String>(
-                client
+            client
                     .query_one(
                         "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_storage_usage;",
                         &[],
                     )
                     .map_err(|e| e.to_string())?
                     .try_get::<_, f64>(0)
-                    .map_err(|e| e.to_string())?,
-            )
+                    .map_err(|e| e.to_string())
         })?
     };
 

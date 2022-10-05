@@ -189,12 +189,12 @@ fn dependency_order(attributes: HashSet<Box<dyn Attribute>>) -> Vec<Box<dyn Attr
 
 /// Compute the transitive closure of the given set of attributes.
 fn transitive_closure(attributes: &mut HashSet<Box<dyn Attribute>>) {
-    let mut diff = requirements(&attributes);
+    let mut diff = requirements(attributes);
 
     // iterate until no new attributes can be discovered
     while !diff.is_empty() {
         attributes.extend(diff);
-        diff = requirements(&attributes);
+        diff = requirements(attributes);
     }
 }
 

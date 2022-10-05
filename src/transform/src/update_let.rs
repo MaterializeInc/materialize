@@ -45,13 +45,21 @@ impl CheckedRecursion for UpdateLet {
 }
 
 impl crate::Transform for UpdateLet {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "update_let")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         *args.id_gen = IdGen::default(); // Get a fresh IdGen.
-        self.action(relation, &mut HashMap::new(), args.id_gen)
+        let result = self.action(relation, &mut HashMap::new(), args.id_gen);
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 

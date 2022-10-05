@@ -701,10 +701,10 @@ impl<'a> Datum<'a> {
     ///
     /// Panics if the datum is not [`Datum::MzTimestamp`].
     #[track_caller]
-    pub fn unwrap_mztimestamp(&self) -> crate::Timestamp {
+    pub fn unwrap_mz_timestamp(&self) -> crate::Timestamp {
         match self {
             Datum::MzTimestamp(t) => *t,
-            _ => panic!("Datum::unwrap_mztimestamp called on {:?}", self),
+            _ => panic!("Datum::unwrap_mz_timestamp called on {:?}", self),
         }
     }
 
@@ -2458,11 +2458,8 @@ fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDic
             entries.sort_by_key(|(k, _)| k.clone());
             entries.dedup_by_key(|(k, _)| k.clone());
             let mut row = Row::default();
-            let entry_iter: Vec<(&str, Datum<'_>)> = entries
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.into()))
-                .collect();
-            row.packer().push_dict(entry_iter.into_iter());
+            let entry_iter = entries.iter().map(|(k, v)| (k.as_str(), Datum::from(v)));
+            row.packer().push_dict(entry_iter);
             PropDict(row, entries)
         })
         .boxed()

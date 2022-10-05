@@ -83,6 +83,7 @@ impl KinesisMetrics {
 #[derive(Clone, Debug)]
 pub(super) struct SourceSpecificMetrics {
     pub(super) capability: UIntGaugeVec,
+    pub(super) resume_upper: IntGaugeVec,
 }
 
 impl SourceSpecificMetrics {
@@ -92,6 +93,12 @@ impl SourceSpecificMetrics {
                 name: "mz_capability",
                 help: "The current capability for this dataflow. This corresponds to min(mz_partition_closed_ts)",
                 var_labels: ["topic", "source_id", "worker_id"],
+            )),
+            resume_upper: registry.register(metric!(
+                name: "mz_resume_upper",
+                // TODO(guswynn): should this also track the resumption frontier operator?
+                help: "The timestamp-domain resumption frontier chosen for a source's ingestion",
+                var_labels: ["source_id"],
             )),
         }
     }
@@ -104,6 +111,7 @@ pub(super) struct PartitionSpecificMetrics {
     pub(super) closed_ts: UIntGaugeVec,
     pub(super) messages_ingested: GenericCounterVec<AtomicI64>,
     pub(super) partition_offset_max: IntGaugeVec,
+    pub(super) source_resume_upper: UIntGaugeVec,
 }
 
 impl PartitionSpecificMetrics {
@@ -134,6 +142,11 @@ impl PartitionSpecificMetrics {
                 name: "mz_kafka_partition_offset_max",
                 help: "High watermark offset on broker for partition",
                 var_labels: ["topic", "source_id", "partition_id"],
+            )),
+            source_resume_upper: registry.register(metric!(
+                name: "mz_source_resume_upper",
+                help: "The offset-domain upper that is used for initializing this partition",
+                var_labels: ["source_id", "partition_id"],
             )),
         }
     }

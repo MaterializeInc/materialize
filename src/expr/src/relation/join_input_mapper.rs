@@ -258,7 +258,7 @@ impl JoinInputMapper {
                 return true;
             }
         }
-        return false;
+        false
     }
 
     /// Takes an expression in the global context and looks in `equivalences`
@@ -358,7 +358,7 @@ impl JoinInputMapper {
             },
             &mut |_| {},
         );
-        if self.is_localized(&expr, index) {
+        if self.is_localized(expr, index) {
             // If the localization attempt is successful, all columns in `expr`
             // should only come from input `index`. Switch to the local context.
             *expr = self.map_expr_to_local(expr.clone());
@@ -399,7 +399,7 @@ impl JoinInputMapper {
         expr: &MirScalarExpr,
         index: usize,
     ) -> Option<MirScalarExpr> {
-        if self.is_localized(&expr, index) {
+        if self.is_localized(expr, index) {
             Some(expr.clone())
         } else {
             match expr {

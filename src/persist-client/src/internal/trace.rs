@@ -1191,7 +1191,7 @@ pub mod datadriven {
         args: DirectiveArgs,
     ) -> Result<String, anyhow::Error> {
         let res = FueledMergeRes {
-            output: DirectiveArgs::parse_hollow_batch(&args.input),
+            output: DirectiveArgs::parse_hollow_batch(args.input),
         };
         if datadriven.trace.apply_merge_res(&res) {
             Ok("applied\n".into())

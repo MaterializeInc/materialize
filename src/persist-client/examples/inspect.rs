@@ -27,6 +27,15 @@ pub(crate) enum Command {
     /// Prints latest consensus state as JSON
     State(StateArgs),
 
+    /// Prints latest consensus rollup state as JSON
+    StateRollup(StateArgs),
+
+    /// Prints the count and size of blobs in an environment
+    BlobCount(BlobCountArgs),
+
+    /// Prints the unreferenced blobs across all shards
+    UnreferencedBlobs(StateArgs),
+
     /// Prints each consensus state change as JSON. Output includes the full consensus state
     /// before and after each state transitions:
     ///
@@ -71,25 +80,64 @@ pub struct StateArgs {
     ///
     #[clap(long, verbatim_doc_comment)]
     consensus_uri: String,
+
+    /// Blob to use
+    ///
+    /// When connecting to a deployed environment's blob, the necessary connection glue must be in
+    /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
+    /// URI scoped to the environment's bucket prefix.
+    #[clap(long)]
+    blob_uri: String,
+}
+
+/// Arguments for viewing the blobs of a given shard
+#[derive(Debug, Clone, clap::Parser)]
+pub struct BlobCountArgs {
+    /// Blob to use
+    ///
+    /// When connecting to a deployed environment's blob, the necessary connection glue must be in
+    /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
+    /// URI scoped to the environment's bucket prefix.
+    #[clap(long)]
+    blob_uri: String,
 }
 
 pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
     match command.command {
         Command::State(args) => {
             let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
-            let state =
-                mz_persist_client::inspect::fetch_current_state(shard_id, &args.consensus_uri)
-                    .await?;
+            let state = mz_persist_client::inspect::fetch_latest_state(
+                shard_id,
+                &args.consensus_uri,
+                &args.blob_uri,
+            )
+            .await?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&state).expect("unserializable state")
             );
         }
+        Command::StateRollup(args) => {
+            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
+            let state_rollup = mz_persist_client::inspect::fetch_latest_state_rollup(
+                shard_id,
+                &args.consensus_uri,
+                &args.blob_uri,
+            )
+            .await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&state_rollup).expect("unserializable state")
+            );
+        }
         Command::StateDiff(args) => {
             let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
-            let states =
-                mz_persist_client::inspect::fetch_state_diffs(shard_id, &args.consensus_uri)
-                    .await?;
+            let states = mz_persist_client::inspect::fetch_state_diffs(
+                shard_id,
+                &args.consensus_uri,
+                &args.blob_uri,
+            )
+            .await?;
             for window in states.windows(2) {
                 println!(
                     "{}",
@@ -99,6 +147,20 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
                     })
                 );
             }
+        }
+        Command::BlobCount(args) => {
+            let blob_counts = mz_persist_client::inspect::blob_counts(&args.blob_uri).await?;
+            println!("{}", json!(blob_counts));
+        }
+        Command::UnreferencedBlobs(args) => {
+            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
+            let unreferenced_blobs = mz_persist_client::inspect::unreferenced_blobs(
+                &shard_id,
+                &args.consensus_uri,
+                &args.blob_uri,
+            )
+            .await?;
+            println!("{}", json!(unreferenced_blobs));
         }
     }
 

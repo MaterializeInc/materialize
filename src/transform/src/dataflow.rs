@@ -28,7 +28,12 @@ use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
 /// Inlines views, performs a full optimization pass including physical
 /// planning using the supplied indexes, propagates filtering and projection
 /// information to dataflow sources and lifts monotonicity information.
-#[tracing::instrument(target = "optimizer", level = "trace", skip_all)]
+#[tracing::instrument(
+    target = "optimizer",
+    level = "debug",
+    skip_all,
+    fields(path.segment ="global")
+)]
 pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
@@ -58,6 +63,8 @@ pub fn optimize_dataflow(
     optimize_dataflow_monotonic(dataflow)?;
 
     optimize_dataflow_index_imports(dataflow, indexes)?;
+
+    mz_repr::explain_new::trace_plan(dataflow);
 
     Ok(())
 }
@@ -164,6 +171,12 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 
 /// Performs either the logical or the physical optimization pass on the
 /// dataflow using the supplied set of indexes.
+#[tracing::instrument(
+    target = "optimizer",
+    level = "debug",
+    skip_all,
+    fields(path.segment = optimizer.name)
+)]
 fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
@@ -180,6 +193,8 @@ fn optimize_dataflow_relations(
         optimizer.transform(object.plan.as_inner_mut(), indexes)?;
     }
 
+    mz_repr::explain_new::trace_plan(dataflow);
+
     Ok(())
 }
 
@@ -189,6 +204,12 @@ fn optimize_dataflow_relations(
 /// Dataflows that exist for the sake of generating plan explanations do not
 /// have published outputs. In this case, we push demand information from views
 /// not depended on by other views to dataflow inputs.
+#[tracing::instrument(
+    target = "optimizer",
+    level = "debug",
+    skip_all,
+    fields(path.segment ="demand")
+)]
 fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // Maps id -> union of known columns demanded from the source/view with the
     // corresponding id.
@@ -269,6 +290,8 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
         }
     }
 
+    mz_repr::explain_new::trace_plan(dataflow);
+
     Ok(())
 }
 
@@ -315,6 +338,12 @@ where
 }
 
 /// Pushes predicate to dataflow inputs.
+#[tracing::instrument(
+    target = "optimizer",
+    level = "debug",
+    skip_all,
+    fields(path.segment ="filters")
+)]
 fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
@@ -348,6 +377,8 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
         }
     }
 
+    mz_repr::explain_new::trace_plan(dataflow);
+
     Ok(())
 }
 
@@ -375,6 +406,12 @@ where
 }
 
 /// Propagates information about monotonic inputs through operators.
+#[tracing::instrument(
+    target = "optimizer",
+    level = "debug",
+    skip_all,
+    fields(path.segment ="monotonic")
+)]
 pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     let mut monotonic_ids = HashSet::new();
     for (source_id, (_source, is_monotonic)) in dataflow.source_imports.iter() {
@@ -405,6 +442,12 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
 ///
 /// The input `dataflow` should import all indexes belonging to all views it
 /// references.
+#[tracing::instrument(
+    target = "optimizer",
+    level = "debug",
+    skip_all,
+    fields(path.segment ="index_imports")
+)]
 fn optimize_dataflow_index_imports(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,

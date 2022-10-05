@@ -44,7 +44,7 @@ pub fn bench_writes(
             let mut batches = None;
             for _ in 0..iters {
                 let b = runtime
-                    .block_on(bench_writes_one_iter(&client, &data))
+                    .block_on(bench_writes_one_iter(client, data))
                     .expect("failed to run iter");
                 assert_eq!(batches.get_or_insert(b), &b);
             }
@@ -89,7 +89,7 @@ pub fn bench_write_to_listen(
             let mut batches = None;
             for _ in 0..iters {
                 let b = runtime
-                    .block_on(bench_write_to_listen_one_iter(&client, &data))
+                    .block_on(bench_write_to_listen_one_iter(client, data))
                     .expect("failed to run iter");
                 assert_eq!(batches.get_or_insert(b), &b);
             }
@@ -199,7 +199,7 @@ pub fn bench_snapshot(
 
         b.iter(|| {
             runtime
-                .block_on(bench_snapshot_one_iter(&client, &shard_id, &as_of))
+                .block_on(bench_snapshot_one_iter(client, &shard_id, &as_of))
                 .expect("failed to run iter")
         })
     });

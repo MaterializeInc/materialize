@@ -129,9 +129,9 @@ struct CteDesc {
 impl HirRelationExpr {
     /// Rewrite `self` into a `mz_expr::MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
-    #[tracing::instrument(target = "optimizer", level = "trace", name = "hir_to_mir", skip_all)]
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "hir_to_mir", skip_all)]
     pub fn lower(self) -> mz_expr::MirRelationExpr {
-        match self {
+        let result = match self {
             // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`
             // to ensure that the downstream optimizer can easily bypass most
             // irrelevant optimizations (e.g. reduce folding) for this expression
@@ -155,7 +155,11 @@ impl HirRelationExpr {
                     },
                 )
             }
-        }
+        };
+
+        mz_repr::explain_new::trace_plan(&result);
+
+        result
     }
 
     /// Return a `mz_expr::MirRelationExpr` which evaluates `self` once for each row of `get_outer`.

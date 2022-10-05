@@ -303,7 +303,7 @@ impl<T: AstInfo> AstDisplay for CopyStatement<T> {
                 f.write_node(name);
                 if !columns.is_empty() {
                     f.write_str("(");
-                    f.write_node(&display::comma_separated(&columns));
+                    f.write_node(&display::comma_separated(columns));
                     f.write_str(")");
                 }
             }
@@ -457,7 +457,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub legacy_with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
-    pub envelope: Option<Envelope<T>>,
+    pub envelope: Option<Envelope>,
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
@@ -554,7 +554,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub from: T::ObjectName,
     pub connection: CreateSinkConnection<T>,
     pub format: Option<Format<T>>,
-    pub envelope: Option<Envelope<T>>,
+    pub envelope: Option<Envelope>,
     pub with_options: Vec<CreateSinkOption<T>>,
 }
 
@@ -687,7 +687,7 @@ impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
         f.write_node(&self.source);
         if let Some(targets) = &self.targets {
             f.write_str(" (");
-            f.write_node(&display::comma_separated(&targets));
+            f.write_node(&display::comma_separated(targets));
             f.write_str(")");
         }
     }
@@ -954,14 +954,14 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
                 f.write_str(&self.as_type);
                 f.write_str("( ");
                 if !with_options.is_empty() {
-                    f.write_node(&display::comma_separated(&with_options));
+                    f.write_node(&display::comma_separated(with_options));
                 }
                 f.write_str(" )");
             }
             CreateTypeAs::Record { column_defs } => {
                 f.write_str("( ");
                 if !column_defs.is_empty() {
-                    f.write_node(&display::comma_separated(&column_defs));
+                    f.write_node(&display::comma_separated(column_defs));
                 }
                 f.write_str(" )");
             }
@@ -1015,7 +1015,7 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
             }
             ClusterOption::Replicas(replicas) => {
                 f.write_str("REPLICAS (");
-                f.write_node(&display::comma_separated(&replicas));
+                f.write_node(&display::comma_separated(replicas));
                 f.write_str(")");
             }
         }
@@ -1175,12 +1175,12 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
         match &self.action {
             AlterIndexAction::SetOptions(options) => {
                 f.write_str("SET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
             AlterIndexAction::ResetOptions(options) => {
                 f.write_str("RESET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
         }
@@ -1214,12 +1214,12 @@ impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
         match &self.action {
             AlterSourceAction::SetOptions(options) => {
                 f.write_str("SET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
             AlterSourceAction::ResetOptions(options) => {
                 f.write_str("RESET (");
-                f.write_node(&display::comma_separated(&options));
+                f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
         }
@@ -1440,9 +1440,6 @@ pub struct DropClusterReplicasStatement {
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
     pub names: Vec<QualifiedReplica>,
-    /// Whether `CASCADE` was specified. This will be `false` when
-    /// `RESTRICT` or no drop behavior at all was specified.
-    pub cascade: bool,
 }
 
 impl AstDisplay for DropClusterReplicasStatement {
@@ -1452,9 +1449,6 @@ impl AstDisplay for DropClusterReplicasStatement {
             f.write_str("IF EXISTS ");
         }
         f.write_node(&display::comma_separated(&self.names));
-        if self.cascade {
-            f.write_str(" CASCADE");
-        }
     }
 }
 impl_display!(DropClusterReplicasStatement);
@@ -2237,6 +2231,21 @@ pub enum ExplainStageNew {
     PhysicalPlan,
     /// The complete trace of the plan through the optimizer
     Trace,
+}
+
+impl ExplainStageNew {
+    /// Return the tracing path that corresponds to a given stage.
+    pub fn path(&self) -> &'static str {
+        match self {
+            ExplainStageNew::RawPlan => "optimize/raw",
+            ExplainStageNew::QueryGraph => "optimize/qgm/raw",
+            ExplainStageNew::OptimizedQueryGraph => "optimize/qgm/optimized",
+            ExplainStageNew::DecorrelatedPlan => "optimize/hir_to_mir",
+            ExplainStageNew::OptimizedPlan => "optimize/global",
+            ExplainStageNew::PhysicalPlan => "optimize/mir_to_lir",
+            ExplainStageNew::Trace => unreachable!(),
+        }
+    }
 }
 
 impl AstDisplay for ExplainStageNew {

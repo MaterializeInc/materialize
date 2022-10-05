@@ -62,6 +62,7 @@ u      false     uuid
 > CREATE SINK uuid_sink_${testdrive.seed} FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 $ kafka-verify format=avro sort-messages=true sink=materialize.public.uuid_sink_${testdrive.seed}
 {"before": null, "after": {"row":{"u": "16fd95b0-65b7-4249-9b66-1547cd95923d"}}}

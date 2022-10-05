@@ -107,13 +107,21 @@ impl CheckedRecursion for PredicatePushdown {
 }
 
 impl crate::Transform for PredicatePushdown {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "predicate_pushdown")
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
         let mut empty = HashMap::new();
-        self.action(relation, &mut empty)
+        let result = self.action(relation, &mut empty);
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
     }
 }
 
@@ -277,7 +285,7 @@ impl PredicatePushdown {
                                         if input_mapper.try_localize_to_input_with_bound_expr(
                                             &mut localized,
                                             index,
-                                            &equivalences,
+                                            equivalences,
                                         ) {
                                             push_down.push(localized);
                                             pushed = true;

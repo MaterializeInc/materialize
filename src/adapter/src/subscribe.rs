@@ -99,7 +99,7 @@ impl PendingSubscribe {
                         "SUBSCRIBE only supports single-dimensional timestamps"
                     );
                     let mut packer = row_buf.packer();
-                    packer.push(Datum::from(numeric::Numeric::from(*&upper[0])));
+                    packer.push(Datum::from(numeric::Numeric::from(upper[0])));
                     packer.push(Datum::True);
                     // Fill in the diff column and all table columns with NULL.
                     for _ in 0..(self.arity + 1) {

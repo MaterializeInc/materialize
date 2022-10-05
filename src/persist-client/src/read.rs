@@ -330,6 +330,7 @@ where
                 part,
                 self.handle.blob.as_ref(),
                 Arc::clone(&self.handle.metrics),
+                &self.handle.metrics.read.listen,
                 Some(&self.handle.reader_id),
             )
             .await;
@@ -544,6 +545,7 @@ where
                 part,
                 self.blob.as_ref(),
                 Arc::clone(&self.metrics),
+                &self.metrics.read.snapshot,
                 Some(&self.reader_id),
             )
             .await;
@@ -661,7 +663,7 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            self.downgrade_since(&new_since).await;
+            self.downgrade_since(new_since).await;
         }
     }
 

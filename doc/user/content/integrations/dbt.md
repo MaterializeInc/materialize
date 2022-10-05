@@ -69,21 +69,34 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
 1. Open `profiles.yml` and adapt it to connect to your Materialize instance using the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize).
 
-    As an example, the following profile would allow you to connect to Materialize in two different environments: an instance running locally (`dev`) and a Materialize Cloud instance (`prod`).
+    As an example, the following profile would allow you to connect to Materialize in two different environments: a developer environment (`dev`) and a production environment (`prod`).
 
     ```yaml
     default:
       outputs:
 
+        prod:
+          type: materialize
+          threads: 1
+          host: <host>
+          port: 6875
+          user: <user@domain.com>
+          pass: <password>
+          database: materialize
+          schema: public
+          cluster: default
+          sslmode: require
         dev:
           type: materialize
           threads: 1
           host: <host>
           port: 6875
-          user: <user>
+          user: <user@domain.com>
           pass: <password>
-          dbname: materialize
-          schema: public
+          database: <dev_database>
+          schema: <dev_schema>
+          cluster: <dev_cluster>
+          sslmode: require
 
       target: dev
     ```
@@ -100,65 +113,139 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
 ## Build and run dbt models
 
-In dbt, a [model](https://docs.getdbt.com/docs/building-a-dbt-project/building-models#getting-started) is a `SELECT` statement that encapsulates a data transformation you want to run on top of your database. For dbt to know how to persist (or not) a transformation, the model needs to be associated with a [materialization](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/materializations) strategy.
+For dbt to know how to persist (or not) a transformation, the model needs to be associated with a [materialization](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/materializations) strategy.
+Because Materialize is optimized for real-time transformations of streaming data and the core of dbt is built around batch, the `dbt-materialize` adapter implements a few custom materialization types:
 
-### dbt models
+{{% dbt-materializations %}}
+
+Create a materialization for each SQL statement you're planning to deploy. Each individual materialization should be stored as a `.sql` file under the directory defined by `model-paths` in `dbt_project.yml`.
+
+### Sources
+
+In dbt, using a [source](https://docs.getdbt.com/docs/building-a-dbt-project/using-sources) makes it possible to name and describe the data loaded into Materialize.
+You can instruct dbt to create a [source](/sql/create-source) in Materialize using the custom `source` materialization, which allows for injecting the complete source statement into your `.sql` file.
+
+{{< note >}}
+To connect to a Kafka broker or PostgreSQL database, you first need to create a connection that specifies access and authentication parameters.
+Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements. For more details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+{{</ note >}}
+
+{{< tabs tabID="1" >}} {{< tab "Kafka">}}
+Create a [Kafka source](/sql/create-source/kafka/).
+
+**Filename:** sources/kafka_topic_a.sql
+```sql
+{{ config(materialized='source') }}
+
+CREATE SOURCE IF NOT EXISTS {{ this }}
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
+  FORMAT TEXT
+```
+
+{{< /tab >}} {{< tab "PostgreSQL">}}
+Create a [PostgreSQL source](/sql/create-source/postgres/).
+
+**Filename:** sources/postgres.sql
+```sql
+{{ config(materialized='source',
+    post_hook="CREATE VIEWS FROM SOURCE {{ this }} (
+                table_a as {{ this.database }}.{{ this.schema }}.table_a,
+                table_b as {{ this.database }}.{{ this.schema }}.table_b, ...)") }}
+
+CREATE SOURCE IF NOT EXISTS {{ this }}
+  FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+```
+
+The [pre-hook](https://docs.getdbt.com/reference/resource-configs/pre-hook-post-hook) defined above is used to create the replication views that reproduce the publication's original tables.
+{{< /tab >}} {{< /tabs >}}
+
+Sources are defined in `.yml` files nested under a `sources:` key.
+
+```yaml
+sources:
+  - name: postgres
+    schema: "{{ target.schema }}"
+    tables:
+      - name: postgres_table_a
+      - name: postgres_table_b
+  - name: kafka
+    schema: "{{ target.schema }}"
+    tables:
+      - name: kafka_topic_a
+```
+
+The sources above would be compiled to:
+```
+database.schema.postgres_table_a
+database.schema.postgres_table_b
+database.schema.kafka_topic_a
+```
+
+* Use the `{{ this }}` [relation](https://docs.getdbt.com/reference/dbt-jinja-functions/this) to generate a fully-qualified name for the source from the base model name.
+
+* To grab information about your current Materialize connection, use the `{{ target }}` [relation](https://docs.getdbt.com/reference/dbt-jinja-functions/target).
+
+### Views and materialized views
+
+In dbt, a [model](https://docs.getdbt.com/docs/building-a-dbt-project/building-models#getting-started) is a `SELECT` statement that encapsulates a data transformation you want to run on top of your database.
 
 When you use dbt with Materialize, **your models stay up-to-date** without manual or configured refreshes. This allows you to efficiently transform streaming data using the same thought process you'd use for batch transformations on top of any other database.
 
-[//]: # "TODO(morsapaes) Adapt once new get started guide is merged"
+#### Views
 
-1. Create a model for each SQL statement you're planning to deploy. Each individual model should be stored as a `.sql` file under the directory defined by `source-paths` in `dbt_project.yml`.
+dbt models are materialized as `views` by default, so to create a [view](/sql/create-view) in Materialize you can simply provide the SQL statement in the model (and skip the `materialized` configuration parameter).
 
-    As an example, we'll use the SQL statements in our [getting started guide](/get-started/) and re-write them as dbt models.
+**Filename:** models/view_a.sql
+```sql
+SELECT
+    col_a, ...
+FROM {{ source('kafka','kafka_topic_a') }}
+```
 
-    <h5>Creating a source</h5>
+The model above would be compiled to `database.schema.view_a`.
+One thing to note here is that the model depends on the Kafka source defined above. To express this dependency and track the **lineage** of your project, you can use the dbt [source()](https://docs.getdbt.com/reference/dbt-jinja-functions/source) function.
 
-    You can instruct dbt to create a [source](/sql/create-source) in Materialize using the custom `source` [materialization](#materializations):
+#### Materialized views
 
-    ```sql
-    {{ config(materialized='source') }}
+This is where Materialize goes beyond dbt's incremental models (and traditional databases), with [materialized views](/sql/create-materialized-view) that **continuously update** as the underlying data changes:
 
-    {% set source_name %}
-        {{ mz_generate_name('market_orders_raw') }}
-    {% endset %}
+**Filename:** models/materialized_view_a.sql
+```sql
+{{ config(materialized='materializedview') }}
 
-    CREATE SOURCE {{ source_name }}
-    FROM LOAD GENERATOR COUNTER;
-    ```
+SELECT
+    col_a, ...
+FROM {{ ref('view_a') }}
+```
 
-    The `mz_generate_name` [macro](https://docs.getdbt.com/docs/building-a-dbt-project/jinja-macros/#macros) allows you to generate a fully-qualified name from a base object name. Here, `source_name` would be compiled to `materialize.public.market_orders_raw`.
+The model above would be compiled to `database.schema.materialized_view_a`.
+Here, the model depends on the view defined above, and is referenced as such via the dbt [ref()](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
 
-    <h5>Creating a view</h5>
+### Configuration
 
-    dbt models are materialized as `views` by default, so to create a [view](/sql/create-view) in Materialize you can simply provide the SQL statement in the model (and skip the `materialized` configuration parameter):
+`source`, `view`, and `materialized view` materializations accept the following additional configuration options.
 
-    ```sql
-    SELECT
-        ((text::jsonb)->>'bid_price')::float AS bid_price,
-        (text::jsonb)->>'order_quantity' AS order_quantity,
-        (text::jsonb)->>'symbol' AS symbol,
-        (text::jsonb)->>'trade_type' AS trade_type,
-        to_timestamp(((text::jsonb)->'timestamp')::bigint) AS ts
-    FROM {{ ref('market_orders_raw') }}
-    ```
+#### cluster
 
-    One thing to note here is that the model depends on the source defined in the previous step. To express this dependency and track the **lineage** of your project, you can use the dbt [ref()](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function {{% gh 8744 %}}.
+Use the [cluster](/sql/create-cluster/) option to specify the cluster in which the materialization is created. If unspecified, the default cluster for the connection is used.
 
-    <h5>Creating a materialized view</h5>
+```sql
+{{ config(materialized='materializedview', cluster='cluster_a') }}
+```
 
-    This is where Materialize goes beyond dbt's incremental models (and traditional databases), with [materialized views](/sql/create-materialized-view) that **continuously update** as the underlying data changes:
+#### indexes
 
-    ```sql
-    {{ config(materialized='materializedview') }}
+Use the indexes option to define a list of [indexes](/sql/create-index/) on a materialization. Each Materialize index can have three components:
+- columns (list, required): one or more columns on which the index is defined
+- name (string, optional): the name for the index. If unspecified, Materialize will use the materialization name and column names provided.
+- cluster (string, optional): the cluster to use to create the index. If unspecified, indexes will be created in the cluster used to create the materialization.
 
-    SELECT symbol,
-           AVG(bid_price) AS avg
-    FROM {{ ref('market_orders') }}
-    GROUP BY symbol
-    ```
+```sql
+{{ config(materialized='view',
+          indexes=[{'columns': ['col_a'], 'cluster': 'cluster_a'}]) }}
+```
 
-    When should you use what? We recommend using `materializedview` models exclusively for your **core business logic** to ensure that you’re not consuming more memory than needed in Materialize. Intermediate or staging views should use the `view` materialization type instead.
+## Build and run dbt
 
 1. [Run](https://docs.getdbt.com/reference/commands/run) the dbt models:
 
@@ -171,37 +258,29 @@ When you use dbt with Materialize, **your models stay up-to-date** without manua
 1. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that all objects have been created:
 
     ```bash
-    psql -U materialize -h localhost -p 6875 materialize
+    psql "postgres://<user>:<password>@<host>:6875/materialize"
     ```
 
     ```sql
-    materialize=> SHOW SOURCES;
-
+    materialize=> SHOW SOURCES [FROM database.schema];
            name
     -------------------
-     market_orders_raw
+     postgres_table_a
+     postgres_table_b
+     kafka_topic_a
 
      materialize=> SHOW VIEWS;
-
            name
     -------------------
-     avg_bid
-     market_orders
+     view_a
+
+     materialize=> SHOW MATERIALIZED VIEWS;
+           name
+    -------------------
+     materialized_view_a
     ```
 
 That's it! From here on, Materialize makes sure that your models are **incrementally updated** as new data streams in, and that you get **fresh and correct results** with millisecond latency whenever you query your views.
-
-### Materializations
-
-dbt models are materialized as `views` by default, but can be configured to use a different materialization type through the `materialized` configuration parameter. This parameter can be set directly in the model file using:
-
-```sql
-{{ config(materialized='materializedview') }}
-```
-
-Because Materialize is optimized for real-time transformations of streaming data and the core of dbt is built around batch, the `dbt-materialize` adapter implements a few custom materialization types:
-
-{{% dbt-materializations %}}
 
 ## Test and document a dbt project
 
@@ -213,8 +292,8 @@ Using dbt in a streaming context means that you're able to run data quality and 
 
     ```yaml
     tests:
-      mz_get_started:
-        marts:
+      dbt_project.name:
+        models:
           +store_failures: true
           +schema: 'etl_failure'
     ```
@@ -227,17 +306,17 @@ Using dbt in a streaming context means that you're able to run data quality and 
 
     ```yaml
     models:
-      - name: avg_bid
-        description: 'Computes the average bid price'
+      - name: materialized_view_a
+        description: 'materialized view a description'
         columns:
-          - name: symbol
-            description: 'The stock ticker'
+          - name: col_a
+            description: 'column a description'
             tests:
               - not_null
               - unique
     ```
 
-    The type of test and the columns being tested are used as a base for naming the test materialized views. For example, the configuration above would create views named `not_null_avg_bid_symbol` and `unique_avg_bid_symbol`.
+    The type of test and the columns being tested are used as a base for naming the test materialized views. For example, the configuration above would create views named `not_null_col_a` and `unique_col_a`.
 
 1. Run the tests:
 
@@ -252,23 +331,21 @@ Using dbt in a streaming context means that you're able to run data quality and 
 1. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that the schema storing the tests has been created, as well as the test materialized views:
 
     ```bash
-    psql -U materialize -h localhost -p 6875 materialize
+    psql "postgres://<user>:<password>@<host>:6875/materialize"
     ```
 
     ```sql
     materialize=> SHOW SCHEMAS;
-
            name
     -------------------
      public
      public_etl_failure
 
-     materialize=> SHOW VIEWS FROM public_etl_failure;;
-
+     materialize=> SHOW MATERIALIZED VIEWS FROM public_etl_failure;;
            name
     -------------------
-     not_null_avg_bid_symbol
-     unique_avg_bid_symbol
+     not_null_col_a
+     unique_col_a
     ```
 
 With continuous testing in place, you can then build alerts off of the test materialized views using any common PostgreSQL-compatible [client library](/integrations/#client-libraries-and-orms) and [`SUBSCRIBE`](/sql/subscribe/) (see the [Python cheatsheet](/integrations/python/#stream) for a reference implementation).
@@ -277,31 +354,7 @@ With continuous testing in place, you can then build alerts off of the test mate
 
 dbt can automatically generate [documentation](https://docs.getdbt.com/docs/building-a-dbt-project/documentation) for your project as a shareable website. This brings **data governance** to your streaming pipelines, speeding up life-saving processes like data discovery (_where_ to find _what_ data) and lineage (the path data takes from source(s) to sink(s), as well as the transformations that happen along the way).
 
-1. Optionally, create a `.yml` file with helpful [properties](https://docs.getdbt.com/reference/configs-and-properties) about your project resources (like model and column descriptions, or tests) and add it to directory where your models live:
-
-    ```yaml
-    version: 2
-
-    sources:
-      - name: public
-        description: "Public schema"
-        tables:
-          - name: market_orders_raw
-            description: "Market order data source (PubNub)"
-    models:
-      - name: market_orders
-        description: "Converts market order data to proper data types"
-
-      - name: avg_bid
-        description: "Computes the average bid price"
-        columns:
-          - name: symbol
-            description: "The stock ticker"
-            tests:
-              - not_null
-          - name: avg
-            description: "The average bid price"
-    ```
+If you've already created `.yml` files with helpful [properties](https://docs.getdbt.com/reference/configs-and-properties) about your project resources (like model and column descriptions, or tests), you are all set.
 
 1. To generate documentation for your project, run:
 

@@ -357,7 +357,7 @@ impl Model {
             model: self,
             r#ref: self
                 .boxes
-                .get(&box_id)
+                .get(box_id)
                 .expect("a valid box identifier")
                 .borrow(),
         })
@@ -920,7 +920,7 @@ impl<'a> BoundRef<'a, Quantifier> {
     /// column.
     pub fn output_arity(&self) -> usize {
         if self.quantifier_type.is_subquery() {
-            return 1;
+            1
         } else {
             self.model.get_box(self.input_box).columns.len()
         }
