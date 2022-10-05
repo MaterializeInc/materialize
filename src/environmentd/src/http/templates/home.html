@@ -5,7 +5,9 @@
 {% block content %}
 <p>environmentd {{ version }} (built at {{ build_time }} from <code>{{ build_sha }}</code>)</p>
 <ul>
-    <li><a href="/prof/">profiling functions</a></li>
+    {% if profiling %}
+        <li><a href="/prof/">profiling functions</a></li>
+    {% endif %}
     <li><a href="/memory">memory visualization</a></li>
     <li><a href="/hierarchical-memory">hierarchical memory visualization</a></li>
 </ul>
