@@ -50,7 +50,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     View(&'static BuiltinView),
     Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
-    StorageManagedTable(&'static BuiltinStorageManagedTable),
+    Source(&'static BuiltinSource),
 }
 
 impl<T: TypeReference> Builtin<T> {
@@ -61,7 +61,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(view) => view.name,
             Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
-            Builtin::StorageManagedTable(coll) => coll.name,
+            Builtin::Source(coll) => coll.name,
         }
     }
 
@@ -72,18 +72,18 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::View(view) => view.schema,
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
-            Builtin::StorageManagedTable(coll) => coll.schema,
+            Builtin::Source(coll) => coll.schema,
         }
     }
 
     pub fn catalog_item_type(&self) -> CatalogItemType {
         match self {
             Builtin::Log(_) => CatalogItemType::Source,
+            Builtin::Source(_) => CatalogItemType::Source,
             Builtin::Table(_) => CatalogItemType::Table,
             Builtin::View(_) => CatalogItemType::View,
             Builtin::Type(_) => CatalogItemType::Type,
             Builtin::Func(_) => CatalogItemType::Func,
-            Builtin::StorageManagedTable(_) => CatalogItemType::Source,
         }
     }
 }
@@ -103,7 +103,7 @@ pub struct BuiltinTable {
 }
 
 #[derive(Clone, Debug, Hash, Serialize)]
-pub struct BuiltinStorageManagedTable {
+pub struct BuiltinSource {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
@@ -167,7 +167,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::View(view) => view.fingerprint(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
-            Builtin::StorageManagedTable(coll) => coll.fingerprint(),
+            Builtin::Source(coll) => coll.fingerprint(),
         }
     }
 }
@@ -202,7 +202,7 @@ impl Fingerprint for &BuiltinView {
     }
 }
 
-impl Fingerprint for &BuiltinStorageManagedTable {
+impl Fingerprint for &BuiltinSource {
     fn fingerprint(&self) -> String {
         self.desc.fingerprint()
     }
@@ -1387,23 +1387,22 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("occurred_at", ScalarType::TimestampTz.nullable(false)),
 });
 
-pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinStorageManagedTable> =
-    Lazy::new(|| BuiltinStorageManagedTable {
-        name: "mz_source_status_history",
-        schema: MZ_CATALOG_SCHEMA,
-        data_source: None,
-        desc: RelationDesc::empty()
-            .with_column("timestamp", ScalarType::Timestamp.nullable(false))
-            .with_column("source_name", ScalarType::String.nullable(false))
-            .with_column("source_id", ScalarType::String.nullable(false))
-            .with_column("source_type", ScalarType::String.nullable(false))
-            .with_column("upstream_name", ScalarType::String.nullable(true))
-            .with_column("worker_id", ScalarType::Int64.nullable(false))
-            .with_column("worker_count", ScalarType::Int64.nullable(false))
-            .with_column("status", ScalarType::String.nullable(false))
-            .with_column("error", ScalarType::String.nullable(true))
-            .with_column("metadata", ScalarType::Jsonb.nullable(true)),
-    });
+pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_source_status_history",
+    schema: MZ_CATALOG_SCHEMA,
+    data_source: None,
+    desc: RelationDesc::empty()
+        .with_column("timestamp", ScalarType::Timestamp.nullable(false))
+        .with_column("source_name", ScalarType::String.nullable(false))
+        .with_column("source_id", ScalarType::String.nullable(false))
+        .with_column("source_type", ScalarType::String.nullable(false))
+        .with_column("upstream_name", ScalarType::String.nullable(true))
+        .with_column("worker_id", ScalarType::Int64.nullable(false))
+        .with_column("worker_count", ScalarType::Int64.nullable(false))
+        .with_column("status", ScalarType::String.nullable(false))
+        .with_column("error", ScalarType::String.nullable(true))
+        .with_column("metadata", ScalarType::Jsonb.nullable(true)),
+});
 
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage_by_shard",
@@ -1418,15 +1417,14 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
         ),
 });
 
-pub static MZ_STORAGE_SHARDS: Lazy<BuiltinStorageManagedTable> =
-    Lazy::new(|| BuiltinStorageManagedTable {
-        name: "mz_storage_shards",
-        schema: MZ_INTERNAL_SCHEMA,
-        data_source: Some(IntrospectionType::ShardMapping),
-        desc: RelationDesc::empty()
-            .with_column("object_id", ScalarType::String.nullable(false))
-            .with_column("shard_id", ScalarType::String.nullable(false)),
-    });
+pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_storage_shards",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::ShardMapping),
+    desc: RelationDesc::empty()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("shard_id", ScalarType::String.nullable(false)),
+});
 
 pub static MZ_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_storage_usage",
@@ -2479,8 +2477,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        // Builtin::StorageManagedTable(&MZ_SOURCE_STATUS_HISTORY),
-        Builtin::StorageManagedTable(&MZ_STORAGE_SHARDS),
+        // Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
+        Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::View(&MZ_STORAGE_USAGE),
     ]);
 

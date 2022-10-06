@@ -478,7 +478,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 CatalogItem::Source(source) => {
                     let data_source = match &source.data_source {
                         // Re-announce the source description.
-                        DataSourceDesc::Ingest(ingestion) => {
+                        DataSourceDesc::Ingestion(ingestion) => {
                             let mut source_imports = BTreeMap::new();
                             for source_import in &ingestion.source_imports {
                                 source_imports.insert(*source_import, ());
@@ -507,8 +507,8 @@ impl<S: Append + 'static> Coordinator<S> {
                             })
                         }
                         DataSourceDesc::Source => DataSource::Source,
-                        DataSourceDesc::Introspection(_) => {
-                            unreachable!("introspection sources should be builtins")
+                        DataSourceDesc::Introspection(introspection) => {
+                            DataSource::Introspection(*introspection)
                         }
                     };
 
@@ -521,7 +521,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 data_source,
                                 since: None,
                                 status_collection_id,
-                                host_config: Some(source.host_config.clone()),
+                                host_config: source.host_config.clone(),
                             },
                         )])
                         .await
@@ -644,27 +644,6 @@ impl<S: Append + 'static> Coordinator<S> {
                             }
                         },
                     );
-                }
-                CatalogItem::StorageManagedTable(coll) => {
-                    let introspection = match &coll.data_source {
-                        Some(introspection) => introspection.clone(),
-                        None => continue,
-                    };
-                    let collection_desc = CollectionDescription {
-                        desc: coll.desc.clone(),
-                        data_source: DataSource::Introspection(introspection),
-                        since: None,
-                        status_collection_id,
-                        host_config: None,
-                    };
-
-                    self.controller
-                        .storage
-                        .create_collections(vec![(entry.id(), collection_desc)])
-                        .await
-                        .unwrap();
-
-                    policies_to_set.storage_ids.insert(entry.id());
                 }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)

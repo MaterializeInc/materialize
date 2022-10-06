@@ -433,8 +433,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     match entry.item() {
                         CatalogItem::Table(_)
                         | CatalogItem::Source(_)
-                        | CatalogItem::MaterializedView(_)
-                        | CatalogItem::StorageManagedTable(_) => {
+                        | CatalogItem::MaterializedView(_) => {
                             id_bundle.storage_ids.insert(entry.id());
                         }
                         CatalogItem::Index(index) => {
@@ -536,9 +535,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         timelines.insert(id, table.timeline());
                     }
                     CatalogItem::Log(_) => {
-                        timelines.insert(id, Timeline::EpochMilliseconds);
-                    }
-                    CatalogItem::StorageManagedTable(_) => {
                         timelines.insert(id, Timeline::EpochMilliseconds);
                     }
                     CatalogItem::Sink(_)
