@@ -25,54 +25,161 @@ async function query(sql) {
   return data;
 }
 
+function formatNameForQuery(name) {
+  return `'${name.replace('\'', '\'\'')}'`;
+}
+
 const { useState, useEffect } = React;
 
-function useSQL(sql) {
-  const [response, setResponse] = useState(null);
+function ClusterReplicaView() {
+  const [currentClusterName, setCurrentClusterName] = useState(null);
+  const [currentReplicaName, setCurrentReplicaName] = useState(null);
+  const [sqlResponse, setSqlResponse] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
+  const queryClusterReplicas = `
+    SELECT
+      clusters.name AS cluster_name, replicas.name AS replica_name
+    FROM
+      mz_catalog.mz_cluster_replicas replicas
+      LEFT JOIN mz_catalog.mz_clusters clusters ON clusters.id = replicas.cluster_id
+    ORDER BY cluster_name ASC, replica_name ASC
+  `;
+
   useEffect(() => {
-    query(sql)
+    const search = new URLSearchParams(location.search);
+    const clusterName = search.get('cluster_name');
+    const replicaName = search.get('replica_name');
+    if (clusterName) {
+      setCurrentClusterName(clusterName);
+    }
+    if (replicaName) {
+      setCurrentReplicaName(replicaName);
+    }
+
+    query(queryClusterReplicas)
       .then((data) => {
-        setResponse(data);
+        const results = data.results[0].rows;
+        setSqlResponse(results);
+        if (!replicaName && results.length > 0) {
+          if(results.some(
+            result => ('default' == result[0]) && ('default_replica' == result[1]))) {
+            setCurrentClusterName('default');
+            setCurrentReplicaName('default_replica');
+          } else {
+            setCurrentClusterName(results[0][0]);
+            setCurrentReplicaName(results[0][1]);
+          }
+        }
         setLoading(false);
       })
       .catch((error) => {
         setError(error);
         setLoading(false);
       });
-  }, [sql]);
+  }, []);
 
-  return [response, loading, error];
+  useEffect(() => {
+    if (!currentReplicaName) return;
+    const params = new URLSearchParams(location.search);
+    params.set('cluster_name', currentClusterName);
+    params.set('replica_name', currentReplicaName);
+    window.history.replaceState({}, '', `${location.pathname}?${params}`);
+  }, [currentClusterName, currentReplicaName]);
+
+  return (
+    <div>
+      {loading ? (
+        <div>Loading...</div>
+      ) : error ? (
+        <div>error: {error}</div>
+      ) : (
+        <div>
+          <label htmlFor="cluster_replica">Cluster Replica </label>
+          <select
+            id="cluster_replica"
+            name="cluster_replica"
+            onChange={(event) => {
+              const clusterReplicaJson = event.target.value;
+              const clusterReplica = JSON.parse(clusterReplicaJson);
+              setCurrentClusterName(clusterReplica[0]);
+              setCurrentReplicaName(clusterReplica[1]);
+            }}
+            defaultValue={JSON.stringify([currentClusterName, currentReplicaName])}
+          >
+            {sqlResponse.map((v) => (
+              <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
+                {`${v[0]}.${v[1]}`}
+              </option>
+            ))}
+          </select>
+          <Views clusterName={currentClusterName} replicaName={currentReplicaName} />
+        </div>
+      )}
+    </div>
+  );
 }
 
-function Views() {
+function Views(props) {
+  const [currentDataflow, setCurrentDataflow] = useState(null);
+  const [includeSystemCatalog, setIncludeSystemCatalog] = useState(false);
+  const [records, setRecords] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
   useEffect(() => {
     const search = new URLSearchParams(location.search);
     const dataflow = search.get('dataflow');
     if (dataflow) {
-      setCurrent(dataflow);
+      setCurrentDataflow(dataflow);
     }
     setIncludeSystemCatalog(search.get('system_catalog') === 'true');
   }, []);
 
-  const [current, setCurrent] = useState(null);
-  const [includeSystemCatalog, setIncludeSystemCatalog] = useState(false);
+  useEffect(() => {
+    setCurrentDataflow(null);
+  }, [props]);
 
-  const where_fragment = includeSystemCatalog ? `` : `WHERE name NOT LIKE 'Dataflow: mz_catalog.%'`;
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (currentDataflow) {
+      params.set('dataflow', currentDataflow);
+    } else {
+      params.delete('dataflow');
+    }
+    window.history.replaceState({}, '', `${location.pathname}?${params}`);
+  }, [currentDataflow]);
 
-  const queryMaterializedViews = `
-    SELECT
-      id, name, records
-    FROM
-      mz_internal.mz_records_per_dataflow_global
-    ${where_fragment}
-    ORDER BY
-      records DESC
-  `;
+  const whereFragment = includeSystemCatalog ? `` : `WHERE name NOT LIKE 'Dataflow: mz_catalog.%'`;
 
-  const [data, loading, error] = useSQL(queryMaterializedViews);
+  useEffect(() => {
+    setLoading(true);
+    setError(false);
+
+    const load = async () => {
+      const {
+        results: [_set_cluster, _set_replica, records_table],
+      } = await query(`
+        SET cluster = ${formatNameForQuery(props.clusterName)};
+        SET cluster_replica = ${formatNameForQuery(props.replicaName)};
+        SELECT
+          id, name, records
+        FROM
+          mz_internal.mz_records_per_dataflow_global
+        ${whereFragment}
+        ORDER BY
+          records DESC
+      `);
+
+      setRecords(records_table.rows);
+      setLoading(false);
+    };
+    load().catch((error) => {
+      setError(error);
+      setLoading(false);
+    });
+  }, [props, includeSystemCatalog]);
 
   return (
     <div>
@@ -111,18 +218,12 @@ function Views() {
               </tr>
             </thead>
             <tbody>
-              {data.results[0].rows.map((v) => (
+              {records.map((v) => (
                 <tr key={v[1]}>
                   <td>{v[0]}</td>
                   <td>
                     <button
-                      onClick={() => {
-                        const params = new URLSearchParams(location.search);
-                        params.set('dataflow', v[0]);
-                        window.history.replaceState({}, '', `${location.pathname}?${params}`);
-
-                        setCurrent(v[0]);
-                      }}
+                      onClick={() => { setCurrentDataflow(v[0]); }}
                     >
                       +
                     </button>
@@ -133,7 +234,12 @@ function Views() {
               ))}
             </tbody>
           </table>
-          <div>{current ? <View dataflow_id={current} /> : null}</div>
+          <div>{currentDataflow ?
+            <View
+              dataflowId={currentDataflow}
+              clusterName={props.clusterName}
+              replicaName={props.replicaName} /> :
+            null}</div>
         </div>
       )}
     </div>
@@ -160,14 +266,16 @@ function View(props) {
 
     const load = async () => {
       const {
-        results: [stats_table, addr_table, oper_table, chan_table, elapsed_table, records_table],
+        results: [_set_cluster, _set_replica, stats_table, addr_table, oper_table, chan_table, elapsed_table, records_table],
       } = await query(`
+        SET cluster = ${formatNameForQuery(props.clusterName)};
+        SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
           name, records
         FROM
           mz_internal.mz_records_per_dataflow_global
         WHERE
-          id = ${props.dataflow_id};
+          id = ${props.dataflowId};
 
         -- 1) Find the address id's value for this dataflow (innermost subselect).
         -- 2) Find all address ids whose first slot value is that (second innermost subselect).
@@ -193,7 +301,7 @@ function View(props) {
                       FROM
                         mz_internal.mz_dataflow_addresses
                       WHERE
-                        id = ${props.dataflow_id}
+                        id = ${props.dataflowId}
                     )
             );
 
@@ -216,7 +324,7 @@ function View(props) {
                       FROM
                         mz_internal.mz_dataflow_addresses
                       WHERE
-                        id = ${props.dataflow_id}
+                        id = ${props.dataflowId}
                     )
             );
 
@@ -241,7 +349,7 @@ function View(props) {
                       FROM
                         mz_internal.mz_dataflow_addresses
                       WHERE
-                        id = ${props.dataflow_id}
+                        id = ${props.dataflowId}
                     )
             )
         GROUP BY id, from_index, to_index
@@ -266,7 +374,7 @@ function View(props) {
                       FROM
                         mz_internal.mz_dataflow_addresses
                       WHERE
-                        id = ${props.dataflow_id}
+                        id = ${props.dataflowId}
                     )
             )
         GROUP BY
@@ -277,12 +385,12 @@ function View(props) {
         FROM
           mz_internal.mz_records_per_dataflow_operator
         WHERE
-          dataflow_id = ${props.dataflow_id}
+          dataflow_id = ${props.dataflowId}
         GROUP BY
           id;
       `);
       if (stats_table.rows.length !== 1) {
-        throw `unknown dataflow id ${props.dataflow_id}`;
+        throw `unknown dataflow id ${props.dataflowId}`;
       }
       const stats_row = stats_table.rows[0];
       const stats = {
@@ -460,7 +568,7 @@ function View(props) {
       ) : (
         <div>
           <h3>
-            Name: {stats.name}, dataflow_id: {props.dataflow_id}, records: {stats.records}
+            Name: {stats.name}, dataflow_id: {props.dataflowId}, records: {stats.records}
           </h3>
           {dotLink}
           {viewText}
@@ -564,4 +672,4 @@ function dispNs(ns) {
 }
 
 const content = document.getElementById('content');
-ReactDOM.render(<Views />, content);
+ReactDOM.render(<ClusterReplicaView />, content);
