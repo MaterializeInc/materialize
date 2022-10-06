@@ -321,13 +321,8 @@ fn get_decoder(
                 metrics,
             }
         }
-        DataEncodingInner::Postgres => {
-            unreachable!("Postgres sources should not go through the general decoding path.")
-        }
         DataEncodingInner::RowCodec(_) => {
-            unreachable!(
-                "Persist (RowCodec) sources should not go through the general decoding path."
-            )
+            unreachable!("RowCodec sources should not go through the general decoding path.")
         }
     }
 }

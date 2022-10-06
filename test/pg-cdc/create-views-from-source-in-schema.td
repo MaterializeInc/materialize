@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Test that CREATE VIEWS can be used to direct the tables to another schema
+# Test that CREATE SOURCE can be used to direct the tables to another schema
 #
 
 > CREATE SECRET pgpass AS 'postgres'
@@ -40,13 +40,12 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE SCHEMA schema1
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (t1 AS schema1.t1, t2 AS schema1.t2);
 
 # Wait for snapshot to be complete
-> SELECT COUNT(*) > 0 FROM mz_source;
+> SELECT COUNT(*) > 0 FROM schema1.t1;
 true
-
-> CREATE VIEWS FROM SOURCE mz_source (t1 AS schema1.t1, t2 AS schema1.t2);
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
