@@ -407,7 +407,7 @@ fn show_sinks<'a>(
     let query_filters = itertools::join(query_filters.iter(), " AND ");
 
     let query = format!(
-        "SELECT sinks.name
+        "SELECT sinks.name, sinks.type, sinks.size
         FROM mz_catalog.mz_sinks AS sinks
         WHERE {query_filters}",
     );

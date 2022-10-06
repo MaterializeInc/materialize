@@ -49,8 +49,8 @@ goofus,gallant
 contains:Expected one of SIZE or SNAPSHOT
 
 > SHOW SINKS
-name
-----
+name               type   size
+------------------------------
 
 # # We should refuse to create a sink with an invalid schema registry URL.
 #
@@ -85,8 +85,8 @@ name
 # contains:v2 is a view, which cannot be exported as a sink
 
 > SHOW SINKS
-name
-----
+name               type   size
+------------------------------
 
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
@@ -107,11 +107,11 @@ name
   ENVELOPE DEBEZIUM
 
 > SHOW SINKS
-name
-----
-snk1
-snk2
-snk3
+name               type   size
+------------------------------
+snk1               kafka  1
+snk2               kafka  1
+snk3               kafka  1
 
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
@@ -201,17 +201,17 @@ $ kafka-verify format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 3}}}
 
 > SHOW SINKS
-name
-----
-snk1
-snk2
-snk3
-snk4
-snk5
-snk6
-snk7
-snk8
-snk_unsigned
+name               type   size
+------------------------------
+snk1               kafka  1
+snk2               kafka  1
+snk3               kafka  1
+snk4               kafka  1
+snk5               kafka  1
+snk6               kafka  1
+snk7               kafka  1
+snk8               kafka  1
+snk_unsigned       kafka  1
 
 # test explicit partition count
 > CREATE SINK snk9 FROM foo
@@ -251,7 +251,7 @@ snk_unsigned
   WITH (SIZE = '2')
 
 # create sink with SIZE and SNAPSHOT set
-> CREATE SINK sink_with_size_and_snapshot FROM src
+> CREATE SINK sink_with_options FROM src
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -264,3 +264,24 @@ snk_unsigned
 # Including for sinks with default size
 > SELECT size FROM mz_sinks WHERE name = 'snk13'
 1
+
+# Check that SHOW SINKS shows the size correctly
+> SHOW SINKS
+name               type   size
+------------------------------
+snk1               kafka  1
+snk2               kafka  1
+snk3               kafka  1
+snk4               kafka  1
+snk5               kafka  1
+snk6               kafka  1
+snk7               kafka  1
+snk8               kafka  1
+snk9               kafka  1
+snk10              kafka  1
+snk11              kafka  1
+snk12              kafka  1
+snk13              kafka  1
+sink_with_size     kafka  2
+sink_with_options  kafka  2
+snk_unsigned       kafka  1

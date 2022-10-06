@@ -33,7 +33,8 @@ name  | type
 Field | Meaning
 ------|--------
 **name** | The name of the sink.
-**type** | Whether the sink was created by the `user` or the `system`.
+**type** | The type of the sink: currently only `kafka` is supported.
+**size** | The size of the sink.
 
 ## Examples
 
@@ -41,10 +42,10 @@ Field | Meaning
 SHOW SINKS;
 ```
 ```nofmt
-name    | type
---------+-------
-my_sink | user
-my_sink
+name    | type  | size
+--------+-------+--------
+my_sink | kafka | small
+xl_sink | kafka | xlarge
 ```
 
 ## Related pages
