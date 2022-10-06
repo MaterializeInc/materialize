@@ -1794,7 +1794,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     mz_columns.name as attname,
     mz_columns.type_oid AS atttypid,
     pg_type.typlen AS attlen,
-    position as attnum,
+    position::int8 as attnum,
     -1::pg_catalog.int4 as atttypmod,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
@@ -2489,6 +2489,13 @@ pub mod BUILTINS {
         })
     }
 
+    pub fn views() -> impl Iterator<Item = &'static BuiltinView> {
+        BUILTINS_STATIC.iter().filter_map(|b| match b {
+            Builtin::View(view) => Some(*view),
+            _ => None,
+        })
+    }
+
     pub fn iter() -> impl Iterator<Item = &'static Builtin<NameReference>> {
         BUILTINS_STATIC.iter()
     }
@@ -2499,9 +2506,10 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::env;
 
+    use anyhow::anyhow;
     use tokio_postgres::NoTls;
 
-    use mz_ore::now::NOW_ZERO;
+    use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
@@ -2789,6 +2797,62 @@ mod tests {
                     }
                 }
                 _ => (),
+            }
+        }
+
+        Ok(())
+    }
+
+    // Make sure pg catalog views don't use unsigned ints.
+    #[tokio::test]
+    async fn test_pg_catalog_unsigned() -> Result<(), anyhow::Error> {
+        let catalog = Catalog::open_debug_sqlite(SYSTEM_TIME.clone()).await?;
+        let conn_catalog = catalog.for_system_session();
+
+        for view in BUILTINS::views()
+            .filter(|view| view.schema == PG_CATALOG_SCHEMA || view.schema == INFORMATION_SCHEMA)
+        {
+            let item = conn_catalog.resolve_item(&PartialObjectName {
+                database: None,
+                schema: Some(view.schema.to_string()),
+                item: view.name.to_string(),
+            })?;
+            let full_name = conn_catalog.resolve_full_name(item.name());
+            for col_type in item.desc(&full_name)?.iter_types() {
+                match &col_type.scalar_type {
+                    ScalarType::UInt16 | ScalarType::UInt32 | ScalarType::UInt64 => {
+                        return Err(anyhow!("Unsigned type found in {full_name}"))
+                    }
+                    ScalarType::Bool
+                    | ScalarType::Int16
+                    | ScalarType::Int32
+                    | ScalarType::Int64
+                    | ScalarType::Float32
+                    | ScalarType::Float64
+                    | ScalarType::Numeric { .. }
+                    | ScalarType::Date
+                    | ScalarType::Time
+                    | ScalarType::Timestamp
+                    | ScalarType::TimestampTz
+                    | ScalarType::Interval
+                    | ScalarType::PgLegacyChar
+                    | ScalarType::Bytes
+                    | ScalarType::String
+                    | ScalarType::Char { .. }
+                    | ScalarType::VarChar { .. }
+                    | ScalarType::Jsonb
+                    | ScalarType::Uuid
+                    | ScalarType::Array(_)
+                    | ScalarType::List { .. }
+                    | ScalarType::Record { .. }
+                    | ScalarType::Oid
+                    | ScalarType::Map { .. }
+                    | ScalarType::RegProc
+                    | ScalarType::RegType
+                    | ScalarType::RegClass
+                    | ScalarType::Int2Vector
+                    | ScalarType::MzTimestamp => {}
+                }
             }
         }
 
