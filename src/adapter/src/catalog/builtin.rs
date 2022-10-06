@@ -1328,9 +1328,9 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("schema_id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
-pub static MZ_CLUSTER_REPLICAS_BASE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_cluster_replicas_base",
-    schema: MZ_INTERNAL_SCHEMA,
+pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_replicas",
+    schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("cluster_id", ScalarType::UInt64.nullable(false))
         .with_column("id", ScalarType::UInt64.nullable(false))
@@ -1490,33 +1490,6 @@ WHERE
     mz_dataflow_operators.worker_id = mz_dataflow_addresses.worker_id AND
     mz_dataflows.local_id = mz_dataflow_addresses.address[1] AND
     mz_dataflows.worker_id = mz_dataflow_addresses.worker_id",
-};
-
-pub const MZ_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
-    name: "mz_cluster_replicas",
-    schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_cluster_replicas AS
-WITH counts AS (
-    SELECT
-        replica_id,
-        count(*) AS total,
-        sum(CASE WHEN status = 'ready' THEN 1 else 0 END) AS ready,
-        sum(CASE WHEN status = 'not_ready' THEN 1 else 0 END) AS not_ready
-    FROM mz_internal.mz_cluster_replica_statuses
-    GROUP BY replica_id
-)
-SELECT
-    mz_cluster_replicas_base.*,
-    CASE
-        WHEN counts.total = 0 OR counts.not_ready > 0
-            THEN 'unhealthy'
-        WHEN counts.ready = counts.total
-            THEN 'healthy'
-        ELSE 'unknown'
-        END AS status
-FROM mz_internal.mz_cluster_replicas_base
-LEFT OUTER JOIN counts
-    ON mz_cluster_replicas_base.id = counts.replica_id",
 };
 
 pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
@@ -2416,7 +2389,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
-        Builtin::Table(&MZ_CLUSTER_REPLICAS_BASE),
+        Builtin::Table(&MZ_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
@@ -2428,7 +2401,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
-        Builtin::View(&MZ_CLUSTER_REPLICAS),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
