@@ -804,24 +804,33 @@ where
         }
 
         // Install collection state for each bound description.
-        for (id, description) in collections {
-            let durable_metadata = METADATA_COLLECTION
-                .insert_without_overwrite(
-                    &mut self.state.stash,
-                    &id,
-                    DurableCollectionMetadata {
-                        remap_shard: ShardId::new(),
-                        data_shard: ShardId::new(),
-                    },
-                )
-                .await?;
 
+        // Perform all stash writes in a single transaction, to minimize transaction overhead and
+        // the time spent waiting for stash.
+        METADATA_COLLECTION
+            .insert_without_overwrite(
+                &mut self.state.stash,
+                collections.iter().map(|(id, _)| {
+                    (
+                        *id,
+                        DurableCollectionMetadata {
+                            remap_shard: ShardId::new(),
+                            data_shard: ShardId::new(),
+                        },
+                    )
+                }),
+            )
+            .await?;
+
+        let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+
+        for (id, description) in collections {
+            let collection_shards = durable_metadata.remove(&id).expect("inserted above");
             let status_shard = if let Some(status_collection_id) = description.status_collection_id
             {
                 Some(
-                    METADATA_COLLECTION
-                        .peek_key_one(&mut self.state.stash, &status_collection_id)
-                        .await?
+                    durable_metadata
+                        .remove(&status_collection_id)
                         .ok_or(StorageError::IdentifierMissing(status_collection_id))?
                         .data_shard,
                 )
@@ -831,8 +840,8 @@ where
 
             let metadata = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
-                remap_shard: durable_metadata.remap_shard,
-                data_shard: durable_metadata.data_shard,
+                remap_shard: collection_shards.remap_shard,
+                data_shard: collection_shards.data_shard,
                 status_shard,
             };
 
@@ -1053,7 +1062,7 @@ where
             let from_since = from_collection.implied_capability.clone();
 
             let as_of = MetadataExportFetcher::get_stash_collection()
-                .insert_without_overwrite(
+                .insert_key_without_overwrite(
                     &mut self.state.stash,
                     &id,
                     DurableExportMetadata {
