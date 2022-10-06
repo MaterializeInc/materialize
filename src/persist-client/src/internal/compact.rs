@@ -476,7 +476,7 @@ where
             cfg.compaction_reads_max_outstanding_parts,
         ));
         let mut fetched_initial_parts = Vec::with_capacity(runs.len());
-        for (part_desc, parts) in &mut runs {
+        for (runs_index, (part_desc, parts)) in runs.iter_mut().enumerate() {
             if let Some(part) = parts.next() {
                 let shard_id = shard_id.clone();
                 let blob = Arc::clone(&blob);
@@ -485,9 +485,9 @@ where
                 let key = part.key.clone();
                 let part_desc = (**part_desc).clone();
 
-                pending_initial_parts.push_back(mz_ore::task::spawn(
-                    || "compaction::initial_fetch_batch_part",
-                    async move {
+                pending_initial_parts.push_back((
+                    runs_index,
+                    mz_ore::task::spawn(|| "compaction::initial_fetch_batch_part", async move {
                         fetch_batch_part(
                             &shard_id,
                             blob.as_ref(),
@@ -497,31 +497,35 @@ where
                             &part_desc,
                         )
                         .await
-                    },
+                    }),
                 ));
 
                 if pending_initial_parts.len() > cfg.compaction_reads_max_outstanding_parts {
                     let start = Instant::now();
-                    let part = pending_initial_parts
+                    let (index, part) = pending_initial_parts
                         .pop_front()
-                        .expect("pop failed when len was just > some usize")
-                        .await??;
+                        .expect("pop failed when len was just > some usize");
+                    fetched_initial_parts.push((index, part.await??));
                     timings.part_fetching += start.elapsed();
-                    fetched_initial_parts.push(part);
                 }
             }
         }
 
-        for part in pending_initial_parts {
+        for (runs_index, part) in pending_initial_parts {
             let start = Instant::now();
-            fetched_initial_parts.push(part.await??);
+            fetched_initial_parts.push((runs_index, part.await??));
             timings.part_fetching += start.elapsed();
         }
+
+        assert_eq!(fetched_initial_parts.len(), runs.len());
 
         // serially add each fetched part into our heap. this will momentarily 2x
         // the memory required to store a given part, so this is done one at a time.
         let start = Instant::now();
-        for (index, mut part) in fetched_initial_parts.into_iter().enumerate() {
+        for (index, (runs_index, mut part)) in fetched_initial_parts.into_iter().enumerate() {
+            // it's crucial that `fetched_initial_parts` maintains the same order as `runs`,
+            // as we use the index into runs for a fair bit of bookkeeping
+            assert_eq!(index, runs_index);
             while let Some((k, v, mut t, d)) = part.next() {
                 t.advance_by(desc.since().borrow());
                 let d = D::decode(d);
