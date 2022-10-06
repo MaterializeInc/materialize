@@ -650,13 +650,7 @@ impl<'a> ShowSelect<'a> {
 
     /// Converts this `ShowSelect` into a [`(HirRelationExpr, Scope)`].
     pub fn plan_hir(self, qcx: &QueryContext) -> Result<(HirRelationExpr, Scope), PlanError> {
-        let query::PlannedQuery {
-            expr,
-            desc,
-            finishing: _,
-        } = query::plan_root_query(self.scx, self.stmt.query, qcx.lifetime)?;
-        let scope = Scope::from_source(None, desc.iter_names());
-        Ok((expr, scope))
+        query::plan_nested_query(&mut qcx.clone(), &self.stmt.query)
     }
 }
 
