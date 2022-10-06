@@ -25,5 +25,4 @@
   WITH (
     REMOTE = 'storaged:2100'
   )
-
-> CREATE VIEWS FROM SOURCE mz_source;
+  FOR ALL TABLES;

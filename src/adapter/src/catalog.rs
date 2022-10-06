@@ -3159,6 +3159,9 @@ impl<S: Append> Catalog<S> {
             for &u in &by_id[&id].used_by {
                 Self::drop_item_cascade(u, by_id, ops, seen)
             }
+            for subsource in by_id[&id].subsources() {
+                Self::drop_item_cascade(subsource, by_id, ops, seen)
+            }
             ops.push(Op::DropItem(id));
         }
     }

@@ -294,8 +294,10 @@ where
                 for ingestion in ingestions {
                     self.sources.insert(ingestion.id, ingestion.clone());
                     // Initialize the uppers we are tracking
-                    self.uppers
-                        .insert(ingestion.id, Antichain::from_elem(T::minimum()));
+                    for &export_id in ingestion.description.source_exports.keys() {
+                        self.uppers
+                            .insert(export_id, Antichain::from_elem(T::minimum()));
+                    }
                 }
             }
             StorageCommand::CreateSinks(exports) => {

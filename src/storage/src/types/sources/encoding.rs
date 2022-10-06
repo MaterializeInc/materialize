@@ -273,16 +273,7 @@ impl DataEncoding {
             DataEncodingInner::Text => {
                 RelationDesc::empty().with_column("text", ScalarType::String.nullable(false))
             }
-            DataEncodingInner::Postgres => RelationDesc::empty()
-                .with_column("oid", ScalarType::Int32.nullable(false))
-                .with_column(
-                    "row_data",
-                    ScalarType::List {
-                        element_type: Box::new(ScalarType::String),
-                        custom_id: None,
-                    }
-                    .nullable(false),
-                ),
+            DataEncodingInner::Postgres => RelationDesc::empty(),
             DataEncodingInner::RowCodec(desc) => desc.clone(),
         };
 

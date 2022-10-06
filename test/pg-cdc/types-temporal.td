@@ -34,12 +34,11 @@ INSERT INTO t1 VALUES ('2011-11-11', '11:11:11.123456', '2011-11-11 11:11:11.123
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
-> SELECT COUNT(*) > 0 FROM mz_source;
+> SELECT COUNT(*) > 0 FROM t1;
 true
-
-> CREATE VIEWS FROM SOURCE mz_source;
 
 # Insert the same data post-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres

@@ -23,6 +23,7 @@
   FROM POSTGRES
   CONNECTION pg
   (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > DROP SOURCE IF EXISTS mz_source_alter CASCADE;
 
@@ -30,7 +31,4 @@
   FROM POSTGRES
   CONNECTION pg
   (PUBLICATION 'mz_source_alter')
-
-> CREATE VIEWS FROM SOURCE mz_source;
-
-> CREATE VIEWS FROM SOURCE mz_source_alter;
+  FOR ALL TABLES;

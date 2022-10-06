@@ -26,7 +26,7 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
-use mz_expr::PartitionId;
+use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -137,6 +137,7 @@ macro_rules! try_recoverable {
 enum InternalMessage {
     Err(SourceReaderError),
     Value {
+        output: usize,
         value: Row,
         lsn: PgLsn,
         diff: Diff,
@@ -176,7 +177,8 @@ struct PostgresTaskInfo {
     /// Our cursor into the WAL
     lsn: PgLsn,
     metrics: PgSourceMetrics,
-    source_tables: HashMap<u32, PostgresTableDesc>,
+    /// A map of the table oid to its corresponding output, its description, and cast expression
+    source_tables: HashMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
     row_sender: RowSender,
     sender: Sender<InternalMessage>,
     /// Channel to receive lsn's from the PgOffsetCommitter
@@ -236,6 +238,12 @@ impl SourceReader for PostgresSourceReader {
             .expect("Postgres connection unexpectedly missing secrets");
 
         if active_read_worker {
+            let mut source_tables = HashMap::new();
+            let tables_iter = connection.details.tables.iter();
+            for (i, (table, table_cast)) in tables_iter.zip(connection.table_casts).enumerate() {
+                source_tables.insert(table.oid, (i + 1, table.clone(), table_cast));
+            }
+
             let task_info = PostgresTaskInfo {
                 source_id: source_id.clone(),
                 connection_config,
@@ -244,9 +252,7 @@ impl SourceReader for PostgresSourceReader {
                 /// Our cursor into the WAL
                 lsn: start_offset.offset.into(),
                 metrics: PgSourceMetrics::new(&metrics, source_id),
-                source_tables: HashMap::from_iter(
-                    connection.details.tables.iter().map(|t| (t.oid, t.clone())),
-                ),
+                source_tables,
                 row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
                 sender: dataflow_tx,
                 offset_rx,
@@ -292,6 +298,7 @@ impl SourceReader for PostgresSourceReader {
         // TODO(guswynn): consider if `try_recv` is better or the same as `now_or_never`
         let ret = match self.receiver_stream.recv().now_or_never() {
             Some(Some(InternalMessage::Value {
+                output,
                 value,
                 diff,
                 lsn,
@@ -300,7 +307,7 @@ impl SourceReader for PostgresSourceReader {
                 if end {
                     Ok(NextMessage::Ready(SourceMessageType::Finalized(
                         SourceMessage {
-                            output: 0,
+                            output,
                             partition: PartitionId::None,
                             offset: lsn.into(),
                             upstream_time_millis: None,
@@ -313,7 +320,7 @@ impl SourceReader for PostgresSourceReader {
                 } else {
                     Ok(NextMessage::Ready(SourceMessageType::InProgress(
                         SourceMessage {
-                            output: 0,
+                            output,
                             partition: PartitionId::None,
                             offset: lsn.into(),
                             upstream_time_millis: None,
@@ -437,7 +444,7 @@ async fn postgres_replication_loop_inner(
 struct RowSender {
     sender: Sender<InternalMessage>,
     activator: SyncActivator,
-    buffered_message: Option<(Row, PgLsn, i64)>,
+    buffered_message: Option<(usize, Row, PgLsn, i64)>,
 }
 
 impl RowSender {
@@ -451,44 +458,69 @@ impl RowSender {
     }
 
     /// Insert a row at an lsn.
-    pub async fn insert(&mut self, row: Row, lsn: PgLsn) {
-        if let Some((buffered_row, buffered_lsn, buffered_diff)) = self.buffered_message.take() {
+    pub async fn insert(&mut self, output: usize, row: Row, lsn: PgLsn) {
+        if let Some((buffered_output, buffered_row, buffered_lsn, buffered_diff)) =
+            self.buffered_message.take()
+        {
             assert_eq!(buffered_lsn, lsn);
-            self.send_row(buffered_row, buffered_lsn, buffered_diff, false)
-                .await;
+            self.send_row(
+                buffered_output,
+                buffered_row,
+                buffered_lsn,
+                buffered_diff,
+                false,
+            )
+            .await;
         }
 
-        self.buffered_message = Some((row, lsn, 1));
+        self.buffered_message = Some((output, row, lsn, 1));
     }
     /// Delete a row at an lsn.
-    pub async fn delete(&mut self, row: Row, lsn: PgLsn) {
-        if let Some((buffered_row, buffered_lsn, buffered_diff)) = self.buffered_message.take() {
+    pub async fn delete(&mut self, output: usize, row: Row, lsn: PgLsn) {
+        if let Some((buffered_output, buffered_row, buffered_lsn, buffered_diff)) =
+            self.buffered_message.take()
+        {
             assert_eq!(buffered_lsn, lsn);
-            self.send_row(buffered_row, buffered_lsn, buffered_diff, false)
-                .await;
+            self.send_row(
+                buffered_output,
+                buffered_row,
+                buffered_lsn,
+                buffered_diff,
+                false,
+            )
+            .await;
         }
 
-        self.buffered_message = Some((row, lsn, -1));
+        self.buffered_message = Some((output, row, lsn, -1));
     }
 
     /// Finalize an lsn, making sure all messages that my be buffered are flushed, and that the
     /// last message sent is marked as closing the `lsn` (which is the messages `offset` in the
     /// rest of the source pipeline.
     pub async fn close_lsn(&mut self, lsn: PgLsn) {
-        if let Some((buffered_row, buffered_lsn, buffered_diff)) = self.buffered_message.take() {
+        if let Some((buffered_output, buffered_row, buffered_lsn, buffered_diff)) =
+            self.buffered_message.take()
+        {
             assert_eq!(buffered_lsn, lsn);
-            self.send_row(buffered_row, buffered_lsn, buffered_diff, true)
-                .await;
+            self.send_row(
+                buffered_output,
+                buffered_row,
+                buffered_lsn,
+                buffered_diff,
+                true,
+            )
+            .await;
         }
     }
 
-    async fn send_row(&self, row: Row, lsn: PgLsn, diff: i64, end: bool) {
+    async fn send_row(&self, output: usize, row: Row, lsn: PgLsn, diff: i64, end: bool) {
         // a closed receiver means the source has been shutdown
         // (dropped or the process is dying), so just continue on
         // without activation
         if let Ok(_) = self
             .sender
             .send(InternalMessage::Value {
+                output,
                 value: row,
                 lsn,
                 diff,
@@ -509,7 +541,7 @@ impl PostgresTaskInfo {
     fn validate_tables(&self, tables: Vec<PostgresTableDesc>) -> Result<(), anyhow::Error> {
         let pub_tables: HashMap<u32, PostgresTableDesc> =
             tables.into_iter().map(|t| (t.oid, t)).collect();
-        for (id, schema) in self.source_tables.iter() {
+        for (id, (_, schema, _)) in self.source_tables.iter() {
             match pub_tables.get(id) {
                 Some(pub_schema) => {
                     if pub_schema != schema {
@@ -587,8 +619,7 @@ impl PostgresTaskInfo {
         self.lsn = try_fatal!(consistent_point
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
-        for info in self.source_tables.values() {
-            let relation_id: Datum = (i32::try_from(info.oid).unwrap()).into();
+        for (output, info, table_cast) in self.source_tables.values() {
             let reader = client
                 .copy_out_simple(
                     format!(
@@ -600,31 +631,33 @@ impl PostgresTaskInfo {
                 .await?;
 
             tokio::pin!(reader);
-            let mut mz_row = Row::default();
+            let mut text_row = Row::default();
             // TODO: once tokio-stream is released with https://github.com/tokio-rs/tokio/pull/4502
             //    we can convert this into a single `timeout(...)` call on the reader CopyOutStream
             while let Some(b) = tokio::time::timeout(Duration::from_secs(30), reader.next())
                 .await?
                 .transpose()?
             {
-                let mut packer = mz_row.packer();
-                packer.push(relation_id);
+                let mut packer = text_row.packer();
                 // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
                 let mut raw_values = parser.iter_raw(info.columns.len() as i32);
-                try_fatal!(packer.push_list_with(|rp| -> Result<(), anyhow::Error> {
-                    while let Some(raw_value) = raw_values.next() {
-                        match raw_value? {
-                            Some(value) => rp.push(Datum::String(std::str::from_utf8(value)?)),
-                            None => rp.push(Datum::Null),
+                while let Some(raw_value) = raw_values.next() {
+                    match try_fatal!(raw_value) {
+                        Some(value) => {
+                            packer.push(Datum::String(try_fatal!(std::str::from_utf8(value))))
                         }
+                        None => packer.push(Datum::Null),
                     }
-                    Ok(())
-                }));
+                }
 
-                self.row_sender.insert(mz_row.clone(), self.lsn).await;
+                let datums: Vec<_> = text_row.iter().collect();
+
+                let row = try_fatal!(PostgresTaskInfo::cast_row(table_cast, &datums));
+
+                self.row_sender.insert(*output, row, self.lsn).await;
                 // Failure scenario after we have produced at least one row, but before a
                 // successful `COMMIT`
                 fail::fail_point!("pg_snapshot_failure", |_| {
@@ -645,37 +678,36 @@ impl PostgresTaskInfo {
         Ok(())
     }
 
-    /// Converts a Tuple received in the replication stream into a Row instance. The logical
-    /// replication protocol doesn't use the binary encoding for column values so contrary to the
-    /// initial snapshot here we need to parse the textual form of each column.
-    ///
-    /// The `old_tuple` argument can be used as a source of data to use when encountering unchanged
-    /// TOAST values.
-    fn row_from_tuple<'a, T>(rel_id: u32, tuple_data: T) -> Result<Row, anyhow::Error>
+    /// Packs a Tuple received in the replication stream into a Row packer.
+    fn datums_from_tuple<'a, T>(rel_id: u32, tuple_data: T) -> Result<Vec<Datum<'a>>, anyhow::Error>
     where
         T: IntoIterator<Item = &'a TupleData>,
     {
+        let mut datums = vec![];
+        for val in tuple_data.into_iter() {
+            let datum = match val {
+                TupleData::Null => Datum::Null,
+                TupleData::UnchangedToast => bail!(
+                    "Missing TOASTed value from table with OID = {}. \
+                    Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                    rel_id
+                ),
+                TupleData::Text(b) => std::str::from_utf8(b)?.into(),
+            };
+            datums.push(datum);
+        }
+        Ok(datums)
+    }
+
+    /// Casts a text row into the target types
+    fn cast_row(table_cast: &[MirScalarExpr], datums: &[Datum<'_>]) -> Result<Row, anyhow::Error> {
+        let arena = mz_repr::RowArena::new();
         let mut row = Row::default();
         let mut packer = row.packer();
-
-        let rel_id: Datum = (rel_id as i32).into();
-        packer.push(rel_id);
-        packer.push_list_with(move |packer| {
-            for val in tuple_data.into_iter() {
-                let datum = match val {
-                    TupleData::Null => Datum::Null,
-                    TupleData::UnchangedToast => bail!(
-                        "Missing TOASTed value from table with OID = {}. \
-                        Did you forget to set REPLICA IDENTITY to FULL for your table?",
-                        rel_id
-                    ),
-                    TupleData::Text(b) => std::str::from_utf8(b)?.into(),
-                };
-                packer.push(datum);
-            }
-            Ok(())
-        })?;
-
+        for column_cast in table_cast {
+            let datum = column_cast.eval(datums, &arena)?;
+            packer.push(datum);
+        }
         Ok(row)
     }
 
@@ -818,14 +850,18 @@ impl PostgresTaskInfo {
                         last_data_message = Instant::now();
                         self.metrics.inserts.inc();
                         let rel_id = insert.rel_id();
+                        let &(output, _, ref table_cast) = self.source_tables.get(&rel_id).unwrap();
                         let new_tuple = insert.tuple().tuple_data();
-                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
-                        inserts.push(row);
+                        let datums =
+                            try_fatal!(PostgresTaskInfo::datums_from_tuple(rel_id, new_tuple));
+                        let row = try_fatal!(PostgresTaskInfo::cast_row(table_cast, &datums));
+                        inserts.push((output, row));
                     }
                     Update(update) if self.source_tables.contains_key(&update.rel_id()) => {
                         last_data_message = Instant::now();
                         self.metrics.updates.inc();
                         let rel_id = update.rel_id();
+                        let &(output, _, ref table_cast) = self.source_tables.get(&rel_id).unwrap();
                         let err = || {
                             anyhow!(
                                 "Old row missing from replication stream for table with OID = {}.
@@ -834,9 +870,11 @@ impl PostgresTaskInfo {
                             )
                         };
                         let old_tuple = try_fatal!(update.old_tuple().ok_or_else(err)).tuple_data();
+                        let old_datums =
+                            try_fatal!(PostgresTaskInfo::datums_from_tuple(rel_id, old_tuple));
                         let old_row =
-                            try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
-                        deletes.push(old_row);
+                            try_fatal!(PostgresTaskInfo::cast_row(table_cast, &old_datums));
+                        deletes.push((output, old_row));
 
                         // If the new tuple contains unchanged toast values, reuse the ones
                         // from the old tuple
@@ -849,14 +887,17 @@ impl PostgresTaskInfo {
                                 TupleData::UnchangedToast => old,
                                 _ => new,
                             });
+                        let new_datums =
+                            try_fatal!(PostgresTaskInfo::datums_from_tuple(rel_id, new_tuple));
                         let new_row =
-                            try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
-                        inserts.push(new_row);
+                            try_fatal!(PostgresTaskInfo::cast_row(table_cast, &new_datums));
+                        inserts.push((output, new_row));
                     }
                     Delete(delete) if self.source_tables.contains_key(&delete.rel_id()) => {
                         last_data_message = Instant::now();
                         self.metrics.deletes.inc();
                         let rel_id = delete.rel_id();
+                        let &(output, _, ref table_cast) = self.source_tables.get(&rel_id).unwrap();
                         let err = || {
                             anyhow!(
                                 "Old row missing from replication stream for table with OID = {}.
@@ -865,19 +906,21 @@ impl PostgresTaskInfo {
                             )
                         };
                         let old_tuple = try_fatal!(delete.old_tuple().ok_or_else(err)).tuple_data();
-                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
-                        deletes.push(row);
+                        let datums =
+                            try_fatal!(PostgresTaskInfo::datums_from_tuple(rel_id, old_tuple));
+                        let row = try_fatal!(PostgresTaskInfo::cast_row(table_cast, &datums));
+                        deletes.push((output, row));
                     }
                     Commit(commit) => {
                         last_data_message = Instant::now();
                         self.metrics.transactions.inc();
                         self.lsn = commit.end_lsn().into();
 
-                        for row in deletes.drain(..) {
-                            self.row_sender.delete(row, self.lsn).await;
+                        for (output, row) in deletes.drain(..) {
+                            self.row_sender.delete(output, row, self.lsn).await;
                         }
-                        for row in inserts.drain(..) {
-                            self.row_sender.insert(row, self.lsn).await;
+                        for (output, row) in inserts.drain(..) {
+                            self.row_sender.insert(output, row, self.lsn).await;
                         }
 
                         self.row_sender.close_lsn(self.lsn).await;
@@ -886,7 +929,7 @@ impl PostgresTaskInfo {
                     Relation(relation) => {
                         last_data_message = Instant::now();
                         let rel_id = relation.rel_id();
-                        if let Some(source_table) = self.source_tables.get(&rel_id) {
+                        if let Some((_, source_table, _)) = self.source_tables.get(&rel_id) {
                             // Start with the cheapest check first, this will catch the majority of alters
                             if source_table.columns.len() != relation.columns().len() {
                                 error!(
@@ -953,7 +996,7 @@ impl PostgresTaskInfo {
                             .iter()
                             // Filter here makes option handling in map "safe"
                             .filter_map(|id| self.source_tables.get(id))
-                            .map(|table| format!("name: {} id: {}", table.name, table.oid))
+                            .map(|(_, table, _)| format!("name: {} id: {}", table.name, table.oid))
                             .collect::<Vec<String>>();
                         return Err(Fatal(anyhow!(
                             "source table(s) {} got truncated",

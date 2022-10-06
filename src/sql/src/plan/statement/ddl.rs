@@ -29,11 +29,10 @@ use mz_interchange::avro::AvroSchemaGenerator;
 use mz_kafka_util::KafkaAddrs;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
-use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
-use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
@@ -74,19 +73,18 @@ use crate::ast::{
     CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
     CreateSourceOptionName, CreateSourceStatement, CreateSourceSubsource, CreateSourceSubsources,
     CreateSubsourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
-    CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
-    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
-    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName, KafkaConnectionOption,
-    KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
-    ObjectType, Op, PgConfigOption, PgConfigOptionName, PostgresConnectionOption,
-    PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
-    ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
-    SourceIncludeMetadataType, SshConnectionOptionName, Statement, SubscriptPosition,
-    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    Value, ViewDefinition,
+    CreateViewStatement, CreateViewsStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
+    CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
+    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConfigOptionName,
+    KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, ObjectType, Op, PgConfigOption, PgConfigOptionName,
+    PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
+    Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr,
+    SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
+    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName,
+    UnresolvedObjectName, Value, ViewDefinition,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
@@ -96,8 +94,11 @@ use crate::names::{
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
-use crate::plan::query::QueryLifetime;
+use crate::plan::expr::ColumnRef;
+use crate::plan::query::{ExprContext, QueryLifetime};
+use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
@@ -108,8 +109,8 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
     DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    FullObjectName, Index, Ingestion, MaterializedView, Params, Plan, RotateKeysPlan, Secret, Sink,
-    Source, StorageHostConfig, Table, Type, View,
+    FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan, QueryContext,
+    RotateKeysPlan, Secret, Sink, Source, StorageHostConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -595,8 +596,87 @@ pub fn plan_create_source(
             let details =
                 ProtoPostgresSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
 
+            // Register the available subsources
+            let mut available_subsources = HashMap::new();
+
+            for (i, table) in details.tables.iter().enumerate() {
+                let name = FullObjectName {
+                    database: RawDatabaseSpecifier::Ambient,
+                    schema: table.namespace.clone(),
+                    item: table.name.clone(),
+                };
+                // The zero-th output is the main output
+                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+                // to handle the main source and the subsources uniformly
+                available_subsources.insert(name, i + 1);
+            }
+
+            // Here we will generate the cast expressions required to convert the text encoded
+            // columns into the appropriate target types, creating a Vec<MirScalarExpr> per table.
+            // The postgres source reader will then eval each of those on the incoming rows based
+            // on the target table
+            let mut table_casts = vec![];
+            for table in details.tables.iter() {
+                // First, construct an expression context where the expression is evaluated on an
+                // imaginary row which has the same number of columns as the upstream table but all
+                // of the types are text
+                let mut cast_scx = scx.clone();
+                cast_scx.param_types = Default::default();
+                let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Static);
+                let mut column_types = vec![];
+                for column in table.columns.iter() {
+                    column_types.push(ColumnType {
+                        nullable: column.nullable,
+                        scalar_type: ScalarType::String,
+                    });
+                }
+
+                let cast_ecx = ExprContext {
+                    qcx: &cast_qcx,
+                    name: "plan_postgres_source_cast",
+                    scope: &Scope::empty(),
+                    relation_type: &RelationType {
+                        column_types,
+                        keys: vec![],
+                    },
+                    allow_aggregates: false,
+                    allow_subqueries: true,
+                    allow_windows: false,
+                };
+
+                // Then, for each column we will generate a MirRelationExpr that extracts the nth
+                // column and casts it to the appropriate target type
+                let mut column_casts = vec![];
+                for (i, column) in table.columns.iter().enumerate() {
+                    let ty = mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod)
+                        .map_err(|e| sql_err!("{}", e))?;
+                    let data_type = scx.resolve_type(ty)?;
+                    let scalar_type = query::scalar_type_from_sql(scx, &data_type)?;
+
+                    let col_expr = HirScalarExpr::Column(ColumnRef {
+                        level: 0,
+                        column: i,
+                    });
+
+                    let cast_expr = plan_cast(
+                        &cast_ecx,
+                        CastContext::Explicit,
+                        col_expr,
+                        &scalar_type,
+                    )?
+                    .lower_uncorrelated()
+                    .expect(
+                        "lower_uncorrelated should not fail given that there is no correlation \
+                            in the input col_expr",
+                    );
+                    column_casts.push(cast_expr);
+                }
+                table_casts.push(column_casts);
+            }
+
             let connection = SourceConnection::Postgres(PostgresSourceConnection {
                 connection,
+                table_casts,
                 publication: publication.expect("validated exists during purification"),
                 details: PostgresSourceDetails::from_proto(details)
                     .map_err(|e| sql_err!("{}", e))?,
@@ -604,7 +684,12 @@ pub fn plan_create_source(
 
             let encoding =
                 SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Postgres));
-            (connection, Some(item.id()), encoding, None)
+            (
+                connection,
+                Some(item.id()),
+                encoding,
+                Some(available_subsources),
+            )
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let load_generator = match generator {
@@ -1335,7 +1420,7 @@ pub fn plan_create_view(
                 );
             }
             let cascade = false;
-            plan_drop_item(scx, ObjectType::View, item, &[], cascade)?
+            plan_drop_item(scx, ObjectType::View, item, cascade)?
         } else {
             None
         }
@@ -1363,7 +1448,7 @@ pub fn plan_create_views(
         if_exists,
         temporary,
         source: source_name,
-        targets,
+        targets: _,
     }: CreateViewsStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let source_desc = match scx.get_item_by_resolved_name(&source_name)?.source_desc()? {
@@ -1450,127 +1535,6 @@ pub fn plan_create_views(
                 if_not_exists: if_exists == IfExistsBehavior::Skip,
             }))
         }
-        SourceConnection::Postgres(PostgresSourceConnection { details, .. }) => {
-            let targets = targets.unwrap_or_else(|| {
-                details
-                    .tables
-                    .iter()
-                    .map(|t| {
-                        let name = UnresolvedObjectName::qualified(&[&t.namespace, &t.name]);
-                        CreateViewsSourceTarget {
-                            name: name.clone(),
-                            alias: Some(name),
-                        }
-                    })
-                    .collect()
-            });
-
-            // An index from table_name -> schema_name -> PostgresTable
-            let mut details_info_idx: HashMap<String, HashMap<String, PostgresTableDesc>> =
-                HashMap::new();
-            for table in &details.tables {
-                details_info_idx
-                    .entry(table.name.clone())
-                    .or_default()
-                    .entry(table.namespace.clone())
-                    .or_insert_with(|| table.clone());
-            }
-            let mut views = Vec::with_capacity(targets.len());
-            for target in targets {
-                let view_name = target.alias.clone().unwrap_or_else(|| target.name.clone());
-                let name = normalize::unresolved_object_name(target.name.clone())?;
-                let schemas = details_info_idx
-                    .get(&name.item)
-                    .ok_or_else(|| sql_err!("table {} not found in upstream database", name))?;
-                let table_desc = match &name.schema {
-                    Some(schema) => schemas.get(schema).ok_or_else(|| {
-                        sql_err!("schema {} does not exist in upstream database", schema)
-                    })?,
-                    None => schemas.values().exactly_one().or_else(|_| {
-                        Err(sql_err!(
-                            "table {} is ambiguous, consider specifying the schema",
-                            name
-                        ))
-                    })?,
-                };
-                let mut projection = vec![];
-                for (i, column) in table_desc.columns.iter().enumerate() {
-                    let ty = mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod)
-                        .map_err(|e| sql_err!("{}", e))?;
-                    let data_type = scx.resolve_type(ty)?;
-                    projection.push(SelectItem::Expr {
-                        expr: Expr::Cast {
-                            expr: Box::new(Expr::Case {
-                                operand: None,
-                                conditions: vec![Expr::Op {
-                                    op: Op::bare("="),
-                                    expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
-                                    expr2: Some(Box::new(Expr::Value(Value::Number(
-                                        table_desc.oid.to_string(),
-                                    )))),
-                                }],
-                                results: vec![Expr::Subscript {
-                                    expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
-                                    positions: vec![SubscriptPosition {
-                                        start: Some(Expr::Value(Value::Number(
-                                            // LIST is one based
-                                            (i + 1).to_string(),
-                                        ))),
-                                        end: None,
-                                        explicit_slice: false,
-                                    }],
-                                }],
-                                else_result: Some(Box::new(Expr::null())),
-                            }),
-                            data_type,
-                        },
-                        alias: Some(Ident::new(column.name.clone())),
-                    });
-                }
-                let query = Query {
-                    ctes: vec![],
-                    body: SetExpr::Select(Box::new(Select {
-                        distinct: None,
-                        projection,
-                        from: vec![TableWithJoins {
-                            relation: TableFactor::Table {
-                                name: source_name.clone(),
-                                alias: None,
-                            },
-                            joins: vec![],
-                        }],
-                        selection: Some(Expr::Op {
-                            op: Op::bare("="),
-                            expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
-                            expr2: Some(Box::new(Expr::Value(Value::Number(
-                                table_desc.oid.to_string(),
-                            )))),
-                        }),
-                        group_by: vec![],
-                        having: None,
-                        options: vec![],
-                    })),
-                    order_by: vec![],
-                    limit: None,
-                    offset: None,
-                };
-
-                let mut viewdef = ViewDefinition {
-                    name: view_name,
-                    columns: table_desc
-                        .columns
-                        .iter()
-                        .map(|c| Ident::new(c.name.clone()))
-                        .collect(),
-                    query,
-                };
-                views.push(plan_view(scx, &mut viewdef, &Params::empty(), temporary)?);
-            }
-            Ok(Plan::CreateViews(CreateViewsPlan {
-                views,
-                if_not_exists: if_exists == IfExistsBehavior::Skip,
-            }))
-        }
         connection => sql_bail!("cannot generate views from {} sources", connection.name()),
     }
 }
@@ -1635,7 +1599,7 @@ pub fn plan_create_materialized_view(
                     );
                 }
                 let cascade = false;
-                replace = plan_drop_item(scx, ObjectType::MaterializedView, item, &[], cascade)?;
+                replace = plan_drop_item(scx, ObjectType::MaterializedView, item, cascade)?;
             }
         }
         IfExistsBehavior::Skip => if_not_exists = true,
@@ -2911,12 +2875,7 @@ pub fn plan_drop_objects(
     for name in names {
         let name = normalize::unresolved_object_name(name)?;
         match scx.catalog.resolve_item(&name) {
-            Ok(item) => {
-                items.push(item);
-                for subsource_id in item.subsources() {
-                    items.push(scx.catalog.get_item(&subsource_id));
-                }
-            }
+            Ok(item) => items.push(item),
             Err(_) if if_exists => {
                 // TODO(benesch/jkosh44): generate a notice indicating items do not exist.
             }
@@ -2933,7 +2892,7 @@ pub fn plan_drop_objects(
         | ObjectType::Sink
         | ObjectType::Type
         | ObjectType::Secret
-        | ObjectType::Connection => plan_drop_items(scx, object_type, items, cascade),
+        | ObjectType::Connection => plan_drop_items(scx, object_type, &items, cascade),
         ObjectType::Role | ObjectType::Cluster | ObjectType::ClusterReplica => {
             unreachable!("handled through their respective plan_drop functions")
         }
@@ -3121,19 +3080,12 @@ pub fn plan_drop_cluster_replica(
 pub fn plan_drop_items(
     scx: &StatementContext,
     object_type: ObjectType,
-    items: Vec<&dyn CatalogItem>,
+    items: &[&dyn CatalogItem],
     cascade: bool,
 ) -> Result<Plan, PlanError> {
     let mut ids = vec![];
-    for (i, item) in items.iter().enumerate() {
-        let assume_dropped = &items[0..i];
-        ids.extend(plan_drop_item(
-            scx,
-            object_type,
-            *item,
-            assume_dropped,
-            cascade,
-        )?);
+    for item in items {
+        ids.extend(plan_drop_item(scx, object_type, *item, cascade)?);
     }
     Ok(Plan::DropItems(DropItemsPlan {
         items: ids,
@@ -3145,7 +3097,6 @@ pub fn plan_drop_item(
     scx: &StatementContext,
     object_type: ObjectType,
     catalog_entry: &dyn CatalogItem,
-    assume_dropped: &[&dyn CatalogItem],
     cascade: bool,
 ) -> Result<Option<GlobalId>, PlanError> {
     if catalog_entry.id().is_system() {
@@ -3171,22 +3122,33 @@ pub fn plan_drop_item(
         );
     }
     if !cascade {
-        for id in catalog_entry.used_by() {
-            // If dep is already dropped as part of this plan then it can't prevent the drop
-            if assume_dropped
-                .iter()
-                .find(|item| item.id() == *id)
-                .is_some()
-            {
-                continue;
-            }
-            let dep = scx.catalog.get_item(id);
-            if dependency_prevents_drop(object_type, dep) {
-                sql_bail!(
-                    "cannot drop {}: still depended upon by catalog item '{}'",
-                    scx.catalog.resolve_full_name(catalog_entry.name()),
-                    scx.catalog.resolve_full_name(dep.name())
-                );
+        let entry_id = catalog_entry.id();
+        // When this item gets dropped it will also drop its subsources, so we need to check the
+        // users of those
+        let mut dropped_items = catalog_entry
+            .subsources()
+            .iter()
+            .map(|id| scx.catalog.get_item(id))
+            .collect_vec();
+        dropped_items.push(catalog_entry);
+
+        for entry in dropped_items {
+            for id in entry.used_by() {
+                // The catalog_entry we're trying to drop will appear in the used_by list of its
+                // subsources so we need to exclude it from cascade checking since it will be
+                // dropped
+                if id == &entry_id {
+                    continue;
+                }
+
+                let dep = scx.catalog.get_item(id);
+                if dependency_prevents_drop(object_type, dep) {
+                    sql_bail!(
+                        "cannot drop {}: still depended upon by catalog item '{}'",
+                        scx.catalog.resolve_full_name(catalog_entry.name()),
+                        scx.catalog.resolve_full_name(dep.name())
+                    );
+                }
             }
         }
     }

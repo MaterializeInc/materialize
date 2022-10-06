@@ -39,55 +39,47 @@ INSERT INTO schema2.t1 VALUES (2);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> SELECT COUNT(*) > 0 FROM mz_source;
-true
-
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO schema1.t1 SELECT * FROM schema1.t1;
 INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
 
-! CREATE VIEWS FROM SOURCE mz_source;
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 contains:unknown schema 'schema1'
 
-! CREATE VIEWS FROM SOURCE mz_source (t1);
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (t1);
 contains:table t1 is ambiguous, consider specifying the schema
 
 > DROP SCHEMA IF EXISTS schema1;
 
 > CREATE SCHEMA schema1;
 
-> CREATE VIEWS FROM SOURCE mz_source (schema1.t1);
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (schema1.t1);
 
 > SELECT * FROM schema1.t1;
 1
 1
 
-> DROP VIEW schema1.t1;
+> DROP SOURCE mz_source;
 
 > DROP SCHEMA IF EXISTS schema2;
 
 > CREATE SCHEMA schema2;
 
-> CREATE VIEWS FROM SOURCE mz_source;
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 > SELECT * FROM schema1.t1;
 1
 1
 
 > SELECT * FROM schema2.t1;
-2
-2
-
-> CREATE VIEWS FROM SOURCE mz_source (schema1.t1 AS t1_1, schema2.t1 AS t1_2);
-
-> SELECT * FROM t1_1;
-1
-1
-
-> SELECT * FROM t1_2;
 2
 2
 

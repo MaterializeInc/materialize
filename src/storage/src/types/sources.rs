@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use uuid::Uuid;
 
-use mz_expr::PartitionId;
+use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
@@ -165,10 +165,11 @@ where
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            any::<SourceDesc>(),
-            any::<BTreeMap<GlobalId, S>>(),
-            any::<BTreeMap<GlobalId, SourceExport<S>>>(),
-            any::<S>(),
+            any::<SourceDesc>().boxed(),
+            proptest::collection::btree_map(any::<GlobalId>(), any::<S>(), 1..4).boxed(),
+            proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 1..4)
+                .boxed(),
+            any::<S>().boxed(),
         )
             .prop_map(
                 |(desc, source_imports, source_exports, ingestion_metadata)| Self {
@@ -672,7 +673,7 @@ impl RustType<ProtoNoneEnvelope> for NoneEnvelope {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct UpsertEnvelope {
     /// Full arity, including the key columns
     pub source_arity: usize,
@@ -681,6 +682,25 @@ pub struct UpsertEnvelope {
     /// The indices of the keys in the full value row, used
     /// to deduplicate data in `upsert_core`
     pub key_indices: Vec<usize>,
+}
+
+impl Arbitrary for UpsertEnvelope {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<usize>(),
+            any::<UpsertStyle>(),
+            proptest::collection::vec(any::<usize>(), 1..4),
+        )
+            .prop_map(|(source_arity, style, key_indices)| Self {
+                source_arity,
+                style,
+                key_indices,
+            })
+            .boxed()
+    }
 }
 
 impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
@@ -1142,9 +1162,9 @@ impl Arbitrary for KafkaSourceConnection {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<KafkaConnection>(),
-            any::<BTreeMap<String, StringOrSecret>>(),
+            proptest::collection::btree_map(any::<String>(), any::<StringOrSecret>(), 1..4),
             any::<String>(),
-            any::<HashMap<i32, i64>>(),
+            proptest::collection::hash_map(any::<i32>(), any::<i64>(), 1..4),
             any::<Option<String>>(),
             any::<String>(),
             any::<Option<IncludedColumnPos>>(),
@@ -1584,11 +1604,37 @@ impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresSourceConnection {
     pub connection: PostgresConnection,
+    /// The cast expressions to convert the incoming string encoded rows to their target types
+    pub table_casts: Vec<Vec<MirScalarExpr>>,
     pub publication: String,
     pub details: PostgresSourceDetails,
+}
+
+impl Arbitrary for PostgresSourceConnection {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<PostgresConnection>(),
+            proptest::collection::vec(
+                proptest::collection::vec(any::<MirScalarExpr>(), 1..4),
+                1..4,
+            ),
+            any::<String>(),
+            any::<PostgresSourceDetails>(),
+        )
+            .prop_map(|(connection, table_casts, publication, details)| Self {
+                connection,
+                table_casts,
+                publication,
+                details,
+            })
+            .boxed()
+    }
 }
 
 impl crate::source::types::SourceConnection for PostgresSourceConnection {
@@ -1599,14 +1645,34 @@ impl crate::source::types::SourceConnection for PostgresSourceConnection {
 
 impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
     fn into_proto(&self) -> ProtoPostgresSourceConnection {
+        use proto_postgres_source_connection::ProtoPostgresTableCast;
+        let mut table_casts = vec![];
+        for table_cast in self.table_casts.iter() {
+            table_casts.push(ProtoPostgresTableCast {
+                column_casts: table_cast
+                    .iter()
+                    .cloned()
+                    .map(|cast| cast.into_proto())
+                    .collect(),
+            });
+        }
         ProtoPostgresSourceConnection {
             connection: Some(self.connection.into_proto()),
             publication: self.publication.clone(),
             details: Some(self.details.into_proto()),
+            table_casts,
         }
     }
 
     fn from_proto(proto: ProtoPostgresSourceConnection) -> Result<Self, TryFromProtoError> {
+        let mut table_casts = vec![];
+        for table_cast in proto.table_casts {
+            let mut column_casts = vec![];
+            for cast in table_cast.column_casts {
+                column_casts.push(cast.into_rust()?);
+            }
+            table_casts.push(column_casts);
+        }
         Ok(PostgresSourceConnection {
             connection: proto
                 .connection
@@ -1615,6 +1681,7 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
             details: proto
                 .details
                 .into_rust_if_some("ProtoPostgresSourceConnection::details")?,
+            table_casts,
         })
     }
 }
