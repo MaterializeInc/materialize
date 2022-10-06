@@ -823,7 +823,10 @@ impl Semigroup for AccumInner {
                     non_nulls: other_non_nulls,
                 },
             ) => {
-                *accum = accum.wrapping_add(*other_accum);
+                *accum = accum.checked_add(*other_accum).unwrap_or_else(|| {
+                    tracing::warn!("Float accumulator overflow. Incorrect results possible");
+                    accum.wrapping_add(*other_accum)
+                });
                 *pos_infs += other_pos_infs;
                 *neg_infs += other_neg_infs;
                 *nans += other_nans;
@@ -906,7 +909,10 @@ impl Multiply<Diff> for AccumInner {
                 nans,
                 non_nulls,
             } => AccumInner::Float {
-                accum: accum.wrapping_mul(i128::from(factor)),
+                accum: accum.checked_mul(i128::from(factor)).unwrap_or_else(|| {
+                    tracing::warn!("Float accumulator overflow. Incorrect results possible");
+                    accum.wrapping_mul(i128::from(factor))
+                }),
                 pos_infs: pos_infs * factor,
                 neg_infs: neg_infs * factor,
                 nans: nans * factor,
