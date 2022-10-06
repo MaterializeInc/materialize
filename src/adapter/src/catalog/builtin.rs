@@ -1794,7 +1794,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     mz_columns.name as attname,
     mz_columns.type_oid AS atttypid,
     pg_type.typlen AS attlen,
-    position::int8 as attnum,
+    position::int8::int2 as attnum,
     -1::pg_catalog.int4 as atttypmod,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
@@ -2803,9 +2803,9 @@ mod tests {
         Ok(())
     }
 
-    // Make sure pg catalog views don't use unsigned ints.
+    // Make sure pg views don't use types that only exist in Materialize.
     #[tokio::test]
-    async fn test_pg_catalog_unsigned() -> Result<(), anyhow::Error> {
+    async fn test_pg_views_forbidden_types() -> Result<(), anyhow::Error> {
         let catalog = Catalog::open_debug_sqlite(SYSTEM_TIME.clone()).await?;
         let conn_catalog = catalog.for_system_session();
 
@@ -2820,8 +2820,13 @@ mod tests {
             let full_name = conn_catalog.resolve_full_name(item.name());
             for col_type in item.desc(&full_name)?.iter_types() {
                 match &col_type.scalar_type {
-                    ScalarType::UInt16 | ScalarType::UInt32 | ScalarType::UInt64 => {
-                        return Err(anyhow!("Unsigned type found in {full_name}"))
+                    typ @ ScalarType::UInt16
+                    | typ @ ScalarType::UInt32
+                    | typ @ ScalarType::UInt64
+                    | typ @ ScalarType::MzTimestamp
+                    | typ @ ScalarType::List { .. }
+                    | typ @ ScalarType::Map { .. } => {
+                        return Err(anyhow!("{typ:?} type found in {full_name}"))
                     }
                     ScalarType::Bool
                     | ScalarType::Int16
@@ -2843,15 +2848,12 @@ mod tests {
                     | ScalarType::Jsonb
                     | ScalarType::Uuid
                     | ScalarType::Array(_)
-                    | ScalarType::List { .. }
                     | ScalarType::Record { .. }
                     | ScalarType::Oid
-                    | ScalarType::Map { .. }
                     | ScalarType::RegProc
                     | ScalarType::RegType
                     | ScalarType::RegClass
-                    | ScalarType::Int2Vector
-                    | ScalarType::MzTimestamp => {}
+                    | ScalarType::Int2Vector => {}
                 }
             }
         }
