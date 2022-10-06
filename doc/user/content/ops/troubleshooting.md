@@ -20,11 +20,16 @@ schema, and it is not possible to create higher-level views depending on them.
 Introspection sources are maintained by independently collecting internal logging
 information within each of the replicas of a cluster. Thus, in a multi-replica
 cluster, the queries below need to be directed to a specific replica by issuing
-the command `SET cluster_replica = <replica_name>`. Materialize also directly
-exposes replica-specific introspection sources by suffixing the respective catalog
-relation names with the replica ID (see [mz_cluster_replicas]()). For example, `mz_internal.mz_compute_frontiers_1`
-corresponds to the introspection source `mz_internal.mz_compute_frontiers` in the 
-replica with a globally assigned ID of `1`.
+the command `SET cluster_replica = <replica_name>`. Note that once this command
+is issued, all subsequent `SELECT` queries, for introspection sources or not, will
+be directed to the targeted replica. The latter selection can be cancelled by
+issuing the command `RESET cluster_replica`.
+
+Materialize also directly exposes replica-specific introspection sources by
+suffixing the respective catalog relation names with a replica ID that is unique
+across clusters. For example, `mz_internal.mz_compute_frontiers_1` corresponds to
+the introspection source `mz_internal.mz_compute_frontiers` in the replica with
+a unique ID of `1`.
 
 As a consequence of the above, you should expect the answers to the queries below
 to vary dependending on which cluster you are working in. In particular, indexes
@@ -42,7 +47,7 @@ is populated.
 
 ```sql
 -- Report the number of records available from the materialization.
-SELECT count(*) FROM my_source_or_materialized_or_indexed_view;
+SELECT count(*) FROM my_source_or_materialization;
 ```
 
 The following introspection source indicates the upper frontier of materializations.
@@ -134,13 +139,13 @@ and incriminate the subject.
 
 ```sql
 -- Extract raw scheduling histogram information, by worker.
-select mdo.id, mdo.name, mdo.worker_id, mrcod.duration_ns, count
-from mz_internal.mz_raw_compute_operator_durations as mrcod,
-     mz_internal.mz_dataflow_operators as mdo
-where
-    mrcod.id = mdo.id and
+SELECT mdo.id, mdo.name, mdo.worker_id, mrcod.duration_ns, count
+FROM mz_internal.mz_raw_compute_operator_durations AS mrcod,
+     mz_internal.mz_dataflow_operators AS mdo
+WHERE
+    mrcod.id = mdo.id AND
     mrcod.worker_id = mdo.worker_id
-order by mrcod.duration_ns desc;
+ORDER BY mrcod.duration_ns DESC;
 ```
 
 ```sql
