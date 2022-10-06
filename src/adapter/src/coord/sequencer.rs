@@ -469,7 +469,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let source = catalog::Source {
                 create_sql: plan.source.create_sql,
                 data_source: match plan.source.ingestion {
-                    Some(ingestion) => DataSourceDesc::Ingest(catalog::Ingestion {
+                    Some(ingestion) => DataSourceDesc::Ingestion(catalog::Ingestion {
                         desc: ingestion.desc,
                         source_imports: ingestion.source_imports,
                         subsource_exports: ingestion.subsource_exports,
@@ -479,7 +479,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 desc: plan.source.desc,
                 timeline: plan.timeline,
                 depends_on,
-                host_config,
+                host_config: Some(host_config),
             };
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
@@ -507,7 +507,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     };
 
                     let data_source = match source.data_source {
-                        DataSourceDesc::Ingest(ingestion) => {
+                        DataSourceDesc::Ingestion(ingestion) => {
                             let mut source_imports = BTreeMap::new();
                             for source_import in ingestion.source_imports {
                                 source_imports.insert(source_import, ());
@@ -541,6 +541,11 @@ impl<S: Append + 'static> Coordinator<S> {
                         }
                     };
 
+                    assert!(
+                        source.host_config.is_some(),
+                        "cannot create sources without host config; only introspection sources may elide this field"
+                    );
+
                     self.controller
                         .storage
                         .create_collections(vec![(
@@ -550,7 +555,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 data_source,
                                 since: None,
                                 status_collection_id,
-                                host_config: Some(source.host_config),
+                                host_config: source.host_config,
                             },
                         )])
                         .await
@@ -3358,7 +3363,13 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.controller
             .storage
-            .alter_collections(vec![(id, updated_source.host_config.clone())])
+            .alter_collections(vec![(
+                id,
+                updated_source
+                    .host_config
+                    .clone()
+                    .expect("cannot alter introspection sources"),
+            )])
             .await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))

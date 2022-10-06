@@ -88,7 +88,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        if let DataSourceDesc::Ingest(ingestion) = &source.data_source {
+                        if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
                             match &ingestion.desc.connection {
                                 SourceConnection::Postgres(PostgresSourceConnection {
                                     connection,
@@ -570,8 +570,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
-                        | CatalogItem::Connection(_)
-                        | CatalogItem::StorageManagedTable(_) => {}
+                        | CatalogItem::Connection(_) => {}
                     }
                 }
                 Op::DropDatabase { .. } => {
@@ -616,8 +615,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
-                        | CatalogItem::Connection(_)
-                        | CatalogItem::StorageManagedTable(_) => {}
+                        | CatalogItem::Connection(_) => {}
                     }
                 }
                 Op::AlterSink { .. }

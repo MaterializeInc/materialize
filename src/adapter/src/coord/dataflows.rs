@@ -261,9 +261,6 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), false);
                     }
-                    CatalogItem::StorageManagedTable(coll) => {
-                        dataflow.import_source(*id, coll.desc.typ().clone(), false);
-                    }
                     _ => unreachable!(),
                 }
             }
@@ -417,7 +414,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         // TODO(petrosagg): store an inverse mapping of subsource -> source in the catalog so that
         // we can retrieve monotonicity information from the parent source.
         match &source.data_source {
-            DataSourceDesc::Ingest(ingest) => ingest.desc.monotonic(),
+            DataSourceDesc::Ingestion(ingestion) => ingestion.desc.monotonic(),
             DataSourceDesc::Introspection(_) | DataSourceDesc::Source => false,
         }
     }
@@ -496,8 +493,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 | CatalogItem::Log(_)
                 | CatalogItem::Index(_)
                 | CatalogItem::Sink(_)
-                | CatalogItem::Func(_)
-                | CatalogItem::StorageManagedTable(_) => Ok(false),
+                | CatalogItem::Func(_) => Ok(false),
             }
         })
     }
