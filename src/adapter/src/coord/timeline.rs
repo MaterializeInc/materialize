@@ -211,7 +211,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     pub fn read_ts(&mut self) -> T {
         let ts = self.timestamp_oracle.read_ts();
         assert!(
-            ts.less_than(&self.durable_timestamp),
+            ts.less_equal(&self.durable_timestamp),
             "read_ts should not advance the global timestamp"
         );
         ts

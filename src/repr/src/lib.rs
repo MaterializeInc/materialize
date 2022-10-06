@@ -87,7 +87,7 @@ pub trait TimestampManipulation:
     /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
     fn step_forward(&self) -> Self;
 
-    /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
+    /// Advance a timestamp forward by the given `amount`, or to the maximum.
     fn step_forward_by(&self, amount: &Self) -> Self;
 
     /// Retreat a timestamp by the least amount possible such that
@@ -170,12 +170,9 @@ impl Timestamp {
         }
     }
 
-    /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
+    /// Advance a timestamp forward by the given `amount`, saturating at maximum.
     pub fn step_forward_by(&self, amount: &Self) -> Self {
-        match self.checked_add(*amount) {
-            Some(ts) => ts,
-            None => panic!("could not step {self} forward by {amount}"),
-        }
+        self.saturating_add(*amount)
     }
 
     /// Retreat a timestamp by the least amount possible such that
