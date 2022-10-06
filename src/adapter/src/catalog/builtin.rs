@@ -1330,7 +1330,7 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 });
 pub static MZ_CLUSTER_REPLICAS_BASE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replicas_base",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("cluster_id", ScalarType::UInt64.nullable(false))
         .with_column("id", ScalarType::UInt64.nullable(false))
@@ -1341,7 +1341,7 @@ pub static MZ_CLUSTER_REPLICAS_BASE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
 
 pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_statuses",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::UInt64.nullable(false))
         .with_column("process_id", ScalarType::Int64.nullable(false))
@@ -1351,7 +1351,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
 
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_heartbeats",
-    schema: MZ_CATALOG_SCHEMA,
+    schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::UInt64.nullable(false))
         .with_column("last_heartbeat", ScalarType::TimestampTz.nullable(false)),
@@ -1502,7 +1502,7 @@ WITH counts AS (
         count(*) AS total,
         sum(CASE WHEN status = 'ready' THEN 1 else 0 END) AS ready,
         sum(CASE WHEN status = 'not_ready' THEN 1 else 0 END) AS not_ready
-    FROM mz_catalog.mz_cluster_replica_statuses
+    FROM mz_internal.mz_cluster_replica_statuses
     GROUP BY replica_id
 )
 SELECT
@@ -1514,7 +1514,7 @@ SELECT
             THEN 'healthy'
         ELSE 'unknown'
         END AS status
-FROM mz_catalog.mz_cluster_replicas_base
+FROM mz_internal.mz_cluster_replicas_base
 LEFT OUTER JOIN counts
     ON mz_cluster_replicas_base.id = counts.replica_id",
 };
