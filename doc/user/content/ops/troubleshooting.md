@@ -29,7 +29,8 @@ Materialize also directly exposes replica-specific introspection sources by
 suffixing the respective catalog relation names with a replica ID that is unique
 across clusters. For example, `mz_internal.mz_compute_frontiers_1` corresponds to
 the introspection source `mz_internal.mz_compute_frontiers` in the replica with
-a unique ID of `1`.
+the unique ID of `1`. A mapping of replica IDs to clusters and replica names is
+provided by the [`mz_cluster_replicas`] system table.
 
 As a consequence of the above, you should expect the answers to the queries below
 to vary dependending on which cluster you are working in. In particular, indexes
@@ -314,3 +315,5 @@ SELECT count(1) FROM (
     GROUP BY id
 );
 ```
+
+[`mz_cluster_replicas`]: /sql/system-catalog/mz_catalog/#mz_cluster_replicas
