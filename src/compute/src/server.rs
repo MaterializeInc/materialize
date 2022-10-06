@@ -712,10 +712,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                             dataflow.as_of.as_ref().unwrap(),
                                         )
                                     });
-                                // TODO: this can be improved to "subscribe with snapshot"-free, I believe.
-                                // There would need to be changes to clean-up, especially around `subscribe_response_buffer`.
-                                let sink_free = dataflow.sink_exports.is_empty();
-                                if compatible && uncompacted && sink_free {
+                                // We cannot reconcile subscriptions at the moment, because the response buffer is shared,
+                                // and to a first approximation must be completely reformed.
+                                let subscribe_free = dataflow
+                                    .sink_exports
+                                    .iter()
+                                    .all(|(_id, sink)| !sink.connection.is_subscribe());
+                                if compatible && uncompacted && subscribe_free {
                                     // Match found; remove the match from the deletion queue,
                                     // and compact its outputs to the dataflow's `as_of`.
                                     old_dataflows.remove(&export_ids);
