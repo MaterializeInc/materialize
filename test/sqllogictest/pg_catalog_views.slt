@@ -30,3 +30,29 @@ SHOW CREATE VIEW pg_views
 ----
 pg_catalog.pg_views
 CREATE VIEW "pg_catalog"."pg_views" AS SELECT "s"."name" AS "schemaname", "v"."name" AS "viewname", NULL::"pg_catalog"."oid" AS "viewowner", "v"."definition" AS "definition" FROM "mz_catalog"."mz_views" AS "v" LEFT JOIN "mz_catalog"."mz_schemas" AS "s" ON "s"."id" = "v"."schema_id" LEFT JOIN "mz_catalog"."mz_databases" AS "d" ON "d"."id" = "s"."database_id" WHERE "d"."name" = "pg_catalog"."current_database"()
+
+# test that nothing in the pg_catalog or information_schema schemas use unsinged ints
+query ITITTITT
+SELECT
+    class_objects.oid as attrelid,
+    mz_columns.name as attname,
+    mz_columns.type_oid AS atttypid,
+    class_objects.type as relation_type,
+    mz_columns.type as typename,
+    position as attnum,
+    mzsc.name as schema_name,
+    class_objects.name as relation_name
+FROM (
+    SELECT id, oid, schema_id, name, type FROM mz_catalog.mz_relations
+    UNION ALL
+        SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index' AS type
+        FROM mz_catalog.mz_indexes
+        JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
+) AS class_objects
+JOIN mz_catalog.mz_columns ON class_objects.id = mz_columns.id
+JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid
+JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
+JOIN mz_catalog.mz_schemas mzsc ON class_objects.schema_id = mzsc.id
+WHERE mzsc.name IN ('pg_catalog', 'information_schema')
+  AND mz_columns.type like '%uint%'
+----

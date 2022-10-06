@@ -80,7 +80,7 @@ attrelid     false     oid
 attname      false     text
 atttypid     false     oid
 attlen       true      smallint
-attnum       false     uint8
+attnum       false     smallint
 atttypmod    false     integer
 attnotnull   false     boolean
 atthasdef    false     boolean
