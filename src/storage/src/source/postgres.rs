@@ -451,6 +451,13 @@ async fn postgres_replication_loop_inner(
     }
 }
 
+struct RowMessage {
+    output_index: usize,
+    row: Row,
+    lsn: PgLsn,
+    diff: i64,
+}
+
 /// A type that makes it easy to correctly send inserts and deletes.
 ///
 /// Note: `RowSender::delete/insert` should be called with the same
@@ -460,7 +467,7 @@ async fn postgres_replication_loop_inner(
 struct RowSender {
     sender: Sender<InternalMessage>,
     activator: SyncActivator,
-    buffered_message: Option<(usize, Row, PgLsn, i64)>,
+    buffered_message: Option<RowMessage>,
 }
 
 impl RowSender {
@@ -474,55 +481,59 @@ impl RowSender {
     }
 
     /// Insert a row at an lsn.
-    pub async fn insert(&mut self, output: usize, row: Row, lsn: PgLsn) {
-        if let Some((buffered_output, buffered_row, buffered_lsn, buffered_diff)) =
-            self.buffered_message.take()
-        {
-            assert_eq!(buffered_lsn, lsn);
+    pub async fn insert(&mut self, output_index: usize, row: Row, lsn: PgLsn) {
+        if let Some(buffered) = self.buffered_message.take() {
+            assert_eq!(buffered.lsn, lsn);
             self.send_row(
-                buffered_output,
-                buffered_row,
-                buffered_lsn,
-                buffered_diff,
+                buffered.output_index,
+                buffered.row,
+                buffered.lsn,
+                buffered.diff,
                 false,
             )
             .await;
         }
 
-        self.buffered_message = Some((output, row, lsn, 1));
+        self.buffered_message = Some(RowMessage {
+            output_index,
+            row,
+            lsn,
+            diff: 1,
+        });
     }
     /// Delete a row at an lsn.
-    pub async fn delete(&mut self, output: usize, row: Row, lsn: PgLsn) {
-        if let Some((buffered_output, buffered_row, buffered_lsn, buffered_diff)) =
-            self.buffered_message.take()
-        {
-            assert_eq!(buffered_lsn, lsn);
+    pub async fn delete(&mut self, output_index: usize, row: Row, lsn: PgLsn) {
+        if let Some(buffered) = self.buffered_message.take() {
+            assert_eq!(buffered.lsn, lsn);
             self.send_row(
-                buffered_output,
-                buffered_row,
-                buffered_lsn,
-                buffered_diff,
+                buffered.output_index,
+                buffered.row,
+                buffered.lsn,
+                buffered.diff,
                 false,
             )
             .await;
         }
 
-        self.buffered_message = Some((output, row, lsn, -1));
+        self.buffered_message = Some(RowMessage {
+            output_index,
+            row,
+            lsn,
+            diff: -1,
+        });
     }
 
     /// Finalize an lsn, making sure all messages that my be buffered are flushed, and that the
     /// last message sent is marked as closing the `lsn` (which is the messages `offset` in the
     /// rest of the source pipeline.
     pub async fn close_lsn(&mut self, lsn: PgLsn) {
-        if let Some((buffered_output, buffered_row, buffered_lsn, buffered_diff)) =
-            self.buffered_message.take()
-        {
-            assert_eq!(buffered_lsn, lsn);
+        if let Some(buffered) = self.buffered_message.take() {
+            assert_eq!(buffered.lsn, lsn);
             self.send_row(
-                buffered_output,
-                buffered_row,
-                buffered_lsn,
-                buffered_diff,
+                buffered.output_index,
+                buffered.row,
+                buffered.lsn,
+                buffered.diff,
                 true,
             )
             .await;

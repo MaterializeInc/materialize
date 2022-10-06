@@ -353,6 +353,14 @@ pub async fn purify_create_source(
                 let subsource = CreateSubsourceStatement {
                     name: subsource_name,
                     columns,
+                    // TODO(petrosagg): nothing stops us from getting the constraints of the
+                    // upstream tables and mirroring them here which will lead to more optimization
+                    // opportunities if for example there is a primary key or an index.
+                    //
+                    // If we ever do that we must triple check that we will get notified *in the
+                    // replication stream*, if our assumptions change. Failure to do that could
+                    // mean that an upstream table that started with an index was then altered to
+                    // one without and now we're producing garbage data.
                     constraints: vec![],
                     if_not_exists: false,
                 };

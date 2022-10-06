@@ -682,6 +682,8 @@ pub fn plan_create_source(
                     .map_err(|e| sql_err!("{}", e))?,
             });
 
+            // The postgres source only outputs data to its subsources. The catalog object
+            // representing the source itself is just an empty relation with no columns
             let encoding = SourceDataEncoding::Single(DataEncoding::new(
                 DataEncodingInner::RowCodec(RelationDesc::empty()),
             ));
