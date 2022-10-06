@@ -112,7 +112,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, StorageHostSizeMap, StorageSinkConnectionState,
+    ClusterReplicaSizeMap, DataSourceDesc, StorageHostSizeMap, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -476,35 +476,41 @@ impl<S: Append + 'static> Coordinator<S> {
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    // Re-announce the source description.
-                    let data_source = source.ingestion.clone().map(|ingestion| {
-                        let mut source_imports = BTreeMap::new();
-                        for source_import in ingestion.source_imports {
-                            source_imports.insert(source_import, ());
-                        }
+                    let data_source = match &source.data_source {
+                        // Re-announce the source description.
+                        DataSourceDesc::Ingest(ingestion) => {
+                            let mut source_imports = BTreeMap::new();
+                            for source_import in &ingestion.source_imports {
+                                source_imports.insert(*source_import, ());
+                            }
 
-                        let mut source_exports = BTreeMap::new();
-                        // By convention the first output corresponds to the main source object
-                        let main_export = SourceExport {
-                            output_index: 0,
-                            storage_metadata: (),
-                        };
-                        source_exports.insert(entry.id(), main_export);
-                        for (subsource, output_index) in ingestion.subsource_exports {
-                            let export = SourceExport {
-                                output_index,
+                            let mut source_exports = BTreeMap::new();
+                            // By convention the first output corresponds to the main source object
+                            let main_export = SourceExport {
+                                output_index: 0,
                                 storage_metadata: (),
                             };
-                            source_exports.insert(subsource, export);
-                        }
+                            source_exports.insert(entry.id(), main_export);
+                            for (subsource, output_index) in ingestion.subsource_exports.clone() {
+                                let export = SourceExport {
+                                    output_index,
+                                    storage_metadata: (),
+                                };
+                                source_exports.insert(subsource, export);
+                            }
 
-                        DataSource::Ingestion(IngestionDescription {
-                            desc: ingestion.desc,
-                            ingestion_metadata: (),
-                            source_imports,
-                            source_exports,
-                        })
-                    });
+                            DataSource::Ingestion(IngestionDescription {
+                                desc: ingestion.desc.clone(),
+                                ingestion_metadata: (),
+                                source_imports,
+                                source_exports,
+                            })
+                        }
+                        DataSourceDesc::Source => DataSource::Source,
+                        DataSourceDesc::Introspection(_) => {
+                            unreachable!("introspection sources should be builtins")
+                        }
+                    };
 
                     self.controller
                         .storage
@@ -640,9 +646,13 @@ impl<S: Append + 'static> Coordinator<S> {
                     );
                 }
                 CatalogItem::StorageManagedTable(coll) => {
+                    let introspection = match &coll.data_source {
+                        Some(introspection) => introspection.clone(),
+                        None => continue,
+                    };
                     let collection_desc = CollectionDescription {
                         desc: coll.desc.clone(),
-                        data_source: coll.data_source.clone().map(DataSource::Introspection),
+                        data_source: DataSource::Introspection(introspection),
                         since: None,
                         status_collection_id,
                         host_config: None,

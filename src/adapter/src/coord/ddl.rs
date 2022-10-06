@@ -31,8 +31,8 @@ use mz_storage::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage::types::sources::{PostgresSourceConnection, SourceConnection, Timeline};
 
 use crate::catalog::{
-    CatalogItem, CatalogState, Op, Sink, StorageSinkConnectionState, TransactionResult,
-    SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
+    TransactionResult, SYSTEM_CONN_ID,
 };
 use crate::client::ConnectionId;
 use crate::coord::appends::BuiltinTableUpdateSource;
@@ -88,7 +88,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        if let Some(ingestion) = &source.ingestion {
+                        if let DataSourceDesc::Ingest(ingestion) = &source.data_source {
                             match &ingestion.desc.connection {
                                 SourceConnection::Postgres(PostgresSourceConnection {
                                     connection,

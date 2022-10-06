@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use itertools::Itertools;
+use mz_storage::controller::IntrospectionType;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1362,16 +1363,19 @@ impl Table {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub enum DataSourceDesc {
+    /// Receives data from an external system
+    Ingest(Ingestion),
+    /// Receives data from some other source
+    Source,
+    /// Receives introspection data from an internal system
+    Introspection(IntrospectionType),
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    /// The ingestion description of this source.
-    ///
-    /// If Some, it will correspond to an ingestion that will insert data in this source and maybe
-    /// other, dependent subsources.
-    ///
-    /// If None, it represents a source that is being written to by the ingestion associated with
-    /// some other, parent source.
-    pub ingestion: Option<Ingestion>,
+    pub data_source: DataSourceDesc,
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
@@ -1545,9 +1549,9 @@ impl CatalogItem {
         name: &QualifiedObjectName,
     ) -> Result<Option<&SourceDesc>, SqlCatalogError> {
         match &self {
-            CatalogItem::Source(source) => match &source.ingestion {
-                Some(ingestion) => Ok(Some(&ingestion.desc)),
-                None => Ok(None),
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingest(ingest) => Ok(Some(&ingest.desc)),
+                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => Ok(None),
             },
             _ => Err(SqlCatalogError::UnexpectedType(
                 name.item.clone(),
@@ -3638,10 +3642,13 @@ impl<S: Append> Catalog<S> {
                             });
                         }
 
-                        // Only subsources can have an undefined size outside of
+                        // Only introspection + subsources can have an undefined size outside of
                         // unsafe mode.
-                        let allow_undefined_size =
-                            state.config().unsafe_mode || old_source.ingestion.is_none();
+                        let allow_undefined_size = state.config().unsafe_mode
+                            || match old_source.data_source {
+                                DataSourceDesc::Introspection(_) | DataSourceDesc::Source => true,
+                                DataSourceDesc::Ingest(_) => false,
+                            };
                         let host_config =
                             state.resolve_storage_host_config(config, allow_undefined_size)?;
                         let create_sql = stmt.to_ast_string_stable();
@@ -4712,11 +4719,14 @@ impl<S: Append> Catalog<S> {
                 let allow_undefined_size = true;
                 CatalogItem::Source(Source {
                     create_sql: source.create_sql,
-                    ingestion: source.ingestion.map(|ingestion| Ingestion {
-                        desc: ingestion.desc,
-                        source_imports: ingestion.source_imports,
-                        subsource_exports: ingestion.subsource_exports,
-                    }),
+                    data_source: match source.ingestion {
+                        Some(ingestion) => DataSourceDesc::Ingest(Ingestion {
+                            desc: ingestion.desc,
+                            source_imports: ingestion.source_imports,
+                            subsource_exports: ingestion.subsource_exports,
+                        }),
+                        None => DataSourceDesc::Source,
+                    },
                     desc: source.desc,
                     timeline,
                     depends_on,
@@ -5599,9 +5609,11 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn subsources(&self) -> Vec<GlobalId> {
         match &self.item {
-            CatalogItem::Source(source) => match &source.ingestion {
-                Some(ingestion) => ingestion.subsource_exports.keys().copied().collect(),
-                None => vec![],
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingest(ingest) => {
+                    ingest.subsource_exports.keys().copied().collect()
+                }
+                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => vec![],
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
